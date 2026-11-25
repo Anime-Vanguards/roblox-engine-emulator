@@ -5,12 +5,12 @@
 use crate::common::Temp;
 use crate::fixture::*;
 use ree_profile_view::{issues::Target, metric::Metric, model::Profile};
-use serde_json::json;
+use serde_json::{Map, Value};
 
 /// The fixture profile with `counters` in its profile.json (and each counter's folded file as `counters.<name>.folded`)
-fn with_counters(dir: &std::path::Path, counters: serde_json::Value, folded: &[(&str, &str)]) {
+fn with_counters(dir: &std::path::Path, counters: Value, folded: &[(&str, &str)]) {
     let path = dir.join("profile.json");
-    let mut profile: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let mut profile: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
     profile["counters"] = counters;
     std::fs::write(&path, profile.to_string()).unwrap();
     for (name, text) in folded {
@@ -20,22 +20,34 @@ fn with_counters(dir: &std::path::Path, counters: serde_json::Value, folded: &[(
 
 /// The counters of a profile ree writes now: the default set, read around sampled calls; `rank` (function 2) waits on
 /// memory, `layout` (4) computes
-fn new_counters() -> serde_json::Value {
+fn new_counters() -> Value {
     let names = ["instructions", "cycles", "load-stall-cycles", "miss-buffer-occupancy", "miss-buffer-allocs", "branch-misses"];
-    let counts = |values: [f64; 6]| -> serde_json::Value { names.iter().zip(values).map(|(name, value)| (name.to_string(), json!(value))).collect::<serde_json::Map<_, _>>().into() };
-    json!({
-        "source": "service",
-        "names": names,
-        "about": names.iter().map(|name| ree_profile_view::hw_counters::known(name).map(|known| known.about)).collect::<Vec<_>>(),
-        "attribution": {"method": "calls", "calls": 300, "threshold_us": 100.0, "min_sampled_us": 10.0},
-        "run": {"counts": counts([4_000_000.0, 4_000_000.0, 1_000_000.0, 1_200_000.0, 3_000.0, 2_000.0]), "rates": {}, "seconds": 1.0},
-        "frames": {"columns": ["frame", "phase", "host_ms", "instructions", "cycles", "load-stall-cycles", "miss-buffer-occupancy", "miss-buffer-allocs", "branch-misses"], "rows": [[1, 2, 1.0, 40000, 40000, 20000, 24000, 60, 20], [2, 2, 1.0, 40000, 40000, 2000, 2400, 6, 20]]},
-        "functions": [
-            {"id": 2, "key": "Main:rank", "name": "rank", "self": counts([300_000.0, 1_500_000.0, 900_000.0, 1_000_000.0, 2_500.0, 500.0]), "total": counts([300_000.0, 1_500_000.0, 900_000.0, 1_000_000.0, 2_500.0, 500.0])},
-            {"id": 4, "key": "Main:layout", "name": "layout", "self": counts([2_000_000.0, 1_000_000.0, 30_000.0, 40_000.0, 100.0, 500.0]), "total": counts([2_000_000.0, 1_000_000.0, 30_000.0, 40_000.0, 100.0, 500.0])},
-        ],
-        "lines": [{"function": 1, "line": 12, "self": {}, "total": counts([300_000.0, 1_500_000.0, 900_000.0, 1_000_000.0, 2_500.0, 500.0]), "calls": true}],
-    })
+    let counts = |values: [f64; 6]| -> Value { names.iter().zip(values).map(|(name, value)| (name.to_string(), Value::from(value))).collect::<Map<_, _>>().into() };
+    let about: Vec<Value> = names.iter().map(|name| ree_profile_view::hw_counters::known(name).map_or(Value::Null, |known| Value::String(known.about.into()))).collect();
+    let mut c = parse_json(
+        r#"{
+            "source": "service",
+            "names": ["instructions", "cycles", "load-stall-cycles", "miss-buffer-occupancy", "miss-buffer-allocs", "branch-misses"],
+            "attribution": {"method": "calls", "calls": 300, "threshold_us": 100.0, "min_sampled_us": 10.0},
+            "run": {"rates": {}, "seconds": 1.0},
+            "frames": {"columns": ["frame", "phase", "host_ms", "instructions", "cycles", "load-stall-cycles", "miss-buffer-occupancy", "miss-buffer-allocs", "branch-misses"], "rows": [[1, 2, 1.0, 40000, 40000, 20000, 24000, 60, 20], [2, 2, 1.0, 40000, 40000, 2000, 2400, 6, 20]]},
+            "functions": [
+                {"id": 2, "key": "Main:rank", "name": "rank"},
+                {"id": 4, "key": "Main:layout", "name": "layout"}
+            ],
+            "lines": [{"function": 1, "line": 12, "self": {}, "calls": true}]
+        }"#,
+    );
+    let rank_counts = counts([300_000.0, 1_500_000.0, 900_000.0, 1_000_000.0, 2_500.0, 500.0]);
+    let layout_counts = counts([2_000_000.0, 1_000_000.0, 30_000.0, 40_000.0, 100.0, 500.0]);
+    c["about"] = Value::Array(about);
+    c["run"]["counts"] = counts([4_000_000.0, 4_000_000.0, 1_000_000.0, 1_200_000.0, 3_000.0, 2_000.0]);
+    c["functions"][0]["self"] = rank_counts.clone();
+    c["functions"][0]["total"] = rank_counts.clone();
+    c["functions"][1]["self"] = layout_counts.clone();
+    c["functions"][1]["total"] = layout_counts;
+    c["lines"][0]["total"] = rank_counts;
+    c
 }
 
 #[test]
@@ -43,7 +55,7 @@ fn a_cut_short_counter_profile_is_marked_in_the_header() {
     let temp = Temp::new("hw-cut-short");
     let dir = write_profile(&temp.path().join("run"), Shape::BEFORE);
     let mut counters = new_counters();
-    counters["cut_short"] = json!(12.345);
+    counters["cut_short"] = Value::from(12.345);
     with_counters(&dir, counters, &[]);
     let mut app = open(&[&dir]);
     let text = screen(&mut app, "1", 120, 40);
@@ -95,19 +107,23 @@ fn a_profile_with_the_old_counter_names_opens_with_their_names_now() {
     let temp = Temp::new("hw-old");
     let old = write_profile(&temp.path().join("old"), Shape::BEFORE);
     let old_names = ["instructions", "cycles", "l1d-misses", "l2-misses", "llc-misses", "branch-misses"];
-    let counts = |names: &[&str], values: [f64; 6]| -> serde_json::Value { names.iter().zip(values).map(|(name, value)| (name.to_string(), json!(value))).collect::<serde_json::Map<_, _>>().into() };
-    with_counters(
-        &old,
-        json!({
+    let counts = |names: &[&str], values: [f64; 6]| -> Value { names.iter().zip(values).map(|(name, value)| (name.to_string(), Value::from(value))).collect::<Map<_, _>>().into() };
+    let old_vals = counts(&old_names, [3000.0, 1000.0, 30.0, 3.0, 1.0, 6.0]);
+    let mut old_counters = parse_json(
+        r#"{
             "source": "service",
-            "names": old_names,
-            "run": {"counts": counts(&old_names, [3000.0, 1000.0, 30.0, 3.0, 1.0, 6.0]), "rates": {"IPC": 3.0, "l1d-misses per 1000 instructions": 10.0}, "seconds": 1.0},
+            "names": ["instructions", "cycles", "l1d-misses", "l2-misses", "llc-misses", "branch-misses"],
+            "run": {"rates": {"IPC": 3.0, "l1d-misses per 1000 instructions": 10.0}, "seconds": 1.0},
             "frames": {"columns": ["frame", "phase", "host_ms", "instructions", "cycles", "l1d-misses", "l2-misses", "llc-misses", "branch-misses"], "rows": [[1, 2, 1.0, 3000, 1000, 30, 3, 1, 6]]},
-            "functions": [{"id": 2, "key": "Main:rank", "name": "rank", "self": counts(&old_names, [3000.0, 1000.0, 30.0, 3.0, 1.0, 6.0]), "total": counts(&old_names, [3000.0, 1000.0, 30.0, 3.0, 1.0, 6.0])}],
-            "lines": [{"function": 2, "line": 21, "self": counts(&old_names, [3000.0, 1000.0, 30.0, 3.0, 1.0, 6.0]), "total": {}}],
-        }),
-        &[("l1d-misses", "steady;update Main:10;rank Main:20 @21 30\n")],
+            "functions": [{"id": 2, "key": "Main:rank", "name": "rank"}],
+            "lines": [{"function": 2, "line": 21, "total": {}}]
+        }"#,
     );
+    old_counters["run"]["counts"] = old_vals.clone();
+    old_counters["functions"][0]["self"] = old_vals.clone();
+    old_counters["functions"][0]["total"] = old_vals.clone();
+    old_counters["lines"][0]["self"] = old_vals;
+    with_counters(&old, old_counters, &[("l1d-misses", "steady;update Main:10;rank Main:20 @21 30\n")]);
     let p = Profile::load(&old).unwrap();
     let c = p.raw.counters.as_ref().unwrap();
     assert_eq!(c.names, vec!["instructions", "cycles", "demand-fills", "demand-fills-beyond-l2", "demand-fills-beyond-l3", "branch-misses"]);
@@ -125,8 +141,17 @@ fn a_profile_with_the_old_counter_names_opens_with_their_names_now() {
     assert!(figures.iter().any(|figure| figure.key == "demand fills per 1000 instructions" && figure.value == 10.0), "{figures:?}");
     // a diff against a profile ree writes now: the fills matched, by their name now
     let new = write_profile(&temp.path().join("new"), Shape::AFTER);
+    let mut new_counters = parse_json(
+        r#"{
+            "source": "service",
+            "names": ["instructions", "cycles", "demand-fills", "demand-fills-beyond-l2", "demand-fills-beyond-l3", "branch-misses"],
+            "attribution": {"method": "calls", "version": 2},
+            "run": {"rates": {}, "seconds": 1.0}
+        }"#,
+    );
     let new_names = ["instructions", "cycles", "demand-fills", "demand-fills-beyond-l2", "demand-fills-beyond-l3", "branch-misses"];
-    with_counters(&new, json!({"source": "service", "names": new_names, "attribution": {"method": "calls", "version": 2}, "run": {"counts": counts(&new_names, [2000.0, 1000.0, 15.0, 2.0, 1.0, 5.0]), "rates": {}, "seconds": 1.0}}), &[]);
+    new_counters["run"]["counts"] = counts(&new_names, [2000.0, 1000.0, 15.0, 2.0, 1.0, 5.0]);
+    with_counters(&new, new_counters, &[]);
     let (figures, notes) = ree_profile_view::diff::headline(&p, &Profile::load(&new).unwrap());
     assert!(notes.iter().any(|note| note.contains("reached functions in other ways") && note.contains("1 ms samples")), "the counters reached functions in other ways: {notes:?}");
     let row = figures.iter().find(|figure| figure.name == "demand-fills (CPU counter)").unwrap_or_else(|| panic!("{:?}", figures.iter().map(|f| &f.name).collect::<Vec<_>>()));

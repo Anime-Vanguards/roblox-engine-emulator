@@ -8,6 +8,8 @@
 extern crate mimalloc;
 
 mod common;
+#[path = "planted/engine.rs"]
+mod engine;
 
 use common::Temp;
 use ree_profile_view::{

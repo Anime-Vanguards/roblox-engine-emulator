@@ -2,12 +2,7 @@
 //! wrote. Its figures are tied to what the profile counts on its own: the call tree's work and instructions add up to
 //! the run's totals, every allocated byte lands on one site, and the sort the harness does every frame is found.
 
-// (the engine's service code calls mimalloc's mi_collect, which ree's binary links the same way)
-extern crate mimalloc;
-
-mod common;
-
-use common::Temp;
+use super::common::Temp;
 use ree_profile_view::{app::View, cli, metric::Metric, sites::alloc_sites, theme::ThemeKind};
 
 const HARNESS: &str = r#"local RunService = game:GetService("RunService")

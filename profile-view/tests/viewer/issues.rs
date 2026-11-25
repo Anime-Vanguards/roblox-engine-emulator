@@ -2,7 +2,7 @@
 //! found where the profile shows none, and what a profile's kinds cannot show said as such.
 
 use crate::common::Temp;
-use crate::fixture::{self as common, *};
+use crate::fixture::*;
 use ree_profile_view::{
     issues::{Issue, Severity, Target},
     model::{Kind, Profile},
@@ -398,19 +398,20 @@ fn a_quadratic_scan_is_named_by_its_growth_at_large_n() {
     let temp = Temp::new("scaling-scan");
     let dir = write_comparison(&temp.path().join("what-if"));
     let path = dir.join("compare.json");
-    let points = serde_json::json!([[10, 0.0041], [100, 0.0142], [1000, 0.816]]);
     let mut compare: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-    compare["scaling"][1] = serde_json::json!({"variant": "t[v][k]", "metric": "work_ms", "exponent": 1.15, "r2": 0.97, "last": 1.76, "points": points});
+    compare["scaling"][1] = parse_json(r#"{"variant": "t[v][k]", "metric": "work_ms", "exponent": 1.15, "r2": 0.97, "last": 1.76, "points": [[10, 0.0041], [100, 0.0142], [1000, 0.816]]}"#);
     std::fs::write(&path, serde_json::to_string(&compare).unwrap()).unwrap();
     let issues = ree_profile_view::compare::Compare::load(&dir).unwrap().issues();
     let scan = issues.iter().find(|issue| issue.title.contains("t[v][k]: work grows")).expect("the version 1 scan is named");
     assert!(scan.title.contains("n^1.76") && scan.severity == Severity::Warning, "{scan:#?}");
     // version 2: the exponent at large n, the growing part's slope with the fixed cost apart (ree's stats::growth on
     // these points: 1.90 with a fixed 3.97 us), and each segment's own slope in the evidence
-    compare["version"] = serde_json::json!(2);
-    compare["scaling"][1] = serde_json::json!({"variant": "t[v][k]", "metric": "work_ms", "exponent": 1.90, "last": 1.76,
-        "fit": {"k": 1.90, "fixed": 0.00397, "coefficient": 1.62e-6, "error": 0.0, "fitted": true},
-        "segments": [[10, 100, 0.54], [100, 1000, 1.76]], "points": points});
+    compare["version"] = serde_json::Value::from(2);
+    compare["scaling"][1] = parse_json(
+        r#"{"variant": "t[v][k]", "metric": "work_ms", "exponent": 1.90, "last": 1.76,
+            "fit": {"k": 1.90, "fixed": 0.00397, "coefficient": 1.62e-6, "error": 0.0, "fitted": true},
+            "segments": [[10, 100, 0.54], [100, 1000, 1.76]], "points": [[10, 0.0041], [100, 0.0142], [1000, 0.816]]}"#,
+    );
     std::fs::write(&path, serde_json::to_string(&compare).unwrap()).unwrap();
     let issues = ree_profile_view::compare::Compare::load(&dir).unwrap().issues();
     let scan = issues.iter().find(|issue| issue.title.contains("t[v][k]: work grows")).expect("the version 2 scan is named");
@@ -508,7 +509,7 @@ fn mluas_own_chunks_are_the_engines() {
     let dir = write_profile(&temp.path().join("run"), Shape::BEFORE);
     let path = dir.join("profile.json");
     let mut json: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-    json["functions"].as_array_mut().unwrap().push(serde_json::json!({"id": 900, "key": "__mlua_index:anonymous@6", "kind": "Luau", "module": "__mlua_index", "name": "", "line": 6, "last_line": 11, "calls": 10, "self": {}, "total": {}}));
+    json["functions"].as_array_mut().unwrap().push(parse_json(r#"{"id": 900, "key": "__mlua_index:anonymous@6", "kind": "Luau", "module": "__mlua_index", "name": "", "line": 6, "last_line": 11, "calls": 10, "self": {}, "total": {}}"#));
     std::fs::write(&path, json.to_string()).unwrap();
     let p = Profile::load(&dir).unwrap();
     let f = p.funcs.iter().find(|f| f.module == "__mlua_index").unwrap();
@@ -619,15 +620,15 @@ fn repeat_reads_say_where_the_value_was_read_again_and_every_unchanged_write_is_
     });
     edit_json(&dir.join("boundary.json"), |boundary| {
         let site = &mut boundary["repeat_reads"][0];
-        site["repeat_cost_ms"] = serde_json::json!(5.0);
-        site["repeat_same_call"] = serde_json::json!(5000);
-        site["repeat_later_call"] = serde_json::json!(15000);
-        site["repeat_other_function"] = serde_json::json!(700);
-        boundary["unchanged_writes"] = serde_json::json!([{
-            "script": common::MODULE, "function": "update", "line": 12, "kind": "write", "member": "Frame.Visible",
-            "count": 2000, "per_s": 1200.0, "cost_ms_per_s": 6.0, "unchanged_cost_ms": 10.0, "unchanged_writes": 2000,
-            "repeat_reads": 0, "repeat_reads_per_s": 0.0,
-        }]);
+        site["repeat_cost_ms"] = serde_json::Value::from(5.0);
+        site["repeat_same_call"] = serde_json::Value::from(5000);
+        site["repeat_later_call"] = serde_json::Value::from(15000);
+        site["repeat_other_function"] = serde_json::Value::from(700);
+        boundary["unchanged_writes"] = parse_json(&format!(
+            r#"[{{"script": "{MODULE}", "function": "update", "line": 12, "kind": "write", "member": "Frame.Visible",
+                "count": 2000, "per_s": 1200.0, "cost_ms_per_s": 6.0, "unchanged_cost_ms": 10.0, "unchanged_writes": 2000,
+                "repeat_reads": 0, "repeat_reads_per_s": 0.0}}]"#
+        ));
     });
     let (issues, _, _) = issues_of(&dir);
     let reads = find(&issues, "repeat reads");
@@ -646,9 +647,9 @@ fn a_cache_miss_takes_the_advice_of_what_happened_most() {
     let path = dir.join("profile.json");
     let mut json: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
     let site = &mut json["luau_caches"]["sites"][0];
-    site["key"] = serde_json::json!("Size");
-    site["outcomes"] = serde_json::json!({"hit": 1000, "repredicted": 5000, "absent": 0});
-    json["luau_caches"]["outcome_info"] = serde_json::json!({"repredicted": {"meaning": "the key was elsewhere in the table", "advice": "Build the tables alike, keys in one order"}});
+    site["key"] = serde_json::Value::from("Size");
+    site["outcomes"] = parse_json(r#"{"hit": 1000, "repredicted": 5000, "absent": 0}"#);
+    json["luau_caches"]["outcome_info"] = parse_json(r#"{"repredicted": {"meaning": "the key was elsewhere in the table", "advice": "Build the tables alike, keys in one order"}}"#);
     std::fs::write(&path, json.to_string()).unwrap();
     let (issues, _, _) = issues_of(&dir);
     let misses = find(&issues, "cache misses");
@@ -772,7 +773,11 @@ fn the_harnesss_cache_sites_are_left_out_before_the_top_sites_are_taken() {
     let mut json: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
     let sites = json["luau_caches"]["sites"].as_array_mut().unwrap();
     for pc in 0..5 {
-        sites.push(serde_json::json!({"function": 4, "line": 40 + pc, "pc": 20 + pc, "op": "GETTABLEKS", "hits": 0, "misses": 9000, "slow": 0, "other": 0, "harness": true}));
+        sites.push(parse_json(&format!(
+            r#"{{"function": 4, "line": {}, "pc": {}, "op": "GETTABLEKS", "hits": 0, "misses": 9000, "slow": 0, "other": 0, "harness": true}}"#,
+            40 + pc,
+            20 + pc
+        )));
     }
     std::fs::write(&path, json.to_string()).unwrap();
     let (issues, _, _) = issues_of(&dir);
@@ -863,28 +868,26 @@ fn a_newer_profiles_cache_and_builtin_prices_split_by_what_the_clock_charged() {
     let declined_calls = 300_000;
     edit_json(&dir.join("profile.json"), |json| {
         let layout = json["functions"].as_array().unwrap().iter().find(|f| f["name"] == "layout").unwrap()["id"].as_i64().unwrap();
-        json["version"] = serde_json::json!(2);
-        json["luau_caches"]["prices"] = serde_json::json!({"clock": "work", "units": "work clock ns"});
+        json["version"] = serde_json::Value::from(2);
+        json["luau_caches"]["prices"] = parse_json(r#"{"clock": "work", "units": "work clock ns"}"#);
         for site in json["luau_caches"]["sites"].as_array_mut().unwrap() {
             if site["line"] != 31 {
                 continue;
             }
-            site["outcomes"] = serde_json::json!({"hit": 1000, "repredicted": 50000, "rehashed": 2000});
-            site["charged_work_us"] = serde_json::json!(5000.0);
-            site["charged_work_us_per_frame"] = serde_json::json!(50.0);
-            site["extra_work_us"] = serde_json::json!(5000.0);
-            site["extra_work_us_per_frame"] = serde_json::json!(50.0);
-            site["first_touch_us"] = serde_json::json!(500.0);
-            site["node"] = serde_json::json!(13);
-            site["outcome_charged_us"] = serde_json::json!(4500.0);
-            site["presized_us"] = serde_json::json!(500.0);
-            site["within_noise"] = serde_json::json!(3);
+            let patch = parse_json(
+                r#"{"outcomes": {"hit": 1000, "repredicted": 50000, "rehashed": 2000},
+                    "charged_work_us": 5000.0, "charged_work_us_per_frame": 50.0, "extra_work_us": 5000.0, "extra_work_us_per_frame": 50.0,
+                    "first_touch_us": 500.0, "node": 13, "outcome_charged_us": 4500.0, "presized_us": 500.0, "within_noise": 3}"#,
+            );
+            site.as_object_mut().unwrap().extend(patch.as_object().unwrap().clone());
         }
-        json["builtins"] = serde_json::json!([{
-            "name": "string.sub", "calls": declined_calls, "fast": 0, "declines": {"args": declined_calls},
-            "decline_charged_ns": 20.0, "decline_charged_us": 6000.0, "advice": {"args": "Pass its end"},
-            "sites": [{"function": layout, "node": 13, "decline_charged_us": 6000.0, "fast_equivalent_us": 1500.0, "fix_cost_exact": true, "fix_instructions_us": 0, "fix_cold_us": 0, "line": 31, "pc": 4, "fallback_end_pc": 4, "calls": declined_calls, "fast": 0, "declines": {"args": declined_calls}}],
-        }]);
+        json["builtins"] = parse_json(&format!(
+            r#"[{{
+                "name": "string.sub", "calls": {declined_calls}, "fast": 0, "declines": {{"args": {declined_calls}}},
+                "decline_charged_ns": 20.0, "decline_charged_us": 6000.0, "advice": {{"args": "Pass its end"}},
+                "sites": [{{"function": {layout}, "node": 13, "decline_charged_us": 6000.0, "fast_equivalent_us": 1500.0, "fix_cost_exact": true, "fix_instructions_us": 0, "fix_cold_us": 0, "line": 31, "pc": 4, "fallback_end_pc": 4, "calls": {declined_calls}, "fast": 0, "declines": {{"args": {declined_calls}}}}}]
+            }}]"#
+        ));
     });
     let (issues, _, app) = issues_of(&dir);
     let misses = find(&issues, "cache misses");
@@ -916,12 +919,16 @@ fn a_newer_profiles_absent_and_inserted_lookups_are_misses() {
     let path = dir.join("profile.json");
     let mut json: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
     let layout = json["functions"].as_array().unwrap().iter().find(|f| f["name"] == "layout").unwrap()["id"].as_i64().unwrap();
-    json["luau_caches"]["prices"] = serde_json::json!({"clock": "work", "units": "work clock ns"});
+    json["luau_caches"]["prices"] = parse_json(r#"{"clock": "work", "units": "work clock ns"}"#);
     let sites = json["luau_caches"]["sites"].as_array_mut().unwrap();
     sites.clear();
-    sites.push(serde_json::json!({"function": layout, "line": 31, "pc": 3, "op": "GETTABLEKS", "kind": "table key slot", "hits": 0, "misses": 0, "slow": 0, "other": 0, "outcomes": {"hit": 610, "absent": 4390}, "extra_work_us": 4390.0, "extra_work_us_per_frame": 43.9}));
+    sites.push(parse_json(&format!(
+        r#"{{"function": {layout}, "line": 31, "pc": 3, "op": "GETTABLEKS", "kind": "table key slot", "hits": 0, "misses": 0, "slow": 0, "other": 0, "outcomes": {{"hit": 610, "absent": 4390}}, "extra_work_us": 4390.0, "extra_work_us_per_frame": 43.9}}"#
+    )));
     for line in [32, 33, 34] {
-        sites.push(serde_json::json!({"function": layout, "line": line, "pc": line, "op": "SETTABLEKS", "kind": "table key slot", "hits": 0, "misses": 0, "slow": 0, "other": 0, "outcomes": {"hit": 0, "inserted": 3000}, "extra_work_us": 5250.0, "extra_work_us_per_frame": 52.5}));
+        sites.push(parse_json(&format!(
+            r#"{{"function": {layout}, "line": {line}, "pc": {line}, "op": "SETTABLEKS", "kind": "table key slot", "hits": 0, "misses": 0, "slow": 0, "other": 0, "outcomes": {{"hit": 0, "inserted": 3000}}, "extra_work_us": 5250.0, "extra_work_us_per_frame": 52.5}}"#
+        )));
     }
     std::fs::write(&path, json.to_string()).unwrap();
     let (issues, _, _) = issues_of(&dir);
@@ -958,20 +965,23 @@ fn cost_profile(dir: &std::path::Path, functions: &[(&str, Vec<f64>)]) -> std::p
 
     // The call tree: the startup phase, the steady phase, then one node for each function under it.
     // A row is [parent node, function id, calls, own work us, instructions, label, calling line]
-    let mut tree = vec![serde_json::json!([-1, -1, 0, 0.0, 0, "startup"]), serde_json::json!([0, -1, 0, 0.0, 0, STEADY_PHASE])];
+    let mut tree = parse_json(&format!(r#"[[-1, -1, 0, 0.0, 0, "startup"], [0, -1, 0, 0.0, 0, "{STEADY_PHASE}"]]"#)).as_array().unwrap().clone();
     let mut function_entries = Vec::new();
     let mut total_ms = 0.0;
     for (id, (name, work_by_frame)) in functions.iter().enumerate() {
         let work_ms: f64 = work_by_frame.iter().sum();
         total_ms += work_ms;
-        tree.push(serde_json::json!([1, id, frames, work_ms * 1e3, 1, null]));
-        function_entries.push(serde_json::json!({
-            "id": id, "key": format!("{MODULE}:{name}"), "name": name, "module": MODULE, "line": id + 1, "last_line": id + 1,
-            "kind": "Luau", "harness": false,
-            "self": {"work_ms": work_ms, "insns": 1},
-            "total": {"work_ms": work_ms, "insns": 1},
-            "phases": {STEADY_PHASE: {"self_work_ms": work_ms, "total_work_ms": work_ms, "calls": frames, "insns": 1}},
-        }));
+        tree.push(serde_json::Value::Array(vec![1.into(), id.into(), frames.into(), (work_ms * 1e3).into(), 1.into(), serde_json::Value::Null]));
+        let line = id + 1;
+        function_entries.push(parse_json(&format!(
+            r#"{{
+                "id": {id}, "key": "{MODULE}:{name}", "name": "{name}", "module": "{MODULE}", "line": {line}, "last_line": {line},
+                "kind": "Luau", "harness": false,
+                "self": {{"work_ms": {work_ms:?}, "insns": 1}},
+                "total": {{"work_ms": {work_ms:?}, "insns": 1}},
+                "phases": {{"{STEADY_PHASE}": {{"self_work_ms": {work_ms:?}, "total_work_ms": {work_ms:?}, "calls": {frames}, "insns": 1}}}}
+            }}"#
+        )));
     }
 
     // The timeline: a row for each frame, [frame, phase, part, work ms, game ms, harness ms], and each row's functions as
@@ -980,29 +990,32 @@ fn cost_profile(dir: &std::path::Path, functions: &[(&str, Vec<f64>)]) -> std::p
     let mut function_cells = Vec::new();
     for frame in 0..frames {
         let frame_ms: f64 = functions.iter().map(|(_, work_by_frame)| work_by_frame[frame]).sum();
-        rows.push(serde_json::json!([frame + 1, 2, 0, frame_ms, frame_ms, 0]));
+        rows.push(serde_json::Value::Array(vec![(frame + 1).into(), 2.into(), 0.into(), frame_ms.into(), frame_ms.into(), 0.into()]));
 
         let mut cells = Vec::new();
         for (id, (_, work_by_frame)) in functions.iter().enumerate() {
             if work_by_frame[frame] > 0.0 {
-                cells.push(serde_json::json!(id));
-                cells.push(serde_json::json!(work_by_frame[frame] * 1e3));
+                cells.push(serde_json::Value::from(id));
+                cells.push(serde_json::Value::from(work_by_frame[frame] * 1e3));
             }
         }
-        function_cells.push(cells);
+        function_cells.push(serde_json::Value::Array(cells));
     }
 
     let path = dir.join("profile.json");
     edit_json(&path, |json| {
-        json["functions"] = serde_json::json!(function_entries);
-        json["tree"] = serde_json::json!(tree);
-        json["lines"] = serde_json::json!([]);
-        json["timeline"] = serde_json::json!({"columns": ["frame", "phase", "part", "work_ms", "game_ms", "harness_ms"], "rows": rows, "functions": function_cells});
-        json["scope"] = serde_json::json!({"phases": [STEADY_PHASE], "game_self_ms": total_ms, "harness_self_ms": 0});
-        json["run"]["frames"] = serde_json::json!(frames);
-        json["work"]["total_ms"] = serde_json::json!(total_ms);
-        json["work"]["c_calls"] = serde_json::json!(true);
-        json["run"]["kinds"] = serde_json::json!(["work", "timeline"]);
+        json["functions"] = serde_json::Value::Array(function_entries);
+        json["tree"] = serde_json::Value::Array(tree);
+        json["lines"] = serde_json::Value::Array(Vec::new());
+        let mut tl = parse_json(r#"{"columns": ["frame", "phase", "part", "work_ms", "game_ms", "harness_ms"]}"#);
+        tl["rows"] = serde_json::Value::Array(rows);
+        tl["functions"] = serde_json::Value::Array(function_cells);
+        json["timeline"] = tl;
+        json["scope"] = parse_json(&format!(r#"{{"phases": ["{STEADY_PHASE}"], "game_self_ms": {total_ms:?}, "harness_self_ms": 0}}"#));
+        json["run"]["frames"] = serde_json::Value::from(frames);
+        json["work"]["total_ms"] = serde_json::Value::from(total_ms);
+        json["work"]["c_calls"] = serde_json::Value::from(true);
+        json["run"]["kinds"] = parse_json(r#"["work", "timeline"]"#);
         for kind in ["alloc", "heap", "luau_caches", "builtins", "boundary"] {
             json.as_object_mut().unwrap().remove(kind);
         }
@@ -1024,19 +1037,21 @@ fn cache_prices_retain_first_touch_and_pay_the_presized_replacement() {
     // priced within their noise, left out. Its repredicted lookups are the uncharged work: 600,000 at 10 ns over 120
     // frames, 0.05 ms a frame.
     edit_json(&path, |json| {
-        json["luau_caches"] = serde_json::json!({
-            "prices": {"clock": "work", "kinds": {"table key slot": {"outcomes": {
-                "rehashed": {"charged": true},
-                "repredicted": {"charged": false, "ns": 10},
-                "absent": {"charged": false, "ns": 100, "within_noise": true},
-            }}}},
-            "sites": [
-                {"function": 0, "node": 2, "line": 1, "op": "SETTABLEKS", "kind": "table key slot", "outcomes": {"rehashed": 120000},
-                 "charged_work_us": 72840, "first_touch_us": 0, "outcome_charged_us": 72840, "presized_us": 21000, "extra_work_us": 0},
-                {"function": 0, "line": 2, "op": "GETTABLEKS", "kind": "table key slot", "outcomes": {"repredicted": 600000, "absent": 1000},
-                 "charged_work_us": 24000, "first_touch_us": 24000, "outcome_charged_us": 0, "within_noise": 1000},
-            ],
-        });
+        json["luau_caches"] = parse_json(
+            r#"{
+                "prices": {"clock": "work", "kinds": {"table key slot": {"outcomes": {
+                    "rehashed": {"charged": true},
+                    "repredicted": {"charged": false, "ns": 10},
+                    "absent": {"charged": false, "ns": 100, "within_noise": true}
+                }}}},
+                "sites": [
+                    {"function": 0, "node": 2, "line": 1, "op": "SETTABLEKS", "kind": "table key slot", "outcomes": {"rehashed": 120000},
+                     "charged_work_us": 72840, "first_touch_us": 0, "outcome_charged_us": 72840, "presized_us": 21000, "extra_work_us": 0},
+                    {"function": 0, "line": 2, "op": "GETTABLEKS", "kind": "table key slot", "outcomes": {"repredicted": 600000, "absent": 1000},
+                     "charged_work_us": 24000, "first_touch_us": 24000, "outcome_charged_us": 0, "within_noise": 1000}
+                ]
+            }"#,
+        );
     });
     let (found, _, _) = issues_of(&dir);
     let caches = find(&found, "cache misses");
@@ -1051,9 +1066,7 @@ fn cache_prices_retain_first_touch_and_pay_the_presized_replacement() {
 
     // Without the breakdown, the old charged total is evidence, not a claimed saving
     edit_json(&path, |json| {
-        json["luau_caches"]["sites"] = serde_json::json!([
-            {"function": 0, "line": 1, "op": "SETTABLEKS", "outcomes": {"rehashed": 120000}, "charged_work_us": 72840, "extra_work_us": 0},
-        ]);
+        json["luau_caches"]["sites"] = parse_json(r#"[{"function": 0, "line": 1, "op": "SETTABLEKS", "outcomes": {"rehashed": 120000}, "charged_work_us": 72840, "extra_work_us": 0}]"#);
     });
     let (found, _, _) = issues_of(&dir);
     let old = find(&found, "cache misses")[0];
@@ -1074,21 +1087,25 @@ fn nested_declines_keep_their_standalone_saving_and_totals_count_the_union() {
     let declined_calls = 513_000;
     let declines_charged_us = 10_260;
     edit_json(&path, |json| {
-        json["functions"].as_array_mut().unwrap().push(serde_json::json!({"id": -2, "key": "table.sort", "name": "table.sort", "kind": "C", "self": {"work_ms": 24}, "total": {"work_ms": 60}}));
-        json["tree"] = serde_json::json!([
-            [-1, -1, 0, 0, 0, "startup"],
-            [0, -1, 0, 0, 0, STEADY_PHASE],
-            [1, 0, frames, 0, 1, null],
-            [2, -2, frames, 24000, 0, "table.sort [C]", 1],
-            [3, 1, compare_calls, 36000, 1, null],
-        ]);
-        json["luau_caches"] = serde_json::json!({"prices": {"clock": "work"}, "sites": []});
-        json["builtins"] = serde_json::json!([{
-            "name": "string.byte", "calls": declined_calls, "declines": {"args": declined_calls},
-            "decline_charged_ns": 20, "decline_charged_us": declines_charged_us,
-            "sites": [{"function": 1, "node": 4, "decline_charged_us": declines_charged_us, "fast_equivalent_us": 0, "fix_cost_exact": true, "fix_instructions_us": 0, "fix_cold_us": 0, "line": 2, "declines": {"args": declined_calls}}],
-            "advice": {"args": "Pass the last index"},
-        }]);
+        json["functions"].as_array_mut().unwrap().push(parse_json(r#"{"id": -2, "key": "table.sort", "name": "table.sort", "kind": "C", "self": {"work_ms": 24}, "total": {"work_ms": 60}}"#));
+        json["tree"] = parse_json(&format!(
+            r#"[
+                [-1, -1, 0, 0, 0, "startup"],
+                [0, -1, 0, 0, 0, "{STEADY_PHASE}"],
+                [1, 0, {frames}, 0, 1, null],
+                [2, -2, {frames}, 24000, 0, "table.sort [C]", 1],
+                [3, 1, {compare_calls}, 36000, 1, null]
+            ]"#
+        ));
+        json["luau_caches"] = parse_json(r#"{"prices": {"clock": "work"}, "sites": []}"#);
+        json["builtins"] = parse_json(&format!(
+            r#"[{{
+                "name": "string.byte", "calls": {declined_calls}, "declines": {{"args": {declined_calls}}},
+                "decline_charged_ns": 20, "decline_charged_us": {declines_charged_us},
+                "sites": [{{"function": 1, "node": 4, "decline_charged_us": {declines_charged_us}, "fast_equivalent_us": 0, "fix_cost_exact": true, "fix_instructions_us": 0, "fix_cold_us": 0, "line": 2, "declines": {{"args": {declined_calls}}}}}],
+                "advice": {{"args": "Pass the last index"}}
+            }}]"#
+        ));
     });
     let (found, _, _) = issues_of(&dir);
     let sort = find(&found, "sort calls")[0];
@@ -1154,10 +1171,12 @@ fn a_counter_claim_cannot_exceed_its_named_functions_work() {
 
     // The cache site claims 50,000 us over 120 frames (0.417 ms a frame) of a function that only did 0.1 ms a frame
     edit_json(&dir.join("profile.json"), |json| {
-        json["luau_caches"] = serde_json::json!({"prices": {"clock": "work"}, "sites": [
-            {"function": 0, "node": 2, "line": 1, "op": "GETIMPORT", "outcomes": {"absent": 120000},
-             "charged_work_us": 50000, "first_touch_us": 0, "outcome_charged_us": 50000, "extra_work_us": 0},
-        ]});
+        json["luau_caches"] = parse_json(
+            r#"{"prices": {"clock": "work"}, "sites": [
+                {"function": 0, "node": 2, "line": 1, "op": "GETIMPORT", "outcomes": {"absent": 120000},
+                 "charged_work_us": 50000, "first_touch_us": 0, "outcome_charged_us": 50000, "extra_work_us": 0}
+            ]}"#,
+        );
     });
     let (found, _, _) = issues_of(&dir);
     let cache = find(&found, "cache misses")[0];

@@ -7,12 +7,16 @@
 
 use std::path::{Path, PathBuf};
 
-use serde_json::{Value, json};
+use serde_json::{Map, Value};
 
 pub const MODULE: &str = "ReplicatedStorage.Fixture.Main";
 /// The harness's module, where ree mounts a run's --harness (its code is not the game's)
 pub const HARNESS_MODULE: &str = "ReplicatedStorage.RURFixtures.Fixture";
 
+/// Parses a JSON string into a `Value`, avoiding `serde_json::json!` macro LLVM IR expansion across large test fixtures.
+pub fn parse_json(text: &str) -> Value {
+    serde_json::from_str(text).unwrap()
+}
 
 /// The fixture's source (40 lines): the lines the figures name hold the code they describe
 pub fn source() -> String {
@@ -68,30 +72,45 @@ pub fn write_profile(dir: &Path, shape: Shape) -> PathBuf {
     let sort_share = shape.sorts as f64 / 100.0;
     // the calling-context tree: [parent, function, calls, self work in us, self instructions, label]
     let compare_calls = 500 * shape.sorts;
-    let mut tree = vec![
-        json!([-1, -1, 0, 0.0, 0, "startup"]),
-        json!([0, 0, 1, 500.0, 400, null]),
-        json!([0, -1, 0, 0.0, 0, "frames"]),
-        json!([2, 1, 20, 200.0, 1000, null]),
-        json!([3, 2, 20, 600.0, 4000, null]),
-        json!([4, -2, 20, 40.0, 0, "sort [C]"]),
-        json!([5, 3, 10000, 800.0, 60000, null]),
-        json!([3, 4, 20, 400.0, 2000, null]),
-        json!([0, -1, 0, 0.0, 0, "steady"]),
-        json!([8, 1, 100, 1000.0, 5000, null]),
-        json!([9, 2, 100, 3000.0 * (0.25 + 0.75 * sort_share), 20000, null]),
-        json!([10, -2, shape.sorts, 2.0 * shape.sorts as f64, 0, "sort [C]"]),
-        json!([11, 3, compare_calls, 40.0 * shape.sorts as f64, 3000 * shape.sorts, null]),
-        json!([9, 4, 100, 2000.0, 10000, null]),
-        json!([13, -3, 30000, 300.0, 0, "__index [C]"]),
-        json!([9, 5, 100, 100.0, 800, null]),
-    ];
+    let rank_steady = 3000.0 * (0.25 + 0.75 * sort_share);
+    let sort_us = 2.0 * shape.sorts as f64;
+    let compare_us = 40.0 * shape.sorts as f64;
+    let compare_insns = 3000 * shape.sorts;
+    let mut tree: Vec<Value> = parse_json(&format!(
+        r#"[
+            [-1, -1, 0, 0.0, 0, "startup"],
+            [0, 0, 1, 500.0, 400, null],
+            [0, -1, 0, 0.0, 0, "frames"],
+            [2, 1, 20, 200.0, 1000, null],
+            [3, 2, 20, 600.0, 4000, null],
+            [4, -2, 20, 40.0, 0, "sort [C]"],
+            [5, 3, 10000, 800.0, 60000, null],
+            [3, 4, 20, 400.0, 2000, null],
+            [0, -1, 0, 0.0, 0, "steady"],
+            [8, 1, 100, 1000.0, 5000, null],
+            [9, 2, 100, {rank_steady:?}, 20000, null],
+            [10, -2, {}, {sort_us:?}, 0, "sort [C]"],
+            [11, 3, {compare_calls}, {compare_us:?}, {compare_insns}, null],
+            [9, 4, 100, 2000.0, 10000, null],
+            [13, -3, 30000, 300.0, 0, "__index [C]"],
+            [9, 5, 100, 100.0, 800, null]
+        ]"#,
+        shape.sorts
+    ))
+    .as_array()
+    .unwrap()
+    .clone();
     if shape.harness {
         // the harness's watcher under the steady phase, its C scan (the harness's side) and a call into the game's rank
         // (the game's side: a script function is its own module's)
-        tree.push(json!([8, 6, 100, 1500.0, 6000, null]));
-        tree.push(json!([16, -4, 100, 2500.0, 0, "GetDescendants [C]"]));
-        tree.push(json!([16, 2, 10, 30.0, 200, null]));
+        let extra = parse_json(
+            r#"[
+                [8, 6, 100, 1500.0, 6000, null],
+                [16, -4, 100, 2500.0, 0, "GetDescendants [C]"],
+                [16, 2, 10, 30.0, 200, null]
+            ]"#,
+        );
+        tree.extend(extra.as_array().unwrap().iter().cloned());
     }
     // per function: (self work us, total work us, self insns, total insns, calls)
     let node = |i: usize| -> (i64, i64, u64, f64, f64) {
@@ -163,27 +182,46 @@ pub fn write_profile(dir: &Path, shape: Shape) -> PathBuf {
     let records_steady = shape.records * 100;
     let records_frames = shape.records * 20;
     let records = records_steady + records_frames;
-    let mut alloc_stacks = vec![
-        json!({"frames": [[2, 21], [1, 10]], "type": "table", "bytes": (records * 64) as f64, "count": records as f64}),
-        json!({"frames": [[2, 21], [1, 10]], "type": "table storage", "bytes": (records * 48) as f64, "count": records as f64}),
-        json!({"frames": [[4, 32], [1, 10]], "type": "table storage", "bytes": 840.0 * 64.0, "count": 840.0}),
-        json!({"frames": [[4, 32], [1, 10]], "type": "table", "bytes": 120.0 * 64.0, "count": 120.0}),
-        json!({"frames": [[0, 5]], "type": "table", "bytes": 640.0, "count": 10.0}),
-        json!({"frames": [], "type": "thread stack", "bytes": 3072.0, "count": 3.0}),
-    ];
+    let rec_f = records as f64;
+    let rec64 = (records * 64) as f64;
+    let rec48 = (records * 48) as f64;
+    let mut alloc_stacks: Vec<Value> = parse_json(&format!(
+        r#"[
+            {{"frames": [[2, 21], [1, 10]], "type": "table", "bytes": {rec64:?}, "count": {rec_f:?}}},
+            {{"frames": [[2, 21], [1, 10]], "type": "table storage", "bytes": {rec48:?}, "count": {rec_f:?}}},
+            {{"frames": [[4, 32], [1, 10]], "type": "table storage", "bytes": 53760.0, "count": 840.0}},
+            {{"frames": [[4, 32], [1, 10]], "type": "table", "bytes": 7680.0, "count": 120.0}},
+            {{"frames": [[0, 5]], "type": "table", "bytes": 640.0, "count": 10.0}},
+            {{"frames": [], "type": "thread stack", "bytes": 3072.0, "count": 3.0}}
+        ]"#
+    ))
+    .as_array()
+    .unwrap()
+    .clone();
     if shape.harness {
         // the watcher's tables, regrown six times each: 28 KB a frame
-        alloc_stacks.push(json!({"frames": [[6, 7]], "type": "table", "bytes": 6400.0, "count": 100.0}));
-        alloc_stacks.push(json!({"frames": [[6, 7]], "type": "table storage", "bytes": 2_867_200.0, "count": 700.0}));
+        let extra = parse_json(
+            r#"[
+                {"frames": [[6, 7]], "type": "table", "bytes": 6400.0, "count": 100.0},
+                {"frames": [[6, 7]], "type": "table storage", "bytes": 2867200.0, "count": 700.0}
+            ]"#,
+        );
+        alloc_stacks.extend(extra.as_array().unwrap().iter().cloned());
     }
     let rank_bytes = (records * 112) as f64;
     let alloc_total = rank_bytes + 61440.0 + 640.0 + 3072.0;
     let alloc_objects = (records * 2) as f64 + 960.0 + 10.0 + 3.0;
-    let by_type = vec![
-        json!({"type": "table", "group": "table", "bytes": (records * 64) as f64 + 7680.0 + 640.0, "count": records as f64 + 130.0}),
-        json!({"type": "table storage", "group": "table", "bytes": (records * 48) as f64 + 53760.0, "count": records as f64 + 840.0}),
-        json!({"type": "thread stack", "group": "thread", "bytes": 3072.0, "count": 3.0}),
-    ];
+    let by_type = parse_json(&format!(
+        r#"[
+            {{"type": "table", "group": "table", "bytes": {:?}, "count": {:?}}},
+            {{"type": "table storage", "group": "table", "bytes": {:?}, "count": {:?}}},
+            {{"type": "thread stack", "group": "thread", "bytes": 3072.0, "count": 3.0}}
+        ]"#,
+        rec64 + 7680.0 + 640.0,
+        rec_f + 130.0,
+        rec48 + 53760.0,
+        rec_f + 840.0,
+    ));
     let alloc_of = |id: i64| -> (f64, f64) {
         match id {
             2 => (rank_bytes, (records * 2) as f64),
@@ -223,11 +261,21 @@ pub fn write_profile(dir: &Path, shape: Shape) -> PathBuf {
                 _ => None,
             };
             let kind = if kind == "harness" { "Luau" } else { kind };
-            let phases: serde_json::Map<String, Value> = by_phase
+            let phases: Map<String, Value> = by_phase
                 .get(&id)
                 .into_iter()
                 .flatten()
-                .map(|(phase, f)| (phase.clone(), json!({"self_work_ms": us(f[0]), "total_work_ms": us(f[1]), "calls": f[2] as u64, "insns": f[3] as u64, "harness_self_work_ms": us(f[4])})))
+                .map(|(phase, f)| {
+                    let entry = parse_json(&format!(
+                        r#"{{"self_work_ms":{:?},"total_work_ms":{:?},"calls":{},"insns":{},"harness_self_work_ms":{:?}}}"#,
+                        us(f[0]),
+                        us(f[1]),
+                        f[2] as u64,
+                        f[3] as u64,
+                        us(f[4])
+                    ));
+                    (phase.clone(), entry)
+                })
                 .collect();
             let key = match (module, name) {
                 (Some(m), "") => format!("{m}:anonymous@{}", line.unwrap()),
@@ -236,56 +284,101 @@ pub fn write_profile(dir: &Path, shape: Shape) -> PathBuf {
             };
             let (alloc, allocs) = alloc_of(id);
             let (total_alloc, total_allocs) = total_alloc_of(id);
-            json!({
-                "id": id, "key": key, "name": name, "module": module, "line": line, "last_line": line.map(|l| l + 4), "kind": kind,
-                "native": false, "native_entries": 0, "native_work_ms": 0.0, "calls": calls, "harness": harness_function(id), "phases": phases,
-                "self": {"insns": insns, "work_ms": us(work), "time_ms": 0.0, "alloc_bytes": alloc, "allocs": allocs},
-                "total": {"insns": total_insns, "work_ms": us(total), "time_ms": 0.0, "alloc_bytes": total_alloc, "allocs": total_allocs},
-            })
+            let mut f = parse_json(&format!(
+                r#"{{
+                    "id": {id}, "native": false, "native_entries": 0, "native_work_ms": 0.0,
+                    "calls": {calls}, "harness": {},
+                    "self": {{"insns": {insns:?}, "work_ms": {:?}, "time_ms": 0.0, "alloc_bytes": {alloc:?}, "allocs": {allocs:?}}},
+                    "total": {{"insns": {total_insns:?}, "work_ms": {:?}, "time_ms": 0.0, "alloc_bytes": {total_alloc:?}, "allocs": {total_allocs:?}}}
+                }}"#,
+                harness_function(id),
+                us(work),
+                us(total),
+            ));
+            let obj = f.as_object_mut().unwrap();
+            obj.insert("key".into(), Value::String(key));
+            obj.insert("name".into(), Value::String(name.into()));
+            obj.insert("module".into(), module.map_or(Value::Null, |m| Value::String(m.into())));
+            obj.insert("line".into(), line.map_or(Value::Null, Value::from));
+            obj.insert("last_line".into(), line.map_or(Value::Null, |l| Value::from(l + 4)));
+            obj.insert("kind".into(), Value::String(kind.into()));
+            obj.insert("phases".into(), Value::Object(phases));
+            f
         })
         .collect();
-    let line = |function: i64, line: i64, insns: f64, work_us: f64, ops: Value| json!({"function": function, "line": line, "insns": insns, "work_ms": us(work_us), "total_work_ms": us(work_us), "total_insns": insns, "time_ms": 0.0, "total_time_ms": 0.0, "alloc_bytes": 0.0, "allocs": 0.0, "ops": ops});
     let rank_work = 600.0 + 3000.0 * (0.25 + 0.75 * sort_share);
+    let line = |function: i64, line: i64, insns: f64, work_us: f64, ops: &str| {
+        let w = us(work_us);
+        parse_json(&format!(
+            r#"{{"function":{function},"line":{line},"insns":{insns:?},"work_ms":{w:?},"total_work_ms":{w:?},"total_insns":{insns:?},"time_ms":0.0,"total_time_ms":0.0,"alloc_bytes":0.0,"allocs":0.0,"ops":{ops}}}"#
+        ))
+    };
     let lines = vec![
-        line(2, 21, 20000.0, rank_work * 0.8, json!({"NEWTABLE": 12000, "SETTABLEKS": 8000})),
-        line(2, 22, 4000.0, rank_work * 0.2, json!({"CALL": 120, "DUPCLOSURE": 120})),
-        line(3, 22, 60000.0 + 3000.0 * shape.sorts as f64, 800.0 + 40.0 * shape.sorts as f64, json!({"GETTABLEKS": 30000, "JUMPIFLT": 15000})),
-        line(4, 31, 8000.0, 1700.0, json!({"GETTABLEKS": 6000, "ADD": 2000})),
-        line(4, 32, 4000.0, 700.0, json!({"NEWTABLE": 120, "SETTABLE": 3000})),
-        line(1, 11, 4000.0, 900.0, json!({"CALL": 120})),
-        line(1, 12, 2000.0, 300.0, json!({"CALL": 120})),
-        line(0, 5, 400.0, 500.0, json!({"NEWTABLE": 1})),
+        line(2, 21, 20000.0, rank_work * 0.8, r#"{"NEWTABLE": 12000, "SETTABLEKS": 8000}"#),
+        line(2, 22, 4000.0, rank_work * 0.2, r#"{"CALL": 120, "DUPCLOSURE": 120}"#),
+        line(3, 22, 60000.0 + 3000.0 * shape.sorts as f64, 800.0 + 40.0 * shape.sorts as f64, r#"{"GETTABLEKS": 30000, "JUMPIFLT": 15000}"#),
+        line(4, 31, 8000.0, 1700.0, r#"{"GETTABLEKS": 6000, "ADD": 2000}"#),
+        line(4, 32, 4000.0, 700.0, r#"{"NEWTABLE": 120, "SETTABLE": 3000}"#),
+        line(1, 11, 4000.0, 900.0, r#"{"CALL": 120}"#),
+        line(1, 12, 2000.0, 300.0, r#"{"CALL": 120}"#),
+        line(0, 5, 400.0, 500.0, r#"{"NEWTABLE": 1}"#),
     ];
     let total_work: f64 = figures.values().map(|f| f.0).sum();
     // the timeline: 20 frames of phase frames, 100 of steady; a collector spike at frame 90, a work spike at frame 60,
     // and connections growing a frame through the steady state
     let rows: Vec<Value> = (1..=120u64)
         .map(|frame| {
-            let phase = if frame <= 20 { 1 } else { 2 };
+            let phase = if frame <= 20 { 1u64 } else { 2u64 };
             let work = if frame == 60 { 2.0 } else if phase == 1 { 0.102 } else { 0.106 };
             let gc = if frame == 90 { 3.0 } else { 0.05 };
             let connections = if phase == 2 { 10 + (frame - 21) } else { 10 };
-            let (allocated, allocations) = if phase == 2 { (shape.records as f64 * 112.0 + 512.0, shape.records as f64 * 2.0 + 8.0) } else { (shape.records as f64 * 112.0 + 512.0, shape.records as f64 * 2.0 + 8.0) };
-            json!([frame, frame as f64 / 60.0, phase, 0.4, work, 3000, 1_000_000 + frame * 1000, allocated, allocations, if frame == 90 { 400 } else { 2 }, gc, if frame == 90 { 900_000 } else { 1000 }, 500, connections, 3, 1_000_000])
+            let (allocated, allocations) = (shape.records as f64 * 112.0 + 512.0, shape.records as f64 * 2.0 + 8.0);
+            Value::Array(vec![
+                frame.into(),
+                (frame as f64 / 60.0).into(),
+                phase.into(),
+                0.4.into(),
+                work.into(),
+                3000u64.into(),
+                (1_000_000 + frame * 1000).into(),
+                allocated.into(),
+                allocations.into(),
+                (if frame == 90 { 400u64 } else { 2u64 }).into(),
+                gc.into(),
+                (if frame == 90 { 900_000u64 } else { 1000u64 }).into(),
+                500u64.into(),
+                connections.into(),
+                3u64.into(),
+                1_000_000u64.into(),
+            ])
         })
         .collect();
+    let heap_types = parse_json(r#"[{"type":"table","count":3000,"bytes":2000000.0},{"type":"function prototype","count":200,"bytes":600000.0},{"type":"string","count":800,"bytes":300000.0}]"#);
+    let holders = parse_json(
+        r#"[
+            {"type":"table","name":"","size":4096.0,"retained":1800000.0,"path":"registry > Items","stack":[[0,5]]},
+            {"type":"thread","name":"","size":6768.0,"retained":220000.0,"path":"(engine reference)","stack":null}
+        ]"#,
+    );
     let snapshot = |label: &str, frame: u64, reachable: f64, by_type: Value, biggest: Value| {
-        json!({
-            "label": label, "frame": frame, "seconds": frame as f64 / 60.0, "gcinfo_kb": reachable / 1024.0 + 100.0, "total_bytes": reachable + 102400.0,
-            "objects": 5000, "object_bytes": reachable + 51200.0,
-            "reachable": {"count": 4000, "bytes": reachable},
-            "unswept": {"count": 1000, "bytes": 51200.0, "by_type": [{"type": "table", "count": 1000, "bytes": 51200.0}]},
-            "by_type": by_type,
-            "allocated_since": {"count": 600.0, "bytes": 61440.0},
-            "biggest": biggest,
-            "by_stack": [{"frames": [[4, 32], [1, 10]], "type": "table", "count": 120.0, "bytes": 61440.0}],
-        })
+        let mut s = parse_json(&format!(
+            r#"{{
+                "label": "{label}", "frame": {frame}, "seconds": {:?}, "gcinfo_kb": {:?}, "total_bytes": {:?},
+                "objects": 5000, "object_bytes": {:?},
+                "reachable": {{"count": 4000, "bytes": {reachable:?}}},
+                "unswept": {{"count": 1000, "bytes": 51200.0, "by_type": [{{"type": "table", "count": 1000, "bytes": 51200.0}}]}},
+                "allocated_since": {{"count": 600.0, "bytes": 61440.0}},
+                "by_stack": [{{"frames": [[4, 32], [1, 10]], "type": "table", "count": 120.0, "bytes": 61440.0}}]
+            }}"#,
+            frame as f64 / 60.0,
+            reachable / 1024.0 + 100.0,
+            reachable + 102400.0,
+            reachable + 51200.0,
+        ));
+        s["by_type"] = by_type;
+        s["biggest"] = biggest;
+        s
     };
-    let heap_types = json!([{"type": "table", "count": 3000, "bytes": 2_000_000.0}, {"type": "function prototype", "count": 200, "bytes": 600_000.0}, {"type": "string", "count": 800, "bytes": 300_000.0}]);
-    let holders = json!([
-        {"type": "table", "name": "", "size": 4096.0, "retained": 1_800_000.0, "path": "registry > Items", "stack": [[0, 5]]},
-        {"type": "thread", "name": "", "size": 6768.0, "retained": 220_000.0, "path": "(engine reference)", "stack": null},
-    ]);
     // what the scripts asked the engine to do, so far at each mark and at the end (ree 64fb6e6): the mount makes the
     // grid, the frames add a little, and the steady state clones, destroys and writes a frame's worth each frame (a
     // tenth of it after the change, and half the writes)
@@ -295,50 +388,104 @@ pub fn write_profile(dir: &Path, shape: Shape) -> PathBuf {
     let busy = shape.records > 0;
     let steady_ops = if busy { [100.0, 0.0, 100.0, 100.0, 3000.0, 2400.0, 600.0, 20.0, 10.0, 0.0, 50.0, 200.0] } else { [10.0, 0.0, 10.0, 10.0, 1200.0, 1150.0, 300.0, 20.0, 10.0, 0.0, 50.0, 200.0] };
     let engine_at = |mark: usize| -> Value {
-        let mut map = serde_json::Map::new();
+        let mut map = Map::new();
         for (index, name) in names.iter().enumerate() {
             let so_far = [0.0, mount[index], mount[index] + frames_ops[index], mount[index] + frames_ops[index] + steady_ops[index]][mark];
-            map.insert(name.to_string(), json!(so_far));
+            map.insert(name.to_string(), Value::from(so_far));
         }
         Value::Object(map)
     };
-    let steady_engine: Value = Value::Object(names.iter().zip(steady_ops).map(|(name, n)| (name.to_string(), json!(n))).collect());
-    let mut cache_sites = vec![json!({"function": 4, "line": 31, "pc": 7, "op": "GETTABLEKS", "hits": 1000, "misses": 5000, "slow": 0, "other": 0}), json!({"function": 2, "line": 21, "pc": 3, "op": "GETTABLEKS", "hits": 89000, "misses": 0, "slow": 0, "other": 2000})];
+    let steady_engine: Value = Value::Object(names.iter().zip(steady_ops).map(|(name, n)| (name.to_string(), Value::from(n))).collect());
+    let mut cache_sites = parse_json(
+        r#"[
+            {"function": 4, "line": 31, "pc": 7, "op": "GETTABLEKS", "hits": 1000, "misses": 5000, "slow": 0, "other": 0},
+            {"function": 2, "line": 21, "pc": 3, "op": "GETTABLEKS", "hits": 89000, "misses": 0, "slow": 0, "other": 2000}
+        ]"#,
+    );
     if shape.harness {
         // (the watcher's lookups miss every time: the harness's, not an issue of the game's)
-        cache_sites.push(json!({"function": 6, "line": 6, "pc": 2, "op": "GETTABLEKS", "hits": 0, "misses": 9000, "slow": 0, "other": 0}));
+        cache_sites.as_array_mut().unwrap().push(parse_json(r#"{"function": 6, "line": 6, "pc": 2, "op": "GETTABLEKS", "hits": 0, "misses": 9000, "slow": 0, "other": 0}"#));
     }
-    let profile = json!({
-        "version": 1, "tool": "ree",
-        "kinds": ["work", "caches", "alloc", "heap", "timeline", "cpu", "phases"],
-        "run": {"command": "run", "status": "ok", "harness": "C:/fixture/Fixture.luau", "frames": 120, "seconds": 2.0, "fps": 60.0, "elapsed": 0.5},
-        "phases": ["startup", "frames", "steady"],
-        "marks": [{"phase": "startup", "frame": 0, "seconds": 0.0, "work_ms": 0.0, "engine": engine_at(0)}, {"phase": "frames", "frame": 0, "seconds": 0.0, "work_ms": 0.5, "engine": engine_at(1)}, {"phase": "steady", "frame": 20, "seconds": 0.333, "work_ms": 2.54, "engine": engine_at(2)}],
-        "end": {"phase": "end", "frame": 120, "seconds": 2.0, "work_ms": us(total_work) + 0.06, "engine": engine_at(3)},
-        "warnings": [],
-        "functions": functions,
-        "lines": lines,
-        "edges": [],
-        "tree": tree,
-        "work": {"total_ms": us(total_work) + 0.06, "outside_instructions_ms": 0.06, "per_second_ms": (us(total_work) + 0.06) / 2.0, "per_frame_ms": (us(total_work) + 0.06) / 120.0,
-            "fidelity": "fidelity: a fixture's numbers, chosen for the tests", "script_insns": 40000, "engine_insns": 800, "native_functions": [], "opcodes": [{"op": "GETTABLEKS", "count": 36000, "work_ms": 1.0}]},
-        "luau_caches": {"by_kind": [{"kind": "table key slot", "hits": 90000, "misses": 5000, "slow": 0, "other": 2000}, {"kind": "import", "hits": 400, "misses": 0, "slow": 4, "other": 0}],
-            "sites": cache_sites},
-        "alloc": {"bytes": alloc_total, "objects": alloc_objects, "step": 1, "by_type": by_type, "by_stack": alloc_stacks},
-        "heap": {"snapshots": [snapshot("start", 0, 512_000.0, heap_types.clone(), holders.clone()), snapshot("steady", 20, 1_048_576.0, heap_types.clone(), holders.clone()), snapshot("end", 120, 3_670_016.0, heap_types, holders)],
-            "gc": {"cycles": 3, "steps": 640, "freed": 2_400_000, "ms": 9.5, "by_state": [{"state": "propagate", "steps": 400, "ms": 6.0}, {"state": "sweep", "steps": 240, "ms": 3.5}]}},
-        "ree_caches": [{"name": "member atoms", "about": "member names to their atoms", "hits": 120000, "misses": 12, "evictions": 0}, {"name": "unused", "about": "", "hits": 0, "misses": 0, "evictions": 0}],
-        "timeline": {"columns": ["frame", "seconds", "phase", "host_ms", "work_ms", "instructions", "heap_bytes", "allocated_bytes", "allocations", "gc_steps", "gc_ms", "gc_freed", "instances", "connections", "threads", "cycles"], "rows": rows},
-        "cpu": {"thread_cycles": 1_000_000_000u64},
-        "listings": {
-            "1": {"path": source_path.to_string_lossy(), "lines": [[10, "local function update()"]]},
-            "2": {"path": source_path.to_string_lossy(), "lines": [[20, "local function rank(items)"]]},
-        },
-        "source_hashes": {MODULE: hash},
-        "scope": {"phases": ["steady"], "game_self_ms": us(game_steady), "harness_self_ms": us(harness_steady), "harness_folder": "ReplicatedStorage.RURFixtures", "engine": steady_engine},
-        "summary": "ree profile: run ok (a test fixture)\n",
-        "files": ["summary.txt", "profile.json"],
-    });
+    let end_work = us(total_work) + 0.06;
+    let mut profile = parse_json(&format!(
+        r#"{{
+            "version": 1, "tool": "ree",
+            "kinds": ["work", "caches", "alloc", "heap", "timeline", "cpu", "phases"],
+            "run": {{"command": "run", "status": "ok", "harness": "C:/fixture/Fixture.luau", "frames": 120, "seconds": 2.0, "fps": 60.0, "elapsed": 0.5}},
+            "phases": ["startup", "frames", "steady"],
+            "marks": [
+                {{"phase": "startup", "frame": 0, "seconds": 0.0, "work_ms": 0.0}},
+                {{"phase": "frames", "frame": 0, "seconds": 0.0, "work_ms": 0.5}},
+                {{"phase": "steady", "frame": 20, "seconds": 0.333, "work_ms": 2.54}}
+            ],
+            "end": {{"phase": "end", "frame": 120, "seconds": 2.0, "work_ms": {end_work:?}}},
+            "warnings": [],
+            "edges": [],
+            "work": {{
+                "total_ms": {end_work:?}, "outside_instructions_ms": 0.06,
+                "per_second_ms": {:?}, "per_frame_ms": {:?},
+                "fidelity": "fidelity: a fixture's numbers, chosen for the tests",
+                "script_insns": 40000, "engine_insns": 800, "native_functions": [],
+                "opcodes": [{{"op": "GETTABLEKS", "count": 36000, "work_ms": 1.0}}]
+            }},
+            "luau_caches": {{
+                "by_kind": [
+                    {{"kind": "table key slot", "hits": 90000, "misses": 5000, "slow": 0, "other": 2000}},
+                    {{"kind": "import", "hits": 400, "misses": 0, "slow": 4, "other": 0}}
+                ]
+            }},
+            "alloc": {{"bytes": {alloc_total:?}, "objects": {alloc_objects:?}, "step": 1}},
+            "heap": {{
+                "gc": {{
+                    "cycles": 3, "steps": 640, "freed": 2400000, "ms": 9.5,
+                    "by_state": [{{"state": "propagate", "steps": 400, "ms": 6.0}}, {{"state": "sweep", "steps": 240, "ms": 3.5}}]
+                }}
+            }},
+            "ree_caches": [
+                {{"name": "member atoms", "about": "member names to their atoms", "hits": 120000, "misses": 12, "evictions": 0}},
+                {{"name": "unused", "about": "", "hits": 0, "misses": 0, "evictions": 0}}
+            ],
+            "timeline": {{
+                "columns": ["frame", "seconds", "phase", "host_ms", "work_ms", "instructions", "heap_bytes", "allocated_bytes", "allocations", "gc_steps", "gc_ms", "gc_freed", "instances", "connections", "threads", "cycles"]
+            }},
+            "cpu": {{"thread_cycles": 1000000000}},
+            "listings": {{
+                "1": {{"lines": [[10, "local function update()"]]}},
+                "2": {{"lines": [[20, "local function rank(items)"]]}}
+            }},
+            "scope": {{
+                "phases": ["steady"], "game_self_ms": {:?}, "harness_self_ms": {:?},
+                "harness_folder": "ReplicatedStorage.RURFixtures"
+            }},
+            "summary": "ree profile: run ok (a test fixture)\n",
+            "files": ["summary.txt", "profile.json"]
+        }}"#,
+        end_work / 2.0,
+        end_work / 120.0,
+        us(game_steady),
+        us(harness_steady),
+    ));
+    for i in 0..3 {
+        profile["marks"][i]["engine"] = engine_at(i);
+    }
+    profile["end"]["engine"] = engine_at(3);
+    profile["functions"] = Value::Array(functions);
+    profile["lines"] = Value::Array(lines);
+    profile["tree"] = Value::Array(tree);
+    profile["luau_caches"]["sites"] = cache_sites;
+    profile["alloc"]["by_type"] = by_type;
+    profile["alloc"]["by_stack"] = Value::Array(alloc_stacks);
+    profile["heap"]["snapshots"] = Value::Array(vec![
+        snapshot("start", 0, 512_000.0, heap_types.clone(), holders.clone()),
+        snapshot("steady", 20, 1_048_576.0, heap_types.clone(), holders.clone()),
+        snapshot("end", 120, 3_670_016.0, heap_types, holders),
+    ]);
+    profile["timeline"]["rows"] = Value::Array(rows);
+    let path_str = source_path.to_string_lossy().into_owned();
+    profile["listings"]["1"]["path"] = Value::String(path_str.clone());
+    profile["listings"]["2"]["path"] = Value::String(path_str);
+    profile["source_hashes"] = Value::Object(Map::from_iter([(MODULE.to_string(), Value::String(hash))]));
+    profile["scope"]["engine"] = steady_engine;
     std::fs::write(dir.join("profile.json"), serde_json::to_string(&profile).unwrap()).unwrap();
     std::fs::write(dir.join("summary.txt"), "ree profile: run ok (a test fixture)\n").unwrap();
     // the folded allocations by phase: what profile.json's stacks hold, split by phase
@@ -360,16 +507,20 @@ pub fn write_profile(dir: &Path, shape: Shape) -> PathBuf {
     // the boundary profile: Part.Size read again 200 times a frame at Main:31 (a repeat 29 ns at the boundary, a first read
     // 542 ns with the frame's cold charge), Position written unchanged at Main:33 (167 ns a write), each with its script
     // side. (A function's crossings are its work: layout's 2.3 ms in the steady phase hold them.)
-    let mut boundary = json!({
-        "version": 1, "phase": "steady", "emulated_seconds": 1.6667, "frames": 100, "crossings": 33000, "crossings_per_s": 19800.0, "cost_ms_per_s": 4.0,
-        "by_site_count": [{"script": MODULE, "function": "layout", "line": 33, "kind": "write", "member": "Part.Position", "count": 3000, "per_s": 1800.0, "cost_ms_per_s": 0.3, "unchanged_writes": 3000, "repeat_reads": 0, "repeat_reads_per_s": 0.0, "repeat_cost_ms": 0.0, "unchanged_cost_ms": 0.5}],
-        "by_site_cost": [],
-        "by_member": [{"member": "Part.Size", "kind": "read", "count": 30000, "per_s": 18000.0, "cost_ms_per_s": 3.0, "call_sites": 1, "reads_per_frame": 300.0, "distinct_per_frame": 100.0, "same_function_repeats_per_frame": 200.0, "cross_function_repeats_per_frame": 0.0}],
-        "repeat_reads": [{"script": MODULE, "function": "layout", "line": 31, "kind": "read", "member": "Part.Size", "count": 30000, "per_s": 15000.0, "cost_ms_per_s": 3.0, "unchanged_writes": 0, "repeat_reads": 20000, "repeat_reads_per_s": 12000.0, "repeat_cost_ms": 0.58, "unchanged_cost_ms": 0.0}],
-    });
+    let mut boundary = parse_json(&format!(
+        r#"{{
+            "version": 1, "phase": "steady", "emulated_seconds": 1.6667, "frames": 100, "crossings": 33000, "crossings_per_s": 19800.0, "cost_ms_per_s": 4.0,
+            "by_site_count": [{{"script": "{MODULE}", "function": "layout", "line": 33, "kind": "write", "member": "Part.Position", "count": 3000, "per_s": 1800.0, "cost_ms_per_s": 0.3, "unchanged_writes": 3000, "repeat_reads": 0, "repeat_reads_per_s": 0.0, "repeat_cost_ms": 0.0, "unchanged_cost_ms": 0.5}}],
+            "by_site_cost": [],
+            "by_member": [{{"member": "Part.Size", "kind": "read", "count": 30000, "per_s": 18000.0, "cost_ms_per_s": 3.0, "call_sites": 1, "reads_per_frame": 300.0, "distinct_per_frame": 100.0, "same_function_repeats_per_frame": 200.0, "cross_function_repeats_per_frame": 0.0}}],
+            "repeat_reads": [{{"script": "{MODULE}", "function": "layout", "line": 31, "kind": "read", "member": "Part.Size", "count": 30000, "per_s": 15000.0, "cost_ms_per_s": 3.0, "unchanged_writes": 0, "repeat_reads": 20000, "repeat_reads_per_s": 12000.0, "repeat_cost_ms": 0.58, "unchanged_cost_ms": 0.0}}]
+        }}"#
+    ));
     if shape.harness {
         // (the watcher reads each part's Name again: the harness's)
-        boundary["repeat_reads"].as_array_mut().unwrap().push(json!({"script": HARNESS_MODULE, "function": "watch", "line": 6, "kind": "read", "member": "Instance.Name", "count": 60000, "per_s": 36000.0, "cost_ms_per_s": 6.0, "unchanged_writes": 0, "repeat_reads": 50000, "repeat_reads_per_s": 30000.0, "repeat_cost_ms": 1.45, "unchanged_cost_ms": 0.0}));
+        boundary["repeat_reads"].as_array_mut().unwrap().push(parse_json(&format!(
+            r#"{{"script": "{HARNESS_MODULE}", "function": "watch", "line": 6, "kind": "read", "member": "Instance.Name", "count": 60000, "per_s": 36000.0, "cost_ms_per_s": 6.0, "unchanged_writes": 0, "repeat_reads": 50000, "repeat_reads_per_s": 30000.0, "repeat_cost_ms": 1.45, "unchanged_cost_ms": 0.0}}"#
+        )));
     }
     std::fs::write(dir.join("boundary.json"), serde_json::to_string(&boundary).unwrap()).unwrap();
     dir.to_path_buf()
@@ -381,64 +532,112 @@ pub fn write_comparison(dir: &Path) -> PathBuf {
     write_profile(&dir.join("runs/t-k-v/1000"), Shape::BEFORE);
     write_profile(&dir.join("runs/t-v-k/1000"), Shape::AFTER);
     let run = |variant: &str, slug: &str, n: f64, work: f64, alloc: f64, host: f64, hit: f64, tables: Value| {
-        json!({
-            "variant": variant, "size": n, "status": "ok", "error": null,
-            "profile": if n == 1000.0 { json!(format!("runs/{slug}/1000")) } else { Value::Null }, "hw_profile": null,
-            "digest": "9f3c0a21", "check": {"ok": true, "message": null},
-            "setup": {"work_ms": work / 2.0},
-            "run": {"work_ms": work, "insns": work * 10000.0, "alloc_bytes": alloc, "allocs": alloc / 64.0, "heap_bytes": alloc, "host_ms": host, "cache_hit_rate": hit, "rehashes": n / 10.0, "gc_ms": host / 4.0},
-            "host": {"ms": [host, host * 1.02], "cycles": [5200.0, 5310.0], "reps": 2500},
-            "heap": {"before": 1_052_672.0, "after_setup": 1_060_864.0 + alloc, "after_run": 1_061_888.0 + alloc},
-            "tables": tables,
-            "hot": [{"key": format!("{slug}:build"), "name": "build", "module": slug, "line": 14, "work_ms": work * 0.8, "insns": work * 8000.0}],
-        })
+        let mut r = parse_json(&format!(
+            r#"{{
+                "variant": "{variant}", "size": {n:?}, "status": "ok", "error": null, "hw_profile": null,
+                "digest": "9f3c0a21", "check": {{"ok": true, "message": null}},
+                "setup": {{"work_ms": {:?}}},
+                "run": {{"work_ms": {work:?}, "insns": {:?}, "alloc_bytes": {alloc:?}, "allocs": {:?}, "heap_bytes": {alloc:?}, "host_ms": {host:?}, "cache_hit_rate": {hit:?}, "rehashes": {:?}, "gc_ms": {:?}}},
+                "host": {{"ms": [{host:?}, {:?}], "cycles": [5200.0, 5310.0], "reps": 2500}},
+                "heap": {{"before": 1052672.0, "after_setup": {:?}, "after_run": {:?}}},
+                "hot": [{{"key": "{slug}:build", "name": "build", "module": "{slug}", "line": 14, "work_ms": {:?}, "insns": {:?}}}]
+            }}"#,
+            work / 2.0,
+            work * 10000.0,
+            alloc / 64.0,
+            n / 10.0,
+            host / 4.0,
+            host * 1.02,
+            1_060_864.0 + alloc,
+            1_061_888.0 + alloc,
+            work * 0.8,
+            work * 8000.0,
+        ));
+        r["profile"] = if n == 1000.0 { Value::String(format!("runs/{slug}/1000")) } else { Value::Null };
+        r["tables"] = tables;
+        r
     };
-    let kv_tables = |n: f64| json!({"count": n + 2.0, "bytes": n * 120.0 + 640.0, "setup": {"count": 1.0, "bytes": 640.0}, "run": {"count": n + 1.0, "bytes": n * 120.0}, "sites": [{"site": "input:5", "frames": [{"module": "input", "name": "setup", "line": 5, "path": "input.luau"}], "phase": "setup", "count": 1.0, "bytes": 640.0, "header_bytes": 56.0, "array_bytes": 584.0, "hash_bytes": 0.0, "array": {"slots": 64, "used": 64, "min": 64, "median": 64, "max": 64, "hist": [[64, 1]]}, "hash": {"slots": 0, "used": 0, "min": 0, "median": 0, "max": 0, "hist": [[0, 1]]}, "levels": {"min": 1, "median": 1, "max": 1, "hist": [[1, 1]]}, "rehashes": 0.0, "rehash_keys": 0.0}, {"site": "tkv:14 < tkv:30", "frames": [{"module": "tkv", "name": "build", "line": 14, "path": "tkv.luau"}], "phase": "run", "count": n, "bytes": n * 112.0, "header_bytes": n * 56.0, "array_bytes": 0.0, "hash_bytes": n * 56.0, "array": {"slots": 0, "used": 0, "min": 0, "median": 0, "max": 0, "hist": [[0, n]]}, "hash": {"slots": n * 2.0, "used": n * 2.0, "min": 2, "median": 2, "max": 2, "hist": [[2, n]]}, "levels": {"min": 1, "max": 1, "hist": [[1, n]]}, "rehashes": n, "rehash_keys": n * 3.0}]});
-    let vk_tables = |n: f64| json!({"count": 3.0, "bytes": n * 40.0, "sites": [{"site": "tvk:20 < tvk:30", "frames": [{"module": "tvk", "name": "build", "line": 20, "path": "tvk.luau"}], "phase": "run", "count": 2.0, "bytes": n * 32.0, "header_bytes": 112.0, "array_bytes": 0.0, "hash_bytes": n * 32.0, "array": {"slots": 0, "used": 0, "min": 0, "median": 0, "max": 0, "hist": [[0, 2]]}, "hash": {"slots": n * 2.0, "used": n * 2.0, "min": n, "median": n, "max": n, "hist": [[n, 2]]}, "levels": {"min": 1, "max": 1, "hist": [[1, 2]]}, "rehashes": 22.0, "rehash_keys": n * 4.0}]});
+    let kv_tables = |n: f64| {
+        parse_json(&format!(
+            r#"{{
+                "count": {:?}, "bytes": {:?}, "setup": {{"count": 1.0, "bytes": 640.0}}, "run": {{"count": {:?}, "bytes": {:?}}},
+                "sites": [
+                    {{"site": "input:5", "frames": [{{"module": "input", "name": "setup", "line": 5, "path": "input.luau"}}], "phase": "setup", "count": 1.0, "bytes": 640.0, "header_bytes": 56.0, "array_bytes": 584.0, "hash_bytes": 0.0, "array": {{"slots": 64, "used": 64, "min": 64, "median": 64, "max": 64, "hist": [[64, 1]]}}, "hash": {{"slots": 0, "used": 0, "min": 0, "median": 0, "max": 0, "hist": [[0, 1]]}}, "levels": {{"min": 1, "median": 1, "max": 1, "hist": [[1, 1]]}}, "rehashes": 0.0, "rehash_keys": 0.0}},
+                    {{"site": "tkv:14 < tkv:30", "frames": [{{"module": "tkv", "name": "build", "line": 14, "path": "tkv.luau"}}], "phase": "run", "count": {n:?}, "bytes": {:?}, "header_bytes": {:?}, "array_bytes": 0.0, "hash_bytes": {:?}, "array": {{"slots": 0, "used": 0, "min": 0, "median": 0, "max": 0, "hist": [[0, {n:?}]]}}, "hash": {{"slots": {:?}, "used": {:?}, "min": 2, "median": 2, "max": 2, "hist": [[2, {n:?}]]}}, "levels": {{"min": 1, "max": 1, "hist": [[1, {n:?}]]}}, "rehashes": {n:?}, "rehash_keys": {:?}}}
+                ]
+            }}"#,
+            n + 2.0,
+            n * 120.0 + 640.0,
+            n + 1.0,
+            n * 120.0,
+            n * 112.0,
+            n * 56.0,
+            n * 56.0,
+            n * 2.0,
+            n * 2.0,
+            n * 3.0,
+        ))
+    };
+    let vk_tables = |n: f64| {
+        parse_json(&format!(
+            r#"{{
+                "count": 3.0, "bytes": {:?},
+                "sites": [{{"site": "tvk:20 < tvk:30", "frames": [{{"module": "tvk", "name": "build", "line": 20, "path": "tvk.luau"}}], "phase": "run", "count": 2.0, "bytes": {:?}, "header_bytes": 112.0, "array_bytes": 0.0, "hash_bytes": {:?}, "array": {{"slots": 0, "used": 0, "min": 0, "median": 0, "max": 0, "hist": [[0, 2]]}}, "hash": {{"slots": {:?}, "used": {:?}, "min": {n:?}, "median": {n:?}, "max": {n:?}, "hist": [[{n:?}, 2]]}}, "levels": {{"min": 1, "max": 1, "hist": [[1, 2]]}}, "rehashes": 22.0, "rehash_keys": {:?}}}]
+            }}"#,
+            n * 40.0,
+            n * 32.0,
+            n * 32.0,
+            n * 2.0,
+            n * 2.0,
+            n * 4.0,
+        ))
+    };
     let mut runs = Vec::new();
     for n in [10.0, 100.0, 1000.0] {
         runs.push(run("t[k][v]", "t-k-v", n, 0.0002 * n, 120.0 * n, 0.00011 * n, 0.95, kv_tables(n)));
         runs.push(run("t[v][k]", "t-v-k", n, 0.0001 * n * (n / 10.0).log10().max(1.0), 40.0 * n, 0.00009 * n, 0.99, vk_tables(n)));
     }
-    let compare = json!({
-        "format": "ree-what-if", "version": 1,
-        "title": "t[k][v] or t[v][k]", "about": "two keys, many values each", "file": "nested-keys.luau", "out": ".",
-        "command": "ree profile try nested-keys.luau",
-        "baseline": "t[k][v]",
-        "variants": [{"name": "t[k][v]", "slug": "t-k-v", "kind": "function", "source": "nested-keys.luau:12"}, {"name": "t[v][k]", "slug": "t-v-k", "kind": "function", "source": "nested-keys.luau:20"}],
-        "sizes": [10, 100, 1000],
-        "frames": 1,
-        "fidelity": "fidelity: a fixture",
-        "metrics": [
-            {"key": "work_ms", "label": "work clock", "unit": "ms", "better": "lower", "exact": true, "about": "the work clock a call took: the same every run"},
-            {"key": "insns", "label": "instructions", "unit": "count", "better": "lower", "exact": true, "about": ""},
-            {"key": "alloc_bytes", "label": "allocated", "unit": "bytes", "better": "lower", "exact": true, "about": ""},
-            {"key": "heap_bytes", "label": "heap kept", "unit": "bytes", "better": "lower", "exact": true, "about": ""},
-            {"key": "host_ms", "label": "host time", "unit": "ms", "better": "lower", "exact": false, "about": "the fastest of the timed rounds"},
-            {"key": "cache_hit_rate", "label": "cache hit rate", "unit": "ratio", "better": "higher", "exact": true, "about": ""},
-            {"key": "rehashes", "label": "rehashes", "unit": "count", "better": "lower", "exact": true, "about": ""},
-            {"key": "hw_cycles", "label": "cycles", "unit": "count", "better": "lower", "exact": false, "about": ""},
-            {"key": "gc_ms", "label": "collector host time", "unit": "ms", "better": "none", "exact": false, "per_call": true, "about": ""}
-        ],
-        "runs": runs,
-        "scaling": [
-            {"variant": "t[k][v]", "metric": "work_ms", "exponent": 1.0, "r2": 1.0, "last": 1.0, "points": [[10, 0.002], [100, 0.02], [1000, 0.2]]},
-            {"variant": "t[v][k]", "metric": "work_ms", "exponent": 1.15, "r2": 0.99, "last": 1.18, "points": [[10, 0.001], [100, 0.01], [1000, 0.2]]}
-        ],
-        "functions": [{"variant": "t[v][k]", "key": "tvk:sortAll", "name": "sortAll", "module": "tvk", "line": 40, "exponent": 1.9, "points": [[10, 0.0001], [100, 0.008], [1000, 0.6]]}],
-        "winners": [
-            {"metric": "work_ms", "size": 10, "winner": "t[v][k]", "value": 0.001, "runner_up": "t[k][v]", "ratio": 2.0, "vs_baseline": 2.0, "clear": true},
-            {"metric": "work_ms", "size": 100, "winner": "t[v][k]", "value": 0.01, "runner_up": "t[k][v]", "ratio": 2.0, "vs_baseline": 2.0, "clear": true},
-            {"metric": "work_ms", "size": 1000, "winner": "t[k][v]", "value": 0.2, "runner_up": "t[v][k]", "ratio": 1.0, "vs_baseline": 1.0, "clear": false},
-            {"metric": "alloc_bytes", "size": 1000, "winner": "t[v][k]", "value": 40000.0, "runner_up": "t[k][v]", "ratio": 3.0, "vs_baseline": 3.0, "clear": true},
-            {"metric": "rehashes", "size": 10, "winner": "t[k][v]", "value": 1.0, "runner_up": "t[v][k]", "ratio": 1.0, "vs_baseline": 1.0, "clear": true, "material": false}
-        ],
-        "aa": [{"size": 1000, "ratio": 1.01, "spread": 0.03}],
-        "hw": {"read": false, "why": "the counter service is not installed"},
-        "check": {"ran": true, "ok": true, "failures": []},
-        "diffs": [{"variant": "t[v][k]", "size": 1000, "dir": "diff/t-v-k"}],
-        "notes": ["a fixture: the numbers are made up"]
-    });
+    let mut compare = parse_json(
+        r#"{
+            "format": "ree-what-if", "version": 1,
+            "title": "t[k][v] or t[v][k]", "about": "two keys, many values each", "file": "nested-keys.luau", "out": ".",
+            "command": "ree profile try nested-keys.luau",
+            "baseline": "t[k][v]",
+            "variants": [{"name": "t[k][v]", "slug": "t-k-v", "kind": "function", "source": "nested-keys.luau:12"}, {"name": "t[v][k]", "slug": "t-v-k", "kind": "function", "source": "nested-keys.luau:20"}],
+            "sizes": [10, 100, 1000],
+            "frames": 1,
+            "fidelity": "fidelity: a fixture",
+            "metrics": [
+                {"key": "work_ms", "label": "work clock", "unit": "ms", "better": "lower", "exact": true, "about": "the work clock a call took: the same every run"},
+                {"key": "insns", "label": "instructions", "unit": "count", "better": "lower", "exact": true, "about": ""},
+                {"key": "alloc_bytes", "label": "allocated", "unit": "bytes", "better": "lower", "exact": true, "about": ""},
+                {"key": "heap_bytes", "label": "heap kept", "unit": "bytes", "better": "lower", "exact": true, "about": ""},
+                {"key": "host_ms", "label": "host time", "unit": "ms", "better": "lower", "exact": false, "about": "the fastest of the timed rounds"},
+                {"key": "cache_hit_rate", "label": "cache hit rate", "unit": "ratio", "better": "higher", "exact": true, "about": ""},
+                {"key": "rehashes", "label": "rehashes", "unit": "count", "better": "lower", "exact": true, "about": ""},
+                {"key": "hw_cycles", "label": "cycles", "unit": "count", "better": "lower", "exact": false, "about": ""},
+                {"key": "gc_ms", "label": "collector host time", "unit": "ms", "better": "none", "exact": false, "per_call": true, "about": ""}
+            ],
+            "scaling": [
+                {"variant": "t[k][v]", "metric": "work_ms", "exponent": 1.0, "r2": 1.0, "last": 1.0, "points": [[10, 0.002], [100, 0.02], [1000, 0.2]]},
+                {"variant": "t[v][k]", "metric": "work_ms", "exponent": 1.15, "r2": 0.99, "last": 1.18, "points": [[10, 0.001], [100, 0.01], [1000, 0.2]]}
+            ],
+            "functions": [{"variant": "t[v][k]", "key": "tvk:sortAll", "name": "sortAll", "module": "tvk", "line": 40, "exponent": 1.9, "points": [[10, 0.0001], [100, 0.008], [1000, 0.6]]}],
+            "winners": [
+                {"metric": "work_ms", "size": 10, "winner": "t[v][k]", "value": 0.001, "runner_up": "t[k][v]", "ratio": 2.0, "vs_baseline": 2.0, "clear": true},
+                {"metric": "work_ms", "size": 100, "winner": "t[v][k]", "value": 0.01, "runner_up": "t[k][v]", "ratio": 2.0, "vs_baseline": 2.0, "clear": true},
+                {"metric": "work_ms", "size": 1000, "winner": "t[k][v]", "value": 0.2, "runner_up": "t[v][k]", "ratio": 1.0, "vs_baseline": 1.0, "clear": false},
+                {"metric": "alloc_bytes", "size": 1000, "winner": "t[v][k]", "value": 40000.0, "runner_up": "t[k][v]", "ratio": 3.0, "vs_baseline": 3.0, "clear": true},
+                {"metric": "rehashes", "size": 10, "winner": "t[k][v]", "value": 1.0, "runner_up": "t[v][k]", "ratio": 1.0, "vs_baseline": 1.0, "clear": true, "material": false}
+            ],
+            "aa": [{"size": 1000, "ratio": 1.01, "spread": 0.03}],
+            "hw": {"read": false, "why": "the counter service is not installed"},
+            "check": {"ran": true, "ok": true, "failures": []},
+            "diffs": [{"variant": "t[v][k]", "size": 1000, "dir": "diff/t-v-k"}],
+            "notes": ["a fixture: the numbers are made up"]
+        }"#,
+    );
+    compare["runs"] = Value::Array(runs);
     std::fs::write(dir.join("compare.json"), serde_json::to_string(&compare).unwrap()).unwrap();
     dir.to_path_buf()
 }

@@ -1208,16 +1208,23 @@ mod tests {
     /// One Heartbeat handler that clones a model and destroys the copy (profile.json's figures from such a run: 60 calls,
     /// the same instructions, its self work 12.494 ms for a model of 10 parts and 77.702 ms for one of 200)
     fn clone_handler(work: f64, cold: Option<f64>) -> Json {
-        let mut own = json!({"insns": 1080.0, "work_ms": work, "alloc_bytes": 0.0, "time_ms": 0.0});
+        let mut p: Json = serde_json::from_str(&format!(
+            r#"{{
+                "run": {{"status": "ok", "frames": 60, "harness": "run.luau", "harness_hash": "h1"}},
+                "kinds": ["work"],
+                "functions": [{{
+                    "id": 0, "key": "Spawner:anonymous@13", "name": "", "module": "ReplicatedStorage.Game.Spawner", "line": 13, "kind": "Luau",
+                    "code_hash": "c1", "source_hash": "s1", "calls": 60,
+                    "self": {{"insns": 1080.0, "work_ms": {work:?}, "alloc_bytes": 0.0, "time_ms": 0.0}},
+                    "total": {{"work_ms": {work:?}}}
+                }}]
+            }}"#
+        ))
+        .unwrap();
         if let Some(cold) = cold {
-            own["cold_work_ms"] = json!(cold);
+            p["functions"][0]["self"]["cold_work_ms"] = Json::from(cold);
         }
-        json!({
-            "run": {"status": "ok", "frames": 60, "harness": "run.luau", "harness_hash": "h1"},
-            "kinds": ["work"],
-            "functions": [{"id": 0, "key": "Spawner:anonymous@13", "name": "", "module": "ReplicatedStorage.Game.Spawner", "line": 13, "kind": "Luau",
-                "code_hash": "c1", "source_hash": "s1", "calls": 60, "self": own, "total": {"work_ms": work}}],
-        })
+        p
     }
 
     /// The same calls and instructions are no evidence of a price change: a handler that clones a model of 200 parts runs
@@ -1271,21 +1278,24 @@ mod tests {
         let harness_self_work_ms = 2.0;
         let cold_work_ms = 3.0;
         let harness_cold_work_ms = 1.5;
-        let profile = json!({"functions": [{
-            "id": -2,
-            "key": "C:helper",
-            "name": "helper",
-            "kind": "C",
-            "calls": 10,
-            "phases": {"run": {
-                "self_work_ms": self_work_ms,
-                "harness_self_work_ms": harness_self_work_ms,
-                "cold_work_ms": cold_work_ms,
-                "harness_cold_work_ms": harness_cold_work_ms,
+        let profile: Json = serde_json::from_str(&format!(
+            r#"{{"functions": [{{
+                "id": -2,
+                "key": "C:helper",
+                "name": "helper",
+                "kind": "C",
                 "calls": 10,
-                "insns": 0
-            }}
-        }]});
+                "phases": {{"run": {{
+                    "self_work_ms": {self_work_ms:?},
+                    "harness_self_work_ms": {harness_self_work_ms:?},
+                    "cold_work_ms": {cold_work_ms:?},
+                    "harness_cold_work_ms": {harness_cold_work_ms:?},
+                    "calls": 10,
+                    "insns": 0
+                }}}}
+            }}]}}"#
+        ))
+        .unwrap();
         let scope = vec!["run".to_string()];
 
         let entries = functions(&profile, Some(&scope));

@@ -2,13 +2,14 @@
 //! reported frames however its work is spread, overlapping fixes are counted once, and the listed prices plus the
 //! closing row add up to the measured work.
 use crate::common::Temp;
+use crate::fixture::parse_json;
 use ree_profile_view::{
     app::App,
     cli,
     issues::{Issue, Severity},
     theme::ThemeKind,
 };
-use serde_json::{Value, json};
+use serde_json::Value;
 
 /// The frame rate most profiles here run at, and the time one frame has (ms)
 const SIXTY_FPS: f64 = 60.0;
@@ -51,14 +52,16 @@ fn advised_nonpositive_site_part_keeps_complete_edit_bound() {
     let expected_upper_ms = caller_ms + argument_ms;
     let temp = Temp::new("model-nonpositive-edit-bound");
     let mut profile = fixture(&[("Step", vec![caller_ms; STEADY_FRAMES]), ("Argument", vec![argument_ms; STEADY_FRAMES])], SIXTY_FPS);
-    profile["builtins"] = json!([{
-        "name": "table.insert", "advice": {"args": "When pos is #t+1 use table.insert(t, value)"},
-        "sites": [{
-            "function": 0, "pc": 7, "line": 12, "declines": {"args": 1000},
-            "decline_charged_us": charged_us, "fast_equivalent_us": fast_us,
-            "nodes": [{"node": FIRST_FUNCTION_NODE, "declines": {"args": 1000}, "decline_charged_us": charged_us, "fast_equivalent_us": fast_us}]
-        }]
-    }]);
+    profile["builtins"] = parse_json(&format!(
+        r#"[{{
+            "name": "table.insert", "advice": {{"args": "When pos is #t+1 use table.insert(t, value)"}},
+            "sites": [{{
+                "function": 0, "pc": 7, "line": 12, "declines": {{"args": 1000}},
+                "decline_charged_us": {charged_us:?}, "fast_equivalent_us": {fast_us:?},
+                "nodes": [{{"node": {FIRST_FUNCTION_NODE}, "declines": {{"args": 1000}}, "decline_charged_us": {charged_us:?}, "fast_equivalent_us": {fast_us:?}}}]
+            }}]
+        }}]"#
+    ));
     let app = open(&temp, "run", &profile);
     let issues = found(&app);
     let insert = of_kind(&issues, "builtin declines");
@@ -86,13 +89,16 @@ fn cache_advice_defaults_to_complete_edit_bounds() {
     let temp = Temp::new("model-cache-edit-bounds");
     for outcome in outcomes {
         let mut profile = fixture(&[("Step", vec![caller_ms; frames]), ("Argument", vec![argument_ms; frames])], SIXTY_FPS);
-        profile["luau_caches"] = json!({"prices": {"clock": "work"}, "sites": [{
-            "function": 0, "pc": 3, "line": 12, "op": "GETTABLEKS", "kind": "table key slot", "outcomes": {(outcome): 1000},
-            "charged_work_us": first_touch_us + outcome_us, "first_touch_us": first_touch_us,
-            "outcome_charged_us": outcome_us, "presized_us": constructor_us,
-            "nodes": [{"node": FIRST_FUNCTION_NODE, "outcomes": {(outcome): 1000}, "charged_work_us": first_touch_us + outcome_us,
-                "first_touch_us": first_touch_us, "outcome_charged_us": outcome_us, "presized_us": constructor_us}]
-        }]});
+        let total_charged = first_touch_us + outcome_us;
+        profile["luau_caches"] = parse_json(&format!(
+            r#"{{"prices": {{"clock": "work"}}, "sites": [{{
+                "function": 0, "pc": 3, "line": 12, "op": "GETTABLEKS", "kind": "table key slot", "outcomes": {{"{outcome}": 1000}},
+                "charged_work_us": {total_charged:?}, "first_touch_us": {first_touch_us:?},
+                "outcome_charged_us": {outcome_us:?}, "presized_us": {constructor_us:?},
+                "nodes": [{{"node": {FIRST_FUNCTION_NODE}, "outcomes": {{"{outcome}": 1000}}, "charged_work_us": {total_charged:?},
+                    "first_touch_us": {first_touch_us:?}, "outcome_charged_us": {outcome_us:?}, "presized_us": {constructor_us:?}}}]
+            }}]}}"#
+        ));
         let app = open(&temp, outcome, &profile);
         let issues = found(&app);
         let cache = of_kind(&issues, "cache misses");
@@ -133,14 +139,16 @@ fn builtin_removal_bounds_cover_work_outside_the_site() {
     for (number, case) in cases.into_iter().enumerate() {
         let BuiltinEditCase { builtin: name, decline_reason: reason, bound } = case;
         let mut profile = fixture(&[("Step", vec![caller_work_ms; frames]), ("Argument", vec![argument_work_ms; frames])], SIXTY_FPS);
-        profile["builtins"] = json!([{
-            "name": name, "advice": {(reason): "Use the equivalent advised form"},
-            "sites": [{
-                "function": 0, "pc": 3, "line": 12,
-                "declines": {(reason): 1000}, "decline_charged_us": charged_us, "fast_equivalent_us": fast_path_us,
-                "nodes": [{"node": FIRST_FUNCTION_NODE, "declines": {(reason): 1000}, "decline_charged_us": charged_us, "fast_equivalent_us": fast_path_us}]
-            }]
-        }]);
+        profile["builtins"] = parse_json(&format!(
+            r#"[{{
+                "name": "{name}", "advice": {{"{reason}": "Use the equivalent advised form"}},
+                "sites": [{{
+                    "function": 0, "pc": 3, "line": 12,
+                    "declines": {{"{reason}": 1000}}, "decline_charged_us": {charged_us}, "fast_equivalent_us": {fast_path_us},
+                    "nodes": [{{"node": {FIRST_FUNCTION_NODE}, "declines": {{"{reason}": 1000}}, "decline_charged_us": {charged_us}, "fast_equivalent_us": {fast_path_us}}}]
+                }}]
+            }}]"#
+        ));
         let app = open(&temp, &number.to_string(), &profile);
         let issues = found(&app);
         let builtin = of_kind(&issues, "builtin declines");
@@ -178,17 +186,21 @@ fn cache_and_builtin_fallbacks_share_physical_work() {
 
     let temp = Temp::new("model-fallback-union");
     let mut data = fixture(&[("Step", vec![function_work_ms; frames as usize])], SIXTY_FPS);
-    data["luau_caches"] = json!({"prices": {"clock": "work"}, "sites": [{
-        "function": 0, "pc": 5, "line": 12, "op": "GETIMPORT", "kind": "import",
-        "outcomes": {"unsafe_env": unsafe_env_outcomes}, "charged_work_us": lookup_charged_us,
-        "first_touch_us": lookup_first_touch_us, "outcome_charged_us": lookup_outcomes_us, "extra_work_us": 0,
-        "nodes": [{"node": FIRST_FUNCTION_NODE, "first_touch_us": lookup_first_touch_us, "outcome_charged_us": lookup_outcomes_us, "outcomes": {"unsafe_env": unsafe_env_outcomes}}]
-    }]});
-    data["builtins"] = json!([{"name": "math.abs", "advice": {"unsafe_env": "Restore the safe environment"}, "sites": [{
-        "function": 0, "pc": 3, "fallback_end_pc": 7, "line": 12,
-        "declines": {"unsafe_env": unsafe_env_outcomes}, "decline_charged_us": decline_charged_us, "fast_equivalent_us": fast_path_us,
-        "nodes": [{"node": FIRST_FUNCTION_NODE, "declines": {"unsafe_env": unsafe_env_outcomes}, "decline_charged_us": decline_charged_us, "fast_equivalent_us": fast_path_us}]
-    }]}]);
+    data["luau_caches"] = parse_json(&format!(
+        r#"{{"prices": {{"clock": "work"}}, "sites": [{{
+            "function": 0, "pc": 5, "line": 12, "op": "GETIMPORT", "kind": "import",
+            "outcomes": {{"unsafe_env": {unsafe_env_outcomes}}}, "charged_work_us": {lookup_charged_us:?},
+            "first_touch_us": {lookup_first_touch_us:?}, "outcome_charged_us": {lookup_outcomes_us:?}, "extra_work_us": 0,
+            "nodes": [{{"node": {FIRST_FUNCTION_NODE}, "first_touch_us": {lookup_first_touch_us:?}, "outcome_charged_us": {lookup_outcomes_us:?}, "outcomes": {{"unsafe_env": {unsafe_env_outcomes}}}}}]
+        }}]}}"#
+    ));
+    data["builtins"] = parse_json(&format!(
+        r#"[{{"name": "math.abs", "advice": {{"unsafe_env": "Restore the safe environment"}}, "sites": [{{
+            "function": 0, "pc": 3, "fallback_end_pc": 7, "line": 12,
+            "declines": {{"unsafe_env": {unsafe_env_outcomes}}}, "decline_charged_us": {decline_charged_us:?}, "fast_equivalent_us": {fast_path_us:?},
+            "nodes": [{{"node": {FIRST_FUNCTION_NODE}, "declines": {{"unsafe_env": {unsafe_env_outcomes}}}, "decline_charged_us": {decline_charged_us:?}, "fast_equivalent_us": {fast_path_us:?}}}]
+        }}]}}]"#
+    ));
     let app = open(&temp, "fallback", &data);
     let issues = found(&app);
     let cache = of_kind(&issues, "cache misses");
@@ -243,14 +255,16 @@ fn complete_issue_summaries_ignore_unrelated_ten_nanoseconds() {
         );
         // No frame detail is kept at all, so the summary is the only source of the issue's peak
         data["timeline"]["functions"] = Value::Null;
-        data["timeline"]["node_frames"] = json!([]);
-        data["timeline"]["site_frames"] = json!([]);
-        data["timeline"]["issue_stats"] = json!([[summary_key, summary_active_frames, summary_largest_us, summary_peak_frame, summary_over_budget_us]]);
-        data["builtins"] = json!([{"name": "math.abs", "advice": {"types": "Use the existing numeric value"}, "sites": [{
-            "function": 0, "pc": 3, "line": 12, "declines": {"types": declined_calls},
-            "decline_charged_us": decline_charged_us, "fast_equivalent_us": fast_path_us,
-            "nodes": [{"node": FIRST_FUNCTION_NODE, "declines": {"types": declined_calls}, "decline_charged_us": decline_charged_us, "fast_equivalent_us": fast_path_us}]
-        }]}]);
+        data["timeline"]["node_frames"] = Value::Array(Vec::new());
+        data["timeline"]["site_frames"] = Value::Array(Vec::new());
+        data["timeline"]["issue_stats"] = parse_json(&format!(r#"[["{summary_key}", {summary_active_frames}, {summary_largest_us:?}, {summary_peak_frame}, {summary_over_budget_us:?}]]"#));
+        data["builtins"] = parse_json(&format!(
+            r#"[{{"name": "math.abs", "advice": {{"types": "Use the existing numeric value"}}, "sites": [{{
+                "function": 0, "pc": 3, "line": 12, "declines": {{"types": {declined_calls}}},
+                "decline_charged_us": {decline_charged_us:?}, "fast_equivalent_us": {fast_path_us:?},
+                "nodes": [{{"node": {FIRST_FUNCTION_NODE}, "declines": {{"types": {declined_calls}}}, "decline_charged_us": {decline_charged_us:?}, "fast_equivalent_us": {fast_path_us:?}}}]
+            }}]}}]"#
+        ));
         let app = open(&temp, &index.to_string(), &data);
         let issues = found(&app);
         let builtin = of_kind(&issues, "builtin declines");
@@ -275,12 +289,13 @@ fn uncharged_cache_estimates_have_spreads_and_claim_no_clock_work() {
 
     let temp = Temp::new("model-estimate-spread");
     let mut data = fixture(&[("Step", vec![0.1; frames as usize])], SIXTY_FPS);
-    let absent_price = json!({"charged": false, "ns": 2, "low_ns": 1, "high_ns": 3});
-    data["luau_caches"] = json!({"prices": {"clock": "work", "kinds": {"table key slot": {"outcomes": {"absent": absent_price}}}}, "sites": [{
-        "function": 0, "pc": 3, "line": 12, "op": "GETTABLEKS", "kind": "table key slot",
-        "outcomes": {"absent": lookups}, "charged_work_us": 0, "first_touch_us": 0,
-        "outcome_charged_us": 0, "extra_work_us": uncharged_us
-    }]});
+    data["luau_caches"] = parse_json(&format!(
+        r#"{{"prices": {{"clock": "work", "kinds": {{"table key slot": {{"outcomes": {{"absent": {{"charged": false, "ns": 2, "low_ns": 1, "high_ns": 3}}}}}}}}}}, "sites": [{{
+            "function": 0, "pc": 3, "line": 12, "op": "GETTABLEKS", "kind": "table key slot",
+            "outcomes": {{"absent": {lookups}}}, "charged_work_us": 0, "first_touch_us": 0,
+            "outcome_charged_us": 0, "extra_work_us": {uncharged_us:?}
+        }}]}}"#
+    ));
     let app = open(&temp, "estimate", &data);
     let issues = found(&app);
     let cache = of_kind(&issues, "cache misses");
@@ -298,18 +313,15 @@ fn uncharged_cache_estimates_have_spreads_and_claim_no_clock_work() {
 
 /// One timeline function entry as profile.json lists it
 fn function_entry(id: usize, name: &str, total_ms: f64, active_frames: usize) -> Value {
-    json!({
-        "id": id,
-        "key": format!("Model:{name}"),
-        "name": name,
-        "module": "ReplicatedStorage.Fixture.Model",
-        "line": 10 * (id + 1),
-        "kind": "Luau",
-        "calls": active_frames,
-        "self": {"work_ms": total_ms},
-        "total": {"work_ms": total_ms},
-        "phases": {"steady": {"self_work_ms": total_ms, "total_work_ms": total_ms, "calls": active_frames}},
-    })
+    let line = 10 * (id + 1);
+    parse_json(&format!(
+        r#"{{
+            "id": {id}, "key": "Model:{name}", "name": "{name}", "module": "ReplicatedStorage.Fixture.Model",
+            "line": {line}, "kind": "Luau", "calls": {active_frames},
+            "self": {{"work_ms": {total_ms:?}}}, "total": {{"work_ms": {total_ms:?}}},
+            "phases": {{"steady": {{"self_work_ms": {total_ms:?}, "total_work_ms": {total_ms:?}, "calls": {active_frames}}}}}
+        }}"#
+    ))
 }
 
 /// The function's summary row in the timeline: [function, total us, active frames, largest frame us, that frame]. The
@@ -318,22 +330,22 @@ fn function_stats_row(id: usize, work: &WorkByFrame) -> Value {
     let total_ms: f64 = work.iter().sum();
     let active_frames = work.iter().filter(|ms| **ms > 0.0).count();
     let (busiest_index, largest_ms) = work.iter().enumerate().max_by(|a, b| a.1.total_cmp(b.1).then(b.0.cmp(&a.0))).unwrap();
-    json!([id, total_ms * 1000.0, active_frames, largest_ms * 1000.0, busiest_index + 1])
+    Value::Array(vec![id.into(), (total_ms * 1000.0).into(), active_frames.into(), (largest_ms * 1000.0).into(), (busiest_index + 1).into()])
 }
 
 /// Each frame's functions, flat: [function id, us, function id, us, ...], for those that worked in it
-fn function_history(series: &[(&str, WorkByFrame)]) -> Vec<Vec<Value>> {
+fn function_history(series: &[(&str, WorkByFrame)]) -> Vec<Value> {
     let frames = series[0].1.len();
     let mut history = Vec::new();
     for frame in 0..frames {
         let mut cells = Vec::new();
         for (id, (_, work)) in series.iter().enumerate() {
             if work[frame] > 0.0 {
-                cells.push(json!(id));
-                cells.push(json!(work[frame] * 1000.0));
+                cells.push(Value::from(id));
+                cells.push(Value::from(work[frame] * 1000.0));
             }
         }
-        history.push(cells);
+        history.push(Value::Array(cells));
     }
     history
 }
@@ -342,17 +354,15 @@ fn function_history(series: &[(&str, WorkByFrame)]) -> Vec<Vec<Value>> {
 /// from 1 and every frame's work is the functions' together.
 fn fixture(series: &[(&str, WorkByFrame)], fps: f64) -> Value {
     let frames = series[0].1.len();
-    let startup_node = json!([-1, -1, 0, 0, 0, "startup"]);
-    let steady_node = json!([0, -1, 0, 0, 0, "steady"]);
     let mut functions = Vec::new();
-    let mut tree = vec![startup_node, steady_node];
+    let mut tree = parse_json(r#"[[-1, -1, 0, 0, 0, "startup"], [0, -1, 0, 0, 0, "steady"]]"#).as_array().unwrap().clone();
     let mut stats = Vec::new();
     for (id, (name, work)) in series.iter().enumerate() {
         let total_ms: f64 = work.iter().sum();
         let active_frames = work.iter().filter(|ms| **ms > 0.0).count();
         functions.push(function_entry(id, name, total_ms, active_frames));
         // (a node under the steady phase, running that function: [parent, function, calls, own us, ?, name])
-        tree.push(json!([1, id, active_frames, total_ms * 1000.0, 0, null]));
+        tree.push(Value::Array(vec![1.into(), id.into(), active_frames.into(), (total_ms * 1000.0).into(), 0.into(), Value::Null]));
         stats.push(function_stats_row(id, work));
     }
     let total_ms: f64 = series.iter().flat_map(|(_, work)| work).sum();
@@ -360,27 +370,27 @@ fn fixture(series: &[(&str, WorkByFrame)], fps: f64) -> Value {
     let rows: Vec<Value> = (0..frames)
         .map(|frame| {
             let frame_work: f64 = series.iter().map(|(_, work)| work[frame]).sum();
-            json!([frame + 1, 1, 0, frame_work, frame_work, 0])
+            Value::Array(vec![(frame + 1).into(), 1.into(), 0.into(), frame_work.into(), frame_work.into(), 0.into()])
         })
         .collect();
-    json!({
-        "version": 2,
-        "tool": "ree",
-        "kinds": ["work", "timeline"],
-        "run": {"command": "run", "status": "ok", "frames": frames, "seconds": frames as f64 / fps, "fps": fps},
-        "phases": ["startup", "steady"],
-        "scope": {"phases": ["steady"], "game_self_ms": total_ms, "harness_self_ms": 0},
-        "functions": functions,
-        "tree": tree,
-        "lines": [],
-        "work": {"total_ms": total_ms, "c_calls": true, "c_invocations": true},
-        "timeline": {
-            "columns": ["frame", "phase", "part", "work_ms", "game_ms", "harness_ms"],
-            "rows": rows,
-            "functions": function_history(series),
-            "function_stats": stats,
-        },
-    })
+    let seconds = frames as f64 / fps;
+    let mut p = parse_json(&format!(
+        r#"{{
+            "version": 2, "tool": "ree", "kinds": ["work", "timeline"],
+            "run": {{"command": "run", "status": "ok", "frames": {frames}, "seconds": {seconds:?}, "fps": {fps:?}}},
+            "phases": ["startup", "steady"],
+            "scope": {{"phases": ["steady"], "game_self_ms": {total_ms:?}, "harness_self_ms": 0}},
+            "lines": [],
+            "work": {{"total_ms": {total_ms:?}, "c_calls": true, "c_invocations": true}},
+            "timeline": {{"columns": ["frame", "phase", "part", "work_ms", "game_ms", "harness_ms"]}}
+        }}"#
+    ));
+    p["functions"] = Value::Array(functions);
+    p["tree"] = Value::Array(tree);
+    p["timeline"]["rows"] = Value::Array(rows);
+    p["timeline"]["functions"] = Value::Array(function_history(series));
+    p["timeline"]["function_stats"] = Value::Array(stats);
+    p
 }
 
 /// Writes the profile into its own folder under `temp` and opens it
@@ -573,44 +583,37 @@ const COMPARATOR_NODE_OUTSIDE_SORT: usize = 5;
 /// subtree and the builtin fix both hold).
 fn nested(outside_ms: f64) -> Value {
     let mut profile = fixture(&[("Sort", vec![0.2; STEADY_FRAMES]), ("Compare", vec![0.3 + outside_ms; STEADY_FRAMES])], SIXTY_FPS);
-    let table_sort = json!({"id": -2, "key": "table.sort", "name": "table.sort", "kind": "C"});
-    profile["functions"].as_array_mut().unwrap().push(table_sort);
+    profile["functions"].as_array_mut().unwrap().push(parse_json(r#"{"id": -2, "key": "table.sort", "name": "table.sort", "kind": "C"}"#));
     let sort_work_us = 24_000;
     let comparator_work_under_sort_us = 36_000;
     let comparator_calls_under_sort = 120_000;
-    profile["tree"] = json!([
-        [-1, -1, 0, 0, 0, "startup"],
-        [0, -1, 0, 0, 0, "steady"],
-        [1, 0, STEADY_FRAMES, 0, 0, null],
-        // (the C function table.sort, called from line 10 of Sort)
-        [SORT_FUNCTION_NODE, -2, STEADY_FRAMES, sort_work_us, 0, "table.sort [C]", 10],
-        [TABLE_SORT_NODE, 1, comparator_calls_under_sort, comparator_work_under_sort_us, 0, null],
-        [1, 1, comparator_calls_under_sort, outside_ms * 120_000.0, 0, null]
-    ]);
-    profile["luau_caches"] = json!({"prices": {"clock": "work"}, "sites": []});
-    let site_in_comparator = json!({
-        "function": 1,
-        "node": COMPARATOR_NODE_UNDER_SORT,
-        "line": 20,
-        "declines": {"args": 513_000},
-        "decline_charged_us": 10_260,
-        "fast_equivalent_us": 0,
-        "fix_cost_exact": true, "fix_instructions_us": 0,
-        "fix_cold_us": 0,
-    });
-    profile["builtins"] = json!([{
-        "name": "string.byte",
-        "declines": {"args": 513_000},
-        "advice": {"args": "Pass the last index"},
-        "sites": [site_in_comparator],
-    }]);
-    // (a profile of contexts: the site's numbers are in its one context, not on the site)
-    let site = &mut profile["builtins"][0]["sites"][0];
-    let mut context = site.clone();
-    context.as_object_mut().unwrap().remove("function");
-    context.as_object_mut().unwrap().remove("line");
-    site.as_object_mut().unwrap().remove("node");
-    site["nodes"] = json!([context]);
+    let outside_us = outside_ms * 120_000.0;
+    profile["tree"] = parse_json(&format!(
+        r#"[
+            [-1, -1, 0, 0, 0, "startup"],
+            [0, -1, 0, 0, 0, "steady"],
+            [1, 0, {STEADY_FRAMES}, 0, 0, null],
+            [{SORT_FUNCTION_NODE}, -2, {STEADY_FRAMES}, {sort_work_us}, 0, "table.sort [C]", 10],
+            [{TABLE_SORT_NODE}, 1, {comparator_calls_under_sort}, {comparator_work_under_sort_us}, 0, null],
+            [1, 1, {comparator_calls_under_sort}, {outside_us:?}, 0, null]
+        ]"#
+    ));
+    profile["luau_caches"] = parse_json(r#"{"prices": {"clock": "work"}, "sites": []}"#);
+    profile["builtins"] = parse_json(&format!(
+        r#"[{{
+            "name": "string.byte", "declines": {{"args": 513000}}, "advice": {{"args": "Pass the last index"}},
+            "sites": [{{
+                "function": 1, "line": 20, "declines": {{"args": 513000}},
+                "decline_charged_us": 10260, "fast_equivalent_us": 0,
+                "fix_cost_exact": true, "fix_instructions_us": 0, "fix_cold_us": 0,
+                "nodes": [{{
+                    "node": {COMPARATOR_NODE_UNDER_SORT}, "declines": {{"args": 513000}},
+                    "decline_charged_us": 10260, "fast_equivalent_us": 0,
+                    "fix_cost_exact": true, "fix_instructions_us": 0, "fix_cold_us": 0
+                }}]
+            }}]
+        }}]"#
+    ));
     profile
 }
 
@@ -645,14 +648,11 @@ fn comparison_refinalization_keeps_the_complete_edit_bound() {
     let temp = Temp::new("model-most");
     let _ = open(&temp, "comparison", &nested(0.3));
     let folder = temp.path().join("comparison");
-    let comparison = json!({
-        "format": "ree-what-if",
-        "baseline": "base",
-        "variants": [{"name": "base", "slug": "base"}],
-        "sizes": [1],
-        "runs": [{"variant": "base", "size": 1, "status": "ok", "profile": "."}],
-    });
-    std::fs::write(folder.join("compare.json"), comparison.to_string()).unwrap();
+    std::fs::write(
+        folder.join("compare.json"),
+        r#"{"format":"ree-what-if","baseline":"base","variants":[{"name":"base","slug":"base"}],"sizes":[1],"runs":[{"variant":"base","size":1,"status":"ok","profile":"."}]}"#,
+    )
+    .unwrap();
     let app = cli::open(&[folder.join("compare.json")], ThemeKind::Dark).unwrap();
     let mut issues = found(&app);
     // Re-finalizing must not forget that the sort edit's bound can exceed Compare's recorded part.
@@ -672,24 +672,20 @@ fn comparison_refinalization_keeps_the_complete_edit_bound() {
 fn builtin_prices_subtract_the_same_calls_replacement_cost() {
     let temp = Temp::new("model-net");
     let mut profile = fixture(&[("Read", vec![0.5; STEADY_FRAMES])], SIXTY_FPS);
-    profile["luau_caches"] = json!({"prices": {"clock": "work"}, "sites": []});
+    profile["luau_caches"] = parse_json(r#"{"prices": {"clock": "work"}, "sites": []}"#);
     let declined_calls = 1_200_000;
     let charged_us = 14_652.342;
     let fast_path_us = 3_221.3860002;
-    profile["builtins"] = json!([{
-        "name": "string.sub",
-        "declines": {"args": declined_calls},
-        "advice": {"args": "Pass the final index"},
-        "sites": [{
-            "function": 0,
-            "node": FIRST_FUNCTION_NODE,
-            "declines": {"args": declined_calls},
-            "decline_charged_us": charged_us,
-            "fix_cost_exact": true, "fix_instructions_us": 0,
-            "fix_cold_us": 0,
-            "fast_equivalent_us": fast_path_us,
-        }],
-    }]);
+    profile["builtins"] = parse_json(&format!(
+        r#"[{{
+            "name": "string.sub", "declines": {{"args": {declined_calls}}}, "advice": {{"args": "Pass the final index"}},
+            "sites": [{{
+                "function": 0, "node": {FIRST_FUNCTION_NODE}, "declines": {{"args": {declined_calls}}},
+                "decline_charged_us": {charged_us:?}, "fix_cost_exact": true, "fix_instructions_us": 0,
+                "fix_cold_us": 0, "fast_equivalent_us": {fast_path_us:?}
+            }}]
+        }}]"#
+    ));
     let app = open(&temp, "net", &profile);
     let issues = found(&app);
     let issue = of_kind(&issues, "builtin declines");
@@ -699,7 +695,7 @@ fn builtin_prices_subtract_the_same_calls_replacement_cost() {
 
     // a rewrite whose own instruction cost is unknown cannot be priced from the fast path
     let site = &mut profile["builtins"][0]["sites"][0];
-    site["fix_unpriced"] = json!("the advised replacement's instruction cost is unavailable");
+    site["fix_unpriced"] = Value::String("the advised replacement's instruction cost is unavailable".into());
     let app = open(&temp, "unknown-setup", &profile);
     let issues = found(&app);
     let issue = of_kind(&issues, "builtin declines");
@@ -720,28 +716,20 @@ fn builtin_prices_subtract_the_same_calls_replacement_cost() {
 fn numeric_declines_with_complete_prices_use_known_advice() {
     let temp = Temp::new("model-numeric-advice");
     let mut profile = fixture(&[("Read", vec![0.5; STEADY_FRAMES])], SIXTY_FPS);
-    profile["luau_caches"] = json!({"prices": {"clock": "work"}, "sites": []});
+    profile["luau_caches"] = parse_json(r#"{"prices": {"clock": "work"}, "sites": []}"#);
     let declined_calls = 120_000;
     let charged_us = 30_000;
     let fast_path_us = 12_000;
-    profile["builtins"] = json!([{
-        "name": "math.abs",
-        "advice": {},
-        "sites": [{
-            "function": 0,
-            "line": 10,
-            "pc": 3,
-            "declines": {"types": declined_calls},
-            "decline_charged_us": charged_us,
-            "fast_equivalent_us": fast_path_us,
-            "nodes": [{
-                "node": FIRST_FUNCTION_NODE,
-                "declines": {"types": declined_calls},
-                "decline_charged_us": charged_us,
-                "fast_equivalent_us": fast_path_us,
-            }],
-        }],
-    }]);
+    profile["builtins"] = parse_json(&format!(
+        r#"[{{
+            "name": "math.abs", "advice": {{}},
+            "sites": [{{
+                "function": 0, "line": 10, "pc": 3, "declines": {{"types": {declined_calls}}},
+                "decline_charged_us": {charged_us}, "fast_equivalent_us": {fast_path_us},
+                "nodes": [{{"node": {FIRST_FUNCTION_NODE}, "declines": {{"types": {declined_calls}}}, "decline_charged_us": {charged_us}, "fast_equivalent_us": {fast_path_us}}}]
+            }}]
+        }}]"#
+    ));
     let app = open(&temp, "numeric", &profile);
     let issues = found(&app);
     let issue = of_kind(&issues, "builtin declines");
@@ -867,7 +855,7 @@ fn calling_lines_accept_the_parallel_array_and_earlier_seventh_elements() {
         let has_line = cells.len() == 7;
         lines.push(if has_line { cells.pop().unwrap() } else { Value::Null });
     }
-    current["tree_lines"] = json!(lines);
+    current["tree_lines"] = Value::Array(lines);
     let from_parallel_array = open(&temp, "new", &current);
 
     let lines_of = |app: &App| -> Vec<Option<i64>> { app.profile().raw_nodes().iter().map(|node| node.line).collect() };
@@ -899,12 +887,12 @@ fn hitch_severity_uses_the_recorded_budget_and_every_reported_phase() {
     // a one-off in the startup phase counts when the report covers it: move the profile's one frame into startup
     let setup_ms = 30.0;
     let mut profile = fixture(&[("Setup", spike(STEADY_FRAMES, setup_ms, 0))], SIXTY_FPS);
-    profile["scope"]["phases"] = json!(["startup", "steady"]);
+    profile["scope"]["phases"] = parse_json(r#"["startup", "steady"]"#);
     let startup_phase = 0;
-    profile["tree"][FIRST_FUNCTION_NODE][0] = json!(startup_phase);
-    profile["timeline"]["rows"][0][0] = json!(0); // the frame number
-    profile["timeline"]["rows"][0][1] = json!(startup_phase);
-    profile["timeline"]["function_stats"][0][4] = json!(0); // the busiest frame
+    profile["tree"][FIRST_FUNCTION_NODE][0] = Value::from(startup_phase);
+    profile["timeline"]["rows"][0][0] = Value::from(0); // the frame number
+    profile["timeline"]["rows"][0][1] = Value::from(startup_phase);
+    profile["timeline"]["function_stats"][0][4] = Value::from(0); // the busiest frame
     let app = open(&temp, "startup", &profile);
     let issues = found(&app);
     let issue = function(&issues, "Setup");
@@ -940,22 +928,17 @@ fn a_site_hitch_uses_its_own_net_work_in_the_heavy_frame() {
     let site_pc = 7;
     // (the site charged 22.5 ms and saves 20 ms net of its 2.5 ms replacement, all in the one heavy frame)
     let saving_us_in_heavy_frame = 20_000;
-    profile["builtins"] = json!([{
-        "name": "string.byte",
-        "declines": {"args": 100_000},
-        "advice": {"args": "Pass the first index"},
-        "sites": [{
-            "function": 0,
-            "pc": site_pc,
-            "node": FIRST_FUNCTION_NODE,
-            "declines": {"args": 100_000},
-            "decline_charged_us": 22_500,
-            "fast_equivalent_us": 2_500,
-            "fix_cost_exact": true, "fix_instructions_us": 0,
-            "fix_cold_us": 0,
-        }],
-    }]);
-    profile["timeline"]["site_frames"] = json!([[heavy_frame_index, "builtin", 0, site_pc, FIRST_FUNCTION_NODE, saving_us_in_heavy_frame]]);
+    profile["builtins"] = parse_json(&format!(
+        r#"[{{
+            "name": "string.byte", "declines": {{"args": 100000}}, "advice": {{"args": "Pass the first index"}},
+            "sites": [{{
+                "function": 0, "pc": {site_pc}, "node": {FIRST_FUNCTION_NODE}, "declines": {{"args": 100000}},
+                "decline_charged_us": 22500, "fast_equivalent_us": 2500,
+                "fix_cost_exact": true, "fix_instructions_us": 0, "fix_cold_us": 0
+            }}]
+        }}]"#
+    ));
+    profile["timeline"]["site_frames"] = parse_json(&format!(r#"[[{heavy_frame_index}, "builtin", 0, {site_pc}, {FIRST_FUNCTION_NODE}, {saving_us_in_heavy_frame}]]"#));
     let app = open(&temp, "builtin", &profile);
     let issues = found(&app);
     let issue = of_kind(&issues, "builtin declines");
@@ -966,19 +949,14 @@ fn a_site_hitch_uses_its_own_net_work_in_the_heavy_frame() {
 
     // the same site as a cache site that rehashed: the same price and hitch
     profile.as_object_mut().unwrap().remove("builtins");
-    profile["luau_caches"] = json!({"prices": {"clock": "work"}, "sites": [{
-        "function": 0,
-        "pc": site_pc,
-        "node": FIRST_FUNCTION_NODE,
-        "op": "SETTABLEKS",
-        "outcomes": {"rehashed": 100_000},
-        "charged_work_us": 25_000,
-        "first_touch_us": 2_500,
-        "outcome_charged_us": 22_500,
-        "presized_us": 2_500,
-        "extra_work_us": 0,
-    }]});
-    profile["timeline"]["site_frames"][0][1] = json!("cache");
+    profile["luau_caches"] = parse_json(&format!(
+        r#"{{"prices": {{"clock": "work"}}, "sites": [{{
+            "function": 0, "pc": {site_pc}, "node": {FIRST_FUNCTION_NODE}, "op": "SETTABLEKS",
+            "outcomes": {{"rehashed": 100000}}, "charged_work_us": 25000, "first_touch_us": 2500,
+            "outcome_charged_us": 22500, "presized_us": 2500, "extra_work_us": 0
+        }}]}}"#
+    ));
+    profile["timeline"]["site_frames"][0][1] = Value::String("cache".into());
     let app = open(&temp, "cache", &profile);
     let issues = found(&app);
     let issue = of_kind(&issues, "cache misses");
@@ -996,24 +974,16 @@ fn a_zero_or_negative_builtin_saving_is_reported_as_no_saving_on_this_clock() {
     // (the fast path costs as much as the declined calls did, then more)
     for fast_path_us in [6_000.0, 6_600.0] {
         let mut profile = fixture(&[("Read", vec![0.5; STEADY_FRAMES])], SIXTY_FPS);
-        profile["builtins"] = json!([{
-            "name": "string.sub",
-            "declines": {"args": declined_calls},
-            "advice": {"args": "Pass the final index"},
-            "sites": [{
-                "function": 0,
-                "pc": 7,
-                "declines": {"args": declined_calls},
-                "decline_charged_us": charged_us,
-                "fast_equivalent_us": fast_path_us,
-                "nodes": [{
-                    "node": FIRST_FUNCTION_NODE,
-                    "declines": {"args": declined_calls},
-                    "decline_charged_us": charged_us,
-                    "fast_equivalent_us": fast_path_us,
-                }],
-            }],
-        }]);
+        profile["builtins"] = parse_json(&format!(
+            r#"[{{
+                "name": "string.sub", "declines": {{"args": {declined_calls}}}, "advice": {{"args": "Pass the final index"}},
+                "sites": [{{
+                    "function": 0, "pc": 7, "declines": {{"args": {declined_calls}}},
+                    "decline_charged_us": {charged_us:?}, "fast_equivalent_us": {fast_path_us:?},
+                    "nodes": [{{"node": {FIRST_FUNCTION_NODE}, "declines": {{"args": {declined_calls}}}, "decline_charged_us": {charged_us:?}, "fast_equivalent_us": {fast_path_us:?}}}]
+                }}]
+            }}]"#
+        ));
         let app = open(&temp, &format!("cost{fast_path_us}"), &profile);
         let issues = found(&app);
         let issue = of_kind(&issues, "builtin declines");
@@ -1033,29 +1003,25 @@ fn a_prototype_replacement_cost_is_shared_without_splitting_it_between_callers()
     let cold_code_us = 600;
     let charged_under_sort_us = 10_260;
     let charged_outside_sort_us = 12_000;
-    profile["builtins"][0] = json!({
-        "name": "string.sub",
-        "declines": {"args": 1_113_000},
-        "advice": {"args": "Pass the final index"},
-        "sites": [{
-            "function": 1,
-            "pc": 9,
-            "line": 20,
-            "decline_charged_us": charged_under_sort_us + charged_outside_sort_us,
-            "fast_equivalent_us": 0,
-            "fix_cost_exact": true, "fix_instructions_us": 0,
-            "fix_cold_us": cold_code_us,
-            "nodes": [
-                {"node": COMPARATOR_NODE_UNDER_SORT, "declines": {"args": 513_000}, "decline_charged_us": charged_under_sort_us, "fast_equivalent_us": 0, "fix_cost_exact": true, "fix_instructions_us": 0},
-                {"node": COMPARATOR_NODE_OUTSIDE_SORT, "declines": {"args": 600_000}, "decline_charged_us": charged_outside_sort_us, "fast_equivalent_us": 0, "fix_cost_exact": true, "fix_instructions_us": 0},
-            ],
-        }],
-    });
+    let total_charged_us = charged_under_sort_us + charged_outside_sort_us;
+    profile["builtins"][0] = parse_json(&format!(
+        r#"{{
+            "name": "string.sub", "declines": {{"args": 1113000}}, "advice": {{"args": "Pass the final index"}},
+            "sites": [{{
+                "function": 1, "pc": 9, "line": 20, "decline_charged_us": {total_charged_us},
+                "fast_equivalent_us": 0, "fix_cost_exact": true, "fix_instructions_us": 0, "fix_cold_us": {cold_code_us},
+                "nodes": [
+                    {{"node": {COMPARATOR_NODE_UNDER_SORT}, "declines": {{"args": 513000}}, "decline_charged_us": {charged_under_sort_us}, "fast_equivalent_us": 0, "fix_cost_exact": true, "fix_instructions_us": 0}},
+                    {{"node": {COMPARATOR_NODE_OUTSIDE_SORT}, "declines": {{"args": 600000}}, "decline_charged_us": {charged_outside_sort_us}, "fast_equivalent_us": 0, "fix_cost_exact": true, "fix_instructions_us": 0}}
+                ]
+            }}]
+        }}"#
+    ));
     // The function's contexts as [function, node, first frame, last frame]: both callers active in every frame, so the
     // sort fix removes only half of the callers' frames and the cold code is still paid; or the callers take turns,
     // so removing the sort's context leaves the other caller's frames
-    let same_frames = json!([[1, COMPARATOR_NODE_UNDER_SORT, 1, 120], [1, COMPARATOR_NODE_OUTSIDE_SORT, 1, 120]]);
-    let alternating_callers = json!([[1, COMPARATOR_NODE_UNDER_SORT, 1, 108], [1, COMPARATOR_NODE_OUTSIDE_SORT, 109, 120]]);
+    let same_frames = parse_json(&format!(r#"[[1, {COMPARATOR_NODE_UNDER_SORT}, 1, 120], [1, {COMPARATOR_NODE_OUTSIDE_SORT}, 1, 120]]"#));
+    let alternating_callers = parse_json(&format!(r#"[[1, {COMPARATOR_NODE_UNDER_SORT}, 1, 108], [1, {COMPARATOR_NODE_OUTSIDE_SORT}, 109, 120]]"#));
     for (name, contexts, sort_and_builtin_per_frame) in [("same-frames", same_frames, 0.595), ("alternating-callers", alternating_callers, 0.5995)] {
         profile["timeline"]["function_contexts"] = contexts;
         let app = open(&temp, name, &profile);
@@ -1081,24 +1047,24 @@ fn compiled_copies_on_one_source_line_keep_the_source_edits_full_net_price() {
     // (two compiled copies of one source line: one saves 12 ms, the other costs 1 ms more than it saves; both pay 60 us of
     // cold code, which the one edit pays twice over its 120 frames)
     let cold_code_us_per_copy = 60;
-    profile["builtins"] = json!([{
-        "name": "string.byte",
-        "declines": {"args": 200_000},
-        "advice": {"args": "Pass the first index"},
-        "sites": [
-            {
-                "function": 0, "pc": 7, "line": 20,
-                "decline_charged_us": 12_000, "fast_equivalent_us": 0, "fix_cost_exact": true, "fix_instructions_us": 0, "fix_cold_us": cold_code_us_per_copy,
-                "nodes": [{"node": FIRST_FUNCTION_NODE, "declines": {"args": 100_000}, "decline_charged_us": 12_000, "fast_equivalent_us": 0, "fix_cost_exact": true, "fix_instructions_us": 0}],
-            },
-            {
-                "function": 0, "pc": 12, "line": 20,
-                "decline_charged_us": 1_000, "fast_equivalent_us": 2_000, "fix_cost_exact": true, "fix_instructions_us": 0, "fix_cold_us": cold_code_us_per_copy,
-                "nodes": [{"node": FIRST_FUNCTION_NODE, "declines": {"args": 100_000}, "decline_charged_us": 1_000, "fast_equivalent_us": 2_000, "fix_cost_exact": true, "fix_instructions_us": 0}],
-            },
-        ],
-    }]);
-    profile["timeline"]["function_contexts"] = json!([[0, FIRST_FUNCTION_NODE, 1, STEADY_FRAMES]]);
+    profile["builtins"] = parse_json(&format!(
+        r#"[{{
+            "name": "string.byte", "declines": {{"args": 200000}}, "advice": {{"args": "Pass the first index"}},
+            "sites": [
+                {{
+                    "function": 0, "pc": 7, "line": 20,
+                    "decline_charged_us": 12000, "fast_equivalent_us": 0, "fix_cost_exact": true, "fix_instructions_us": 0, "fix_cold_us": {cold_code_us_per_copy},
+                    "nodes": [{{"node": {FIRST_FUNCTION_NODE}, "declines": {{"args": 100000}}, "decline_charged_us": 12000, "fast_equivalent_us": 0, "fix_cost_exact": true, "fix_instructions_us": 0}}]
+                }},
+                {{
+                    "function": 0, "pc": 12, "line": 20,
+                    "decline_charged_us": 1000, "fast_equivalent_us": 2000, "fix_cost_exact": true, "fix_instructions_us": 0, "fix_cold_us": {cold_code_us_per_copy},
+                    "nodes": [{{"node": {FIRST_FUNCTION_NODE}, "declines": {{"args": 100000}}, "decline_charged_us": 1000, "fast_equivalent_us": 2000, "fix_cost_exact": true, "fix_instructions_us": 0}}]
+                }}
+            ]
+        }}]"#
+    ));
+    profile["timeline"]["function_contexts"] = parse_json(&format!(r#"[[0, {FIRST_FUNCTION_NODE}, 1, {STEADY_FRAMES}]]"#));
     let app = open(&temp, "run", &profile);
     let issues = found(&app);
     let copies: Vec<_> = issues.iter().filter(|issue| issue.kind == "builtin declines").collect();
@@ -1114,20 +1080,17 @@ fn a_nonpositive_append_site_part_still_bounds_the_complete_edit() {
     // (the fast path of table.insert costs more than the declined calls did: it keeps rehashing the growing table)
     let charged_us = 2_470.116;
     let fast_path_us = 6_604.884;
-    profile["builtins"] = json!([{
-        "name": "table.insert",
-        "declines": {"args": 132_000},
-        "advice": {"args": "When pos is #t+1 use table.insert(t, value)"},
-        "sites": [{
-            "function": 0,
-            "pc": 7,
-            "line": 20,
-            "decline_charged_us": charged_us,
-            "fast_equivalent_us": fast_path_us,
-            "fix_unpriced": "the advised argument rewrite has no measured instruction cost",
-            "nodes": [{"node": FIRST_FUNCTION_NODE, "declines": {"args": 132_000}, "decline_charged_us": charged_us, "fast_equivalent_us": fast_path_us}],
-        }],
-    }]);
+    profile["builtins"] = parse_json(&format!(
+        r#"[{{
+            "name": "table.insert", "declines": {{"args": 132000}}, "advice": {{"args": "When pos is #t+1 use table.insert(t, value)"}},
+            "sites": [{{
+                "function": 0, "pc": 7, "line": 20,
+                "decline_charged_us": {charged_us:?}, "fast_equivalent_us": {fast_path_us:?},
+                "fix_unpriced": "the advised argument rewrite has no measured instruction cost",
+                "nodes": [{{"node": {FIRST_FUNCTION_NODE}, "declines": {{"args": 132000}}, "decline_charged_us": {charged_us:?}, "fast_equivalent_us": {fast_path_us:?}}}]
+            }}]
+        }}]"#
+    ));
     let app = open(&temp, "run", &profile);
     let issues = found(&app);
     let append = of_kind(&issues, "builtin declines");

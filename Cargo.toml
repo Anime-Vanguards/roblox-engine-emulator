@@ -114,18 +114,14 @@ codegen-units = 256
 [profile.release.package."*"]
 codegen-units = 16
 
-# `cargo test --release` / `cargo bench` test harnesses: shares every external dependency, proc-macro and build script
-# with `[profile.release]` (same opt-level, ThinLTO and package."*" codegen-units), while dropping local workspace
-# codegen units from 256 to 16 to avoid 256-CGU ThinLTO overhead on the `--lib` test harness. (CI can override via
-# `CARGO_PROFILE_BENCH_CODEGEN_UNITS`.)
-[profile.bench]
-opt-level = 3
-lto = false
-incremental = true
-codegen-units = 16
-
-[profile.bench.package."*"]
-codegen-units = 16
-
 [profile.dev.package."*"]
 opt-level = 2
+
+# Plain `cargo test` (dev profile): line-table debuginfo keeps file:line backtraces while cutting dev PDB size and link
+# time; `[profile.test.package."*"]` matches `[profile.dev]` defaults so external dependencies stay shared with `cargo build`.
+[profile.test]
+debug = "line-tables-only"
+
+[profile.test.package."*"]
+opt-level = 2
+debug = 2

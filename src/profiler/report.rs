@@ -4358,14 +4358,18 @@ mod frame_tests {
         let mut parts = vec![row(1, 1, 10.0), row(1, 2, 10.0), row(2, 1, 1.0), row(3, 9, 12.0)];
         parts[1].nodes = vec![(second_context_node, 10.0)];
         let (stats, _, _) = frame_evidence(&parts, &[1, 2], 60.0);
-        let mut json = json!({"timeline": {"function_stats": stats}, "builtins": [{
-            "name": "string.sub", "sites": [{"function": function, "pc": 0, "line": line,
-                "declines": {"args": 1000}, "decline_charged_us": 30, "fast_equivalent_us": 5,
-                "nodes": [
-                    {"node": first_context_node, "declines": {"args": 600}, "decline_charged_us": 10, "fast_equivalent_us": 2},
-                    {"node": second_context_node, "declines": {"args": 400}, "decline_charged_us": 20, "fast_equivalent_us": 3}
-                ]}]
-        }]});
+        let mut json: Json = serde_json::from_str(&format!(
+            r#"{{"timeline": {{}}, "builtins": [{{
+                "name": "string.sub", "sites": [{{"function": {function}, "pc": 0, "line": {line},
+                    "declines": {{"args": 1000}}, "decline_charged_us": 30, "fast_equivalent_us": 5,
+                    "nodes": [
+                        {{"node": {first_context_node}, "declines": {{"args": 600}}, "decline_charged_us": 10, "fast_equivalent_us": 2}},
+                        {{"node": {second_context_node}, "declines": {{"args": 400}}, "decline_charged_us": 20, "fast_equivalent_us": 3}}
+                    ]}}]
+            }}]}}"#
+        ))
+        .unwrap();
+        json["timeline"]["function_stats"] = stats;
         price_builtin_fixes(&vm_results, &parts, &[1, 2], 60.0, &mut json);
         let site = &json["builtins"][0]["sites"][0];
         // 1000 declined calls at the warm cost of a LENGTH and a LOADN each

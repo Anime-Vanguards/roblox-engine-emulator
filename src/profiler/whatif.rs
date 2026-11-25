@@ -2415,17 +2415,21 @@ mod tests {
     #[test]
     fn the_variants_own_work_leaves_the_harness_out() {
         // the generated harness's wrapper (its own function), the variant, and a C function both called
-        let profile = json!({"functions": [
-            {"id": 0, "harness": true, "phases": {"run": {"self_work_ms": 3.0, "harness_self_work_ms": 3.0, "cold_work_ms": 0.5}}},
-            {"id": 1, "harness": false, "phases": {"run": {"self_work_ms": 1.0, "harness_self_work_ms": 0.0, "cold_work_ms": 0.2}}},
-            {"id": 2, "harness": false, "phases": {"run": {"self_work_ms": 0.5, "harness_self_work_ms": 0.3, "cold_work_ms": 0.15, "harness_cold_work_ms": 0.1}}},
-            {"id": 3, "harness": false, "phases": {"setup": {"self_work_ms": 9.0, "harness_self_work_ms": 0.0, "cold_work_ms": 1.0}}},
-        ]});
+        let profile: Json = serde_json::from_str(
+            r#"{"functions": [
+                {"id": 0, "harness": true, "phases": {"run": {"self_work_ms": 3.0, "harness_self_work_ms": 3.0, "cold_work_ms": 0.5}}},
+                {"id": 1, "harness": false, "phases": {"run": {"self_work_ms": 1.0, "harness_self_work_ms": 0.0, "cold_work_ms": 0.2}}},
+                {"id": 2, "harness": false, "phases": {"run": {"self_work_ms": 0.5, "harness_self_work_ms": 0.3, "cold_work_ms": 0.15, "harness_cold_work_ms": 0.1}}},
+                {"id": 3, "harness": false, "phases": {"setup": {"self_work_ms": 9.0, "harness_self_work_ms": 0.0, "cold_work_ms": 1.0}}}
+            ]}"#,
+        )
+        .unwrap();
         let (work, cold) = own_work(&profile, "run").expect("the split is there");
         assert!((work - 1.2).abs() < 1e-12, "{work}");
         assert!((cold - 0.25).abs() < 1e-12, "{cold}");
         // (a profile from before the split has no cold per function: the marks' figures stand)
-        assert!(own_work(&json!({"functions": [{"id": 0, "phases": {"run": {"self_work_ms": 1.0}}}]}), "run").is_none());
+        let legacy: Json = serde_json::from_str(r#"{"functions": [{"id": 0, "phases": {"run": {"self_work_ms": 1.0}}}]}"#).unwrap();
+        assert!(own_work(&legacy, "run").is_none());
     }
 
     /// A version 2 profile's marks carry the exact cold charges (`cold_ms`). They decide the cold part of a phase even
@@ -2437,16 +2441,19 @@ mod tests {
         let run_cold_ms = 0.25;
         let after_work_ms = 5.0;
         let after_cold_ms = 1.25;
-        let profile = json!({"version": 2, "marks": [
-            {
-                "phase": "run", "work_ms": run_work_ms, "cold_ms": run_cold_ms,
-                "vm": {"cold_tables": 0, "cold_closures": 0, "cold_protos": 0, "cold_code": 0}
-            },
-            {
-                "phase": "after", "work_ms": after_work_ms, "cold_ms": after_cold_ms,
-                "vm": {"cold_tables": 10, "cold_closures": 2, "cold_protos": 1, "cold_code": 50}
-            }
-        ]});
+        let profile: Json = serde_json::from_str(&format!(
+            r#"{{"version": 2, "marks": [
+                {{
+                    "phase": "run", "work_ms": {run_work_ms:?}, "cold_ms": {run_cold_ms:?},
+                    "vm": {{"cold_tables": 0, "cold_closures": 0, "cold_protos": 0, "cold_code": 0}}
+                }},
+                {{
+                    "phase": "after", "work_ms": {after_work_ms:?}, "cold_ms": {after_cold_ms:?},
+                    "vm": {{"cold_tables": 10, "cold_closures": 2, "cold_protos": 1, "cold_code": 50}}
+                }}
+            ]}}"#
+        ))
+        .unwrap();
 
         let figures = phase_figures(&profile, "run", "after", calls);
 
@@ -2461,17 +2468,20 @@ mod tests {
     /// the function's own line, not the calling lines `tree_lines` holds.
     #[test]
     fn hot_functions_sum_context_nodes_without_changing_the_six_column_rows() {
-        let profile = json!({
-            "version": 2,
-            "tree": [
-                [-1, -1, 0, 0.0, 0, "startup"],
-                [0, -1, 0, 0.0, 0, "run"],
-                [1, 7, 2, 1000.0, 100, null],
-                [1, 7, 3, 2000.0, 200, null]
-            ],
-            "tree_lines": [-1, -1, 12, 18],
-            "functions": [{"id": 7, "key": "Walker:walk", "name": "walk", "module": "Walker", "line": 4, "kind": "Luau"}]
-        });
+        let profile: Json = serde_json::from_str(
+            r#"{
+                "version": 2,
+                "tree": [
+                    [-1, -1, 0, 0.0, 0, "startup"],
+                    [0, -1, 0, 0.0, 0, "run"],
+                    [1, 7, 2, 1000.0, 100, null],
+                    [1, 7, 3, 2000.0, 200, null]
+                ],
+                "tree_lines": [-1, -1, 12, 18],
+                "functions": [{"id": 7, "key": "Walker:walk", "name": "walk", "module": "Walker", "line": 4, "kind": "Luau"}]
+            }"#,
+        )
+        .unwrap();
         let functions = BTreeMap::from([(7, &profile["functions"][0])]);
 
         let hot = hot_functions(&profile, &functions, 8);
@@ -2486,17 +2496,20 @@ mod tests {
     /// A phase's figures are the differences of its marks' counts, flows per call
     #[test]
     fn phase_figures_are_differences_between_marks() {
-        let profile = json!({
-            "kinds": ["work", "caches", "alloc", "heap"],
-            "marks": [
-                {"phase": "run", "work_ms": 1.0, "insns": 100, "alloc_bytes": 1000, "allocs": 10, "script_rehashes": 1, "script_rehash_keys": 4,
-                 "gc": {"steps": 2, "freed": 64, "ms": 0.5}, "vm": {"cold_tables": 0, "cold_closures": 0, "cold_protos": 0, "cold_code": 0},
-                 "caches": {"table key slot": [10, 1, 0, 0, 0, 0], "import": [5, 0, 0, 0]}, "cache_depths": {"table key slot": [0, 0, 0, 0]}},
-                {"phase": "after", "work_ms": 5.0, "insns": 500, "alloc_bytes": 3000, "allocs": 30, "script_rehashes": 5, "script_rehash_keys": 24,
-                 "gc": {"steps": 6, "freed": 128, "ms": 0.9}, "vm": {"cold_tables": 10, "cold_closures": 2, "cold_protos": 0, "cold_code": 0},
-                 "caches": {"table key slot": [40, 3, 2, 0, 1, 2], "import": [9, 0, 0, 0]}, "cache_depths": {"table key slot": [1, 1, 0, 0]}}
-            ]
-        });
+        let profile: Json = serde_json::from_str(
+            r#"{
+                "kinds": ["work", "caches", "alloc", "heap"],
+                "marks": [
+                    {"phase": "run", "work_ms": 1.0, "insns": 100, "alloc_bytes": 1000, "allocs": 10, "script_rehashes": 1, "script_rehash_keys": 4,
+                     "gc": {"steps": 2, "freed": 64, "ms": 0.5}, "vm": {"cold_tables": 0, "cold_closures": 0, "cold_protos": 0, "cold_code": 0},
+                     "caches": {"table key slot": [10, 1, 0, 0, 0, 0], "import": [5, 0, 0, 0]}, "cache_depths": {"table key slot": [0, 0, 0, 0]}},
+                    {"phase": "after", "work_ms": 5.0, "insns": 500, "alloc_bytes": 3000, "allocs": 30, "script_rehashes": 5, "script_rehash_keys": 24,
+                     "gc": {"steps": 6, "freed": 128, "ms": 0.9}, "vm": {"cold_tables": 10, "cold_closures": 2, "cold_protos": 0, "cold_code": 0},
+                     "caches": {"table key slot": [40, 3, 2, 0, 1, 2], "import": [9, 0, 0, 0]}, "cache_depths": {"table key slot": [1, 1, 0, 0]}}
+                ]
+            }"#,
+        )
+        .unwrap();
         let figures = phase_figures(&profile, "run", "after", 2.0);
         assert_eq!(figures["work_ms"], 2.0);
         assert_eq!(figures["insns"], 200.0);

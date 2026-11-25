@@ -12,10 +12,12 @@ description = "ree's profile viewer: a keyboard-driven terminal UI over profile 
 name = "ree_profile_view"
 path = "src/lib.rs"
 
-# `ree profile view|render` runs this binary (src/main.rs); `cargo build --release` in the workspace builds it beside ree
+# `ree profile view|render` runs this binary (src/main.rs); `cargo build --release` in the workspace builds it beside ree.
+# src/main.rs is a thin wrapper over lib.rs with no unit tests, so skip compiling an empty binary test harness.
 [[bin]]
 name = "ree-profile-view"
 path = "src/main.rs"
+test = false
 
 # Exact versions, as the engine's: a host (rur) resolves the same ones
 [dependencies]
@@ -33,8 +35,9 @@ rustc-hash = "=2.1.3"
 serde = { version = "=1.0.228", features = ["derive"] }
 serde_json = { version = "=1.0.145", features = ["float_roundtrip"] }
 
-# tests/engine.rs: a real profile made by the engine in the test (the engine is not a dependency of the viewer itself),
-# and mimalloc, which the engine's service code calls (mi_collect) and ree's binary links; the engine's own version
+# tests/planted.rs (including planted/engine.rs): real profiles made by the engine in the test (the engine is not a
+# dependency of the viewer itself), and mimalloc, which the engine's service code calls (mi_collect) and ree's binary links;
+# the engine's own version
 [dev-dependencies]
 roblox-engine-emulator = { path = ".." }
 mimalloc = { version = "=0.1.52", default-features = false, features = ["v2"] }

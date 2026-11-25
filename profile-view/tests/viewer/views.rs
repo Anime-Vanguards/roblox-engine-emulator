@@ -96,25 +96,30 @@ fn a_comparison_colours_only_clear_gaps_and_blocks_a_differing_result() {
     let dir = write_comparison(&temp.path().join("what-if"));
     let path = dir.join("compare.json");
     let mut compare: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-    compare["version"] = serde_json::json!(2);
-    compare["check"] = serde_json::json!({"ran": true, "by": "digest", "ok": false, "failures": [{"variant": "t[k][v] off", "size": 1000, "message": "its result's digest is 0badd16e"}]});
+    compare["version"] = serde_json::Value::from(2);
+    compare["check"] = parse_json(r#"{"ran": true, "by": "digest", "ok": false, "failures": [{"variant": "t[k][v] off", "size": 1000, "message": "its result's digest is 0badd16e"}]}"#);
     // a third variant computing something else (its digest), and the fastest at n = 1000 by work: it must not win
     let mut off = compare["runs"][4].clone();
-    off["variant"] = serde_json::json!("t[k][v] off");
-    off["digest"] = serde_json::json!("0badd16e");
-    off["check"] = serde_json::json!({"ok": false, "message": "its result's digest is 0badd16e, the baseline's 9f3c0a21"});
-    off["run"]["work_ms"] = serde_json::json!(0.001);
+    off["variant"] = serde_json::Value::from("t[k][v] off");
+    off["digest"] = serde_json::Value::from("0badd16e");
+    off["check"] = parse_json(r#"{"ok": false, "message": "its result's digest is 0badd16e, the baseline's 9f3c0a21"}"#);
+    off["run"]["work_ms"] = serde_json::Value::from(0.001);
     compare["runs"].as_array_mut().unwrap().push(off);
-    compare["variants"].as_array_mut().unwrap().push(serde_json::json!({"name": "t[k][v] off", "slug": "t-k-v-off", "kind": "function", "source": "nested-keys.luau:30"}));
+    compare["variants"].as_array_mut().unwrap().push(parse_json(r#"{"name": "t[k][v] off", "slug": "t-k-v-off", "kind": "function", "source": "nested-keys.luau:30"}"#));
     // the baseline verdicts at n = 1000: allocated clear, host time within noise, the work clock the same
     // (a verdict's ratio is the variant's figure over the baseline's, oriented so above 1 is worse)
     let verdicts = [("alloc_bytes", 1.0 / 3.0, true), ("host_ms", 0.82, false), ("work_ms", 1.0, false), ("cache_hit_rate", 0.96, true)];
     for (metric, ratio, clear) in verdicts {
-        let entry = serde_json::json!({"variant": "t[v][k]", "ratio": ratio, "clear": clear, "material": true, "differs": false, "rounds": if metric == "host_ms" { serde_json::json!({"won": 4, "of": 9, "noise": 0.05}) } else { serde_json::Value::Null }});
+        let rounds = if metric == "host_ms" { r#"{"won": 4, "of": 9, "noise": 0.05}"# } else { "null" };
+        let entry = parse_json(&format!(r#"{{"variant": "t[v][k]", "ratio": {ratio:?}, "clear": {clear}, "material": true, "differs": false, "rounds": {rounds}}}"#));
         let winners = compare["winners"].as_array_mut().unwrap();
         match winners.iter_mut().find(|w| w["metric"] == metric && w["size"] == 1000) {
-            Some(winner) => winner["baseline"] = serde_json::json!([entry]),
-            None => winners.push(serde_json::json!({"metric": metric, "size": 1000, "winner": "t[v][k]", "value": 0.0, "clear": clear, "baseline": [entry]})),
+            Some(winner) => winner["baseline"] = serde_json::Value::Array(vec![entry]),
+            None => {
+                let mut w = parse_json(&format!(r#"{{"metric": "{metric}", "size": 1000, "winner": "t[v][k]", "value": 0.0, "clear": {clear}}}"#));
+                w["baseline"] = serde_json::Value::Array(vec![entry]);
+                winners.push(w);
+            }
         }
     }
     std::fs::write(&path, serde_json::to_string(&compare).unwrap()).unwrap();
@@ -155,28 +160,34 @@ fn a_diff_pairs_a_moved_function_and_tags_a_price_move() {
         std::fs::create_dir_all(&dir).unwrap();
         let function = |id: i64, name: &str, line: i64, code: &str, work: f64, calls: u64, insns: f64, cold: Option<f64>| {
             let key = if name.is_empty() { format!("Game:anonymous@{line}") } else { format!("Game:{name}") };
-            let mut f = serde_json::json!({"id": id, "key": key, "name": name, "module": "Game", "line": line, "last_line": line + 4, "kind": "Luau", "code_hash": code, "source_hash": format!("s{code}"),
-                "calls": calls, "self": {"insns": insns, "work_ms": work}, "total": {"insns": insns, "work_ms": work}, "harness": false,
-                "phases": {"frames": {"self_work_ms": work, "total_work_ms": work, "calls": calls, "insns": insns, "harness_self_work_ms": 0.0}}});
+            let last_line = line + 4;
+            let mut f = parse_json(&format!(
+                r#"{{"id": {id}, "key": "{key}", "name": "{name}", "module": "Game", "line": {line}, "last_line": {last_line}, "kind": "Luau", "code_hash": "{code}", "source_hash": "s{code}",
+                    "calls": {calls}, "self": {{"insns": {insns:?}, "work_ms": {work:?}}}, "total": {{"insns": {insns:?}, "work_ms": {work:?}}}, "harness": false,
+                    "phases": {{"frames": {{"self_work_ms": {work:?}, "total_work_ms": {work:?}, "calls": {calls}, "insns": {insns:?}, "harness_self_work_ms": 0.0}}}}}}"#
+            ));
             if let Some(cold) = cold {
-                f["self"]["cold_work_ms"] = serde_json::json!(cold);
-                f["phases"]["frames"]["cold_work_ms"] = serde_json::json!(cold);
+                f["self"]["cold_work_ms"] = serde_json::Value::from(cold);
+                f["phases"]["frames"]["cold_work_ms"] = serde_json::Value::from(cold);
             }
             f
         };
-        let mut profile = serde_json::json!({
-            "version": 1, "kinds": ["work", "time"], "run": {"status": "ok", "frames": 10, "harness": "Fixture.luau"}, "phases": ["frames"],
-            "scope": {"phases": ["frames"], "game_self_ms": 1.0, "harness_self_ms": 0.0}, "work": {"total_ms": 1.0, "per_frame_ms": 0.1, "script_insns": 1000.0},
-            "functions": [
-                function(0, "", handler_line, "c0ffee", 0.5, 10, 400.0, None),
-                function(1, "first", 30, "beef01", first_work, 10, 200.0, cold.map(|c| c.0)),
-                function(2, "second", 40, "beef02", second_work, 10, 200.0, cold.map(|c| c.1)),
-                function(3, "", handler_line + 10, if edited_insns > 100.0 { "f00d02" } else { "f00d01" }, edited_insns / 1000.0, 10, edited_insns, None),
-            ],
-            "source_hashes": {"Game": if handler_line == 12 { "1" } else { "2" }, "ReplicatedStorage.RURFixtures.Fixture": "aaaa"},
-        });
+        let game_hash = if handler_line == 12 { "1" } else { "2" };
+        let mut profile = parse_json(&format!(
+            r#"{{
+                "version": 1, "kinds": ["work", "time"], "run": {{"status": "ok", "frames": 10, "harness": "Fixture.luau"}}, "phases": ["frames"],
+                "scope": {{"phases": ["frames"], "game_self_ms": 1.0, "harness_self_ms": 0.0}}, "work": {{"total_ms": 1.0, "per_frame_ms": 0.1, "script_insns": 1000.0}},
+                "source_hashes": {{"Game": "{game_hash}", "ReplicatedStorage.RURFixtures.Fixture": "aaaa"}}
+            }}"#
+        ));
+        profile["functions"] = serde_json::Value::Array(vec![
+            function(0, "", handler_line, "c0ffee", 0.5, 10, 400.0, None),
+            function(1, "first", 30, "beef01", first_work, 10, 200.0, cold.map(|c| c.0)),
+            function(2, "second", 40, "beef02", second_work, 10, 200.0, cold.map(|c| c.1)),
+            function(3, "", handler_line + 10, if edited_insns > 100.0 { "f00d02" } else { "f00d01" }, edited_insns / 1000.0, 10, edited_insns, None),
+        ]);
         if hashed {
-            profile["run"]["harness_hash"] = serde_json::json!("aaaa");
+            profile["run"]["harness_hash"] = serde_json::Value::from("aaaa");
         }
         std::fs::write(dir.join("profile.json"), serde_json::to_string(&profile).unwrap()).unwrap();
         std::fs::write(dir.join("summary.txt"), "ree profile: run ok; kinds work\n").unwrap();
@@ -236,15 +247,16 @@ fn a_host_time_diff_names_no_function_new_or_gone_that_ran_in_both() {
     let write = |name: &str, folded: &str| -> std::path::PathBuf {
         let dir = temp.path().join(name);
         std::fs::create_dir_all(&dir).unwrap();
-        let function = |id: i64, name: &str, line: i64| {
-            let key = if name.is_empty() { format!("Game:anonymous@{line}") } else { format!("Game:{name}") };
-            serde_json::json!({"id": id, "key": key, "name": name, "module": "Game", "line": line, "last_line": line + 4, "kind": "Luau",
-                "calls": 60, "self": {"time_ms": 0.0}, "total": {"time_ms": 0.0}, "harness": false})
-        };
-        let profile = serde_json::json!({
-            "version": 1, "kinds": ["time"], "run": {"status": "ok", "frames": 60, "harness": "Fixture.luau", "harness_hash": "aaaa"}, "phases": ["frames"],
-            "time": {"sampled_ms": 5.0}, "functions": [function(0, "tick", 10), function(1, "", 20)],
-        });
+        let profile = parse_json(
+            r#"{
+                "version": 1, "kinds": ["time"], "run": {"status": "ok", "frames": 60, "harness": "Fixture.luau", "harness_hash": "aaaa"}, "phases": ["frames"],
+                "time": {"sampled_ms": 5.0},
+                "functions": [
+                    {"id": 0, "key": "Game:tick", "name": "tick", "module": "Game", "line": 10, "last_line": 14, "kind": "Luau", "calls": 60, "self": {"time_ms": 0.0}, "total": {"time_ms": 0.0}, "harness": false},
+                    {"id": 1, "key": "Game:anonymous@20", "name": "", "module": "Game", "line": 20, "last_line": 24, "kind": "Luau", "calls": 60, "self": {"time_ms": 0.0}, "total": {"time_ms": 0.0}, "harness": false}
+                ]
+            }"#,
+        );
         std::fs::write(dir.join("profile.json"), serde_json::to_string(&profile).unwrap()).unwrap();
         std::fs::write(dir.join("summary.txt"), "ree profile: run ok; kinds time\n").unwrap();
         std::fs::write(dir.join("time.folded"), folded).unwrap();
@@ -272,13 +284,16 @@ fn float_noise_is_no_move_in_the_diff() {
     let write = |name: &str, work: f64| -> std::path::PathBuf {
         let dir = temp.path().join(name);
         std::fs::create_dir_all(&dir).unwrap();
-        let profile = serde_json::json!({
-            "version": 1, "kinds": ["work"], "run": {"status": "ok", "frames": 10, "harness": "Fixture.luau", "harness_hash": "aaaa"}, "phases": ["frames"],
-            "scope": {"phases": ["frames"], "game_self_ms": work, "harness_self_ms": 0.0}, "work": {"total_ms": work, "per_frame_ms": work / 10.0, "script_insns": 100.0},
-            "functions": [{"id": 0, "key": "Cloner:build", "name": "build", "module": "Cloner", "line": 6, "last_line": 10, "kind": "Luau", "calls": 10,
-                "self": {"insns": 100.0, "work_ms": work}, "total": {"insns": 100.0, "work_ms": work}, "harness": false,
-                "phases": {"frames": {"self_work_ms": work, "total_work_ms": work, "calls": 10, "insns": 100, "harness_self_work_ms": 0.0}}}],
-        });
+        let per_frame = work / 10.0;
+        let profile = parse_json(&format!(
+            r#"{{
+                "version": 1, "kinds": ["work"], "run": {{"status": "ok", "frames": 10, "harness": "Fixture.luau", "harness_hash": "aaaa"}}, "phases": ["frames"],
+                "scope": {{"phases": ["frames"], "game_self_ms": {work:?}, "harness_self_ms": 0.0}}, "work": {{"total_ms": {work:?}, "per_frame_ms": {per_frame:?}, "script_insns": 100.0}},
+                "functions": [{{"id": 0, "key": "Cloner:build", "name": "build", "module": "Cloner", "line": 6, "last_line": 10, "kind": "Luau", "calls": 10,
+                    "self": {{"insns": 100.0, "work_ms": {work:?}}}, "total": {{"insns": 100.0, "work_ms": {work:?}}}, "harness": false,
+                    "phases": {{"frames": {{"self_work_ms": {work:?}, "total_work_ms": {work:?}, "calls": 10, "insns": 100, "harness_self_work_ms": 0.0}}}}}}]
+            }}"#
+        ));
         std::fs::write(dir.join("profile.json"), serde_json::to_string(&profile).unwrap()).unwrap();
         std::fs::write(dir.join("summary.txt"), "ree profile: run ok; kinds work\n").unwrap();
         dir
@@ -306,30 +321,35 @@ fn write_walker_profile(dir: &std::path::Path, run: &WalkerRun) {
     std::fs::create_dir_all(dir).unwrap();
     let warm_ms = 1.0;
     let work_ms = warm_ms + run.cold_ms;
-    let profile = serde_json::json!({
-        "version": run.version,
-        "kinds": ["work", "alloc"],
-        "phases": ["run"],
-        "run": {"status": "ok", "frames": 10},
-        "work": {"total_ms": work_ms, "per_frame_ms": work_ms / 10.0, "script_insns": 300},
-        "alloc": {"bytes": run.allocated_bytes, "objects": 1},
-        "functions": [{
-            "id": 7, "key": "Walker:walk", "name": "walk", "module": "Walker", "line": 4,
-            "kind": "Luau", "harness": false, "calls": 5, "code_hash": "c1", "source_hash": "s1",
-            "self": {"work_ms": work_ms, "insns": 300, "cold_work_ms": run.cold_ms},
-            "total": {"work_ms": work_ms}
-        }],
-        "tree": [
-            [-1, -1, 0, 0.0, 0, "run"],
-            [0, 7, 2, work_ms * 400.0, 100, null],
-            [0, 7, 3, work_ms * 600.0, 200, null]
-        ],
-        "tree_lines": [-1, 12, 18],
-        "source_hashes": {"Walker": "s1"}
-    });
+    let profile = parse_json(&format!(
+        r#"{{
+            "version": {}, "kinds": ["work", "alloc"], "phases": ["run"],
+            "run": {{"status": "ok", "frames": 10}},
+            "work": {{"total_ms": {work_ms:?}, "per_frame_ms": {:?}, "script_insns": 300}},
+            "alloc": {{"bytes": {}, "objects": 1}},
+            "functions": [{{
+                "id": 7, "key": "Walker:walk", "name": "walk", "module": "Walker", "line": 4,
+                "kind": "Luau", "harness": false, "calls": 5, "code_hash": "c1", "source_hash": "s1",
+                "self": {{"work_ms": {work_ms:?}, "insns": 300, "cold_work_ms": {:?}}},
+                "total": {{"work_ms": {work_ms:?}}}
+            }}],
+            "tree": [
+                [-1, -1, 0, 0.0, 0, "run"],
+                [0, 7, 2, {:?}, 100, null],
+                [0, 7, 3, {:?}, 200, null]
+            ],
+            "tree_lines": [-1, 12, 18],
+            "source_hashes": {{"Walker": "s1"}}
+        }}"#,
+        run.version,
+        work_ms / 10.0,
+        run.allocated_bytes,
+        run.cold_ms,
+        work_ms * 400.0,
+        work_ms * 600.0,
+    ));
     std::fs::write(dir.join("profile.json"), profile.to_string()).unwrap();
-    std::fs::write(dir.join("alloc.folded"), format!("run;walk Walker:4 @12 {}
-", run.allocated_bytes)).unwrap();
+    std::fs::write(dir.join("alloc.folded"), format!("run;walk Walker:4 @12 {}\n", run.allocated_bytes)).unwrap();
 }
 
 /// Two version 2 profiles of a function that ran in two contexts pair into one row: the contexts add up, the calls and
