@@ -917,8 +917,6 @@ fn install_native_vector3(lua: &Lua, roblox: &LuaTable) -> LuaResult<()> {
         Ok(f64::from(rad))
     })?;
 
-    let lerp_fn: LuaFunction = methods.raw_get("Lerp")?;
-    methods.raw_set("lerp", lerp_fn)?;
     methods.raw_set("FuzzyEq", fuzzy_eq.clone())?;
     methods.raw_set("Angle", angle.clone())?;
 
@@ -3024,6 +3022,43 @@ print("OK")
         )
         .unwrap();
         let out = run_one(&script.to_string_lossy(), vec!["hello".into()], true, false, None);
+        let _ = fs::remove_dir_all(&dir);
+        assert_eq!(out.code, 0, "stderr/stdout: {}", out.output);
+        assert_eq!(out.output.trim(), "OK");
+    }
+
+    /// `ree lune`'s native Vector3 table keeps `vector_methods`'s distinct lowercase `lerp` C function
+    /// (named `"lerp"`, not `rawequal` to `Lerp`, naming `'lerp'` in dotted errors) matching the engine.
+    #[test]
+    fn lune_runner_vector3_lowercase_lerp_matches_client() {
+        let dir = std::env::temp_dir().join(format!("ree-lune-lerp-test-{}", std::process::id()));
+        let _ = fs::create_dir_all(&dir);
+        let script = dir.join("lerp.luau");
+        fs::write(
+            &script,
+            r#"
+local roblox = require("@lune/roblox")
+local a = roblox.Vector3.new(0, 2, 4)
+local b = roblox.Vector3.new(10, 6, 8)
+local m1 = a:lerp(b, 0.5)
+local m2 = a:Lerp(b, 0.5)
+assert(m1 == m2 and m1.X == 5 and m1.Y == 4 and m1.Z == 6, "lerp value")
+assert(not rawequal(a.lerp, a.Lerp), "lerp must be distinct from Lerp")
+local s1, l1, n1, ar1, v1 = debug.info(a.lerp, "slna")
+local s2, l2, n2, ar2, v2 = debug.info(a.Lerp, "slna")
+assert(s1 == "[C]" and l1 == -1 and n1 == "lerp" and ar1 == 0 and v1 == true, `bad lerp info: {s1}|{l1}|{n1}|{ar1}|{v1}`)
+assert(s2 == "[C]" and l2 == -1 and n2 == "Lerp" and ar2 == 0 and v2 == true, `bad Lerp info: {s2}|{l2}|{n2}|{ar2}|{v2}`)
+local ok1, err1 = pcall(a.lerp)
+local ok2, err2 = pcall(a.lerp, a)
+assert(not ok1 and string.find(tostring(err1), "to 'lerp'", 1, true), `bad err1: {err1}`)
+assert(not ok2 and string.find(tostring(err2), "to 'lerp'", 1, true), `bad err2: {err2}`)
+local c = roblox.Color3.new(0, 0.5, 1):lerp(roblox.Color3.new(1, 0.25, 0.25), 0.5)
+assert(math.abs(c.R - 0.5) < 1e-6 and math.abs(c.G - 0.375) < 1e-6 and math.abs(c.B - 0.625) < 1e-6, "Color3:lerp")
+print("OK")
+"#,
+        )
+        .unwrap();
+        let out = run_one(&script.to_string_lossy(), Vec::new(), true, false, None);
         let _ = fs::remove_dir_all(&dir);
         assert_eq!(out.code, 0, "stderr/stdout: {}", out.output);
         assert_eq!(out.output.trim(), "OK");
