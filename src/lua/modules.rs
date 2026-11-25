@@ -966,27 +966,37 @@ pub fn compile_for_loadmodule(lua: &Lua, engine: &Rc<Engine>, script: InstanceId
     // those and the other sandbox-overridden globals mutable, so they are never imports) so `luau_load` resolves the
     // library imports without baking per-script globals or keeping any caller's environment in the template cache.
     let template_env = engine.lua.borrow().shared.clone().expect("shared globals");
-    let chunk = match &bytecode {
-        Some(bytecode) => lua.load(&**bytecode).set_mode(mlua::chunk::ChunkMode::Binary),
-        None => lua.load(&*source).set_compiler(loadmodule_compiler()),
-    };
     let tiered = engine.modules.borrow().tiered_jit;
     let skip_jit = !tiered && !should_jit_chunk(&source);
-    let template = if skip_jit {
-        #[cfg(feature = "jit")]
-        let was_interpreted = engine.modules.borrow().interpret_all;
-        #[cfg(feature = "jit")]
-        lua.enable_jit(false);
-        let loaded = crate::timing::time("modules: compile + load", || {
-            chunk.set_name(format!("={name}")).set_environment(template_env).into_function()
-        });
-        #[cfg(feature = "jit")]
-        if !was_interpreted {
-            lua.enable_jit(true);
+    let load_template = |chunk: LuaChunk| {
+        if skip_jit {
+            #[cfg(feature = "jit")]
+            let was_interpreted = engine.modules.borrow().interpret_all;
+            #[cfg(feature = "jit")]
+            lua.enable_jit(false);
+            let loaded = crate::timing::time("modules: compile + load", || {
+                chunk.set_name(format!("={name}")).set_environment(template_env.clone()).into_function()
+            });
+            #[cfg(feature = "jit")]
+            if !was_interpreted {
+                lua.enable_jit(true);
+            }
+            loaded
+        } else {
+            load(lua, engine, chunk.set_name(format!("={name}")).set_environment(template_env.clone()))
         }
-        loaded?
-    } else {
-        load(lua, engine, chunk.set_name(format!("={name}")).set_environment(template_env))?
+    };
+    let text = || lua.load(&*source).set_mode(mlua::chunk::ChunkMode::Text).set_compiler(loadmodule_compiler());
+    let template = match &bytecode {
+        Some(bytecode) => match load_template(lua.load(&**bytecode).set_mode(mlua::chunk::ChunkMode::Binary)) {
+            Ok(template) => template,
+            Err(_) => {
+                // (bytecode kept from an earlier compile that does not load: see compile_in)
+                forget_unloadable(engine, script);
+                load_template(text())?
+            }
+        },
+        None => load_template(text())?,
     };
     crate::cost::set_safe_sandbox(lua, &template)?;
     engine
@@ -1047,14 +1057,50 @@ pub fn compile_in(lua: &Lua, engine: &Rc<Engine>, script: InstanceId, source: &[
             }
         }
     };
-    let chunk = match &bytecode {
-        Some(bytecode) => lua.load(&**bytecode).set_mode(mlua::chunk::ChunkMode::Binary),
-        None => lua.load(&*source).set_compiler(compiler()),
-    };
     // A script's chunk is its full name as Roblox names it: error positions, tracebacks and debug.info(f, "s") read
     // `ReplicatedStorage.Module:3:`, not Luau's `[string "ReplicatedStorage.Module"]:3:` for an unmarked name
-    // (measured in a playing client, Studio 0.744: tools/parity/probes/chunknames.luau).
-    load(lua, engine, chunk.set_name(format!("={name}")).set_environment(env))
+    // (measured in a playing client, Studio 0.744: tools/parity/probes/chunknames.luau). The source is always text, as
+    // Roblox compiles it: left to guess, mlua takes text whose first byte is below 9 for bytecode, and a zero first byte
+    // then fails to load with an error whose text is only the chunk name.
+    let text = || lua.load(&*source).set_mode(mlua::chunk::ChunkMode::Text).set_compiler(compiler()).set_name(format!("={name}")).set_environment(env.clone());
+    match &bytecode {
+        Some(bytecode) => {
+            let chunk = lua.load(&**bytecode).set_mode(mlua::chunk::ChunkMode::Binary).set_name(format!("={name}")).set_environment(env.clone());
+            load(lua, engine, chunk).or_else(|_| {
+                // Bytecode compiled earlier (kept by this process, or read from the module store) that does not load is
+                // not the script's error: compile the source again, so a script fails only for its own reasons
+                forget_unloadable(engine, script);
+                engine.modules.borrow_mut().text_compiles += 1;
+                load(lua, engine, text())
+            })
+        }
+        None => load(lua, engine, text()),
+    }
+}
+
+/// Test hook: keeps `bytecode` as `script`'s compiled source, as a prefetch, the process's kept sources or the module store
+/// hand bytecode over.
+#[cfg(test)]
+pub(crate) fn keep_bytecode(engine: &Engine, script: InstanceId, bytecode: Vec<u8>) {
+    let source = source_rc(engine, script).expect("a source");
+    engine.modules.borrow_mut().bytecode.insert(script, (source, StoredBytes::from_vec(bytecode)));
+}
+
+/// Drops the bytecode kept for `script` (this engine's and the process's, by its file) after it failed to load, so it is
+/// compiled from its source again.
+fn forget_unloadable(engine: &Engine, script: InstanceId) {
+    engine.modules.borrow_mut().forget_bytecode(script);
+    let Some(path) = engine.state.borrow().dom.at(script).source_path().cloned() else { return };
+    if let Some(compiled) = COMPILED.get() {
+        if let Ok(mut entries) = compiled.entries.write() {
+            entries.remove(&*path);
+        }
+    }
+    if let Some(compiled) = LOADMODULE_COMPILED.get() {
+        if let Ok(mut entries) = compiled.write() {
+            entries.remove(&*path);
+        }
+    }
 }
 
 /// Loads a script's chunk as this engine's VM runs scripts: interpreted, or compiled to native code now or later

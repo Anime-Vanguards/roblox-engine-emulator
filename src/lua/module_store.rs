@@ -8,11 +8,19 @@
 //! Safety invariants:
 //! - Every entry is keyed by `(kind, sha256(content), content_len)` and scoped to a versioned
 //!   directory + header containing the format version and live compiler ABI digest.
-//! - Writers serialize to a unique temporary file beside the target and atomically rename into a
-//!   content-addressed `.mpack` name; a crashed writer leaves an ignored `.tmp` file, and concurrent
-//!   writers of the same pack converge on the identical immutable file without blocking.
+//! - Writers serialize to a unique temporary file beside the target, flush it to disk, and atomically
+//!   rename it into a content-addressed `.mpack` name; a crashed writer leaves an ignored `.tmp` file,
+//!   and concurrent writers of the same pack converge on the identical immutable file without blocking.
 //! - Readers validate magic, format version, ABI digest, bounds, and index ordering on open,
-//!   silently ignoring incompatible or corrupted files.
+//!   silently ignoring incompatible or corrupted files, and check each payload against its record's
+//!   checksum before handing it out: a payload that reads otherwise is a miss. Windows can show a
+//!   just-written file's pages zero-filled through a mapping while the machine is under heavy write
+//!   load (a cold `golden --all`: whole 256 KB runs of a fresh pack read as zeros in the writer and in
+//!   other processes), and Luau reports bytecode that starts with a zero byte as an error whose text is
+//!   only the chunk name.
+//! - One process compacts at a time (a try-lock on `compact.lock`; the others skip), and packs that a
+//!   larger pack already holds entirely (a compaction's inputs that a sibling still had mapped, so they
+//!   could not be removed) are dropped from the lookup list and never count toward compaction.
 
 use std::{
     ffi::{OsString, c_char, c_int},
@@ -35,10 +43,16 @@ pub(crate) const KIND_LOADMODULE_BYTECODE: u8 = 2;
 pub(crate) const KIND_BINARY_JSON: u8 = 3;
 
 const PACK_MAGIC: &[u8; 8] = b"REEMPK01";
-const FORMAT_VERSION: u32 = 1;
+/// 2: each record carries its payload's [`payload_check`]
+const FORMAT_VERSION: u32 = 2;
 const HEADER_LEN: usize = 48;
-const RECORD_LEN: usize = 56;
-const COMPACT_THRESHOLD: usize = 8;
+const RECORD_LEN: usize = 64;
+/// Packs (beyond those a larger pack holds entirely) a store keeps before it compacts them into one: a cold
+/// `golden --all` (a dozen batch workers, each flushing after every job) publishes a delta pack per job, and each
+/// compaction rewrites every entry (40 MB for rur's frozen project)
+const COMPACT_THRESHOLD: usize = 16;
+/// The file whose lock a compacting process holds (`File::try_lock`): a process that cannot take it skips
+const COMPACT_LOCK: &str = "compact.lock";
 const STALE_TMP_AGE: Duration = Duration::from_secs(300);
 
 const BJSON_MAGIC: &[u8; 4] = b"RBJ1";
@@ -158,7 +172,7 @@ impl Pack {
         // Validate bounds and strict sorted order once on open so binary search & slicing are infallible.
         let mut prev: Option<EntryKey> = None;
         for index in 0..entry_count {
-            let (key, offset, len) = read_record(bytes, index);
+            let (key, offset, len, _) = read_record(bytes, index);
             if let Some(prev_key) = prev {
                 if key <= prev_key {
                     return None;
@@ -173,36 +187,84 @@ impl Pack {
         Some(Arc::new(Pack { path: path.to_path_buf(), backing, entry_count }))
     }
 
+    /// The record of `target`: (payload offset, length, checksum).
     #[inline]
-    fn get(&self, target: &EntryKey) -> Option<StoredBytes> {
+    fn find(&self, target: &EntryKey) -> Option<(usize, usize, u64)> {
         let bytes = self.backing.bytes();
         let mut lo = 0usize;
         let mut hi = self.entry_count;
         while lo < hi {
             let mid = lo + (hi - lo) / 2;
-            let (key, offset, len) = read_record(bytes, mid);
+            let (key, offset, len, check) = read_record(bytes, mid);
             match key.cmp(target) {
                 std::cmp::Ordering::Less => lo = mid + 1,
                 std::cmp::Ordering::Greater => hi = mid,
-                std::cmp::Ordering::Equal => {
-                    return Some(StoredBytes { backing: self.backing.clone(), start: offset, end: offset + len });
-                }
+                std::cmp::Ordering::Equal => return Some((offset, len, check)),
             }
         }
         None
     }
 
-    fn iter_entries(&self) -> impl Iterator<Item = (EntryKey, &[u8])> {
+    /// `target`'s payload, when its bytes read as they were stored (else None, as for a missing entry).
+    #[inline]
+    fn get(&self, target: &EntryKey) -> Option<StoredBytes> {
+        let (offset, len, check) = self.find(target)?;
+        let payload = &self.backing.bytes()[offset..offset + len];
+        if payload_check(payload) != check {
+            DAMAGED.fetch_add(1, Ordering::Relaxed);
+            return None;
+        }
+        Some(StoredBytes { backing: self.backing.clone(), start: offset, end: offset + len })
+    }
+
+    /// Whether this pack has a payload that reads as stored for every key `other` has (so a pack holding the good copy of
+    /// an entry damaged here is never taken for covered).
+    fn covers(&self, other: &Pack) -> bool {
+        let bytes = other.backing.bytes();
+        (0..other.entry_count).all(|index| self.get(&read_record(bytes, index).0).is_some())
+    }
+
+    /// The entries whose payloads read as they were stored, with their checksums.
+    fn iter_entries(&self) -> impl Iterator<Item = (EntryKey, &[u8], u64)> {
         let bytes = self.backing.bytes();
-        (0..self.entry_count).map(move |index| {
-            let (key, offset, len) = read_record(bytes, index);
-            (key, &bytes[offset..offset + len])
+        (0..self.entry_count).filter_map(move |index| {
+            let (key, offset, len, check) = read_record(bytes, index);
+            let payload = &bytes[offset..offset + len];
+            if payload_check(payload) != check {
+                DAMAGED.fetch_add(1, Ordering::Relaxed);
+                return None;
+            }
+            Some((key, payload, check))
         })
     }
 }
 
+/// Payloads read back with other bytes than their checksum says (left out as misses)
+static DAMAGED: AtomicU64 = AtomicU64::new(0);
+
+/// How many payloads this process found damaged so far (and treated as missing).
+pub(crate) fn damaged_reads() -> u64 {
+    DAMAGED.load(Ordering::Relaxed)
+}
+
+/// A payload's checksum, kept in its record: 64 bits over its bytes, word by word (a payload that reads otherwise, such as a
+/// zero-filled run of pages, fails it). Fixed here rather than borrowed from a hasher crate, so a dependency update never
+/// changes what a pack on disk means.
+fn payload_check(bytes: &[u8]) -> u64 {
+    const MUL: u64 = 0x9e37_79b9_7f4a_7c15;
+    let mut hash = (bytes.len() as u64).wrapping_mul(MUL) ^ 0x243f_6a88_85a3_08d3;
+    let mut words = bytes.chunks_exact(8);
+    for word in &mut words {
+        hash = (hash ^ u64::from_le_bytes(word.try_into().unwrap())).wrapping_mul(MUL).rotate_left(29);
+    }
+    let mut tail = [0u8; 8];
+    tail[..words.remainder().len()].copy_from_slice(words.remainder());
+    hash = (hash ^ u64::from_le_bytes(tail)).wrapping_mul(MUL);
+    hash ^ (hash >> 32)
+}
+
 #[inline]
-fn read_record(bytes: &[u8], index: usize) -> (EntryKey, usize, usize) {
+fn read_record(bytes: &[u8], index: usize) -> (EntryKey, usize, usize, u64) {
     let base = HEADER_LEN + index * RECORD_LEN;
     let kind = bytes[base];
     let payload_len = u32::from_le_bytes([bytes[base + 4], bytes[base + 5], bytes[base + 6], bytes[base + 7]]) as usize;
@@ -216,20 +278,22 @@ fn read_record(bytes: &[u8], index: usize) -> (EntryKey, usize, usize) {
         bytes[base + 48], bytes[base + 49], bytes[base + 50], bytes[base + 51],
         bytes[base + 52], bytes[base + 53], bytes[base + 54], bytes[base + 55],
     ]) as usize;
-    (EntryKey { kind, hash, source_len }, payload_offset, payload_len)
+    let check = u64::from_le_bytes(bytes[base + 56..base + 64].try_into().unwrap());
+    (EntryKey { kind, hash, source_len }, payload_offset, payload_len, check)
 }
 
-fn serialize_pack(entries: &[(EntryKey, &[u8])], abi: &[u8; 32]) -> Option<Vec<u8>> {
+/// A pack's bytes: `entries` (sorted by key), each with its payload's [`payload_check`].
+fn serialize_pack(entries: &[(EntryKey, &[u8], u64)], abi: &[u8; 32]) -> Option<Vec<u8>> {
     let count = u32::try_from(entries.len()).ok()?;
     let table_end = HEADER_LEN + entries.len() * RECORD_LEN;
-    let payload_total: usize = entries.iter().map(|(_, p)| p.len()).sum();
+    let payload_total: usize = entries.iter().map(|(_, p, _)| p.len()).sum();
     let mut buf = Vec::with_capacity(table_end + payload_total);
     buf.extend_from_slice(PACK_MAGIC);
     buf.extend_from_slice(&FORMAT_VERSION.to_le_bytes());
     buf.extend_from_slice(&count.to_le_bytes());
     buf.extend_from_slice(abi);
     let mut offset = table_end as u64;
-    for (key, payload) in entries {
+    for (key, payload, check) in entries {
         let len = u32::try_from(payload.len()).ok()?;
         buf.push(key.kind);
         buf.extend_from_slice(&[0u8; 3]);
@@ -237,9 +301,10 @@ fn serialize_pack(entries: &[(EntryKey, &[u8])], abi: &[u8; 32]) -> Option<Vec<u
         buf.extend_from_slice(&key.hash);
         buf.extend_from_slice(&key.source_len.to_le_bytes());
         buf.extend_from_slice(&offset.to_le_bytes());
+        buf.extend_from_slice(&check.to_le_bytes());
         offset += payload.len() as u64;
     }
-    for (_, payload) in entries {
+    for (_, payload, _) in entries {
         buf.extend_from_slice(payload);
     }
     Some(buf)
@@ -309,10 +374,14 @@ impl Store {
                 loaded.insert(name);
             }
         }
-        if let Ok(mut packs) = self.packs.write() {
-            packs.extend(opened);
-            packs.sort_by(|a, b| b.entry_count.cmp(&a.entry_count));
-        }
+        let pruned = match self.packs.write() {
+            Ok(mut packs) => {
+                packs.extend(opened);
+                prune_covered(&mut packs)
+            }
+            Err(_) => Vec::new(),
+        };
+        remove_packs(pruned);
     }
 
     #[inline]
@@ -377,18 +446,18 @@ impl Store {
             return;
         }
         to_write.sort_by_key(|(key, _)| *key);
-        let slices: Vec<(EntryKey, &[u8])> = to_write.iter().map(|(k, v)| (*k, &**v)).collect();
-        let Some(buf) = serialize_pack(&slices, &self.abi) else { return };
+        let entries: Vec<(EntryKey, &[u8], u64)> = to_write.iter().map(|(k, v)| (*k, &**v, payload_check(v))).collect();
+        let Some(buf) = serialize_pack(&entries, &self.abi) else { return };
         if let Some(pack) = self.publish_pack(&buf) {
-            let need_compact = {
-                if let Ok(mut packs) = self.packs.write() {
+            let (need_compact, pruned) = match self.packs.write() {
+                Ok(mut packs) => {
                     packs.push(pack);
-                    packs.sort_by(|a, b| b.entry_count.cmp(&a.entry_count));
-                    packs.len() > COMPACT_THRESHOLD
-                } else {
-                    false
+                    let pruned = prune_covered(&mut packs);
+                    (packs.len() > COMPACT_THRESHOLD, pruned)
                 }
+                Err(_) => (false, Vec::new()),
             };
+            remove_packs(pruned);
             if need_compact {
                 self.compact_locked();
             }
@@ -407,7 +476,7 @@ impl Store {
             let seq = SEQ.fetch_add(1, Ordering::Relaxed);
             let tmp_name = format!("{}.{}-{seq}.tmp", hex16(&digest), std::process::id());
             let tmp = self.packs_dir.join(tmp_name);
-            if std::fs::write(&tmp, buf).is_err() {
+            if write_durably(&tmp, buf).is_err() {
                 let _ = std::fs::remove_file(&tmp);
                 return None;
             }
@@ -426,24 +495,32 @@ impl Store {
         Some(pack)
     }
 
+    /// Merges this store's packs into one, unless another process is compacting (its pack will hold these entries) or
+    /// already did (what it published leaves few enough packs).
     fn compact_locked(&self) {
+        let Ok(lock) = std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(self.packs_dir.join(COMPACT_LOCK)) else { return };
+        if lock.try_lock().is_err() {
+            return;
+        }
         self.refresh_from_disk();
         let snapshot: Vec<Arc<Pack>> = match self.packs.read() {
             Ok(packs) => packs.clone(),
             Err(_) => return,
         };
-        if snapshot.len() <= 1 {
+        if snapshot.len() <= COMPACT_THRESHOLD {
             return;
         }
-        let mut merged: FxHashMap<EntryKey, &[u8]> = FxHashMap::default();
+        // (only payloads that read as they were stored: a damaged copy is left out, or replaced by another pack's)
+        let mut merged: FxHashMap<EntryKey, (&[u8], u64)> = FxHashMap::default();
         for pack in &snapshot {
-            for (key, payload) in pack.iter_entries() {
-                merged.entry(key).or_insert(payload);
+            for (key, payload, check) in pack.iter_entries() {
+                merged.entry(key).or_insert((payload, check));
             }
         }
-        let mut entries: Vec<(EntryKey, &[u8])> = merged.into_iter().collect();
-        entries.sort_by_key(|(key, _)| *key);
+        let mut entries: Vec<(EntryKey, &[u8], u64)> = merged.into_iter().map(|(key, (payload, check))| (key, payload, check)).collect();
+        entries.sort_by_key(|(key, _, _)| *key);
         let Some(buf) = serialize_pack(&entries, &self.abi) else { return };
+        drop(entries);
         let Some(new_pack) = self.publish_pack(&buf) else { return };
         let new_path = new_pack.path.clone();
         let old_paths: Vec<PathBuf> = snapshot.iter().filter(|p| p.path != new_path).map(|p| p.path.clone()).collect();
@@ -458,6 +535,7 @@ impl Store {
             let _ = std::fs::remove_file(&old);
         }
         self.sweep_stale_temps();
+        drop(lock);
     }
 
     fn sweep_stale_temps(&self) {
@@ -479,6 +557,40 @@ impl Store {
             }
         }
     }
+}
+
+/// Sorts `packs` largest first and drops every other pack the largest holds entirely (a compaction's inputs: another
+/// process's, or this one's that a sibling still had mapped so they could not be removed), so they are neither searched, nor
+/// counted toward [`COMPACT_THRESHOLD`], nor kept mapped. Returns their paths.
+fn prune_covered(packs: &mut Vec<Arc<Pack>>) -> Vec<PathBuf> {
+    packs.sort_by(|a, b| b.entry_count.cmp(&a.entry_count));
+    let Some(largest) = packs.first().cloned() else { return Vec::new() };
+    let mut pruned = Vec::new();
+    packs.retain(|pack| {
+        let keep = Arc::ptr_eq(pack, &largest) || !largest.covers(pack);
+        if !keep {
+            pruned.push(pack.path.clone());
+        }
+        keep
+    });
+    pruned
+}
+
+/// Removes pack files no longer needed (best effort: one that another process still has mapped stays, and a later process
+/// that finds it covered removes it).
+fn remove_packs(paths: Vec<PathBuf>) {
+    for path in paths {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
+/// Writes `bytes` to a new file at `path`, flushed to disk before it is renamed to the name readers open: what a reader
+/// maps is then on disk whole, never pages whose writes are still pending.
+fn write_durably(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut file = std::fs::File::create(path)?;
+    file.write_all(bytes)?;
+    file.sync_all()
 }
 
 /// Process-wide store registry keyed by resolved state directory.
@@ -1028,11 +1140,11 @@ mod tests {
         let mut wrong_abi = *abi;
         wrong_abi[0] ^= 0xff;
         let key = key_for(KIND_STD_BYTECODE, b"return 1");
-        let bad_abi_buf = serialize_pack(&[(key, b"stale")], &wrong_abi).unwrap();
+        let bad_abi_buf = serialize_pack(&[(key, &b"stale"[..], payload_check(b"stale"))], &wrong_abi).unwrap();
         std::fs::write(packs_dir.join("11111111111111111111111111111111.mpack"), &bad_abi_buf).unwrap();
 
         // 2) Older format version (0 instead of FORMAT_VERSION)
-        let mut old_ver_buf = serialize_pack(&[(key, b"old-format")], abi).unwrap();
+        let mut old_ver_buf = serialize_pack(&[(key, &b"old-format"[..], payload_check(b"old-format"))], abi).unwrap();
         old_ver_buf[8..12].copy_from_slice(&0u32.to_le_bytes());
         std::fs::write(packs_dir.join("22222222222222222222222222222222.mpack"), &old_ver_buf).unwrap();
 
@@ -1085,6 +1197,228 @@ mod tests {
             let src = format!("return {i}");
             let got = reader.get(&key_for(KIND_STD_BYTECODE, src.as_bytes())).unwrap();
             assert_eq!(&*got, format!("bc-{i}").as_bytes());
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The payload a stress worker stores for entry `index`: deterministic, starting with a non-zero byte, sized so the
+    /// packs grow to megabytes as a story's modules do.
+    fn stress_payload(index: usize) -> Vec<u8> {
+        let len = 2_000 + (index * 7919) % 30_000;
+        let mut bytes = Vec::with_capacity(len);
+        let mut state = index as u64 * 0x9e37_79b9_7f4a_7c15 + 1;
+        bytes.push(6);
+        while bytes.len() < len {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            bytes.push((state as u8) | 1);
+        }
+        bytes
+    }
+
+    fn stress_key(index: usize) -> EntryKey {
+        key_for(KIND_STD_BYTECODE, format!("return {index} -- stress").as_bytes())
+    }
+
+    /// One stress worker (a child process): fills the store in rounds, as a batch worker does one job after another, and
+    /// checks every entry it can read, its own and the other workers', after each round. Returns the bad reads.
+    fn stress_worker(dir: &Path, worker: usize, entries: usize, rounds: usize) -> Vec<String> {
+        let (abi, _) = abi_info();
+        let store = Store::open_at(dir.to_path_buf(), *abi);
+        let mut bad = Vec::new();
+        for round in 0..rounds {
+            // each round puts a slice of the shared entries, starting at another place for each worker
+            for step in 0..entries / rounds {
+                let index = (worker * 97 + round * (entries / rounds) + step) % entries;
+                let key = stress_key(index);
+                if store.get(&key).is_none() {
+                    store.put(key, Arc::from(stress_payload(index)));
+                }
+            }
+            store.flush();
+            let fresh = Store::open_at(dir.to_path_buf(), *abi);
+            for index in 0..entries {
+                for (label, reader) in [("own", &store), ("fresh", &fresh)] {
+                    if let Some(found) = reader.get(&stress_key(index)) {
+                        if *found != *stress_payload(index) {
+                            let zeros = found.iter().take(64).all(|&b| b == 0);
+                            bad.push(format!("worker {worker} round {round} {label} entry {index}: {} bytes, first {:?}{}", found.len(), &found[..found.len().min(8)], if zeros { " (zeros)" } else { "" }));
+                        }
+                    }
+                }
+            }
+        }
+        bad
+    }
+
+    /// Many processes filling one empty store at once (a cold `golden --all`: 16 batch workers, each flushing after every
+    /// job, compacting when deltas pile up) never read an entry back with other bytes than were stored.
+    #[test]
+    fn processes_filling_an_empty_store_at_once_read_back_what_was_stored() {
+        const ENTRIES: usize = 400;
+        const ROUNDS: usize = 10;
+        if let Some(dir) = std::env::var_os("REE_MODSTORE_STRESS_DIR") {
+            let worker: usize = std::env::var("REE_MODSTORE_STRESS_WORKER").unwrap().parse().unwrap();
+            let bad = stress_worker(Path::new(&dir), worker, ENTRIES, ROUNDS);
+            for line in &bad {
+                println!("BAD {line}");
+            }
+            assert!(bad.is_empty(), "{} bad reads", bad.len());
+            return;
+        }
+        let workers: usize = std::env::var("REE_MODSTORE_STRESS_WORKERS").ok().and_then(|v| v.parse().ok()).unwrap_or(8);
+        let tries: usize = std::env::var("REE_MODSTORE_STRESS_TRIES").ok().and_then(|v| v.parse().ok()).unwrap_or(2);
+        let exe = std::env::current_exe().unwrap();
+        let mut failures = Vec::new();
+        for attempt in 0..tries {
+            let dir = temp_dir(&format!("procs-{attempt}"));
+            let children: Vec<_> = (0..workers)
+                .map(|worker| {
+                    std::process::Command::new(&exe)
+                        .args(["lua::modules::store::tests::processes_filling_an_empty_store_at_once_read_back_what_was_stored", "--exact", "--nocapture", "--test-threads=1"])
+                        .env("REE_MODSTORE_STRESS_DIR", &dir)
+                        .env("REE_MODSTORE_STRESS_WORKER", worker.to_string())
+                        .stdout(std::process::Stdio::piped())
+                        .stderr(std::process::Stdio::piped())
+                        .spawn()
+                        .unwrap()
+                })
+                .collect();
+            for child in children {
+                let output = child.wait_with_output().unwrap();
+                let text = String::from_utf8_lossy(&output.stdout);
+                failures.extend(text.lines().filter(|line| line.starts_with("BAD ")).map(|line| format!("try {attempt}: {line}")));
+                if !output.status.success() && !text.contains("BAD ") {
+                    failures.push(format!("try {attempt}: a worker failed: {}{}", text, String::from_utf8_lossy(&output.stderr)));
+                }
+            }
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+        assert!(failures.is_empty(), "{} bad reads:\n{}", failures.len(), failures.iter().take(40).cloned().collect::<Vec<_>>().join("\n"));
+    }
+
+    /// The `.mpack` files in a store's packs folder.
+    fn pack_files(dir: &Path) -> Vec<PathBuf> {
+        let mut files: Vec<PathBuf> = std::fs::read_dir(dir.join("packs"))
+            .map(|entries| entries.flatten().map(|entry| entry.path()).filter(|path| path.extension().is_some_and(|ext| ext == "mpack")).collect())
+            .unwrap_or_default();
+        files.sort();
+        files
+    }
+
+    /// A payload whose pages read back zero-filled (what a cold `golden --all` under heavy write load saw through a fresh
+    /// pack's mapping: whole 256 KB runs of zeros, which Luau loads as an error whose text is only the chunk name) is a miss:
+    /// the store hands out none of it, takes the payload again, and a compaction keeps the good copy.
+    #[test]
+    fn a_payload_that_reads_back_zero_filled_is_a_miss_and_is_stored_again() {
+        let dir = temp_dir("zeroed");
+        let (abi, _) = abi_info();
+        let payloads: Vec<Vec<u8>> = (0..3).map(stress_payload).collect();
+        {
+            let store = Store::open_at(dir.clone(), *abi);
+            for (index, payload) in payloads.iter().enumerate() {
+                store.put(stress_key(index), Arc::from(payload.as_slice()));
+            }
+            store.flush();
+        }
+        // zero the middle payload where it sits in the pack file
+        let file = pack_files(&dir).pop().unwrap();
+        let mut bytes = std::fs::read(&file).unwrap();
+        let at = bytes.windows(payloads[1].len()).position(|window| window == payloads[1].as_slice()).unwrap();
+        bytes[at..at + payloads[1].len()].fill(0);
+        std::fs::write(&file, &bytes).unwrap();
+
+        let damaged_before = damaged_reads();
+        let store = Store::open_at(dir.clone(), *abi);
+        assert_eq!(store.get(&stress_key(0)).as_deref(), Some(payloads[0].as_slice()));
+        assert!(store.get(&stress_key(1)).is_none(), "a zero-filled payload must read as missing, not as its zeros");
+        assert_eq!(store.get(&stress_key(2)).as_deref(), Some(payloads[2].as_slice()));
+        assert!(damaged_reads() > damaged_before);
+
+        // the caller compiles again and stores the payload: the good copy goes into a new pack, and every later reader finds it
+        store.put(stress_key(1), Arc::from(payloads[1].as_slice()));
+        store.flush();
+        assert_eq!(pack_files(&dir).len(), 2);
+        assert_eq!(Store::open_at(dir.clone(), *abi).get(&stress_key(1)).as_deref(), Some(payloads[1].as_slice()));
+
+        // a compaction merges the good copy, never the zeros
+        // (with the first pack and the replacement, the last of these deltas makes one pack too many)
+        for index in 3..2 + COMPACT_THRESHOLD {
+            store.put(stress_key(index), Arc::from(stress_payload(index)));
+            store.flush();
+        }
+        assert_eq!(store.packs.read().unwrap().len(), 1, "the deltas were compacted");
+        let reader = Store::open_at(dir.clone(), *abi);
+        for index in 0..2 + COMPACT_THRESHOLD {
+            assert_eq!(reader.get(&stress_key(index)).as_deref(), Some(stress_payload(index).as_slice()), "entry {index}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Writes a pack holding `indices`' stress entries straight into `dir` (as another process would publish it).
+    fn write_stress_pack(dir: &Path, indices: std::ops::Range<usize>) -> PathBuf {
+        let (abi, _) = abi_info();
+        let payloads: Vec<(EntryKey, Vec<u8>)> = indices.map(|index| (stress_key(index), stress_payload(index))).collect();
+        let mut entries: Vec<(EntryKey, &[u8], u64)> = payloads.iter().map(|(key, payload)| (*key, payload.as_slice(), payload_check(payload))).collect();
+        entries.sort_by_key(|(key, _, _)| *key);
+        let buf = serialize_pack(&entries, abi).unwrap();
+        let file = dir.join("packs").join(format!("{}.mpack", hex16(&sha256(&buf))));
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, buf).unwrap();
+        file
+    }
+
+    /// Packs that a larger pack holds entirely (a compaction's inputs that a sibling process still had mapped, so they could
+    /// not be removed) are neither searched nor counted: a store that finds a compacted pack beside many of its old inputs
+    /// does not compact again, and the old inputs it can remove are removed. Before, every worker of a cold `golden --all`
+    /// counted them and rewrote the 40 MB pack after each job.
+    #[test]
+    fn packs_a_larger_pack_holds_are_not_counted_or_compacted_again() {
+        let dir = temp_dir("covered");
+        let (abi, _) = abi_info();
+        let compacted = write_stress_pack(&dir, 0..200);
+        for slice in 0..COMPACT_THRESHOLD + 4 {
+            write_stress_pack(&dir, slice * 10..slice * 10 + 10);
+        }
+        assert_eq!(pack_files(&dir).len(), COMPACT_THRESHOLD + 5);
+
+        let store = Store::open_at(dir.clone(), *abi);
+        assert_eq!(store.packs.read().unwrap().len(), 1, "only the compacted pack is searched");
+        assert_eq!(pack_files(&dir), vec![compacted.clone()], "the old inputs were removed");
+        store.put(stress_key(500), Arc::from(stress_payload(500)));
+        store.flush();
+        let files = pack_files(&dir);
+        assert_eq!(files.len(), 2, "one new delta, no new compaction: {files:?}");
+        assert!(files.contains(&compacted));
+        for index in (0..200).chain([500]) {
+            assert_eq!(store.get(&stress_key(index)).as_deref(), Some(stress_payload(index).as_slice()), "entry {index}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// While one process compacts (holding `compact.lock`), another that reaches the threshold skips its compaction rather
+    /// than writing the same merged pack at the same time; it compacts once the lock is free.
+    #[test]
+    fn a_store_skips_compacting_while_another_process_compacts() {
+        let dir = temp_dir("lock");
+        let (abi, _) = abi_info();
+        let store = Store::open_at(dir.clone(), *abi);
+        store.put(stress_key(0), Arc::from(stress_payload(0)));
+        store.flush();
+        let lock = std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(dir.join("packs").join(COMPACT_LOCK)).unwrap();
+        lock.try_lock().unwrap();
+        for index in 1..=COMPACT_THRESHOLD + 2 {
+            store.put(stress_key(index), Arc::from(stress_payload(index)));
+            store.flush();
+        }
+        assert_eq!(store.packs.read().unwrap().len(), COMPACT_THRESHOLD + 3, "no compaction while another process holds the lock");
+        drop(lock);
+        store.put(stress_key(100), Arc::from(stress_payload(100)));
+        store.flush();
+        assert_eq!(store.packs.read().unwrap().len(), 1, "compacted once the lock was free");
+        for index in (0..=COMPACT_THRESHOLD + 2).chain([100]) {
+            assert_eq!(store.get(&stress_key(index)).as_deref(), Some(stress_payload(index).as_slice()), "entry {index}");
         }
         let _ = std::fs::remove_dir_all(&dir);
     }

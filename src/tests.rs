@@ -1993,6 +1993,52 @@ fn modules_require_and_environments() {
     assert!(prints.contains(&"print: first late") && prints.contains(&"print: second late"), "{prints:?}");
 }
 
+/// Bytecode kept from an earlier compile that does not load does not fail its module: the source is compiled again. (A cold
+/// `golden --all` under heavy write load read module store pages back zero-filled, and Luau loads zero-led bytes as an error
+/// whose text is only the chunk name, so stories failed with a shared module's name and no reason.) A source
+/// that starts with a zero byte is text, as Roblox compiles it: Luau's lexer ends it there and the module returns nothing,
+/// rather than mlua taking it for bytecode and Luau naming only the chunk.
+#[test]
+fn a_module_whose_kept_bytecode_does_not_load_compiles_its_source() {
+    let (lua, engine) = start();
+    run(
+        &lua,
+        &engine,
+        r#"
+        local Folder = Instance.new("Folder")
+        Folder.Name = "Mods"
+        Folder.Parent = game:GetService("ReplicatedStorage")
+        local Kept = Instance.new("ModuleScript")
+        Kept.Name = "Kept"
+        __setSource(Kept, "return 'from source'")
+        Kept.Parent = Folder
+        local Zero = Instance.new("ModuleScript")
+        Zero.Name = "Zero"
+        __setSource(Zero, "\0\0return 1")
+        Zero.Parent = Folder
+        "#,
+    );
+    let kept = {
+        let state = engine.state.borrow();
+        let storage = state.dom.find_child(engine.world().game, b"ReplicatedStorage").unwrap();
+        let folder = state.dom.find_child(storage, b"Mods").unwrap();
+        state.dom.find_child(folder, b"Kept").unwrap()
+    };
+    engine_lua::modules::keep_bytecode(&engine, kept, vec![0; 64]);
+    let output = run(
+        &lua,
+        &engine,
+        r#"
+        local Mods = game:GetService("ReplicatedStorage").Mods
+        print(require(Mods.Kept))
+        print(pcall(require, Mods.Zero))
+        "#,
+    );
+    let prints: Vec<&str> = output.iter().filter(|l| l.starts_with("print: ")).map(String::as_str).collect();
+    assert_eq!(prints[0], "print: from source", "{output:?}");
+    assert!(prints[1].ends_with("Module code did not return exactly one value"), "{output:?}");
+}
+
 #[test]
 fn wait_for_child_and_services() {
     let (lua, engine) = start();
