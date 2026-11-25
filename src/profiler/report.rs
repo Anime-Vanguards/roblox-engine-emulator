@@ -3262,7 +3262,7 @@ fn write_work_section<'a>(
     for ScopedLine { function, line, figures, phase } in scoped_lines.iter().filter(is_game_line).take(top) {
         let ops: Vec<String> = {
             let mut ops: Vec<_> = figures.ops.iter().collect();
-            crate::sort::by(&mut ops, |a, b| b.1.cmp(a.1));
+            crate::sort::by(&mut ops, |a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
             ops.iter().take(4).map(|(op, count)| format!("{} {}", vm::opcode_name(**op), group_digits(**count))).collect()
         };
         let module = names.function(*function).map_or(String::new(), |f| names.short(&f.source).to_string());

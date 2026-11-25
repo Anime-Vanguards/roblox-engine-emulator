@@ -1072,18 +1072,18 @@ fn build_shared(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<LuaTable> {
     shared.raw_set("Instance", instance_global)?;
     shared.raw_set("typeof", prelude.typeof_fn.clone())?;
     // print and warn: C functions that write their arguments as tostring does, from their own frame (lua/builtins.rs)
-    let e = engine.clone();
-    let output = super::lua_fn(lua, move |_, (kind, message): (LuaString, LuaString)| {
-        let kind = if &*kind.as_bytes() == b"warn" { "warn" } else { "print" };
-        e.output(kind, message.to_string_lossy(), None);
-        Ok(())
-    })?;
-    let mark = super::create_boxed_void_val(lua, Box::new(|_, value: LuaValue| {
-        super::shared_table::mark_value(&value);
-        Ok(())
-    }))?;
     for kind in ["print", "warn"] {
-        shared.raw_set(kind, super::builtins::output_function(lua, kind, output.clone(), mark.clone())?)?;
+        let e = engine.clone();
+        let output = super::lua_fn(lua, move |_, (kind, message): (LuaString, LuaString)| {
+            let kind = if &*kind.as_bytes() == b"warn" { "warn" } else { "print" };
+            e.output(kind, message.to_string_lossy(), None);
+            Ok(())
+        })?;
+        let mark = super::create_boxed_void_val(lua, Box::new(|_, value: LuaValue| {
+            super::shared_table::mark_value(&value);
+            Ok(())
+        }))?;
+        shared.raw_set(kind, super::builtins::output_function(lua, kind, output, mark)?)?;
     }
 
     // (the C functions below are named as a client names them, each alias a function of its own: `Wait` is named Wait; measured,
