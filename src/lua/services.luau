@@ -1245,15 +1245,15 @@ for _, Name in { "PromptPurchase", "PromptProductPurchase", "PromptGamePassPurch
 	Method("MarketplaceService", Name, function() Missing("MarketplaceService", Name) end)
 end
 
-Method("PolicyService", "GetPolicyInfoForPlayerAsync", function()
+Method("PolicyService", "GetPolicyInfoForPlayerAsync", function() -- (a playing 0.747 client's whole table offline, measured 2026-11-26; an offline server raised "Http request failed to get policy info.")
 	return {
-		AreAdsAllowed = true,
-		ArePaidRandomItemsRestricted = false,
-		AllowedExternalLinkReferences = { "Discord", "YouTube", "Twitch", "Facebook", "X" },
-		IsContentSharingAllowed = true,
-		IsEligibleToPurchaseSubscription = true,
-		IsPaidItemTradingAllowed = true,
-		IsSubjectToChinaPolicies = false,
+		AllowedExternalLinkReferences = {},
+		AreAdsAllowed = true, ArePaidRandomItemsRestricted = false,
+		IsContentSharingAllowed = true, IsEligibleToPurchaseCommerceProduct = false,
+		IsEligibleToPurchaseSubscription = true, IsEndlessContentAutoplayAllowed = true,
+		IsEndlessContentLoadAllowed = true, IsPaidItemTradingAllowed = true,
+		IsPhotoToAvatarAllowed = false, IsSubjectToChinaPolicies = false,
+		IsThirdPartyAccountLinkingAllowed = true,
 	}
 end)
 Method("BadgeService", "UserHasBadgeAsync", function()

@@ -88,18 +88,19 @@ fn assert_lines(lines: &[String], expected: &[&str]) {
 /// Every reader of the profile a client's script reaches, one line each (a JSON value on a line of its own)
 const CLIENT_READS: &str = include_str!("client_profile_tests/reads.luau");
 
-/// What the base commit (main 056dc98, before client profiles) printed for CLIENT_READS
+/// What the base commit (main 056dc98, before client profiles) printed for CLIENT_READS, but for GuiService.PreferredTransparency
+/// (1, not 0) and the policy table (all twelve keys, no external links), which follow a 0.747 client since (measured 2026-11-26)
 const DEFAULT_LINES: [&str; 29] = [
     r#"print player Player Player 1 0 Enum.MembershipType.None false  0"#,
     r#"print inputs true true false false false false false"#,
     r#"print input Enum.PreferredInput.KeyboardAndMouse Enum.UserInputType.MouseMovement"#,
-    r#"print gui false 0, 0 0, 0, 0, 0 Enum.PreferredTextSize.Medium 0 false"#,
+    r#"print gui false 0, 0 0, 0, 0, 0 Enum.PreferredTextSize.Medium 1 false"#,
     r#"print screen 1920, 1080 0, 0, 1920, 1080"#,
     r#"print settings Enum.SavedQualitySetting.Automatic 1"#,
     r#"print vr false"#,
     r#"print locale en-us en-us US"#,
     r#"print game 0 0 0 Enum.CreatorType.Group  0  0 false"#,
-    r#"print policy {"ArePaidRandomItemsRestricted":false,"IsPaidItemTradingAllowed":true,"IsContentSharingAllowed":true,"AreAdsAllowed":true,"IsEligibleToPurchaseSubscription":true,"AllowedExternalLinkReferences":5,"IsSubjectToChinaPolicies":false}"#,
+    r#"print policy {"AllowedExternalLinkReferences":0,"AreAdsAllowed":true,"ArePaidRandomItemsRestricted":false,"IsContentSharingAllowed":true,"IsEligibleToPurchaseCommerceProduct":false,"IsEligibleToPurchaseSubscription":true,"IsEndlessContentAutoplayAllowed":true,"IsEndlessContentLoadAllowed":true,"IsPaidItemTradingAllowed":true,"IsPhotoToAvatarAllowed":false,"IsSubjectToChinaPolicies":false,"IsThirdPartyAccountLinkingAllowed":true}"#,
     r#"print owns false false false false false"#,
     r#"missing MarketplaceService.PlayerOwnsAssetAsync is not emulated"#,
     r#"print owns async nil"#,
@@ -171,7 +172,7 @@ fn each_field_changes_what_scripts_read() {
             r#"print vr true"#,
             r#"print locale de-de de-de DE"#,
             r#"print game 10 11 12 Enum.CreatorType.User job-1 3 ps 13 true"#,
-            r#"print policy {"ArePaidRandomItemsRestricted":false,"IsPaidItemTradingAllowed":true,"IsContentSharingAllowed":true,"AreAdsAllowed":false,"IsEligibleToPurchaseSubscription":true,"AllowedExternalLinkReferences":0,"IsSubjectToChinaPolicies":false}"#,
+            r#"print policy {"AllowedExternalLinkReferences":0,"AreAdsAllowed":false,"ArePaidRandomItemsRestricted":false,"IsContentSharingAllowed":true,"IsEligibleToPurchaseCommerceProduct":false,"IsEligibleToPurchaseSubscription":true,"IsEndlessContentAutoplayAllowed":true,"IsEndlessContentLoadAllowed":true,"IsPaidItemTradingAllowed":true,"IsPhotoToAvatarAllowed":false,"IsSubjectToChinaPolicies":false,"IsThirdPartyAccountLinkingAllowed":true}"#,
             r#"print owns true false true false true"#,
             r#"print owns async true"#,
             r#"print subscription {"IsSubscribed":true,"IsRenewing":true}"#,
@@ -214,8 +215,8 @@ end"#;
     let lines = |preset: &str| printed(&run_harness(preset, harness, &["--client-profile", preset]));
     assert_eq!(lines("phone")[0], "true false false Touch false 844, 390");
     assert_eq!(lines("console")[0], "false true false Gamepad true 1920, 1080");
-    assert_eq!(lines("desktop-us")[..2], ["false false true KeyboardAndMouse false 1920, 1080", "en-us en-us US false 5"]);
-    assert_eq!(lines("locale-de")[1], "de-de de-de DE false 5");
+    assert_eq!(lines("desktop-us")[..2], ["false false true KeyboardAndMouse false 1920, 1080", "en-us en-us US false 0"]);
+    assert_eq!(lines("locale-de")[1], "de-de de-de DE false 0");
     assert_eq!(lines("china-policy")[1], "zh-cn zh-cn CN true 0");
     assert_eq!(lines("premium-owner")[2], "Premium 2000 true Player 1");
     assert_eq!(lines("new-account")[2], "None 0 false NewPlayer 9000000001");

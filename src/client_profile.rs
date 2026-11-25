@@ -205,7 +205,7 @@ impl Device {
 pub struct Settings {
     /// GuiService.PreferredTextSize, an Enum.PreferredTextSize item's name
     pub preferred_text_size: Option<String>,
-    /// GuiService.PreferredTransparency, 0 to 1
+    /// GuiService.PreferredTransparency, 0 to 1. Unset: 1 (a client's and a server's, measured)
     pub preferred_transparency: Option<f64>,
     /// GuiService.ReducedMotionEnabled
     pub reduced_motion: Option<bool>,

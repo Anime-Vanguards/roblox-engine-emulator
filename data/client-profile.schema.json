@@ -78,7 +78,7 @@
 			"additionalProperties": false,
 			"properties": {
 				"preferredTextSize": { "description": "GuiService.PreferredTextSize: an Enum.PreferredTextSize item's name. Unset: Medium", "type": "string" },
-				"preferredTransparency": { "description": "GuiService.PreferredTransparency. Unset: the property's default", "type": "number", "minimum": 0, "maximum": 1 },
+				"preferredTransparency": { "description": "GuiService.PreferredTransparency. Unset: 1", "type": "number", "minimum": 0, "maximum": 1 },
 				"reducedMotion": { "description": "GuiService.ReducedMotionEnabled. Unset: false", "type": "boolean" },
 				"savedQualityLevel": { "description": "UserGameSettings.SavedQualityLevel: an Enum.SavedQualitySetting item's name. Unset: Automatic", "type": "string" },
 				"cameraYInverted": { "description": "UserGameSettings:GetCameraYInvertValue() reads -1. Unset: false (1)", "type": "boolean" }
@@ -96,7 +96,7 @@
 			}
 		},
 		"policy": {
-			"description": "PolicyService:GetPolicyInfoForPlayerAsync for the player: these keys (Roblox's: AreAdsAllowed, ArePaidRandomItemsRestricted, AllowedExternalLinkReferences, IsContentSharingAllowed, IsEligibleToPurchaseSubscription, IsPaidItemTradingAllowed, IsSubjectToChinaPolicies, ...) go over the engine's answer",
+			"description": "PolicyService:GetPolicyInfoForPlayerAsync for the player: these keys (Roblox's: AllowedExternalLinkReferences, AreAdsAllowed, ArePaidRandomItemsRestricted, IsContentSharingAllowed, IsEligibleToPurchaseCommerceProduct, IsEligibleToPurchaseSubscription, IsEndlessContentAutoplayAllowed, IsEndlessContentLoadAllowed, IsPaidItemTradingAllowed, IsPhotoToAvatarAllowed, IsSubjectToChinaPolicies, IsThirdPartyAccountLinkingAllowed, ...) go over the engine's answer, a 0.747 client's table offline",
 			"type": "object",
 			"propertyNames": { "pattern": "^[A-Z]" },
 			"additionalProperties": { "type": ["boolean", "number", "string", "array"], "items": { "type": "string" } }

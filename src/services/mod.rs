@@ -1059,7 +1059,9 @@ fn install_gui_and_input(behaviors: &mut Behaviors, reflection: &Reflection, opt
         if let (Some(item), Some(n)) = (settings.preferred_text_size.clone(), name(reflection, "PreferredTextSize")) {
             behaviors.add_getter(gui, n, getter(move |lua, engine, _| Ok(enum_item(lua, engine, "PreferredTextSize", &item)?)));
         }
-        if let (Some(value), Some(n)) = (settings.preferred_transparency, name(reflection, "PreferredTransparency")) {
+        // (1 unless the profile sets it: a 0.747 client and server read 1, measured 2026-11-26, where the dump's default is 0)
+        if let Some(n) = name(reflection, "PreferredTransparency") {
+            let value = settings.preferred_transparency.unwrap_or(1.0);
             behaviors.add_getter(gui, n, getter(move |_, _, _| Ok(LuaValue::Number(value))));
         }
         if let (Some(flag), Some(n)) = (settings.reduced_motion, name(reflection, "ReducedMotionEnabled")) {
