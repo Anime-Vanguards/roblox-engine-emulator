@@ -901,11 +901,11 @@ fn a_spooled_recording_writes_what_a_kept_one_writes() {
     }
     let events: Json = serde_json::from_slice(&kept[2]).unwrap();
     assert_eq!(events["output"].as_array().map(Vec::len), Some(2005), "{events:.400}");
-    // (written piece by piece: each file is the pretty JSON of its own value)
-    for index in [1, 2] {
-        let value: Json = serde_json::from_slice(&spooled[index]).unwrap();
-        assert!(serde_json::to_vec_pretty(&value).unwrap() == spooled[index], "file {index} is not its value's pretty JSON");
-    }
+    // (written piece by piece: playback.json is the compact JSON of its own value, events.json its pretty JSON)
+    let playback_value: Json = serde_json::from_slice(&spooled[1]).unwrap();
+    assert!(serde_json::to_vec(&playback_value).unwrap() == spooled[1], "playback.json is not its value's compact JSON");
+    let events_value: Json = serde_json::from_slice(&spooled[2]).unwrap();
+    assert!(serde_json::to_vec_pretty(&events_value).unwrap() == spooled[2], "events.json is not its value's pretty JSON");
     let playback: Json = serde_json::from_slice(&kept[1]).unwrap();
     for key in ["actions", "tweens", "motion", "frames"] {
         assert!(playback[key].as_array().is_some_and(|list| !list.is_empty()), "{key}: {playback:.600}");
@@ -2940,4 +2940,73 @@ fn a_failed_scene_write_leaves_no_playback_json() {
     engine.teardown();
     assert!(err.contains("scene.rbxm"), "expected scene.rbxm error, got: {err}");
     assert!(!playback_exists, "playback.json should not be written when scene.rbxm fails");
+}
+
+/// `playback.json` is written as compact JSON (exact `serde_json::to_vec` bytes of its parsed value,
+/// no pretty-print indentation) so recordings keep identical parsed playback data for old and new
+/// `ror` builds while eliminating ~60% whitespace bloat from 12-float motion keys.
+#[test]
+fn playback_json_is_compact_and_lossless() {
+    let engine = Engine::new(Options { mode: "play".into(), ..Options::default() }).expect("engine");
+    let lua = Lua::new();
+    engine_lua::start(&lua, &engine).expect("start");
+    let recorder = Recorder::install(&engine, 60.0);
+    let script = r#"
+        local p = Instance.new("Part")
+        p.Name = "Mover"
+        p.Anchored = true
+        p.CFrame = CFrame.new(0, 1, 0)
+        p.Parent = workspace
+        local e = Instance.new("ParticleEmitter")
+        e.Name = "Sparks"
+        e.Enabled = false
+        e.Parent = p
+        game:GetService("RunService").Heartbeat:Connect(function()
+            local t = os.clock()
+            p.CFrame = CFrame.new(math.sin(t * 7), 1 + math.cos(t * 5), t * 3) * CFrame.Angles(t, t * 1.3, t * 0.7)
+            p.Transparency = (t * 0.5) % 1
+        end)
+        task.delay(0.05, function() e:Emit(5) end)
+    "#;
+    let script_id = {
+        let mut state = engine.state.borrow_mut();
+        let class = engine.reflection.class_id("ModuleScript").unwrap();
+        crate::instance::create_named(&mut state, &engine.reflection, class, "CompactPlayback")
+    };
+    let env = engine_lua::modules::environment(&lua, &engine, script_id).expect("environment");
+    let function = lua.load(script).set_name("=CompactPlayback").set_environment(env).into_function().expect("compile");
+    let call = engine_lua::globals::call(&lua, &engine, function, LuaMultiValue::new()).expect("call");
+    if let CallOutcome::Failed(message, _) = call.outcome().unwrap() {
+        panic!("harness failed: {message}");
+    }
+    recorder.sample(&engine, 0);
+    for frame in 1..=20 {
+        scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("frame");
+        recorder.sample(&engine, frame);
+    }
+    if let CallOutcome::Failed(message, _) = call.outcome().unwrap() {
+        panic!("harness failed: {message}");
+    }
+    let unique = TEST_DIRS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let out = std::env::temp_dir().join(format!(
+        "ree-compact-playback-{}-{}-{unique}",
+        std::process::id(),
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos(),
+    ));
+    recorder.write(&engine, &out, Map::new()).expect("write");
+    let raw = std::fs::read(out.join("playback.json")).expect("read playback.json");
+    let _ = std::fs::remove_dir_all(&out);
+    drop(lua);
+    engine.teardown();
+
+    let parsed: Json = serde_json::from_slice(&raw).expect("valid JSON");
+    assert_eq!(parsed["play"], Json::Bool(true));
+    assert!(!parsed["actions"].as_array().unwrap().is_empty());
+    assert!(!parsed["tweens"].as_array().unwrap().is_empty());
+    assert!(!parsed["motion"].as_array().unwrap().is_empty());
+
+    let compact = serde_json::to_vec(&parsed).unwrap();
+    let pretty = serde_json::to_vec_pretty(&parsed).unwrap();
+    assert_eq!(raw, compact, "playback.json must match compact serde_json::to_vec bytes");
+    assert!(raw.len() * 2 < pretty.len(), "compact playback.json ({} B) should be <50% of pretty ({} B)", raw.len(), pretty.len());
 }

@@ -181,7 +181,7 @@ When running via `--service`, the client enforces wall-clock and parent watches;
 
 `ree record` writes:
 - `scene.rbxm`: every instance that ever entered `Workspace` (in its initial state, hidden before entry and after removal).
-- `playback.json`: `ror`-compatible timeline—appearances/removals, `set` actions, keyed tweens, motion tracks, `Emit(n)`/`Clear()` (including emitter world CFrame at emit time), reparents, post-spawn instance references, and `Lighting` changes.
+- `playback.json`: compact `ror`-compatible timeline—appearances/removals, `set` actions, keyed tweens, motion tracks, `Emit(n)`/`Clear()` (including emitter world CFrame at emit time), reparents, post-spawn instance references, and `Lighting` changes.
 - `events.json`: timestamped prints, warnings, errors, and sound plays/stops (loopback runs tag each line with `side`).
 - `camera.json`: camera keyframes.
 - `summary.json`: run summary (also printed to stdout, with a short `ree: record ...` line on stderr).

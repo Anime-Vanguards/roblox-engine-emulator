@@ -595,16 +595,17 @@ enum Elements<'a> {
     Bytes(Box<dyn Iterator<Item = &'a [u8]> + 'a>),
 }
 
-/// Writes `top` as pretty JSON to `path` with the arrays of `arrays` (top-level keys, each holding `[]`
-/// in `top`) filled with their elements: the bytes [`write_json`] writes of the object holding them.
-fn write_filled(path: &Path, top: &Json, arrays: Vec<(&str, Elements)>) -> Result<(), String> {
+/// Writes `top` as JSON to `path` (`compact` for `playback.json`, pretty for `events.json`) with the
+/// arrays of `arrays` (top-level keys, each holding `[]` in `top`) filled with their elements: the
+/// exact bytes of `serde_json::to_vec` (`compact`) or `serde_json::to_vec_pretty` (`!compact`).
+fn write_filled(path: &Path, top: &Json, arrays: Vec<(&str, Elements)>, compact: bool) -> Result<(), String> {
     use std::io::Write;
-    let text = serde_json::to_string_pretty(top).map_err(|e| e.to_string())?;
-    // (keys and strings are escaped: `"key": []` with an unescaped quote is a key; each top-level key is
+    let text = if compact { serde_json::to_string(top) } else { serde_json::to_string_pretty(top) }.map_err(|e| e.to_string())?;
+    // (keys and strings are escaped: `"key":[]` / `"key": []` with an unescaped quote is a key; each top-level key is
     // the first of its kind, the object's own coming before any value's)
     let mut places = Vec::new();
     for (key, elements) in arrays {
-        let needle = format!("\"{key}\": []");
+        let needle = if compact { format!("\"{key}\":[]") } else { format!("\"{key}\": []") };
         let at = text.find(&needle).ok_or_else(|| format!("{}: no {key} array", path.display()))? + needle.len() - 2;
         places.push((at, elements));
     }
@@ -624,13 +625,14 @@ fn write_filled(path: &Path, top: &Json, arrays: Vec<(&str, Elements)>) -> Resul
             Elements::Bytes(mut items) => match items.next() {
                 None => file.write_all(b"[]").map_err(fail)?,
                 Some(first) => {
-                    file.write_all(b"[\n").map_err(fail)?;
+                    file.write_all(if compact { b"[" } else { b"[\n" }).map_err(fail)?;
                     file.write_all(first).map_err(fail)?;
+                    let sep: &[u8] = if compact { b"," } else { b",\n" };
                     for item in items {
-                        file.write_all(b",\n").map_err(fail)?;
+                        file.write_all(sep).map_err(fail)?;
                         file.write_all(item).map_err(fail)?;
                     }
-                    file.write_all(b"\n  ]").map_err(fail)?;
+                    file.write_all(if compact { b"]" } else { b"\n  ]" }).map_err(fail)?;
                 }
             },
         }
@@ -643,7 +645,7 @@ fn write_filled(path: &Path, top: &Json, arrays: Vec<(&str, Elements)>) -> Resul
 /// `output` array `events` holds empty: the bytes [`write_json`] writes of it holding them.
 fn write_events(path: &Path, events: &Json, lines: Option<std::fs::File>) -> Result<(), String> {
     match lines {
-        Some(lines) => write_filled(path, events, vec![("output", Elements::File(lines))]),
+        Some(lines) => write_filled(path, events, vec![("output", Elements::File(lines))], false),
         None => write_json(path, events),
     }
 }
@@ -697,11 +699,9 @@ fn indented(value: &Json, out: &mut Vec<u8>) {
     indented_serialize(value, out);
 }
 
-/// [`indented`] as a block of its own.
+/// Compact JSON of one playback array element (no pretty-print indentation or newlines).
 fn serialize_element<T: Serialize>(value: &T) -> Box<[u8]> {
-    let mut out = Vec::with_capacity(192);
-    indented_serialize(value, &mut out);
-    out.into_boxed_slice()
+    serde_json::to_vec(value).unwrap_or_default().into_boxed_slice()
 }
 
 /// An output line as events.json holds it in its `output` array (pretty, 4 spaces in).
@@ -709,8 +709,9 @@ pub(crate) fn event_line(entry: &crate::output::Entry, out: &mut Vec<u8>) {
     indented(&event_json(entry), out);
 }
 
-/// playback.json: its arrays as their elements' bytes ([`serialize_element`]; a recording of a busy scene made
-/// a JSON value of hundreds of thousands of actions and a string of all of it, ~3 GB for one effect scene's).
+/// playback.json: its arrays as their compact elements' bytes ([`serialize_element`]; a recording of a busy scene made
+/// a JSON value of hundreds of thousands of actions and a string of all of it, ~3 GB for one effect scene's, and
+/// pretty-printing alone more than doubled playback.json's size with per-number indentation inside 12-float CFrames).
 struct Playback {
     /// (time, bytes) of each action, in time order
     actions: Vec<(f64, Box<[u8]>)>,
@@ -734,6 +735,7 @@ fn write_playback(path: &Path, playback: &Playback) -> Result<(), String> {
             ("tweens", Elements::Bytes(Box::new(playback.tweens.iter().map(|bytes| &bytes[..])))),
             ("motion", Elements::Bytes(Box::new(playback.motion.iter().map(|bytes| &bytes[..])))),
         ],
+        true,
     )
 }
 
