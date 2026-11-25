@@ -1536,7 +1536,7 @@ dependencies = [
 [[package]]
 name = "ror-archive"
 version = "0.10.0"
-source = "git+https://github.com/Anime-Vanguards/roblox-object-renderer?rev=5ba32b5432f7799f16f6ee5664497753c6cf7814#5ba32b5432f7799f16f6ee5664497753c6cf7814"
+source = "git+https://github.com/Anime-Vanguards/roblox-object-renderer?rev=36dac94d178130c05dd4b5e95aea69009609c9e6#36dac94d178130c05dd4b5e95aea69009609c9e6"
 dependencies = [
  "blake3",
  "crc32fast",
@@ -1550,7 +1550,7 @@ dependencies = [
 [[package]]
 name = "ror-mesh"
 version = "0.10.0"
-source = "git+https://github.com/Anime-Vanguards/roblox-object-renderer?rev=5ba32b5432f7799f16f6ee5664497753c6cf7814#5ba32b5432f7799f16f6ee5664497753c6cf7814"
+source = "git+https://github.com/Anime-Vanguards/roblox-object-renderer?rev=36dac94d178130c05dd4b5e95aea69009609c9e6#36dac94d178130c05dd4b5e95aea69009609c9e6"
 dependencies = [
  "draco-core",
  "lz4_flex 0.13.1",
