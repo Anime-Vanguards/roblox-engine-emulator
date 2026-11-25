@@ -1831,8 +1831,10 @@ pub const LINK_FRAME: f64 = 34e-6;
 /// of their medians): the assembly as a client keeps it, which a link between two anchored parts does not join (each anchored part
 /// the root of an assembly of its own) and a Glue does, each part of it [`LINK_PART`], more when none of them is anchored
 /// ([`LINK_FREE_PART`]), and each link from its anchored parts to other anchored parts [`LINK_ANCHORED`] (world/joints.rs
-/// mark_component). A split of a two-part assembly the frame had not changed, later in the frame, costs a client 5.1 us beyond a
-/// disabled weld's (12 pairs of an anchored part welded to an unanchored one, the third and later in turn; 4.0 to 6.7 in each
+/// mark_component; an unanchored part linked to two anchored ones joins one of their assemblies: two anchored hubs of 1,000 leaves
+/// each and one part welded to both, a leaf of each changed in turn 88 and 69 us, where unbridged hubs' cost 73 and 60). A split
+/// of a two-part assembly the frame had not changed, later in the frame, costs a client 5.1 us beyond a disabled weld's (12
+/// pairs of an anchored part welded to an unanchored one, the third and later in turn; 4.0 to 6.7 in each
 /// session, an Enabled write alike), N such welds taken out in one loop at a frame's start 1.64 ms at 300 and 4.8 ms at 1,000,
 /// and UnjoinFromOutsiders of their N anchored parts 2.03 and 6.4 ms (where [`LINK_ASSEMBLY`] at 5 us read x2.1 to x3.1): each of
 /// the two pieces pays [`LINK_ASSEMBLY`] and its part. An anchored hub's leaf's weld disabled after another change in the frame, the
@@ -1880,7 +1882,8 @@ pub fn link_assembly(parts: usize, free: bool, anchored: usize) -> f64 {
 /// 1,000 and 3,000, 235 us at 100: x0.79 to x1.01, where they read x0.29 to x0.42). A link that another joint between the same two
 /// parts keeps
 /// changes no assembly (an anchored hub's leaf's weld disabled while N more welds between the two are left, after another change in
-/// the frame: 3.0 to 4.8 us at N = 1,000 and 3,000 when they were made after it), but for the last made of them ending, which costs
+/// the frame: 3.0 to 4.8 us at N = 1,000 and 3,000 when they were made after it; its Part1 set to nil 4.3 to 4.7 where a disabled
+/// weld's costs 2.7 to 3.0, and disabled after its Part1 was set back as before), but for the last made of them ending, which costs
 /// a client a split's price and [`LINK_KEPT_PARALLEL`] for each joint it keeps (36.5 to 43.3 us at 1,000, 86.5 to 99.8 at 3,000,
 /// where a hub with none cost 14 to 16): world/joints.rs charge_link prices the others as a link between anchored parts, the change
 /// alone. Fitted: x0.57 to x0.69 and x0.87 to x0.95. Not matched: such a kept change at a frame's start costs a client 13.6 to 26.8 us

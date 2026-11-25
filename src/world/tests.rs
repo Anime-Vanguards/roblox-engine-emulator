@@ -4359,6 +4359,214 @@ fn a_link_change_costs_the_assembly_a_client_keeps() {
     super::joints::check_index(&mut engine.state.borrow_mut(), &engine.reflection).expect("the joint index");
 }
 
+/// A single link change finds the other joints between its two parts at the same cost however many there are (world/joints.rs
+/// Joints::pairs, parallel_links): 8,000 welds between an anchored hub and an unanchored part, disabled one by one in the order
+/// they were made, take about the host time 8,000 welds between two anchored parts take (whose changes look at no parallel joint),
+/// each try a fresh pair of scenes. A change used to walk every joint linking the part with fewer links to count the parallel ones
+/// (x1.4 to x1.46 of the anchored pair's time here, 8,000 to 10,000 welds).
+#[test]
+fn parallel_joints_cost_a_link_change_the_same_however_many() {
+    let (lua, engine) = start_play();
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    run(
+        &lua,
+        &engine,
+        r#"
+        workspace.Gravity = 0
+        local Spot = 0
+        local function Part(Anchored)
+            Spot += 1
+            local P = Instance.new("Part")
+            P.Anchored, P.CanCollide = Anchored, false
+            P.CFrame = CFrame.new(300 + Spot % 60 * 6, 300 + Spot // 60 % 60 * 6, 300)
+            P.Parent = workspace
+            return P
+        end
+        function shared.Scene(Free)
+            local H, U = Part(true), Part(not Free)
+            local Folder, Welds = Instance.new("Folder"), {}
+            Folder.Parent = workspace
+            for I = 1, 8000 do
+                local W = Instance.new("Weld")
+                W.Part0, W.Part1, W.C0 = H, U, H.CFrame:ToObjectSpace(U.CFrame)
+                W.Parent = Folder
+                Welds[I] = W
+            end
+            shared.Welds = Welds
+        end
+        function shared.Off()
+            for _, W in shared.Welds do
+                W.Enabled = false
+            end
+        end
+        "#,
+    );
+    let scene = compile(&lua, &engine, "shared.Scene(...)");
+    let off = compile(&lua, &engine, "shared.Off()");
+    let time = |free: bool| {
+        call(&lua, &engine, &scene, free);
+        let start = std::time::Instant::now();
+        call(&lua, &engine, &off, ());
+        start.elapsed().as_secs_f64()
+    };
+    let (mut free, mut rigid) = (0.0, 0.0);
+    for _ in 0..3 {
+        (free, rigid) = (time(true), time(false));
+        if free < 1.25 * rigid + 0.02 {
+            break;
+        }
+    }
+    assert!(free < 1.25 * rigid + 0.02, "8,000 parallel welds to an unanchored part disabled in {free:.3} s of host time, to an anchored one {rigid:.3} s");
+    super::joints::check_index(&mut engine.state.borrow_mut(), &engine.reflection).expect("the joint index");
+}
+
+/// A Glue that a Parent write takes out of the world joins no assembly the write's link change prices (world/joints.rs
+/// mark_component): a Model holding an unanchored part welded to an anchored one and 1,000 Glue from the anchored part to unanchored
+/// parts outside it, taken out of the Workspace at a frame's start, costs what the same Model with the Glue disabled costs and the
+/// Glue's leaving their parts' lists (JOINT_TAKEN_OUT and JOINT_LIST_LEFT each). The anchored part's assembly was charged with the
+/// 1,000 parts the leaving Glue joined to it (LINK_PART each more).
+#[test]
+fn glue_that_leaves_joins_no_assembly_the_write_prices() {
+    let (lua, engine) = start_play();
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    use crate::cost::*;
+    let want = 1000.0 * (JOINT_TAKEN_OUT + JOINT_LIST_LEFT);
+    run(
+        &lua,
+        &engine,
+        &format!(
+            r#"
+        workspace.Gravity = 0
+        local Spot = 0
+        local function Part(Anchored, Parent)
+            Spot += 1
+            local P = Instance.new("Part")
+            P.Anchored, P.CanCollide = Anchored, false
+            P.CFrame = CFrame.new(300 + Spot % 60 * 6, 300 + Spot // 60 % 60 * 6, 300)
+            P.Parent = Parent or workspace
+            return P
+        end
+        local function Scene(Enabled)
+            local M = Instance.new("Model")
+            M.Parent = workspace
+            local B, P = Part(true), Part(false, M)
+            local W = Instance.new("Weld")
+            W.Part0, W.Part1, W.C0 = B, P, B.CFrame:ToObjectSpace(P.CFrame)
+            W.Parent = M
+            for _ = 1, 1000 do
+                local G = Instance.new("Glue")
+                G.Part0, G.Part1, G.Enabled = B, Part(false), Enabled
+                G.Parent = M
+            end
+            return M
+        end
+        local function Out(M)
+            task.wait()
+            task.wait()
+            local Start = os.clock()
+            M.Parent = nil
+            return os.clock() - Start
+        end
+        -- (a round first, whose first touches are not what is compared)
+        Out(Scene(true))
+        Out(Scene(false))
+        local Extra = Out(Scene(true)) - Out(Scene(false))
+        -- (to 1 us: the two scenes' first touches differ by 0.2 us, where the walk crossing the leaving Glue charged 85 us more)
+        assert(math.abs(Extra - {want:e}) < 1e-6, `1,000 active Glue leaving cost {{Extra * 1e6}} us more than disabled ones, not {{{want:e} * 1e6}}`)
+        "#
+        ),
+    );
+    super::joints::check_index(&mut engine.state.borrow_mut(), &engine.reflection).expect("the joint index");
+}
+
+/// A weld between two parts that later-made welds also link costs a Part1 write what its Enabled write costs (world/joints.rs
+/// repointed: the order it named its pair in, from before the write): LINK_CHANGED alone, Part1 set to nil and back, beyond the
+/// same writes of a disabled weld between the two, as a playing client's (roblox-sim, Studio 0.747, three sessions: an anchored
+/// hub's leaf held by 1,001 welds, the first made re-pointed after another link change in the frame, 4.3 to 4.7 us where a
+/// disabled weld's costs 2.7 to 3.0; then disabled, 2.5 to 2.9 as before it was re-pointed). The write was charged a split, the
+/// frame's first split and LINK_KEPT_PARALLEL for each weld left (37.9 us), and the weld counted as the last made after it.
+#[test]
+fn a_parallel_weld_re_pointed_costs_what_disabling_it_costs() {
+    let (lua, engine) = start_play();
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    let changed = crate::cost::LINK_CHANGED;
+    run(
+        &lua,
+        &engine,
+        &format!(
+            r#"
+        workspace.Gravity = 0
+        local CHANGED = {changed:e}
+        local Spot = 0
+        local function Part(Anchored, Size)
+            Spot += 1
+            local P = Instance.new("Part")
+            P.Anchored, P.CanCollide, P.Size = Anchored, false, Size or Vector3.one
+            P.CFrame = CFrame.new(300 + Spot % 60 * 6, 300 + Spot // 60 % 60 * 6, 300)
+            P.Parent = workspace
+            return P
+        end
+        local function Weld(P0, P1, Enabled, Parent)
+            local W = Instance.new("Weld")
+            W.Part0, W.Part1, W.C0, W.Enabled = P0, P1, P0.CFrame:ToObjectSpace(P1.CFrame), Enabled
+            W.Parent = Parent or P1
+            return W
+        end
+        local Sac = Weld(Part(true), Part(false), false)
+        local Hub, Leaf = Part(true, Vector3.new(4, 4, 4)), Part(false)
+        local W = Weld(Hub, Leaf, true)
+        local Folder = Instance.new("Folder")
+        Folder.Parent = workspace
+        for _ = 1, 1000 do
+            Weld(Hub, Leaf, true, Folder)
+        end
+        local D = Weld(Hub, Leaf, false)
+        local function Time(F)
+            local Start = os.clock()
+            F()
+            return os.clock() - Start
+        end
+        -- (each weld's writes in a frame of their own, after another pair's weld enabled first in it; a round first, whose first
+        -- touches are not what is compared)
+        local function Repoint(X)
+            task.wait()
+            task.wait()
+            Sac.Enabled = true
+            local Nil, Back = Time(function() X.Part1 = nil end), Time(function() X.Part1 = Leaf end)
+            Sac.Enabled = false
+            return Nil, Back
+        end
+        local function Round()
+            local Nil, Back = Repoint(W)
+            local DNil, DBack = Repoint(D)
+            return Nil - DNil, Back - DBack
+        end
+        local function Disabled()
+            task.wait()
+            task.wait()
+            Sac.Enabled = true
+            local Off = Time(function() W.Enabled = false end)
+            W.Enabled = true
+            Sac.Enabled = false
+            return Off
+        end
+        Disabled()
+        local Before = Disabled()
+        Round()
+        local Nil, Back = Round()
+        local Off = Disabled()
+        local function Is(Name, Got, Want)
+            assert(math.abs(Got - Want) < 1e-8, string.format("%s: %.3f us, not %.3f", Name, Got * 1e6, Want * 1e6))
+        end
+        Is("Part1 set to nil, beyond a disabled weld's", Nil, CHANGED)
+        Is("Part1 set back, beyond a disabled weld's", Back, CHANGED)
+        Is("disabled after it was re-pointed and back, against before", Off, Before)
+        "#
+        ),
+    );
+    super::joints::check_index(&mut engine.state.borrow_mut(), &engine.reflection).expect("the joint index");
+}
+
 /// Two later link changes in a frame cost more, as a playing client's do (cost.rs LINK_SPLIT_AGAIN, LINK_REJOINED): on an anchored hub
 /// welded to 100 parts, two leaves' welds disabled and enabled again in turn in a frame, the second disable costs LINK_SPLIT_AGAIN
 /// more than the last enable and the first enable LINK_REJOINED more; with another hub's weld disabled first in the frame, the first
