@@ -927,8 +927,73 @@ pub(crate) fn worker_variables() -> Vec<(&'static str, OsString)> {
 }
 
 /// What a run reports when no worker is named and there is no checkout to look beside (a standalone run, or the public
-/// build).
-const WORKER_NOT_NAMED: &str = "manifest bundles need an asset worker: set REE_ASSET_WORKER to its executable (docs/engine.md, \"Asset bundles\")";
+/// build). In standalone mode, explains why ree chose standalone mode (which executable path(s) lacked a checkout) and
+/// how to configure a worker or run from a checkout.
+fn worker_not_named() -> String {
+    format_worker_not_named(crate::standalone_sources())
+}
+
+fn format_worker_not_named(standalone_sources: Option<&[PathBuf]>) -> String {
+    match standalone_sources {
+        Some(sources) => {
+            let why = if sources.is_empty() {
+                "no roblox-engine-emulator Cargo.toml + Cargo.lock ancestor found".to_string()
+            } else {
+                let checked = sources.iter().map(|path| path.display().to_string()).collect::<Vec<_>>().join(", ");
+                format!("no roblox-engine-emulator Cargo.toml + Cargo.lock ancestor above {checked}")
+            };
+            format!(
+                "manifest bundles need an asset worker: running in standalone mode ({why}); set REE_ASSET_WORKER to the worker executable (and REE_ASSET_WORKER_ARGS for any arguments, such as a subcommand), or run a build inside a roblox-engine-emulator checkout (docs/engine.md, \"Asset bundles\")"
+            )
+        }
+        None => "manifest bundles need an asset worker: set REE_ASSET_WORKER to the worker executable (and REE_ASSET_WORKER_ARGS for any arguments, such as a subcommand) (docs/engine.md, \"Asset bundles\")".to_string(),
+    }
+}
+
+/// Splits `REE_ASSET_WORKER_ARGS` into argv tokens: whitespace-separated, with `'...'` literal quotes and `"..."`
+/// quotes where `\"` and `\\` unescape (backslashes before other characters stay literal for Windows paths).
+fn parse_worker_args(raw: &str) -> Result<Vec<String>, String> {
+    let mut args = Vec::new();
+    let mut current = String::new();
+    let mut in_token = false;
+    let mut chars = raw.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch.is_ascii_whitespace() {
+            if in_token {
+                args.push(std::mem::take(&mut current));
+                in_token = false;
+            }
+            continue;
+        }
+        in_token = true;
+        match ch {
+            '\'' => loop {
+                match chars.next() {
+                    Some('\'') => break,
+                    Some(c) => current.push(c),
+                    None => return Err("REE_ASSET_WORKER_ARGS: unclosed ' quote".to_string()),
+                }
+            },
+            '"' => loop {
+                match chars.next() {
+                    Some('"') => break,
+                    Some('\\') => match chars.peek().copied() {
+                        Some('"' | '\\') => current.push(chars.next().unwrap()),
+                        _ => current.push('\\'),
+                    },
+                    Some(c) => current.push(c),
+                    None => return Err("REE_ASSET_WORKER_ARGS: unclosed \" quote".to_string()),
+                }
+            },
+            other => current.push(other),
+        }
+    }
+    if in_token {
+        args.push(current);
+    }
+    Ok(args)
+}
+
 
 /// An explicitly named worker, or the lookup failure the client sent along with it. `None` when `name` is not set.
 fn named_worker(name: &str) -> Option<Result<PathBuf, String>> {
@@ -948,7 +1013,7 @@ fn standalone_worker() -> Result<PathBuf, String> {
 }
 
 fn resolve_named_worker() -> Result<PathBuf, String> {
-    let named = named_worker("REE_ASSET_WORKER").unwrap_or_else(|| Err(WORKER_NOT_NAMED.to_string()));
+    let named = named_worker("REE_ASSET_WORKER").unwrap_or_else(|| Err(worker_not_named()));
     named.and_then(|executable| resolve_executable(&executable))
 }
 
@@ -975,13 +1040,28 @@ impl AssetWorker {
         std::env::var_os("REE_ASSET_WORKER")
             .filter(|v| !v.is_empty())
             .map(PathBuf::from)
-            .ok_or_else(|| WORKER_NOT_NAMED.to_string())
+            .ok_or_else(worker_not_named)
+    }
+
+    fn worker_args(executable: &Path, standalone: bool) -> Result<Vec<String>, String> {
+        let _ = standalone;
+        if let Some(raw) = std::env::var_os("REE_ASSET_WORKER_ARGS").filter(|v| !v.is_empty()) {
+            let text = raw.into_string().map_err(|_| "REE_ASSET_WORKER_ARGS is not valid UTF-8".to_string())?;
+            let args = parse_worker_args(&text)?;
+            if !args.is_empty() {
+                return Ok(args);
+            }
+        }
+        let _ = executable;
+        Ok(Vec::new())
     }
 
     fn start(&self) -> Result<Worker, String> {
         let standalone = crate::is_standalone(&self.repo);
         let executable = Self::executable(&self.repo)?;
+        let args = Self::worker_args(&executable, standalone)?;
         let mut command = Command::new(&executable);
+        command.args(&args);
         command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());
         let mut working_directory = None;
         if standalone {
@@ -1966,4 +2046,35 @@ mod tests {
         assert_eq!(converted_key(&file).unwrap(), format!("conversion {expected}|{}|{}", stamp.len, stamp.modified).into_bytes());
         let _ = std::fs::remove_dir_all(&directory);
     }
+
+    #[test]
+    fn worker_args_parser_handles_subcommands_quotes_and_errors() {
+        assert_eq!(parse_worker_args("viewport-worker").unwrap(), vec!["viewport-worker"]);
+        assert_eq!(parse_worker_args("  viewport-worker   --refresh  ").unwrap(), vec!["viewport-worker", "--refresh"]);
+        assert_eq!(
+            parse_worker_args(r#"worker.mjs --dir "C:\my cache\dir" 'two words' "a\"b\\c""#).unwrap(),
+            vec!["worker.mjs", "--dir", r"C:\my cache\dir", "two words", r#"a"b\c"#]
+        );
+        assert!(parse_worker_args("   ").unwrap().is_empty());
+        assert!(parse_worker_args(r#""unclosed"#).unwrap_err().contains("unclosed \" quote"));
+        assert!(parse_worker_args("'unclosed").unwrap_err().contains("unclosed ' quote"));
+    }
+
+    #[test]
+    fn standalone_missing_worker_error_explains_reason_and_remedy() {
+        let exe = PathBuf::from(r"C:\tools\ree.exe");
+        let standalone_msg = format_worker_not_named(Some(&[exe]));
+        assert!(standalone_msg.contains("standalone mode"), "{standalone_msg}");
+        assert!(standalone_msg.contains("Cargo.toml + Cargo.lock"), "{standalone_msg}");
+        assert!(standalone_msg.contains(r"C:\tools\ree.exe"), "{standalone_msg}");
+        assert!(standalone_msg.contains("set REE_ASSET_WORKER"), "{standalone_msg}");
+        assert!(standalone_msg.contains("REE_ASSET_WORKER_ARGS"), "{standalone_msg}");
+        assert!(standalone_msg.contains("checkout"), "{standalone_msg}");
+
+        let plain_msg = format_worker_not_named(None);
+        assert!(plain_msg.contains("set REE_ASSET_WORKER"), "{plain_msg}");
+        assert!(plain_msg.contains("REE_ASSET_WORKER_ARGS"), "{plain_msg}");
+        assert!(!plain_msg.contains("standalone mode"), "{plain_msg}");
+    }
+
 }

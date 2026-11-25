@@ -204,9 +204,11 @@ fn select_defaults(argv: &[String]) -> Result<(), String> {
     } else {
         (None, None)
     };
+    if let Some(starter) = starter {
+        return roblox_engine_emulator::init_binary(std::path::Path::new(starter), state_dir);
+    }
     let exe = std::env::current_exe().map_err(|error| format!("cannot find the ree executable: {error}"))?;
-    let source = starter.map(std::path::Path::new).unwrap_or(&exe);
-    roblox_engine_emulator::init_binary(source, state_dir)
+    roblox_engine_emulator::init_binary_exe(&exe, state_dir)
 }
 
 /// `ree profile view|render ...`: the profile viewer, a binary of its own beside this one (profile-view/, which

@@ -923,4 +923,146 @@ for (const cached of [false, true]) {
 		}
 	}
 }
+
+// A build whose `target` directory is a Windows junction or Unix symlink pointing outside the checkout must still
+// detect its checkout directly and through `--service`, keeping caches in `<checkout>/.cache` rather than standalone mode.
+test("a junctioned or symlinked target directory stays in checkout mode directly and through the service", async () => {
+	const root = realPath(fs.mkdtempSync(path.join(os.tmpdir(), "ree-linked-target-")));
+	const checkout = path.join(root, "checkout");
+	const realTarget = path.join(root, "real-target");
+	const realRelease = path.join(realTarget, "release");
+	const project = path.join(root, "project");
+	const userCache = path.join(root, "user-cache");
+	for (const dir of [checkout, realRelease, path.join(project, "helpers"), path.join(project, "root"), userCache]) {
+		fs.mkdirSync(dir, { recursive: true });
+	}
+	fs.writeFileSync(path.join(checkout, "Cargo.toml"), '[package]\nname = "roblox-engine-emulator"\nversion = "0.1.0"\n');
+	fs.writeFileSync(path.join(checkout, "Cargo.lock"), "");
+	const reeName = WINDOWS ? "ree.exe" : "ree";
+	installRee(path.join(realRelease, reeName));
+	const linkedTarget = path.join(checkout, "target");
+	fs.symlinkSync(realTarget, linkedTarget, WINDOWS ? "junction" : "dir");
+	const linkedExe = path.join(linkedTarget, "release", reeName);
+
+	const mock = path.join(root, "mock.cjs");
+	fs.writeFileSync(mock, MOCK_WORKER);
+	const worker = path.join(project, "helpers", WORKER_FILE);
+	installWorker(worker);
+
+	const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !STEERING_VARIABLES.test(key)));
+	Object.assign(env, {
+		LOCALAPPDATA: userCache,
+		HOME: userCache,
+		USERPROFILE: userCache,
+		XDG_CACHE_HOME: userCache,
+		REE_PARENT_WATCH: "0",
+		REE_SERVE_WORKERS: "1",
+		REE_WORKER_LOG: path.join(root, "requests.jsonl"),
+		NODE_OPTIONS: `--require=${JSON.stringify(mock)}`,
+		[HOST_WORKER_VARIABLE]: worker,
+	});
+	const ree = async (cwd, args) => {
+		const result = await spawnAsync(linkedExe, args, { cwd, env, timeout: 120_000 });
+		assert.ifError(result.error);
+		assert.equal(result.status, 0, result.stderr || result.stdout);
+		return result.stdout;
+	};
+	const requests = () => fs.readFileSync(env.REE_WORKER_LOG, "utf8").trim().split("\n").map(JSON.parse);
+
+	let passed = false;
+	try {
+		await fetchAnimation(ree, project, 9101, false);
+		const pid = await warmService(ree, project);
+		await fetchAnimation(ree, project, 9102, true, [], pid);
+
+		assert.equal(requests().length, 2);
+		assert(!fs.existsSync(path.join(userCache, "ree")), "checkout build must not fall back to standalone per-user cache");
+		const servicesDir = path.join(checkout, ".cache", "services");
+		const records = fs.readdirSync(servicesDir).filter((name) => name.endsWith(".json")).map((name) => JSON.parse(fs.readFileSync(path.join(servicesDir, name), "utf8")));
+		assert.equal(records.length, 1);
+		assert.equal(records[0].source.toLowerCase(), linkedExe.toLowerCase(), "service --source preserves the checkout path through the link");
+		passed = true;
+	} finally {
+		try {
+			await stopServices((args) => ree(project, args));
+			if (fs.existsSync(env.REE_WORKER_LOG)) await waitForWorkers(requests());
+		} catch (error) {
+			console.error(`linked target cleanup failed; files kept at ${root}: ${error.message}`);
+			if (passed) throw error;
+		}
+		if (passed) {
+			if (WINDOWS) fs.rmdirSync(linkedTarget);
+			else fs.unlinkSync(linkedTarget);
+			await removeTestFolder(root);
+		} else {
+			console.error(`linked target check failed; files kept at ${root}`);
+		}
+	}
+});
+
+// A standalone release layout explains why it is standalone when no worker is configured, and starts workers that
+// require subcommand arguments via REE_ASSET_WORKER_ARGS.
+check("standalone release layout explains missing worker and starts subcommand workers", async ({ root, env, ree, failed, project, requests, executable }) => {
+	const directory = project("project");
+	fs.mkdirSync(path.join(directory, "root"));
+	fs.writeFileSync(path.join(directory, "Harness.luau"), `return function()
+local sequence = game:GetService("KeyframeSequenceProvider"):GetKeyframeSequenceAsync("rbxassetid://9201")
+assert(sequence.Name == "Mock")
+print("worker asset ok")
+end`);
+
+	// 1. No worker configured: direct and served failures name standalone mode, the checked executable path, and the remedy
+	delete env.REE_ASSET_WORKER;
+	delete env.REE_ASSET_WORKER_ARGS;
+	const missingArgs = ["run", "--harness", "Harness.luau", "--seconds", "0.05"];
+	const directMissing = JSON.parse(await failed(directory, missingArgs));
+	for (const expected of ["standalone mode", "Cargo.toml + Cargo.lock", "set REE_ASSET_WORKER", "REE_ASSET_WORKER_ARGS"]) {
+		assert(directMissing.failure.includes(expected), `${expected} missing from: ${directMissing.failure}`);
+	}
+	assert(directMissing.failure.toLowerCase().includes(executable.toLowerCase()), `executable path missing from: ${directMissing.failure}`);
+	const pidMissing = await warmService(ree, directory);
+	const servedMissing = JSON.parse(await servedRun(inDirectory(ree, directory), [...missingArgs, "--service"], pidMissing, { run: inDirectory(failed, directory), counted: "failed" }));
+	assert.equal(servedMissing.failure, directMissing.failure);
+	await stopServices((args) => ree(root, args));
+
+	// 2. Standalone release layout with REE_ASSET_WORKER_ARGS passing a subcommand (works in both public and internal builds)
+	const subcommandWorker = path.join(directory, "helpers", "subcommand-worker.cjs");
+	fs.writeFileSync(subcommandWorker, `
+const fs = require("node:fs");
+const path = require("node:path");
+const argv = process.argv.slice(2);
+if (argv[0] !== "viewport-worker") {
+	console.error("missing viewport-worker subcommand:", argv);
+	process.exit(2);
+}
+const running = process.platform === "win32" && process.env.REE_WORKER_LOG ? process.env.REE_WORKER_LOG + "." + process.pid + ".running" : undefined;
+if (running) fs.openSync(running, fs.constants.O_CREAT | fs.constants.O_RDWR | 0x10000000);
+require("node:readline").createInterface({ input: process.stdin }).on("line", (line) => {
+	const request = JSON.parse(line);
+	fs.appendFileSync(process.env.REE_WORKER_LOG, JSON.stringify({ ...request, pid: process.pid, running, argv }) + "\\n");
+	fs.mkdirSync(path.dirname(request.out), { recursive: true });
+	fs.writeFileSync(request.out, ${JSON.stringify(MODEL_XML)});
+	console.log(JSON.stringify({ file: request.out }));
+});
+`);
+	delete env.NODE_OPTIONS;
+	env.REE_ASSET_WORKER = process.execPath;
+	env.REE_ASSET_WORKER_ARGS = `${JSON.stringify(subcommandWorker)} viewport-worker`;
+	await fetchAnimation(ree, directory, 9202, false);
+	const pidArgs = await warmService(ree, directory);
+	await fetchAnimation(ree, directory, 9203, true, [], pidArgs);
+
+	// Changing REE_ASSET_WORKER_ARGS selects a distinct service and reaches the worker
+	env.REE_ASSET_WORKER_ARGS = `${JSON.stringify(subcommandWorker)} viewport-worker --extra`;
+	const pidArgs2 = await warmService(ree, directory);
+	assert.notEqual(pidArgs2, pidArgs, "changed REE_ASSET_WORKER_ARGS must select a distinct service");
+	await fetchAnimation(ree, directory, 9204, true, [], pidArgs2);
+
+	const rows = requests();
+	assert.equal(rows.length, 3);
+	assert.deepEqual(rows[0].argv, ["viewport-worker"]);
+	assert.deepEqual(rows[1].argv, ["viewport-worker"]);
+	assert.deepEqual(rows[2].argv, ["viewport-worker", "--extra"]);
+
+});
 });

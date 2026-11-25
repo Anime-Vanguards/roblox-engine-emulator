@@ -388,15 +388,18 @@ impl RunContext {
 pub static BEFORE_EXIT: std::sync::OnceLock<fn()> = std::sync::OnceLock::new();
 
 /// The checkout a host runs from: a service's starter's, else the nearest `Cargo.lock` above the
-/// executable, else `.`. This is the lookup library hosts (rur and others) were written against. Ree's
-/// own binary does not use it: [`init_binary`] sets its defaults first.
+/// executable (trying the unresolved launch path before the resolved executable path), else `.`.
+/// This is the lookup library hosts (rur and others) were written against. Ree's own binary does
+/// not use it: [`init_binary`] / [`init_binary_exe`] sets its defaults first.
 pub fn default_repo() -> PathBuf {
     if let Some(repo) = STARTER_REPO.get() {
         return repo.clone();
     }
     DEFAULT_REPO
         .get_or_init(|| {
-            let checkout = std::env::current_exe().ok().and_then(|exe| checkout_of(&exe));
+            let checkout = std::env::current_exe().ok().and_then(|exe| {
+                unresolved_exe(&exe).and_then(|unresolved| checkout_of(&unresolved)).or_else(|| checkout_of(&exe))
+            });
             checkout.unwrap_or_else(|| PathBuf::from("."))
         })
         .clone()
@@ -416,6 +419,88 @@ pub(crate) fn is_standalone_binary() -> bool {
     STANDALONE_STATE.get().is_some()
 }
 
+/// The executable path(s) [`init_binary`] / [`init_binary_exe`] checked when it chose standalone mode,
+/// or `None` when not running as a standalone binary.
+pub(crate) fn standalone_sources() -> Option<&'static [PathBuf]> {
+    STANDALONE_STATE.get().map(|standalone| standalone.sources.as_slice())
+}
+
+/// Removes a Windows `\\?\` verbatim prefix (except `\\?\UNC\...`) so paths display and compare cleanly.
+pub(crate) fn strip_verbatim(path: PathBuf) -> PathBuf {
+    let text = path.to_string_lossy();
+    match text.strip_prefix(r"\\?\") {
+        Some(rest) if !rest.starts_with("UNC") => PathBuf::from(rest),
+        _ => path,
+    }
+}
+
+/// The unresolved launch path of `current_exe`, when `argv[0]` (or a `PATH` lookup of a bare `argv[0]`)
+/// points to the same underlying executable without resolving intermediate junctions or symlinks.
+pub(crate) fn unresolved_exe(current_exe: &Path) -> Option<PathBuf> {
+    let arg0 = std::env::args_os().next();
+    let path_env = std::env::var_os("PATH");
+    unresolved_exe_from(arg0.as_deref(), current_exe, path_env.as_deref())
+}
+
+fn unresolved_exe_from(arg0: Option<&std::ffi::OsStr>, current_exe: &Path, path_env: Option<&std::ffi::OsStr>) -> Option<PathBuf> {
+    let arg0 = Path::new(arg0?);
+    if arg0.as_os_str().is_empty() {
+        return None;
+    }
+    let real = std::fs::canonicalize(current_exe).ok()?;
+    let matches_current = |candidate: &Path| -> Option<PathBuf> {
+        let abs = std::path::absolute(candidate).ok()?;
+        let mut candidates = vec![abs.clone()];
+        #[cfg(windows)]
+        {
+            let lower = abs.to_string_lossy().to_ascii_lowercase();
+            if !lower.ends_with(".exe") {
+                let mut with_exe = abs.into_os_string();
+                with_exe.push(".exe");
+                candidates.push(PathBuf::from(with_exe));
+            }
+        }
+        for path in candidates {
+            if std::fs::canonicalize(&path).ok().as_ref() == Some(&real) {
+                return Some(strip_verbatim(path));
+            }
+        }
+        None
+    };
+    let is_bare_name = arg0.components().count() == 1 && !arg0.is_absolute();
+    if !is_bare_name {
+        return matches_current(arg0);
+    }
+    let paths = path_env?;
+    for dir in std::env::split_paths(paths) {
+        let dir = if dir.as_os_str().is_empty() {
+            if cfg!(windows) {
+                continue;
+            }
+            PathBuf::from(".")
+        } else {
+            dir
+        };
+        if let Some(found) = matches_current(&dir.join(arg0)) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+/// Candidate executable paths for checkout detection, unresolved launch path first, then `exe`.
+pub(crate) fn exe_candidates(exe: &Path) -> Vec<PathBuf> {
+    let mut sources = Vec::new();
+    if let Some(unresolved) = unresolved_exe(exe) {
+        sources.push(unresolved);
+    }
+    let current = strip_verbatim(std::path::absolute(exe).unwrap_or_else(|_| exe.to_path_buf()));
+    if !sources.iter().any(|existing| existing == &current) {
+        sources.push(current);
+    }
+    sources
+}
+
 /// For ree's own binary, not for hosts: picks the binary's defaults before anything reads them, so
 /// call it first thing in `main`. A host that never calls it keeps [`default_repo`] and `<repo>/.cache`.
 ///
@@ -427,7 +512,24 @@ pub(crate) fn is_standalone_binary() -> bool {
 ///
 /// The first call wins: later calls do not change the defaults.
 pub fn init_binary(source: &Path, state: Option<PathBuf>) -> Result<(), String> {
-    let repo = ree_checkout_of(source).unwrap_or_default();
+    let normalized = if source.as_os_str().is_empty() {
+        PathBuf::new()
+    } else {
+        strip_verbatim(std::path::absolute(source).unwrap_or_else(|_| source.to_path_buf()))
+    };
+    let sources = if normalized.as_os_str().is_empty() { Vec::new() } else { vec![normalized] };
+    init_binary_sources(&sources, state)
+}
+
+/// Like [`init_binary`], trying the unresolved launch path (for builds reached through a symlinked or
+/// junctioned `target` folder) before `exe`.
+pub fn init_binary_exe(exe: &Path, state: Option<PathBuf>) -> Result<(), String> {
+    let sources = exe_candidates(exe);
+    init_binary_sources(&sources, state)
+}
+
+fn init_binary_sources(sources: &[PathBuf], state: Option<PathBuf>) -> Result<(), String> {
+    let repo = sources.iter().find_map(|source| ree_checkout_of(source)).unwrap_or_default();
     if repo.as_os_str().is_empty() {
         // a service changes its working directory, so a relative `--state-dir` is made absolute here
         let state = match state {
@@ -439,7 +541,7 @@ pub fn init_binary(source: &Path, state: Option<PathBuf>) -> Result<(), String> 
             Some(dir) => std::sync::OnceLock::from(dir),
             None => std::sync::OnceLock::new(),
         };
-        let _ = STANDALONE_STATE.set(pinned_state);
+        let _ = STANDALONE_STATE.set(Standalone { state: pinned_state, sources: sources.to_vec() });
     }
     set_default_repo(repo);
     Ok(())
@@ -460,11 +562,7 @@ pub(crate) fn ree_checkout_of(exe: &Path) -> Option<PathBuf> {
 /// The nearest ancestor of `exe` (not `exe` itself) that `is_checkout` accepts, without a verbatim prefix.
 fn checkout_matching(exe: &Path, is_checkout: impl Fn(&Path) -> bool) -> Option<PathBuf> {
     let dir = exe.ancestors().skip(1).find(|dir| is_checkout(dir))?;
-    let text = dir.to_string_lossy();
-    Some(match text.strip_prefix(r"\\?\") {
-        Some(rest) if !rest.starts_with("UNC") => PathBuf::from(rest),
-        _ => dir.to_path_buf(),
-    })
+    Some(strip_verbatim(dir.to_path_buf()))
 }
 
 /// Whether `dir` is ree's own checkout: a `Cargo.lock` beside a `Cargo.toml` whose package is this crate. A lockfile
@@ -514,10 +612,15 @@ pub fn set_default_repo(repo: PathBuf) {
 static STARTER_REPO: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
 /// The checkout [`default_repo`] found above the executable, looked up once.
 static DEFAULT_REPO: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
-/// Set only by [`init_binary`], and only for a standalone ree. The inner lock holds `serve --state-dir`, or the first
-/// successful cache lookup when a command needs state. Every later job shares it, even after the service changes its
-/// environment and working directory. `--help` needs no cache at all.
-static STANDALONE_STATE: std::sync::OnceLock<std::sync::OnceLock<PathBuf>> = std::sync::OnceLock::new();
+struct Standalone {
+    state: std::sync::OnceLock<PathBuf>,
+    sources: Vec<PathBuf>,
+}
+
+/// Set only by [`init_binary`] / [`init_binary_exe`], and only for a standalone ree. The inner lock holds
+/// `serve --state-dir`, or the first successful cache lookup when a command needs state. Every later job
+/// shares it, even after the service changes its environment and working directory. `--help` needs no cache at all.
+static STANDALONE_STATE: std::sync::OnceLock<Standalone> = std::sync::OnceLock::new();
 
 /// The state dir: RUR_STATE_DIR, else RUR_CACHE_DIR, else `<repo>/.cache` for a host's checkout,
 /// or, for every job of a standalone ree ([`init_binary`]), the per-user `ree` cache. Caches
@@ -533,7 +636,7 @@ pub fn state_dir(repo: &Path) -> PathBuf {
 pub(crate) fn try_state_dir(repo: &Path) -> Result<PathBuf, String> {
     match STANDALONE_STATE.get() {
         // `repo` only names inputs here, so it never provides the cache
-        Some(state) => resolve_standalone_state(state, std::env::consts::OS, |name| std::env::var_os(name)),
+        Some(standalone) => resolve_standalone_state(&standalone.state, std::env::consts::OS, |name| std::env::var_os(name)),
         // a host, or a binary in its checkout
         None => Ok(state_override(|name| std::env::var_os(name)).unwrap_or_else(|| repo.join(".cache"))),
     }

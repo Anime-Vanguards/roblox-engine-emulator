@@ -291,7 +291,22 @@ fn service_binary(state_dir: &Path, build: &str) -> Result<PathBuf, String> {
 
 fn source() -> Option<String> {
     let exe = std::env::current_exe().ok()?;
-    Some(std::fs::canonicalize(&exe).unwrap_or(exe).display().to_string())
+    // Keep the unresolved launch path so a build reached through a junctioned or symlinked `target`
+    // directory stays in its checkout when handed to `ree serve --source`.
+    let unresolved = crate::unresolved_exe(&exe).unwrap_or(exe);
+    let path = std::path::absolute(&unresolved).unwrap_or(unresolved);
+    Some(crate::strip_verbatim(path).display().to_string())
+}
+
+fn same_source(a: Option<&str>, b: Option<&str>) -> bool {
+    let (Some(a), Some(b)) = (a, b) else { return false };
+    if a == b {
+        return true;
+    }
+    match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    }
 }
 
 fn start(state_dir: &Path, build: &str, env: &str) -> Result<u16, String> {
@@ -322,7 +337,7 @@ fn start(state_dir: &Path, build: &str, env: &str) -> Result<u16, String> {
         if let Some(info) = read_info(&record).filter(|info| info.pid == pid && health(info.port).is_some()) {
             // earlier builds of the same executable are superseded: they finish and exit
             for old in recorded(state_dir) {
-                if old.build != build && old.source.is_some() && old.source == source {
+                if old.build != build && same_source(old.source.as_deref(), source.as_deref()) {
                     let _ = http::request(old.port, "POST", "/shutdown", b"{}", Duration::from_secs(3));
                 }
             }

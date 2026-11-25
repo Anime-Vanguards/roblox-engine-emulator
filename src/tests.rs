@@ -11191,6 +11191,64 @@ fn an_unrelated_cargo_project_is_not_the_executables_checkout() {
     std::fs::remove_dir_all(&root).unwrap();
 }
 
+#[test]
+fn unresolved_exe_preserves_junctioned_or_symlinked_target_checkout() {
+    let root = std::env::temp_dir().join(format!("ree-linked-target-test-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let checkout = root.join("checkout");
+    let real_release = root.join("real-target/release");
+    let other_dir = root.join("other");
+    std::fs::create_dir_all(&checkout).unwrap();
+    std::fs::create_dir_all(&real_release).unwrap();
+    std::fs::create_dir_all(&other_dir).unwrap();
+    std::fs::write(checkout.join("Cargo.toml"), "[package]\nname = \"roblox-engine-emulator\"\n").unwrap();
+    std::fs::write(checkout.join("Cargo.lock"), "").unwrap();
+    let exe_name = format!("ree{}", std::env::consts::EXE_SUFFIX);
+    let real_exe = real_release.join(&exe_name);
+    std::fs::write(&real_exe, b"binary").unwrap();
+    let decoy_exe = other_dir.join(&exe_name);
+    std::fs::write(&decoy_exe, b"other").unwrap();
+
+    let linked_target = checkout.join("target");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(root.join("real-target"), &linked_target).unwrap();
+    #[cfg(windows)]
+    {
+        let status = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(&linked_target)
+            .arg(root.join("real-target"))
+            .output()
+            .unwrap();
+        assert!(status.status.success(), "mklink /J failed: {}", String::from_utf8_lossy(&status.stderr));
+    }
+
+    let linked_release = linked_target.join("release");
+    let linked_exe = linked_release.join(&exe_name);
+    // The resolved path behind the junction/symlink has no checkout above it
+    assert_eq!(super::ree_checkout_of(&real_exe), None);
+    // The unresolved path keeps the checkout above `target`
+    let unresolved = super::unresolved_exe_from(Some(linked_exe.as_os_str()), &real_exe, None);
+    assert_eq!(unresolved.as_deref(), Some(linked_exe.as_path()));
+    assert_eq!(super::ree_checkout_of(unresolved.as_ref().unwrap()), Some(checkout.clone()));
+    // A bare invocation on PATH pointing to the linked release directory resolves through the link too
+    let bare = std::ffi::OsStr::new("ree");
+    let path_env = std::env::join_paths([&linked_release]).unwrap();
+    let from_path = super::unresolved_exe_from(Some(bare), &real_exe, Some(path_env.as_os_str()));
+    assert_eq!(from_path.as_deref(), Some(linked_exe.as_path()));
+    // A spoofed argv[0] pointing to a different file inside the checkout is rejected
+    assert_eq!(super::unresolved_exe_from(Some(linked_exe.as_os_str()), &decoy_exe, None), None);
+    // A bare invocation whose PATH points elsewhere does not match the linked checkout
+    let other_path = std::env::join_paths([&other_dir]).unwrap();
+    assert_eq!(super::unresolved_exe_from(Some(bare), &real_exe, Some(other_path.as_os_str())), None);
+
+    #[cfg(unix)]
+    std::fs::remove_file(&linked_target).unwrap();
+    #[cfg(windows)]
+    std::fs::remove_dir(&linked_target).unwrap();
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
 /// Standalone state uses the platform's per-user cache, unless the environment names one.
 #[test]
 fn standalone_caches_are_per_user() {

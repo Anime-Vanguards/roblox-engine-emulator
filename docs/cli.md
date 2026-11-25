@@ -441,5 +441,5 @@ Many variables retain `RUR_*` names for compatibility with `rur` tooling (full l
 | `RUR_LUAU_ALLOC_PROFILE=<file>` | Folded allocation bytes (+ `<file>.counts`; `RUR_LUAU_ALLOC_STEP=<bytes>`, default `1024`) |
 | `REE_PROFILE`, `REE_PROFILE_OUT`, `REE_PROFILE_COUNTERS`, `REE_HW_COUNTERS`, `REE_HW_PIN` | Profiling & hardware counter controls |
 | `REE_SCRIPT_TIMEOUT`, `REE_MAX_SCRIPT_TIMEOUTS`, `REE_MAX_WALL_SECONDS`, `REE_PARENT_WATCH` | Watchdog & limit controls |
-| `REE_DEVICE`, `REE_TIMING_CHECK`, `REE_TIMING_PROBES`, `REE_FROZEN_CLOCK`, `REE_SERVE_WORKERS`, `REE_ASSET_WORKER`, `REE_VIEW_COLOR` | Runtime, service, and viewer controls |
+| `REE_DEVICE`, `REE_TIMING_CHECK`, `REE_TIMING_PROBES`, `REE_FROZEN_CLOCK`, `REE_SERVE_WORKERS`, `REE_ASSET_WORKER`, `REE_ASSET_WORKER_ARGS`, `REE_VIEW_COLOR` | Runtime, service, and viewer controls |
 | `REE_LOCALIZED_PLACES`, `REE_MATCH_PLACES` | Place IDs with extra client localization/geometry write costs ([engine.md](engine.md)) |
