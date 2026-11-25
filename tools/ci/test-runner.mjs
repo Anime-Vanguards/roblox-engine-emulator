@@ -5,13 +5,13 @@
 //   node tools/ci/test-entry.mjs planted <index> <count> <binary> [test arguments]
 //   node tools/ci/test-entry.mjs standalone <index> <count> <binary> [test arguments]
 //
-// Two test binaries take most of a run's testing time, so each runs in jobs of its own, beside the rest:
+// Two test binaries run in jobs of their own, beside the rest:
 //
 // - The planted profile tests (profile-view/tests/planted.rs): each runs the engine under the profiler in process.
-//   CI runs them across `count` machines, each running one slice with `--test-threads=1` until workflow sharding is updated.
-// - The standalone tests (tests/standalone.rs): one test runs the installed binary's checks six times in a row and
-//   takes two minutes, longer than every other test of the test job together. CI runs them on `count` machines too,
-//   each slice on libtest's own threads.
+// - The standalone tests (tests/standalone.rs): end-to-end checks of the installed binary and service.
+//
+// CI runs each in one job (shard 0 of 1) on libtest's own threads; raising `count` splits a binary across that many
+// machines without changing the runner.
 //
 // The mode says which job this is:
 //
@@ -153,8 +153,6 @@ export function run(argv, { cwd = process.cwd(), env = process.env, spawn = spaw
 	log(`${mode} shard ${index + 1}/${count}: ${slice.length} of ${names.length} tests, about ${Math.round(all[index].ms / 1000)} s (the shards: ${all.map(share => Math.round(share.ms / 1000)).join(" / ")} s)`);
 	if (slice.length === 0) return 0;
 	// Several test names after the options are run together. --exact makes each name match that test alone, never every
-	// test whose name contains it. Planted shards pass --test-threads=1 while workflow sharding still splits them across
-	// runners; standalone's tests run on libtest's threads, as they did in one job.
-	const threads = mode === "planted" ? ["--test-threads=1"] : [];
-	return start(["--exact", ...threads, ...testArguments, ...slice]).code;
+	// test whose name contains it. Both planted and standalone run on libtest's threads.
+	return start(["--exact", ...testArguments, ...slice]).code;
 }

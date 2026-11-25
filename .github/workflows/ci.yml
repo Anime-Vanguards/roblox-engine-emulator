@@ -1,12 +1,12 @@
 # Runs on the public repository only: the private one has no free Actions minutes to spare.
 # Third-party actions are pinned to full commit SHAs; Dependabot (private repo) keeps them current.
 #
-# Three kinds of job, side by side, which shortens the run: test runs everything but two slow test binaries in two parts
-# (the libraries' unit tests; the integration tests, binaries and doctests), planted runs the planted profile tests in five
-# shards at once, and standalone runs the standalone tests in two, the second with the checks that need no build, Clippy
-# and the counter service's tests. Cargo starts each test binary
-# through tools/ci/test-entry.mjs, and the runner it calls (tools/ci/test-runner.mjs) decides what runs where: the
-# shards' slices are cut by the test times in tools/ci/test-weights.json, so each shard gets about the same time.
+# Three kinds of job (four Windows runners), side by side, which shortens the run: test runs everything but two test
+# binaries in two parts (the libraries' unit tests; the integration tests, binaries and doctests), planted runs the
+# planted profile tests in one job, and standalone runs the standalone tests together with the checks that need no build,
+# Clippy and the counter service's tests. Cargo starts each test binary through tools/ci/test-entry.mjs, and the runner
+# it calls (tools/ci/test-runner.mjs) decides what runs where (and can split planted or standalone across shards by the
+# test times in tools/ci/test-weights.json if either grows slow again).
 #
 # Two caches keep a job from compiling everything on every run. The dependency cache (Swatinem/rust-cache) holds what
 # the crates.io crates compile to. The compile cache (sccache, set up by tools/ci/compile-cache.mjs) holds what that one
@@ -121,15 +121,9 @@ jobs:
 
   planted:
     if: ${{ !github.event.repository.private }}
-    name: Planted profile tests, shard ${{ matrix.shard }} (windows-latest)
+    name: Planted profile tests (windows-latest)
     runs-on: windows-latest
     timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix:
-        # One job per shard. The runner is told its position and the shard count by the matrix itself, so adding a shard
-        # here is all it takes to cut the slices thinner. Five shards of about 140 s each: the longest test takes 139 s.
-        shard: [1, 2, 3, 4, 5]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -164,33 +158,24 @@ jobs:
           shared-key: test # The test job's cache, see above.
           save-if: ${{ github.ref == 'refs/heads/main' }}
           env-vars: INCLUDE
-      # The runner lists planted's tests and runs this job's slice, one test at a time. The slices of the five jobs
-      # together hold every test once (tools/ci/test-runner.mjs).
+      # The runner lists planted's tests and runs them on libtest's threads (tools/ci/test-runner.mjs).
       # Only planted's target is built here: the other test targets are built by the test job. No package is named, as in
       # the standalone job: the features are the workspace's either way, but only so is the engine's library compiled
       # as a workspace member, the same compile the test job stores in the compile cache, which can then answer for it
       # when the engine's sources have not changed.
-      - name: Test planted profiles (this shard's slice)
+      - name: Test planted profiles
         run: |
           $entry = (Resolve-Path tools/ci/test-entry.mjs).Path.Replace('\', '/')
-          cargo test --release --locked --no-fail-fast --test planted --config "target.x86_64-pc-windows-msvc.runner=['node','$entry','planted','${{ strategy.job-index }}','${{ strategy.job-total }}']"
+          cargo test --release --locked --no-fail-fast --test planted --config "target.x86_64-pc-windows-msvc.runner=['node','$entry','planted','0','1']"
       - name: Compile cache statistics
         if: ${{ !cancelled() }}
         run: node tools/ci/compile-cache.mjs stop
 
   standalone:
     if: ${{ !github.event.repository.private }}
-    name: Standalone tests, shard ${{ matrix.shard }}, and ${{ matrix.also }} (windows-latest)
+    name: Standalone tests, source checks and Clippy (windows-latest)
     runs-on: windows-latest
     timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix:
-        # One test takes two minutes or more, the other four about 75 s together, so the second shard also runs the checks
-        # that need no build, Clippy and the counter service's tests.
-        include:
-          - { shard: 1, also: nothing else }
-          - { shard: 2, also: source checks and Clippy }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -205,7 +190,6 @@ jobs:
       # The vendored archives cache is soft-failed (continue-on-error) and vendor.mjs re-checks every archive's SHA-256.
       - name: Restore the vendored archives cache
         id: vendor-cache
-        if: ${{ strategy.job-index == 1 }}
         continue-on-error: true
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -213,19 +197,18 @@ jobs:
           path: .cache/vendor
       - name: Vendored VM matches its patches
         id: vendor-check
-        if: ${{ strategy.job-index == 1 }}
         run: node tools/vendor.mjs --check
       - name: Store the vendored archives cache
-        if: ${{ github.ref == 'refs/heads/main' && strategy.job-index == 1 && steps.vendor-cache.outcome == 'success' && steps.vendor-cache.outputs.cache-hit != 'true' && steps.vendor-check.outcome == 'success' }}
+        if: ${{ github.ref == 'refs/heads/main' && steps.vendor-cache.outcome == 'success' && steps.vendor-cache.outputs.cache-hit != 'true' && steps.vendor-check.outcome == 'success' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           key: ${{ steps.vendor-cache.outputs.cache-primary-key }}
           path: .cache/vendor
       - name: CI tool tests
-        if: ${{ !cancelled() && strategy.job-index == 1 }}
+        if: ${{ !cancelled() }}
         run: node --test tools/ci/test.mjs
       - name: Luau release tracker tests
-        if: ${{ !cancelled() && strategy.job-index == 1 }}
+        if: ${{ !cancelled() }}
         run: node --test tools/luau-release.test.mjs
       # The two caches, as in the test job. This job reads the compile cache and never stores it.
       # From here on every step runs after a failed check too, so one failure does not hide the other, and the tests
@@ -262,22 +245,21 @@ jobs:
           shared-key: test # The test job's cache, see above.
           save-if: false
           env-vars: INCLUDE
-      # One of these tests alone takes two minutes: it runs the installed binary's checks six times in a row. The runner
-      # runs this shard's slice of them (tools/ci/test-runner.mjs).
+      # The runner runs standalone's tests on libtest's threads (tools/ci/test-runner.mjs).
       # No package is named, so cargo resolves the workspace's features as the test job does and builds the same ree.
       # Only standalone's target and what it needs are built here: the engine and ree.
-      - name: Test the standalone binary (this shard's slice)
+      - name: Test the standalone binary
         if: ${{ !cancelled() }}
         run: |
           $entry = (Resolve-Path tools/ci/test-entry.mjs).Path.Replace('\', '/')
-          cargo test --release --locked --no-fail-fast --test standalone --config "target.x86_64-pc-windows-msvc.runner=['node','$entry','standalone','${{ strategy.job-index }}','${{ strategy.job-total }}']"
+          cargo test --release --locked --no-fail-fast --test standalone --config "target.x86_64-pc-windows-msvc.runner=['node','$entry','standalone','0','1']"
       # Clippy's errors only: its warnings are not cleaned up yet, so they do not fail the run. The dependency cache holds
       # the dependencies, so this checks the workspace's own crates.
       - name: Lint (clippy errors)
-        if: ${{ !cancelled() && strategy.job-index == 1 }}
+        if: ${{ !cancelled() }}
         run: cargo clippy --release --locked --all-targets
       - name: Test the counter service (tools/hw-counters, a workspace of its own)
-        if: ${{ !cancelled() && strategy.job-index == 1 }}
+        if: ${{ !cancelled() }}
         run: cargo test --release --locked --manifest-path tools/hw-counters/Cargo.toml
       - name: Compile cache statistics
         if: ${{ !cancelled() }}

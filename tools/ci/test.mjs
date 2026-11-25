@@ -101,6 +101,16 @@ test("the workflow has jobs for both test binaries that core skips", () => {
 	assert.deepEqual(modes.sort(), ["core", ...Object.keys(OWN_JOBS)].sort());
 });
 
+test("planted and standalone run as single jobs without leftover shard matrix conditions", () => {
+	const plantedJob = WORKFLOW.split(/^  planted:\r?\n/m)[1].split(/^  standalone:\r?\n/m)[0];
+	const standaloneJob = WORKFLOW.split(/^  standalone:\r?\n/m)[1];
+	for (const [mode, job] of [["planted", plantedJob], ["standalone", standaloneJob]]) {
+		assert.doesNotMatch(job, /^\s+matrix:/m, `${mode} runs in one job`);
+		assert.doesNotMatch(job, /strategy\.job-(?:index|total)/, `${mode} has no matrix-only strategy expressions`);
+		assert.ok(job.includes(`runner=['node','$entry','${mode}','0','1']`), `${mode} runs shard 0 of 1`);
+	}
+});
+
 // The runner knows a test binary by its package and its file's name, and cargo names the file after the target alone.
 // A binary, example or bench of the same package with the same name would read as the same: core would skip its tests,
 // and the job of its own, which asks cargo for the test target, would never run them.
@@ -150,7 +160,7 @@ test("a standalone shard runs its slice by exact name on libtest's threads and r
 	assert.equal(calls.length, 2);
 });
 
-test("a shard lists the binary, runs its slice by exact name one test at a time and exits with the tests' code", () => {
+test("a planted shard lists the binary, runs its slice by exact name on libtest's threads and exits with the tests' code", () => {
 	const calls = [];
 	const spawn = (file, args, options) => {
 		calls.push(args);
@@ -160,7 +170,7 @@ test("a shard lists the binary, runs its slice by exact name one test at a time 
 		return { status: 17 };
 	};
 	assert.equal(run(["planted", "0", "3", planted], { cwd, env, spawn, log() {} }), 17);
-	assert.deepEqual(calls, [["--list", "--format", "terse"], ["--exact", "--test-threads=1", "a", "c"]]);
+	assert.deepEqual(calls, [["--list", "--format", "terse"], ["--exact", "a", "c"]]);
 });
 
 test("a failed listing, a signal, a launch error or a bad argument cannot turn a shard green", () => {
@@ -179,7 +189,7 @@ test("a shard with no tests runs nothing, and the arguments for the binary come 
 	assert.equal(run(["planted", "2", "3", planted], { cwd, env, spawn: only.spawn, log() {} }), 0);
 	assert.equal(only.calls.length, 1);
 	assert.equal(run(["planted", "0", "3", planted, "--list", "--format", "terse"], { cwd, env, spawn: only.spawn, log() {} }), 0);
-	assert.deepEqual(only.calls[2], ["--exact", "--test-threads=1", "--list", "--format", "terse", "only"]);
+	assert.deepEqual(only.calls[2], ["--exact", "--list", "--format", "terse", "only"]);
 });
 
 // node stands in for the test binary, and the entry runs as cargo starts it, as a separate process
