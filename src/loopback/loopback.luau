@@ -3,7 +3,7 @@
 -- the callback's script and line (measured: tools/parity/probes/loopback/remote_function.luau). A server's InvokeClient
 -- of a player that is not the loopback one waits for that player to leave and then raises, as a server run's does
 -- (server.luau). Run as the engine's own Luau (not charged to scripts).
-local Call, Players = ...
+local Call, Players, Report, CreateThread = ...
 
 -- (results pass as arguments, never packed into a table: a call allocates nothing of its own here)
 local function Answer(Ok, ...)
@@ -40,9 +40,25 @@ local function InvokeClient(Self, Player, ...)
 	return Answered(Self, Player, Call(Self, false, Player, ...))
 end
 
--- The callback of an invoke that arrived: its outcome goes back to the caller (Done)
+-- The callback of an invoke that arrived, on a thread of its own: its outcome goes back to the caller (Done). An error it raises
+-- before it first yields is also logged on this side as an uncaught error is (Report: ScriptContext.Error and an error line with
+-- the callback's own stack, a table's as "Error occurred, no output from Luau."); one raised after a yield is not. Measured in a
+-- 0.747 play session's server and client, OnServerInvoke and OnClientInvoke alike:
+-- tools/parity/probes/loopback/remote_callback_errors.luau.
 local function Run(Callback, Done, CallId, ...)
-	Done(CallId, pcall(Callback, ...))
+	local Fresh = true
+	local function Failed(Problem)
+		if Fresh then
+			Report(Problem)
+		end
+		return Problem
+	end
+	-- (the VM's own coroutine.create: the scripts' charges a thread's price)
+	local Handler = CreateThread(function(...)
+		Done(CallId, xpcall(Callback, Failed, ...))
+	end)
+	coroutine.resume(Handler, ...)
+	Fresh = false
 end
 
 return { InvokeServer = InvokeServer, InvokeClient = InvokeClient, Run = Run }

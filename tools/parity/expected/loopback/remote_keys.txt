@@ -1,0 +1,191 @@
+# engine: Roblox Studio 0.747.0.7471481, a headless play session of one server and one client in processes of their own (the server's half a server Script from the server's start, the client's half a job in the client; script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-25
+# repeated: 3 captures, the same lines
+server: send tostring nil: error string '__tostring' must return a string calls 1
+server: send tostring number: ok calls 1
+server: send tostring error: error string @47: boom calls 1
+server: send tostring error table: error table calls 1
+server: send tostring task.wait: error string thread is not yieldable calls 1
+server: send two tostring nil: error string '__tostring' must return a string calls 1
+server: send clears table: error string invalid key to 'next' calls 1
+server: send numbers named same: ok calls 0
+server: send key CFrame: ok calls 0
+server: send key BrickColor: ok calls 0
+server: send key Rect: ok calls 0
+server: send key Enum: ok calls 0
+server: send key Enums: ok calls 0
+server: send key RBXScriptSignal: ok calls 0
+server: send key RBXScriptConnection: ok calls 0
+server: send key RotationCurveKey: ok calls 0
+server: send key newproxy: ok calls 0
+server: send key Axes: ok calls 0
+server: send value Axes: ok calls 0
+server: send value Axes of a face: ok calls 0
+server: send value Faces: ok calls 0
+server: send value PathWaypoint: ok calls 0
+server: send value PathWaypoint plain: ok calls 0
+server: send value ColorSequenceKeypoint: ok calls 0
+server: send value NumberSequenceKeypoint: ok calls 0
+server: send value SecurityCapabilities: ok calls 0
+server: send value SecurityCapabilities of two: ok calls 0
+server: send value RotationCurveKey: ok calls 0
+server: send value ValueCurveKey: ok calls 0
+server: send value FloatCurveKey: ok calls 0
+server: send value Path2DControlPoint: ok calls 0
+server: send value DockWidgetPluginGuiInfo: ok calls 0
+server: send value CatalogSearchParams: ok calls 0
+server: send value OverlapParams: ok calls 0
+server: send value Content: ok calls 0
+server: send value Region3: ok calls 0
+server: send value Region3int16: ok calls 0
+server: send value Vector2int16: ok calls 0
+server: send value Vector3int16: ok calls 0
+server: send value RBXScriptSignal: ok calls 0
+server: send value newproxy: ok calls 0
+server: send in array Axes: ok calls 0
+server: send in array Faces: ok calls 0
+server: send in dict PathWaypoint: ok calls 0
+server: send in dict keypoints: ok calls 0
+server: got tostring nil: nothing
+server: got tostring number: {string:<Table> (42)=number:1}
+server: got tostring error: nothing
+server: got tostring error table: nothing
+server: got tostring task.wait: nothing
+server: got two tostring nil: nothing
+server: got clears table: nothing
+server: got numbers named same: {string:1=string:a}
+server: got key CFrame: {string:<CoordinateFrame> (1, 2, 3, 1, 0, 0, 0, 1, 0, 0, 0, 1)=number:1}
+server: got key BrickColor: {string:<int> (Bright red)=number:1}
+server: got key Rect: {string:<Rect2D> (1, 2, 3, 4)=number:1}
+server: got key Enum: {string:<null> (Material)=number:1}
+server: got key Enums: {string:<null> (Enums)=number:1}
+server: got key RBXScriptSignal: {string:<EventInstance> (Signal Changed)=number:1}
+server: got key RBXScriptConnection: {string:<Connection> (Connection)=number:1}
+server: got key RotationCurveKey: {string:<null> ({Linear, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0})=number:1}
+server: got key newproxy: {string:<null> (proxy)=number:1}
+server: got key Axes: {string:<Axes> (X)=number:1}
+server: got value Axes: Axes:X, Y
+server: got value Axes of a face: Axes:Y
+server: got value Faces: Faces:Top, Back
+server: got value PathWaypoint: PathWaypoint:{1, 2, 3}, Jump, label
+server: got value PathWaypoint plain: PathWaypoint:{0, 0, 0}, Walk, 
+server: got value ColorSequenceKeypoint: ColorSequenceKeypoint:0.5 0 0 1 0 
+server: got value NumberSequenceKeypoint: NumberSequenceKeypoint:0.5 2 0.25 
+server: got value SecurityCapabilities: SecurityCapabilities:
+server: got value SecurityCapabilities of two: SecurityCapabilities:Basic | UI
+server: got value RotationCurveKey: nil:nil
+server: got value ValueCurveKey: nil:nil
+server: got value FloatCurveKey: nil:nil
+server: got value Path2DControlPoint: nil:nil
+server: got value DockWidgetPluginGuiInfo: nil:nil
+server: got value CatalogSearchParams: nil:nil
+server: got value OverlapParams: nil:nil
+server: got value Content: Content:Content{SourceType=Uri, Uri=rbxassetid://1}
+server: got value Region3: Region3:1, 1, 1, 1, 0, 0, 0, 1, 0, 0, 0, 1; 2, 2, 2
+server: got value Region3int16: Region3int16:0, 0, 0; 2, 2, 2
+server: got value Vector2int16: Vector2int16:1, 2
+server: got value Vector3int16: Vector3int16:1, 2, 3
+server: got value RBXScriptSignal: nil:nil
+server: got value newproxy: nil:nil
+server: got in array Axes: {number:1=Axes:Z, number:2=number:2}
+server: got in array Faces: {number:1=Faces:Bottom, number:2=number:2}
+server: got in dict PathWaypoint: {string:N=number:2, string:W=PathWaypoint:{4, 5, 6}, Walk, }
+server: got in dict keypoints: {string:C=ColorSequenceKeypoint:0 1 0 0 0 , string:N=NumberSequenceKeypoint:1 3 0 }
+client: got tostring nil: nothing
+client: got tostring number: {string:<Table> (42)=number:1}
+client: got tostring error: nothing
+client: got tostring error table: nothing
+client: got tostring task.wait: nothing
+client: got two tostring nil: nothing
+client: got clears table: nothing
+client: got numbers named same: {string:1=string:a}
+client: got key CFrame: {string:<CoordinateFrame> (1, 2, 3, 1, 0, 0, 0, 1, 0, 0, 0, 1)=number:1}
+client: got key BrickColor: {string:<int> (Bright red)=number:1}
+client: got key Rect: {string:<Rect2D> (1, 2, 3, 4)=number:1}
+client: got key Enum: {string:<null> (Material)=number:1}
+client: got key Enums: {string:<null> (Enums)=number:1}
+client: got key RBXScriptSignal: {string:<EventInstance> (Signal Changed)=number:1}
+client: got key RBXScriptConnection: {string:<Connection> (Connection)=number:1}
+client: got key RotationCurveKey: {string:<null> ({Linear, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0})=number:1}
+client: got key newproxy: {string:<null> (proxy)=number:1}
+client: got key Axes: {string:<Axes> (X)=number:1}
+client: got value Axes: Axes:X, Y
+client: got value Axes of a face: Axes:Y
+client: got value Faces: Faces:Top, Back
+client: got value PathWaypoint: PathWaypoint:{1, 2, 3}, Jump, label
+client: got value PathWaypoint plain: PathWaypoint:{0, 0, 0}, Walk, 
+client: got value ColorSequenceKeypoint: ColorSequenceKeypoint:0.5 0 0 1 0 
+client: got value NumberSequenceKeypoint: NumberSequenceKeypoint:0.5 2 0.25 
+client: got value SecurityCapabilities: SecurityCapabilities:
+client: got value SecurityCapabilities of two: SecurityCapabilities:Basic | UI
+client: got value RotationCurveKey: nil:nil
+client: got value ValueCurveKey: nil:nil
+client: got value FloatCurveKey: nil:nil
+client: got value Path2DControlPoint: nil:nil
+client: got value DockWidgetPluginGuiInfo: nil:nil
+client: got value CatalogSearchParams: nil:nil
+client: got value OverlapParams: nil:nil
+client: got value Content: Content:Content{SourceType=Uri, Uri=rbxassetid://1}
+client: got value Region3: Region3:1, 1, 1, 1, 0, 0, 0, 1, 0, 0, 0, 1; 2, 2, 2
+client: got value Region3int16: Region3int16:0, 0, 0; 2, 2, 2
+client: got value Vector2int16: Vector2int16:1, 2
+client: got value Vector3int16: Vector3int16:1, 2, 3
+client: got value RBXScriptSignal: nil:nil
+client: got value newproxy: nil:nil
+client: got in array Axes: {number:1=Axes:Z, number:2=number:2}
+client: got in array Faces: {number:1=Faces:Bottom, number:2=number:2}
+client: got in dict PathWaypoint: {string:N=number:2, string:W=PathWaypoint:{4, 5, 6}, Walk, }
+client: got in dict keypoints: {string:C=ColorSequenceKeypoint:0 1 0 0 0 , string:N=NumberSequenceKeypoint:1 3 0 }
+client: send tostring nil: error string '__tostring' must return a string calls 1
+client: send tostring number: ok calls 1
+client: send tostring error: error string @47: boom calls 1
+client: send tostring error table: error table calls 1
+client: send tostring task.wait: error string thread is not yieldable calls 1
+client: send two tostring nil: error string '__tostring' must return a string calls 1
+client: send clears table: error string invalid key to 'next' calls 1
+client: send numbers named same: ok calls 0
+client: send key CFrame: ok calls 0
+client: send key BrickColor: ok calls 0
+client: send key Rect: ok calls 0
+client: send key Enum: ok calls 0
+client: send key Enums: ok calls 0
+client: send key RBXScriptSignal: ok calls 0
+client: send key RBXScriptConnection: ok calls 0
+client: send key RotationCurveKey: ok calls 0
+client: send key newproxy: ok calls 0
+client: send key Axes: ok calls 0
+client: send value Axes: ok calls 0
+client: send value Axes of a face: ok calls 0
+client: send value Faces: ok calls 0
+client: send value PathWaypoint: ok calls 0
+client: send value PathWaypoint plain: ok calls 0
+client: send value ColorSequenceKeypoint: ok calls 0
+client: send value NumberSequenceKeypoint: ok calls 0
+client: send value SecurityCapabilities: ok calls 0
+client: send value SecurityCapabilities of two: ok calls 0
+client: send value RotationCurveKey: ok calls 0
+client: send value ValueCurveKey: ok calls 0
+client: send value FloatCurveKey: ok calls 0
+client: send value Path2DControlPoint: ok calls 0
+client: send value DockWidgetPluginGuiInfo: ok calls 0
+client: send value CatalogSearchParams: ok calls 0
+client: send value OverlapParams: ok calls 0
+client: send value Content: ok calls 0
+client: send value Region3: ok calls 0
+client: send value Region3int16: ok calls 0
+client: send value Vector2int16: ok calls 0
+client: send value Vector3int16: ok calls 0
+client: send value RBXScriptSignal: ok calls 0
+client: send value newproxy: ok calls 0
+client: send in array Axes: ok calls 0
+client: send in array Faces: ok calls 0
+client: send in dict PathWaypoint: ok calls 0
+client: send in dict keypoints: ok calls 0
+client: invoke tostring nil: error string '__tostring' must return a string calls 1
+client: invoke tostring error: error string @47: boom calls 1
+client: invoke tostring error table: error table calls 1
+client: invoke key CFrame: ok {string:<CoordinateFrame> (1, 2, 3, 1, 0, 0, 0, 1, 0, 0, 0, 1)=number:1} calls 0
+client: invoke value Axes: ok Axes:X, Y calls 0
+client: invoke value PathWaypoint: ok PathWaypoint:{1, 2, 3}, Jump, label calls 0
+client: invoke results with a failing key: error string '__tostring' must return a string
+client: uncaught MessageError:'__tostring' must return a string\x0A    Stack Begin\x0A    Script '<probe>', Line @178\x0A    Stack End

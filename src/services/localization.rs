@@ -46,7 +46,7 @@ use super::{Behaviors, StringParam, method, strings, values};
 use crate::{
     ClassId, Engine, InstanceId, NameId, Reflection, State,
     instance as core,
-    lua::{Args, Flow, Ret, instance_value, none, raise, typeof_value},
+    lua::{Args, Flow, Ret, bindable::Refused, instance_value, none, raise, typeof_value},
     value::{Str, Value},
 };
 
@@ -600,7 +600,7 @@ enum Arguments {
     Named(FxHashMap<Bytes, LuaValue>),
 }
 
-fn arguments(lua: &Lua, engine: &Engine, value: &LuaValue) -> Result<Arguments, String> {
+fn arguments(lua: &Lua, engine: &Engine, value: &LuaValue) -> Result<Arguments, Refused> {
     let table = match value {
         LuaValue::Nil => return Ok(Arguments::None),
         LuaValue::Table(table) => table,
@@ -617,7 +617,7 @@ fn arguments(lua: &Lua, engine: &Engine, value: &LuaValue) -> Result<Arguments, 
     let mut named = FxHashMap::default();
     for pair in table.clone().pairs::<LuaValue, LuaValue>() {
         let (key, item) = pair.map_err(|error| error.to_string())?;
-        named.insert(crate::lua::bindable::key_name(lua, engine, &key)?, item);
+        named.insert(crate::lua::bindable::key_name(lua, engine, table, &key)?, item);
     }
     if named.is_empty() {
         return Ok(Arguments::Array(Vec::new()));
@@ -732,28 +732,25 @@ fn format_value(lua: &Lua, engine: &Engine, value: &LuaValue, format: Format, lo
     })
 }
 
-/// A template written with its arguments (FormatByKey's text), and what writing them cost a client beyond the call
-/// (cost.rs LOCALIZATION_ARGUMENTS and after)
-fn render(lua: &Lua, engine: &Engine, pieces: &[Piece], args: &LuaValue, locale: &[u8], translate: &dyn Fn(&[u8]) -> Bytes) -> (Result<Bytes, String>, f64) {
+/// A template written with its arguments (FormatByKey's text, its arguments already read: [`arguments`]), and what writing
+/// them cost a client beyond the call (cost.rs LOCALIZATION_ARGUMENTS, at the first parameter, and after)
+fn render(lua: &Lua, engine: &Engine, pieces: &[Piece], arguments: &Arguments, locale: &[u8], translate: &dyn Fn(&[u8]) -> Bytes) -> (Result<Bytes, String>, f64) {
     let mut out = Vec::new();
-    let mut read: Option<Arguments> = None;
+    let mut read = false;
     let mut work = 0.0;
     for piece in pieces {
         match piece {
             Piece::Text(text) => out.extend_from_slice(text),
             Piece::Param(param, format) => {
-                if read.is_none() {
+                if !read {
                     work += crate::cost::LOCALIZATION_ARGUMENTS;
-                    match arguments(lua, engine, args) {
-                        Ok(arguments) => read = Some(arguments),
-                        Err(problem) => return (Err(problem), work),
-                    }
+                    read = true;
                 }
                 work += match param {
                     Param::Index(_) => crate::cost::LOCALIZATION_POSITIONAL,
                     Param::Name(_) => crate::cost::LOCALIZATION_NAMED,
                 };
-                let value = match read.as_ref().expect("read").get(param) {
+                let value = match arguments.get(param) {
                     Ok(value) => value,
                     Err(problem) => return (Err(problem), work),
                 };
@@ -1232,18 +1229,18 @@ fn is_empty(table: &LuaTable) -> bool {
 /// dictionaries, each with string `Key`, `Source`, `Context` and `Example` fields (absent ones empty) and a `Values`
 /// dictionary of strings by locale (locale ids made lower case with `-`, the first of those that end up equal in key order
 /// kept, an empty one dropped); the whole call refused at the first bad entry
-fn entries_from_lua(lua: &Lua, engine: &Engine, value: &LuaValue) -> Result<Entries, String> {
-    let LuaValue::Table(list) = value else { return Err("entries was not an array.".into()) };
+fn entries_from_lua(lua: &Lua, engine: &Engine, value: &LuaValue) -> Result<Entries, Refused> {
+    let LuaValue::Table(list) = value else { return Err(Refused::from("entries was not an array.".to_string())) };
     let border = list.raw_len();
     if border == 0 && !is_empty(list) {
-        return Err("entries was not an array.".into());
+        return Err(Refused::from("entries was not an array.".to_string()));
     }
     let mut entries = Builder::default();
     for index in 1..=border {
         let item: LuaValue = list.raw_get(index).map_err(|error| error.to_string())?;
         let fields = match item {
             LuaValue::Table(fields) if fields.raw_len() == 0 && !is_empty(&fields) => fields,
-            _ => return Err(format!("Entry at index {index} was not a table.")),
+            _ => return Err(Refused::from(format!("Entry at index {index} was not a table."))),
         };
         let invalid = |message: String| format!("Entry at index {index} had invalid Key/Source/Context: {message}");
         let field = |name: &str| -> Result<Option<Bytes>, String> {
@@ -1257,31 +1254,31 @@ fn entries_from_lua(lua: &Lua, engine: &Engine, value: &LuaValue) -> Result<Entr
         for name in ["Key", "Source", "Context"] {
             match field(name)? {
                 Some(text) => texts.push(text),
-                None => return Err(invalid(format!("Entry at index {index} \"{name}\" was not a string."))),
+                None => return Err(Refused::from(invalid(format!("Entry at index {index} \"{name}\" was not a string.")))),
             }
         }
         let (key, source, context) = (&texts[0], source_text(&texts[1]), &texts[2]);
         if key.is_empty() && source.is_empty() {
-            return Err(invalid("Cannot create entry with empty source text and no key.".into()));
+            return Err(Refused::from(invalid("Cannot create entry with empty source text and no key.".into())));
         }
         if let Err(problem) = parse_template(source) {
-            return Err(invalid(problem.text(source)));
+            return Err(Refused::from(invalid(problem.text(source))));
         }
         let mut entry = Entry::new(key, source, context);
         entry.example = field("Example")?.ok_or_else(|| format!("Entry at index {index} \"Example\" was not a string."))?;
         let values = match fields.raw_get::<LuaValue>("Values").map_err(|error| error.to_string())? {
-            LuaValue::Nil => return Err(format!("Entry at index {index} had was missing \"Values\".")),
+            LuaValue::Nil => return Err(Refused::from(format!("Entry at index {index} had was missing \"Values\"."))),
             LuaValue::Table(values) if values.raw_len() == 0 => values,
-            _ => return Err(format!("Entry at index {index} [\"Values\"] was not a table.")),
+            _ => return Err(Refused::from(format!("Entry at index {index} [\"Values\"] was not a table."))),
         };
         let mut pairs = Vec::new();
         for pair in values.pairs::<LuaValue, LuaValue>() {
             let (name, text) = pair.map_err(|error| error.to_string())?;
-            pairs.push((crate::lua::bindable::key_name(lua, engine, &name)?, text));
+            pairs.push((crate::lua::bindable::key_name(lua, engine, &values, &name)?, text));
         }
         pairs.sort_by(|a, b| a.0.cmp(&b.0));
         for (name, text) in pairs {
-            let LuaValue::String(text) = text else { return Err(format!("Entry at index {index} \"{}\" was not a string.", lossy(&name))) };
+            let LuaValue::String(text) = text else { return Err(Refused::from(format!("Entry at index {index} \"{}\" was not a string.", lossy(&name)))) };
             let id = locale(&name);
             if !id.is_empty() && entry.value(&id).is_none() {
                 entry.set_value(id, text.as_bytes().to_vec());
@@ -1444,7 +1441,7 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
             }
             let entries = match entries_from_lua(lua, engine, args.get(1)) {
                 Ok(entries) => entries,
-                Err(message) => return raise(message),
+                Err(refused) => return refused.raise(),
             };
             charge(engine, entries_work(&entries, crate::cost::LOCALIZATION_ENTRY_SET, crate::cost::LOCALIZATION_VALUE_SET));
             Localization::store(&mut engine.state.borrow_mut(), &engine.reflection, &names, this, entries);
@@ -1629,6 +1626,12 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
     if let Some(id) = member("FormatByKey") {
         behaviors.add_method(translator, id, strings(ONE, method(move |lua, engine, this, args| {
             let key = text_arg(args, 1);
+            // (the arguments are read first, as a client reads a call's arguments: a dictionary key's failing __tostring raises
+            // even when the key is not found; measured, tools/parity/probes/table_keys.luau)
+            let given = match arguments(lua, engine, args.get(2)) {
+                Ok(given) => given,
+                Err(refused) => return refused.raise(),
+            };
             let (text, wanted, tables) = {
                 let mut state = engine.state.borrow_mut();
                 let wanted = string_of(&state, this, names.locale_id);
@@ -1652,7 +1655,7 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
                 Err(problem) => return raise(problem.message()),
             };
             let translate = |text: &[u8]| translate_text(&mut engine.state.borrow_mut(), &names, &tables, text, b"", &wanted);
-            let (written, work) = render(lua, engine, &pieces, args.get(2), &wanted, &translate);
+            let (written, work) = render(lua, engine, &pieces, &given, &wanted, &translate);
             charge(engine, work + text.len() as f64 * crate::cost::LOCALIZATION_TEXT_BYTE);
             match written {
                 Ok(written) => Ok(values([string(lua, &written)?])),

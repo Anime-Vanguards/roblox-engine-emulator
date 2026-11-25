@@ -1402,7 +1402,53 @@ local function EngineLibrary(Library)
 	return if table.isfrozen(Library) then table.freeze(Copy) else Copy
 end
 
+-- A proxy datatype as plain values, which another VM makes again (a remote's copy: loopback/wire.rs): its typeof and its
+-- fields, or nil for any other value. Faces and Axes give the faces they hold (an Axes' axis comes with each of its faces, as
+-- its constructor sets them), a PathWaypoint its Position, Action and Label, SecurityCapabilities its items' names.
+-- ProxyFromFields makes the value again from them.
+local function ProxyFields(Value)
+	local Kind = Typeof(Value)
+	if Kind == "Faces" or Kind == "Axes" then
+		local Held = {}
+		for _, Name in FaceNames do
+			if Value[Name] then
+				table.insert(Held, Name)
+			end
+		end
+		return Kind, Held
+	elseif Kind == "PathWaypoint" then
+		return Kind, { Value.Position, Value.Action, Value.Label }
+	elseif Kind == "SecurityCapabilities" then
+		local Names = {}
+		for Rank in CapabilitySets[Value] do
+			table.insert(Names, CapabilityOrder[Rank])
+		end
+		return Kind, Names
+	end
+	return nil
+end
+local function ProxyFromFields(Kind, Fields)
+	if Kind == "Faces" or Kind == "Axes" then
+		local Items = {}
+		for _, Name in Fields do
+			table.insert(Items, GetEnumItem("NormalId", Name))
+		end
+		return (if Kind == "Faces" then Faces else Axes).new(table.unpack(Items))
+	elseif Kind == "PathWaypoint" then
+		return PathWaypointLibrary.new(Fields[1], Fields[2], Fields[3])
+	elseif Kind == "SecurityCapabilities" then
+		local Set = {}
+		for _, Name in Fields do
+			Set[CapabilityRankOf(GetEnumItem("SecurityCapability", Name))] = true
+		end
+		return Capabilities(Set)
+	end
+	return nil
+end
+
 return {
+	ProxyFields = ProxyFields,
+	ProxyFromFields = ProxyFromFields,
 	CopyProxy = CopyProxy,
 	Wrap = Wrap,
 	WrapIndex = WrapIndex,

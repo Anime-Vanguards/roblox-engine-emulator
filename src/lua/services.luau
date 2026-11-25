@@ -1327,8 +1327,8 @@ Method("BindableFunction", "Invoke", function(Self, ...)
 	if Self:GetActor() then
 		Charge(Cost.ActorInvoke) -- (a call into an Actor's VM: 1.0 us in Studio)
 	end
-	-- (the arguments and results are copied as Roblox copies them: tables, buffers, threads; lua/bindable.rs)
-	return R.Copied(Callback(R.CopiedArguments(...)))
+	-- (copied as Roblox copies them: lua/bindable.rs; the callback on a thread of its own: R.InvokeOwn, at the end)
+	return R.Copied(R.InvokeOwn(Callback, R.CopiedArguments(...)))
 end)
 
 -- LogService:Output, Info, Warn, Error and Log: a line of their MessageType (Output: print's, Info: MessageInfo, Warn: warn's,
@@ -1539,26 +1539,63 @@ Method("LogService", "Log", Priced(function(Self, MessageType, Message, Context)
 	LogLine(LogKinds[Item.Name], Message, Context, 3)
 end))
 
--- BindableFunction:Invoke from a thread that cannot yield (a metamethod, a sort comparator): the handler runs on a thread of
--- its own; the call returns what it returns when it ends without yielding, else raises `thread is not yieldable` while the
--- handler goes on (a call with no handler raises it too). Measured in a 0.747 playing client and server:
--- tools/parity/probes/yield_refused.luau. (Here at the end: the stubs above keep their line numbers.)
+-- A BindableFunction's callback, as a client runs it: on a thread of its own (coroutine.running() in it is not the caller's),
+-- handing its outcome to Finished as xpcall packs it. An error it raises before it first yields is also logged as an uncaught
+-- error is (R.ReportError: ScriptContext.Error and an error line with the callback's own stack); one raised after a yield is
+-- not. The caller gets the error as text: a string's own, any other value's empty. Measured in a 0.747 playing client and
+-- server: tools/parity/probes/loopback/remote_callback_errors.luau (its BindableFunction rows). (Here at the end: the stubs
+-- above keep their line numbers.)
+local function RunOwn(Callback, Finished, ...)
+	local Fresh = true
+	local function Failed(Problem)
+		if Fresh then
+			R.ReportError(Problem)
+		end
+		return Problem
+	end
+	local Handler = R.CreateThread(function(...)
+		Finished(table.pack(xpcall(Callback, Failed, ...)))
+	end)
+	coroutine.resume(Handler, ...)
+	Fresh = false
+end
+local function Answer(Outcome)
+	if Outcome[1] then
+		return table.unpack(Outcome, 2, Outcome.n)
+	end
+	error(if type(Outcome[2]) == "string" then Outcome[2] else "", 0)
+end
+-- BindableFunction:Invoke: the caller waits for its callback to end (resumed by the callback's thread when it yielded)
+R.InvokeOwn = function(Callback, ...)
+	local Caller = coroutine.running()
+	local Outcome, Waiting
+	RunOwn(Callback, function(Ended)
+		Outcome = Ended
+		if Waiting then
+			R.Resume(Caller)
+		end
+	end, ...)
+	if not Outcome then
+		Waiting = true
+		coroutine.yield()
+	end
+	return Answer(Outcome)
+end
+-- BindableFunction:Invoke from a thread that cannot yield (a metamethod, a sort comparator): the call returns what the
+-- callback returns when it ends without yielding, else raises `thread is not yieldable` while the callback goes on (a call with
+-- no handler raises it too). Measured in a 0.747 playing client and server: tools/parity/probes/yield_refused.luau.
 R.InvokeApart = function(Self, Callback, ...)
 	if Self:GetActor() then
 		Charge(Cost.ActorInvoke)
 	end
 	local Outcome
-	local Handler = coroutine.create(function(...)
-		Outcome = table.pack(Callback(...))
-	end)
-	local Resumed, Problem = coroutine.resume(Handler, R.CopiedArguments(...))
-	if not Resumed then
-		error(Problem, 0)
-	end
+	RunOwn(Callback, function(Ended)
+		Outcome = Ended
+	end, R.CopiedArguments(...))
 	if not Outcome then
 		error("thread is not yieldable", 0)
 	end
-	return R.Copied(table.unpack(Outcome, 1, Outcome.n))
+	return R.Copied(Answer(Outcome))
 end
 
 return true

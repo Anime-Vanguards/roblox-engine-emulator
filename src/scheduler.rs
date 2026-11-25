@@ -1314,6 +1314,28 @@ fn resume_raw(lua: &Lua, thread: &LuaThread, args: LuaMultiValue, log_errors: u6
     }
 }
 
+/// What an uncaught error that is no string (a table, nil, a datatype) logs
+pub const NO_OUTPUT: &str = "Error occurred, no output from Luau.";
+
+/// A RemoteFunction's or a BindableFunction's callback raised `problem` before it first yielded (loopback.luau `Run`,
+/// services.luau `RunOwn`: their error handler calls this where the error was raised, the callback's frames still on its
+/// thread). A client logs it as it logs an uncaught error, with the callback's own frames as its stack, and fires
+/// ScriptContext.Error, a value that is no string as [`NO_OUTPUT`]; the caller gets the error as well. Measured in a 0.747
+/// play session's server and client, OnServerInvoke, OnClientInvoke and OnInvoke alike:
+/// tools/parity/probes/loopback/remote_callback_errors.luau. The work clock is charged what logging it cost a client
+/// (cost.rs [`crate::cost::CALLBACK_ERROR_REPORTED`]).
+pub fn report_callback_error(lua: &Lua, engine: &Engine, problem: &LuaValue) {
+    let trace = super::lua::script_traceback(lua);
+    // SAFETY: the running thread's state, valid while the error handler runs
+    let script = unsafe { super::lua::script_of_thread(lua.current_thread().state()) };
+    let message = match problem {
+        LuaValue::String(text) => text.to_string_lossy(),
+        _ => NO_OUTPUT.into(),
+    };
+    engine.output_error_with_script(message, Some(trace), script, true);
+    engine.state.borrow().sched.charge(crate::cost::CALLBACK_ERROR_REPORTED);
+}
+
 /// `check_ready`: look at the thread first (`resume`), or trust the caller's [`can_resume`] (`resume_ready`)
 fn resume_thread(lua: &Lua, engine: &Rc<Engine>, thread: &LuaThread, args: LuaMultiValue, check_ready: bool) -> bool {
     let (top_level, _entered) = {
@@ -1364,9 +1386,10 @@ fn resume_thread(lua: &Lua, engine: &Rc<Engine>, thread: &LuaThread, args: LuaMu
                     }
                 }
                 ResumeError::NonString => {
-                    // Non-string uncaught error (table, nil, etc.): logs "Error occurred, no output from Luau." with
-                    // stack and does not fire ScriptContext.Error (Studio 0.747, tools/parity/probes/logservice.luau).
-                    engine.output_error_with_script("Error occurred, no output from Luau.".into(), trace, None, false);
+                    // Non-string uncaught error (table, nil, etc.): logs NO_OUTPUT with its stack and fires
+                    // ScriptContext.Error with that text (Studio 0.747, a playing client and server, a spawned thread's
+                    // `error({})`: tools/parity/probes/loopback/remote_callback_errors.luau; logservice.luau).
+                    engine.output_error_with_script(NO_OUTPUT.into(), trace, fallback_script, true);
                 }
                 ResumeError::Exhaustion => {
                     engine.output("error", super::lua::refs::message(), trace);

@@ -5,7 +5,10 @@
 //! - A table whose border (`#t`) is not 0 is an array of indices 1 to `#t` (a hole, or a value JSON cannot hold, is
 //!   `null`); any other table is an object in the table's own iteration order, its keys named as BindableEvent:Fire
 //!   names them (lua/bindable.rs: a number truncated to a 64-bit integer, `<Instance> (Name)`, `<Vector3> (1, 2, 3)`;
-//!   a boolean or thread key raises `Invalid table key type used`). An empty table is `[]`. Metatables are not
+//!   a boolean or thread key raises `Invalid table key type used`, a key's `__tostring` its own error). Unlike a copy, the
+//!   object keeps every entry when keys end up with the same name (`{[1.5] = "a", [1.25] = "b"}` is `{"1":"b","1":"a"}`,
+//!   as is a string key `"1"` beside a number key 1.5: table_keys.luau, a 0.747 client and server). An empty table is
+//!   `[]`. Metatables are not
 //!   consulted; a table inside itself raises `tables cannot be cyclic`, nesting past [`ENCODE_DEPTH`] `Max lua stack
 //!   size reached`, the depth checked first (a cycle closing one level past the limit raises the depth's error:
 //!   table_depth.luau, Studio 0.747). A table that appears several times is written each time, with no limit of its own
@@ -31,9 +34,8 @@
 use std::ffi::c_void;
 
 use mlua::prelude::*;
-use rustc_hash::FxHashMap;
 
-use crate::{Engine, lua::bindable::Tally};
+use crate::{Engine, lua::bindable::{Refused, Tally}};
 
 /// What JSONEncode and JSONDecode handled on this thread (os.workcounters' `jsonbytes` and `jsonvalues`; the work clock prices each
 /// call by its own: cost.rs `json`)
@@ -120,7 +122,7 @@ impl Written<'_> {
 
 /// HttpService:JSONEncode of `value`, or the message it raises. The writers count each value they write ([`Written`]), one count
 /// for the whole call.
-pub(crate) fn encode_counted(lua: &Lua, engine: &Engine, value: &LuaValue) -> Result<Counted<String>, String> {
+pub(crate) fn encode_counted(lua: &Lua, engine: &Engine, value: &LuaValue) -> Result<Counted<String>, Refused> {
     let mut text = String::new();
     let timeout = engine.state.borrow().sched.timeout.as_ref().map(|timeout| timeout.limit()).filter(|limit| *limit > 0.0);
     let mut written = Written { engine, tally: Tally::default(), timeout };
@@ -128,7 +130,7 @@ pub(crate) fn encode_counted(lua: &Lua, engine: &Engine, value: &LuaValue) -> Re
     Ok(Counted { result: text, values: written.tally.values })
 }
 
-fn write_value(lua: &Lua, engine: &Engine, value: &LuaValue, out: &mut String, path: &mut Vec<*const c_void>, written: &mut Written) -> Result<(), String> {
+fn write_value(lua: &Lua, engine: &Engine, value: &LuaValue, out: &mut String, path: &mut Vec<*const c_void>, written: &mut Written) -> Result<(), Refused> {
     written.value(match value {
         LuaValue::String(text) => text.as_bytes().len(),
         LuaValue::Buffer(buffer) => buffer.len(),
@@ -148,11 +150,11 @@ fn write_value(lua: &Lua, engine: &Engine, value: &LuaValue, out: &mut String, p
         LuaValue::Table(table) => {
             // (the depth first: a cycle that closes one level past the limit raises the depth's error, table_depth.luau)
             if path.len() >= ENCODE_DEPTH {
-                return Err("Max lua stack size reached".into());
+                return Err(Refused::Message("Max lua stack size reached".into()));
             }
             let pointer = table.to_pointer();
             if path.contains(&pointer) {
-                return Err("tables cannot be cyclic".into());
+                return Err(Refused::Message("tables cannot be cyclic".into()));
             }
             path.push(pointer);
             let wrote = write_table(lua, engine, table, out, path, written);
@@ -164,7 +166,7 @@ fn write_value(lua: &Lua, engine: &Engine, value: &LuaValue, out: &mut String, p
     Ok(())
 }
 
-fn write_table(lua: &Lua, engine: &Engine, table: &LuaTable, out: &mut String, path: &mut Vec<*const c_void>, written: &mut Written) -> Result<(), String> {
+fn write_table(lua: &Lua, engine: &Engine, table: &LuaTable, out: &mut String, path: &mut Vec<*const c_void>, written: &mut Written) -> Result<(), Refused> {
     let length = table.raw_len();
     if length > 0 {
         out.push('[');
@@ -178,36 +180,25 @@ fn write_table(lua: &Lua, engine: &Engine, table: &LuaTable, out: &mut String, p
         out.push(']');
         return Ok(());
     }
-    // An object: each key as a bindable names it; keys that end up equal keep the later value (as a bindable's copy
-    // does), in the first one's place
-    let mut entries: Vec<(Vec<u8>, String)> = Vec::new();
-    let mut places: FxHashMap<Vec<u8>, usize> = FxHashMap::default();
+    // An object: each key as a bindable names it, every entry written, in the table's order (keys that end up with the same
+    // name too: the module's notes)
+    let start = out.len();
+    out.push('{');
     for pair in table.pairs::<LuaValue, LuaValue>() {
         let (key, item) = pair.map_err(|error| error.to_string())?;
-        let key = crate::lua::bindable::key_name(lua, engine, &key)?;
+        let key = crate::lua::bindable::key_name(lua, engine, table, &key)?;
         written.tally.add_bytes(key.len())?;
-        let mut text = String::new();
-        write_value(lua, engine, &item, &mut text, path, written)?;
-        match places.get(&key) {
-            Some(&place) => entries[place].1 = text,
-            None => {
-                places.insert(key.clone(), entries.len());
-                entries.push((key, text));
-            }
-        }
-    }
-    if entries.is_empty() {
-        out.push_str("[]");
-        return Ok(());
-    }
-    out.push('{');
-    for (index, (key, text)) in entries.iter().enumerate() {
-        if index > 0 {
+        if out.len() > start + 1 {
             out.push(',');
         }
-        write_string(key, out)?;
+        write_string(&key, out)?;
         out.push(':');
-        out.push_str(text);
+        write_value(lua, engine, &item, out, path, written)?;
+    }
+    if out.len() == start + 1 {
+        out.truncate(start);
+        out.push_str("[]");
+        return Ok(());
     }
     out.push('}');
     Ok(())

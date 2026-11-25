@@ -1526,6 +1526,108 @@ fn bindables_copy_tables_for_every_receiver_as_roblox_does() {
     );
 }
 
+/// A dictionary key's `__tostring` runs on the sending thread, and an error it raises is the sending call's, as it was raised, the
+/// first failing key's alone, with nothing sent: Fire, Invoke and JSONEncode alike; a key whose `__tostring` cleared its table
+/// raises `invalid key to 'next'`; a CFrame key is named `<CoordinateFrame>`; and JSONEncode keeps entries whose keys share a name
+/// (measured, a 0.747 playing client and server: tools/parity/probes/table_keys.luau). On main each failing key arrived named
+/// `<Table> ()`, the cleared table's remains arrived, and JSONEncode kept one entry.
+#[test]
+fn a_keys_failing_tostring_is_raised_from_the_sending_call() {
+    let (lua, engine) = start();
+    let output = run(
+        &lua,
+        &engine,
+        r##"
+        local HttpService = game:GetService("HttpService")
+        local Event = Instance.new("BindableEvent")
+        local Arrived = 0
+        Event.Event:Connect(function() Arrived += 1 end)
+        local Function = Instance.new("BindableFunction")
+        Function.OnInvoke = function(Value) return Value end
+        local Calls = 0
+        local Problem = { code = 1 }
+        local function Key(Result)
+            return setmetatable({}, { __tostring = function() Calls += 1 return Result() end })
+        end
+        for _, Call in { function(T) return Event:Fire(T) end, function(T) return Function:Invoke(T) end, function(T) return HttpService:JSONEncode(T) end } do
+            Calls = 0
+            local Ok, Message = pcall(Call, { [Key(function() return nil end)] = 1, [Key(function() return nil end)] = 2 })
+            local _, Raised = pcall(Call, { [Key(function() error(Problem) end)] = 1 })
+            local Clearing = { a = 1, b = 2 }
+            Clearing[Key(function() table.clear(Clearing) return "x" end)] = 3
+            local _, Cleared = pcall(Call, Clearing)
+            print(Ok, Message, Calls, rawequal(Raised, Problem), Cleared)
+        end
+        task.wait()
+        print(Arrived, HttpService:JSONEncode({ [CFrame.new()] = 1 }), HttpService:JSONEncode({ [1.5] = "a", [1.25] = "b" }))
+        "##,
+    );
+    assert_eq!(
+        output,
+        vec![
+            "print: false '__tostring' must return a string 3 true invalid key to 'next'",
+            "print: false '__tostring' must return a string 3 true invalid key to 'next'",
+            "print: false '__tostring' must return a string 3 true invalid key to 'next'",
+            r#"print: 0 {"<CoordinateFrame> (0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1)":1} {"1":"b","1":"a"}"#,
+        ]
+    );
+}
+
+/// A BindableFunction's callback runs on a thread of its own; an error it raises before it first yields is logged as an uncaught
+/// error is (an error line, ScriptContext.Error), a value that is no string as "Error occurred, no output from Luau.", and one
+/// raised after a yield is not; the caller gets the error as text, empty for a value that is no string. A spawned thread's
+/// uncaught table error fires ScriptContext.Error too. Measured in a 0.747 playing client and server:
+/// tools/parity/probes/loopback/remote_callback_errors.luau. On main the callback ran on its caller's thread, nothing was logged,
+/// a table raised reached the caller as that table, and a spawned thread's table error fired no ScriptContext.Error.
+#[test]
+fn a_bindable_functions_callback_error_is_logged_until_it_yields() {
+    let (lua, engine) = start_with(Options { mode: "play".into(), ..Options::default() });
+    let output = run(
+        &lua,
+        &engine,
+        r##"
+        local Reported = {}
+        game:GetService("ScriptContext").Error:Connect(function(Message) table.insert(Reported, Message) end)
+        local Function = Instance.new("BindableFunction")
+        local Caller = coroutine.running()
+        local Same
+        Function.OnInvoke = function(Kind)
+            Same = coroutine.running() == Caller
+            if Kind == "table" then
+                error({ code = 1 })
+            elseif Kind == "string" then
+                error("callback failed", 0)
+            elseif Kind == "later" then
+                task.wait()
+                error("failed later", 0)
+            end
+            return Kind
+        end
+        local _, Problem = pcall(Function.Invoke, Function, "table")
+        print(typeof(Problem), #Problem)
+        print(pcall(Function.Invoke, Function, "string"))
+        print(pcall(Function.Invoke, Function, "later"))
+        print(Function:Invoke("fine"), Same)
+        task.spawn(function() error({}) end)
+        task.wait()
+        print(table.concat(Reported, " | "))
+        "##,
+    );
+    assert_eq!(
+        output,
+        vec![
+            "error: Error occurred, no output from Luau.",
+            "print: string 0",
+            "error: callback failed",
+            "print: false callback failed",
+            "print: false failed later",
+            "print: fine false",
+            "error: Error occurred, no output from Luau.",
+            "print: Error occurred, no output from Luau. | callback failed | Error occurred, no output from Luau.",
+        ]
+    );
+}
+
 /// A table an event or a curve key copies is walked on the Lua stack above the call's own values (the outermost at the
 /// frame's height, an array's table one slot up, a dictionary's two), and one above slot 300 raises "Max lua stack size
 /// reached" without a position, before a cycle through it does (measured in a 0.747 playing client and server,
@@ -14116,7 +14218,8 @@ fn a_method_takes_only_its_declaring_classs_instances_as_self() {
 
 /// Real-client parity behaviors: Model:MoveTo ignores models outside the DataModel, BasePart.Color quantizes to u8/255,
 /// collectgarbage / Instance.new(number) / EnumItem.__newindex / TweenService:Create type-mismatch error texts,
-/// and playing-client ScriptContext.Error with script and formatted trace.
+/// and playing-client ScriptContext.Error with script and formatted trace, a table error's as "Error occurred, no output from
+/// Luau." (Studio 0.747, a playing client and server: tools/parity/probes/loopback/remote_callback_errors.luau's spawned rows).
 #[test]
 fn parity_behaviors_move_to_color_quantization_errors_and_client_script_context() {
     let options = Options { mode: "play".into(), ..Options::default() };
@@ -14153,7 +14256,7 @@ fn parity_behaviors_move_to_color_quantization_errors_and_client_script_context(
         local Ok5, Err5 = pcall(collectgarbage, "collect")
         assert(not Ok5 and Err5 == "collectgarbage must be called with 'count'; use gcinfo() instead", tostring(Err5))
 
-        -- Playing-client ScriptContext.Error fires with real script and formatted trace; non-string errors do not
+        -- Playing-client ScriptContext.Error fires with real script and formatted trace; a non-string error with its stand-in text
         local Seen = {}
         game:GetService("ScriptContext").Error:Connect(function(Msg, Trace, Src)
             table.insert(Seen, { Msg = Msg, Trace = Trace, HasScript = typeof(Src) == "Instance" })
@@ -14173,8 +14276,9 @@ fn parity_behaviors_move_to_color_quantization_errors_and_client_script_context(
         &engine,
         r#"
         local Seen = _G.SeenErrors
-        assert(#Seen == 1, tostring(#Seen))
+        assert(#Seen == 2, tostring(#Seen))
         assert(Seen[1].Msg == "client boom", tostring(Seen[1].Msg))
+        assert(Seen[2].Msg == "Error occurred, no output from Luau.", tostring(Seen[2].Msg))
         assert(Seen[1].HasScript == true)
         assert(string.find(Seen[1].Trace, ", line ", 1, true) ~= nil, tostring(Seen[1].Trace))
         print("ok")

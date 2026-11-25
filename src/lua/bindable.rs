@@ -7,11 +7,16 @@
 //! - A table whose border (`#t`) is not 0 is copied as an array: indices 1 to `#t`, holes kept, every other key
 //!   dropped (`{1, 2, Key = "v"}` arrives as `{1, 2}`, `{[1] = "a", [3] = "c"}` as `{"a"}`).
 //! - Any other table is copied as a dictionary whose keys all become strings: a number truncated to a 64-bit
-//!   integer (`1.5` -> `"1"`, `-9223372036854775808` when out of range), an Instance `<Instance> (Name)`, an
-//!   InstanceHandle `<InstanceRef> (Name)` (`<InstanceRef> (nil)` for a handle of none; Studio 0.748), a
-//!   function `<Function> (function: 0x...)`, a table `<Table> (table: 0x...)`, a vector `<Vector3> (1, 2, 3)`, an
-//!   EnumItem `<token> (Enum.Material.Plastic)`, a buffer `<Buffer> (buffer: 0x...)`. Keys that end up equal keep the
-//!   later one in iteration order. A boolean or thread key is an error, `Invalid table key type used`.
+//!   integer (`1.5` -> `"1"`, `-9223372036854775808` when out of range), any other key `<Type> (text)`, its text
+//!   tostring's: an Instance `<Instance> (Name)`, an InstanceHandle `<InstanceRef> (Name)` (`<InstanceRef> (nil)` for a
+//!   handle of none; Studio 0.748), a function `<Function> (function: 0x...)`, a table `<Table> (table: 0x...)` (or its
+//!   `__tostring`'s text), a vector `<Vector3> (1, 2, 3)`, an EnumItem `<token> (Enum.Material.Plastic)`, a buffer
+//!   `<Buffer> (buffer: 0x...)`, the other datatypes by their typeof but for the few [`key_type`] names otherwise (a CFrame
+//!   `<CoordinateFrame> (...)`). Keys that end up equal keep the later one in iteration order. A boolean or thread key is
+//!   an error, `Invalid table key type used`. A key's `__tostring` runs on the sending thread, once for each key, and an
+//!   error it raises ends the copy: the sending call raises it as it was raised (a table as that table; a yield is `thread
+//!   is not yieldable`) and sends nothing, the first such key's alone. So does the table's `next` from that key when its
+//!   `__tostring` took the key out of the table (`invalid key to 'next'` after a `table.clear`): [`key_name`].
 //! - A table that contains itself is an error, `tables cannot be cyclic`.
 //! - The copy walks a table on the Lua stack above the call's own values: the outermost table sits at the height of the
 //!   call's frame (`self` and the arguments of Fire and Invoke, the results of an Invoke's callback), a table inside an
@@ -31,15 +36,51 @@
 //!   same 100,000-item table 100,000 times is 10^10 values), ree stops a copy past [`COPY_VALUES`] values or
 //!   [`COPY_BYTES`] bytes with [`too_large`]'s error, a guard of its own ([`Tally`]).
 //!
-//! Not measured: other userdata keys (named here by their typeof, e.g. `<Color3> (1, 0, 0)`), and whether a table
-//! key's text calls its `__tostring` (it does here).
+//! Keys measured in a 0.747 playing client and server, Fire, Invoke, JSONEncode and the remotes alike
+//! (tools/parity/probes/table_keys.luau, loopback/remote_keys.luau): every datatype a script can make, and keys whose
+//! `__tostring` returns a number, a string, nil, a boolean or a table, raises a string, a table, nil or a number, yields,
+//! fails in its own code, or clears the table or takes its own entry out of it.
 
 use mlua::prelude::*;
 use std::ffi::c_void;
 use std::rc::Rc;
 
-use super::{Ret, raise};
+use super::{Flow, Ret, raise};
 use crate::{Engine, value::Value};
+
+/// Why a copy stopped: the engine's own error, or one a script's code raised while the copy ran (a dictionary key's
+/// `__tostring`), which the call raises as it was raised (a table as that table, nil as nil).
+#[derive(Debug)]
+pub enum Refused {
+    Message(String),
+    Raised(LuaValue),
+}
+
+impl From<String> for Refused {
+    fn from(message: String) -> Self {
+        Refused::Message(message)
+    }
+}
+
+impl Refused {
+    /// The error the engine call raises
+    pub fn raise<T>(self) -> Result<T, Flow> {
+        match self {
+            Refused::Message(message) => raise(message),
+            Refused::Raised(value) => Err(Flow::Raised(value)),
+        }
+    }
+
+    /// The error as text, where only text goes on (a RemoteFunction's answer to its caller): a raised string's text, any
+    /// other raised value's empty text (as a RemoteFunction answers a callback's table error)
+    pub fn text(self) -> String {
+        match self {
+            Refused::Message(message) => message,
+            Refused::Raised(LuaValue::String(text)) => text.to_string_lossy(),
+            Refused::Raised(_) => String::new(),
+        }
+    }
+}
 
 /// A sent value as its receivers rebuild it.
 pub enum Sent {
@@ -144,7 +185,7 @@ pub fn nested_height(height: usize, array: bool) -> Result<usize, String> {
 /// A value as it is sent: an error when a table cannot be (cyclic, nested too deep, or a key of a kind that cannot be
 /// sent). `height`: the call's frame, where the value's outermost table sits (the module's notes).
 /// `tally`: what the call's copy has made so far, its other values' included ([`Tally`]).
-pub fn capture(lua: &Lua, engine: &Engine, value: &LuaValue, height: usize, tally: &mut Tally) -> Result<Sent, String> {
+pub fn capture(lua: &Lua, engine: &Engine, value: &LuaValue, height: usize, tally: &mut Tally) -> Result<Sent, Refused> {
     tally.add(buffer_bytes(value))?;
     Ok(capture_value(lua, engine, value, height, &mut Vec::new(), tally)?.unwrap_or(Sent::Value(LuaValue::Nil)))
 }
@@ -156,7 +197,7 @@ fn buffer_bytes(value: &LuaValue) -> usize {
 }
 
 /// `None`: a value that does not arrive (a thread).
-fn capture_value(lua: &Lua, engine: &Engine, value: &LuaValue, height: usize, ancestors: &mut Vec<*const c_void>, tally: &mut Tally) -> Result<Option<Sent>, String> {
+fn capture_value(lua: &Lua, engine: &Engine, value: &LuaValue, height: usize, ancestors: &mut Vec<*const c_void>, tally: &mut Tally) -> Result<Option<Sent>, Refused> {
     Ok(Some(match value {
         LuaValue::Thread(_) => return Ok(None),
         LuaValue::Table(table) => capture_table(lua, engine, table, height, ancestors, tally)?,
@@ -170,10 +211,10 @@ fn capture_value(lua: &Lua, engine: &Engine, value: &LuaValue, height: usize, an
     }))
 }
 
-fn capture_table(lua: &Lua, engine: &Engine, table: &LuaTable, height: usize, ancestors: &mut Vec<*const c_void>, tally: &mut Tally) -> Result<Sent, String> {
+fn capture_table(lua: &Lua, engine: &Engine, table: &LuaTable, height: usize, ancestors: &mut Vec<*const c_void>, tally: &mut Tally) -> Result<Sent, Refused> {
     let pointer = table.to_pointer();
     if ancestors.contains(&pointer) {
-        return Err("tables cannot be cyclic".into());
+        return Err(Refused::Message("tables cannot be cyclic".into()));
     }
     ancestors.push(pointer);
     let entries = capture_entries(lua, engine, table, height, ancestors, tally);
@@ -183,12 +224,12 @@ fn capture_table(lua: &Lua, engine: &Engine, table: &LuaTable, height: usize, an
 
 /// The copy of a value held by a table at `height`: a table is checked against the stack ([`nested_height`]) before it is
 /// walked, so one too deep is refused before a cycle through it is found
-fn capture_item(lua: &Lua, engine: &Engine, item: &LuaValue, height: usize, array: bool, ancestors: &mut Vec<*const c_void>, tally: &mut Tally) -> Result<Option<Sent>, String> {
+fn capture_item(lua: &Lua, engine: &Engine, item: &LuaValue, height: usize, array: bool, ancestors: &mut Vec<*const c_void>, tally: &mut Tally) -> Result<Option<Sent>, Refused> {
     let height = if matches!(item, LuaValue::Table(_)) { nested_height(height, array)? } else { height };
     capture_value(lua, engine, item, height, ancestors, tally)
 }
 
-fn capture_entries(lua: &Lua, engine: &Engine, table: &LuaTable, height: usize, ancestors: &mut Vec<*const c_void>, tally: &mut Tally) -> Result<Vec<(Key, Sent)>, String> {
+fn capture_entries(lua: &Lua, engine: &Engine, table: &LuaTable, height: usize, ancestors: &mut Vec<*const c_void>, tally: &mut Tally) -> Result<Vec<(Key, Sent)>, Refused> {
     let mut entries = Vec::new();
     let length = table.raw_len();
     if length > 0 {
@@ -207,7 +248,7 @@ fn capture_entries(lua: &Lua, engine: &Engine, table: &LuaTable, height: usize, 
     }
     for pair in table.pairs::<LuaValue, LuaValue>() {
         let (key, item) = pair.map_err(|error| error.to_string())?;
-        let key = key_name(lua, engine, &key)?;
+        let key = key_name(lua, engine, table, &key)?;
         tally.add(key.len() + buffer_bytes(&item))?;
         if let Some(copy) = capture_item(lua, engine, &item, height, false, ancestors, tally)? {
             entries.push((Key::Name(key), copy));
@@ -216,27 +257,75 @@ fn capture_entries(lua: &Lua, engine: &Engine, table: &LuaTable, height: usize, 
     Ok(entries)
 }
 
-/// A dictionary key as the receiver sees it (always a string). HttpService:JSONEncode names its object keys the same
-/// way (services/json.rs).
-pub(crate) fn key_name(lua: &Lua, engine: &Engine, key: &LuaValue) -> Result<Vec<u8>, String> {
-    let text = match key {
+/// A dictionary key of `table` as the receiver sees it (always a string: the module's notes). HttpService:JSONEncode and a
+/// localization table's arguments and values name their keys the same way (services/json.rs, services/localization.rs). A
+/// key's text is tostring's, called in protected mode: the error it raises, as it was raised, is the copy's
+/// ([`Refused::Raised`]). Where that ran a script's code (a table's or a newproxy's `__tostring`), the table's `next` from the
+/// key is checked too, as a client's walk takes it next: `invalid key to 'next'` once the code took the key out of the table
+/// (`table.clear`; setting its value to nil keeps it).
+pub(crate) fn key_name(lua: &Lua, engine: &Engine, table: &LuaTable, key: &LuaValue) -> Result<Vec<u8>, Refused> {
+    let typeof_name;
+    let (text, scripted) = match key {
         LuaValue::String(text) => return Ok(text.as_bytes().to_vec()),
         LuaValue::Integer(number) => return Ok(number.to_string().into_bytes()),
         LuaValue::Number(number) => return Ok(integer_of(*number).to_string().into_bytes()),
-        LuaValue::Boolean(_) | LuaValue::Thread(_) => return Err("Invalid table key type used".into()),
-        LuaValue::Table(_) => "Table".to_string(),
-        LuaValue::Function(_) => "Function".to_string(),
-        LuaValue::Buffer(_) => "Buffer".to_string(),
-        LuaValue::Vector(_) => "Vector3".to_string(),
-        other => match super::typeof_value(engine, other).as_str() {
-            "EnumItem" => "token".to_string(),
-            "InstanceHandle" => "InstanceRef".to_string(),
-            name => name.to_string(),
-        },
+        LuaValue::Boolean(_) | LuaValue::Thread(_) => return Err(Refused::Message("Invalid table key type used".into())),
+        LuaValue::Table(_) => ("Table", true),
+        LuaValue::Function(_) => ("Function", false),
+        LuaValue::Buffer(_) => ("Buffer", false),
+        LuaValue::Vector(_) => ("Vector3", false),
+        other => {
+            typeof_name = super::typeof_value(engine, other);
+            (key_type(&typeof_name), typeof_name == "userdata")
+        }
     };
-    let shown = lua.globals().get::<LuaFunction>("tostring").and_then(|tostring| tostring.call::<LuaString>(key.clone()));
-    let shown = shown.map(|shown| shown.to_string_lossy()).unwrap_or_default();
+    let shown = match protected(engine, lua, "tostring", [key.clone()])? {
+        LuaValue::String(shown) => shown.to_string_lossy(),
+        _ => String::new(),
+    };
+    if scripted {
+        protected(engine, lua, "next", [LuaValue::Table(table.clone()), key.clone()])?;
+    }
     Ok(format!("<{text}> ({shown})").into_bytes())
+}
+
+/// The type a dictionary key's name gives a value whose typeof is `kind`: a client's own name for some types, the typeof for
+/// the rest (measured in a 0.747 playing client and server: tools/parity/probes/table_keys.luau)
+fn key_type(kind: &str) -> &str {
+    match kind {
+        "EnumItem" => "token",
+        "InstanceHandle" => "InstanceRef",
+        "CFrame" => "CoordinateFrame",
+        "BrickColor" => "int",
+        "Rect" => "Rect2D",
+        "RBXScriptSignal" => "EventInstance",
+        "RBXScriptConnection" => "Connection",
+        // (an Enum, `Enum` itself, a RotationCurveKey and a newproxy)
+        "Enum" | "Enums" | "RotationCurveKey" | "userdata" => "null",
+        other => other,
+    }
+}
+
+/// The library function `name` called with `args` in protected mode: its first result, or the error it raised, as it was
+/// raised (charged what that raise costs a client beyond the call's own: cost.rs [`crate::cost::COPY_KEY_RAISED`])
+fn protected<const N: usize>(engine: &Engine, lua: &Lua, name: &str, args: [LuaValue; N]) -> Result<LuaValue, Refused> {
+    let failed = |error: LuaError| Refused::Message(error.to_string());
+    let globals = lua.globals();
+    let pcall: LuaFunction = globals.get("pcall").map_err(failed)?;
+    let function: LuaFunction = globals.get(name).map_err(failed)?;
+    let mut call = LuaMultiValue::with_capacity(N + 1);
+    call.push_back(LuaValue::Function(function));
+    call.extend(args);
+    let mut results = pcall.call::<LuaMultiValue>(call).map_err(failed)?.into_iter();
+    let ok = matches!(results.next(), Some(LuaValue::Boolean(true)));
+    let first = results.next().unwrap_or(LuaValue::Nil);
+    if ok {
+        return Ok(first);
+    }
+    if let Ok(state) = engine.state.try_borrow() {
+        state.sched.charge(crate::cost::COPY_KEY_RAISED);
+    }
+    Err(Refused::Raised(first))
 }
 
 /// A number key's integer, as a C cast on x86-64 makes it: toward zero, the least 64-bit integer when out of range.
@@ -278,7 +367,7 @@ pub fn rebuild(lua: &Lua, sent: &Sent) -> LuaResult<LuaValue> {
 /// receiver rebuilds, a SharedTable as one that gives every receiver a new handle ([`rebuild`]), a thread as nil, anything
 /// else converted as usual. `height`: the call's frame (`self` and the arguments); `tally`: what the call's copy has made so
 /// far ([`Tally`]).
-pub fn sent_value(lua: &Lua, engine: &Engine, value: &LuaValue, height: usize, tally: &mut Tally) -> Result<Value, String> {
+pub fn sent_value(lua: &Lua, engine: &Engine, value: &LuaValue, height: usize, tally: &mut Tally) -> Result<Value, Refused> {
     match value {
         LuaValue::Table(_) | LuaValue::Buffer(_) => {
             let sent = capture(lua, engine, value, height, tally)?;
@@ -307,7 +396,7 @@ pub fn copied(lua: &Lua, engine: &Engine, values: LuaMultiValue, height: usize) 
     for value in values.iter() {
         let sent = match capture(lua, engine, value, height, &mut tally) {
             Ok(sent) => sent,
-            Err(message) => return raise(message),
+            Err(refused) => return refused.raise(),
         };
         out.push_back(rebuild(lua, &sent)?);
     }

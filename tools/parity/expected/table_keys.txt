@@ -1,0 +1,248 @@
+# engine: Roblox Studio 0.747.0.7471481, a headless playing client (script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-25
+fire tostring nil: error string '__tostring' must return a string got string:none calls 1
+invoke tostring nil: error string '__tostring' must return a string calls 1
+json tostring nil: error string '__tostring' must return a string calls 1
+fire tostring number: ok nil:nil got {string:<Table> (42)=number:1} calls 1
+invoke tostring number: ok {string:<Table> (42)=number:1} calls 1
+json tostring number: ok {"<Table> (42)":1} calls 1
+fire tostring string: ok nil:nil got {string:<Table> (custom)=number:1} calls 1
+invoke tostring string: ok {string:<Table> (custom)=number:1} calls 1
+json tostring string: ok {"<Table> (custom)":1} calls 1
+fire tostring boolean: error string '__tostring' must return a string got string:none calls 1
+invoke tostring boolean: error string '__tostring' must return a string calls 1
+json tostring boolean: error string '__tostring' must return a string calls 1
+fire tostring table: error string '__tostring' must return a string got string:none calls 1
+invoke tostring table: error string '__tostring' must return a string calls 1
+json tostring table: error string '__tostring' must return a string calls 1
+fire tostring error: error string @70: boom got string:none calls 1
+invoke tostring error: error string @70: boom calls 1
+json tostring error: error string @70: boom calls 1
+fire tostring error level 0: error string plain boom got string:none calls 1
+invoke tostring error level 0: error string plain boom calls 1
+json tostring error level 0: error string plain boom calls 1
+fire tostring error table: error the table raised: true got string:none calls 1
+invoke tostring error table: error the table raised: true calls 1
+json tostring error table: error the table raised: true calls 1
+fire tostring error nil: error nil nil got string:none calls 1
+invoke tostring error nil: error nil nil calls 1
+json tostring error nil: error nil nil calls 1
+fire tostring error number: error string @74: 7 got string:none calls 1
+invoke tostring error number: error string @74: 7 calls 1
+json tostring error number: error string @74: 7 calls 1
+fire tostring task.wait: error string thread is not yieldable got string:none calls 1
+invoke tostring task.wait: error string thread is not yieldable calls 1
+json tostring task.wait: error string thread is not yieldable calls 1
+fire tostring coroutine.yield: error string attempt to yield across metamethod/C-call boundary got string:none calls 1
+invoke tostring coroutine.yield: error string attempt to yield across metamethod/C-call boundary calls 1
+json tostring coroutine.yield: error string attempt to yield across metamethod/C-call boundary calls 1
+fire tostring index error: error string @77: attempt to index nil with 'Field' got string:none calls 1
+invoke tostring index error: error string @77: attempt to index nil with 'Field' calls 1
+json tostring index error: error string @77: attempt to index nil with 'Field' calls 1
+fire two tostring nil: error string '__tostring' must return a string got string:none calls 1
+invoke two tostring nil: error string '__tostring' must return a string calls 1
+json two tostring nil: error string '__tostring' must return a string calls 1
+fire proxy tostring nil: error string '__tostring' must return a string got string:none calls 1
+invoke proxy tostring nil: error string '__tostring' must return a string calls 1
+json proxy tostring nil: error string '__tostring' must return a string calls 1
+fire proxy tostring error: error string @80: proxy boom got string:none calls 1
+invoke proxy tostring error: error string @80: proxy boom calls 1
+json proxy tostring error: error string @80: proxy boom calls 1
+fire nested tostring nil: error string '__tostring' must return a string got string:none calls 1
+invoke nested tostring nil: error string '__tostring' must return a string calls 1
+json nested tostring nil: error string '__tostring' must return a string calls 1
+fire array key tostring nil: ok nil:nil got {number:1=number:10, number:2=number:20} calls 0
+invoke array key tostring nil: ok {number:1=number:10, number:2=number:20} calls 0
+json array key tostring nil: ok [10,20] calls 0
+fire value tostring nil: ok nil:nil got {string:Value={}} calls 0
+invoke value tostring nil: ok {string:Value={}} calls 0
+json value tostring nil: ok {"Value":[]} calls 0
+fire clears table: error string invalid key to 'next' got string:none calls 1
+invoke clears table: error string invalid key to 'next' calls 1
+json clears table: error string invalid key to 'next' calls 1
+fire removes own entry: ok nil:nil got {string:<Table> (removed)=number:4, string:a=number:1} calls 1
+invoke removes own entry: ok {string:<Table> (removed)=number:4, string:a=number:1} calls 1
+json removes own entry: ok {"<Table> (removed)":4,"a":1} calls 1
+fire two named same: ok nil:nil got {string:<Table> (same)=number:1} calls 2
+invoke two named same: ok {string:<Table> (same)=number:1} calls 2
+json two named same: ok {"<Table> (same)":1,"<Table> (same)":1} calls 2
+fire numbers named same: ok nil:nil got {string:1=string:a} calls 0
+invoke numbers named same: ok {string:1=string:a} calls 0
+json numbers named same: ok {"1":"a","1":"b"} calls 0
+fire string and number named same: ok nil:nil got {string:1=string:n} calls 0
+invoke string and number named same: ok {string:1=string:n} calls 0
+json string and number named same: ok {"1":"n","1":"s"} calls 0
+fire number and string named same: ok nil:nil got {string:-1=string:n} calls 0
+invoke number and string named same: ok {string:-1=string:n} calls 0
+json number and string named same: ok {"-1":"n","-1":"s"} calls 0
+fire instances named same: ok nil:nil got {string:<Instance> (Folder)=number:1} calls 0
+invoke instances named same: ok {string:<Instance> (Folder)=number:1} calls 0
+json instances named same: ok {"<Instance> (Folder)":1,"<Instance> (Folder)":1} calls 0
+format tostring nil: error string '__tostring' must return a string calls 1
+format missing key tostring nil: error string '__tostring' must return a string calls 1
+entries tostring nil: error string '__tostring' must return a string calls 1 keys k
+format tostring number: error string Parameter name "x" not found in table calls 1
+format missing key tostring number: error string Key missing not found for locale es-es calls 1
+entries tostring number: error string Entry at index 1 "<Table> (42)" was not a string. calls 1 keys k
+format tostring error: error string @70: boom calls 1
+format missing key tostring error: error string @70: boom calls 1
+entries tostring error: error string @70: boom calls 1 keys k
+format tostring error table: error the table raised: true calls 1
+format missing key tostring error table: error the table raised: true calls 1
+entries tostring error table: error the table raised: true calls 1 keys k
+format clears table: error string invalid key to 'next' calls 1
+format missing key clears table: error string invalid key to 'next' calls 1
+entries clears table: error string invalid key to 'next' calls 1 keys k
+key Axes: fire ok nil:nil got {string:<Axes> (X, Z)=boolean:true}
+key Axes: invoke ok {string:<Axes> (X, Z)=boolean:true}
+key Axes: json ok string:{"<Axes> (X, Z)":true}
+key BrickColor: fire ok nil:nil got {string:<int> (Bright red)=boolean:true}
+key BrickColor: invoke ok {string:<int> (Bright red)=boolean:true}
+key BrickColor: json ok string:{"<int> (Bright red)":true}
+key CatalogSearchParams: fire ok nil:nil got {string:<CatalogSearchParams> (CatalogSearchParams{SearchKeyword=, CategoryFilter=None, SortType=Relevance, SortAggregation=AllTime, SalesTypeFilter=All, CreatorName=, Limit=30, CreatorType=All, BundleTypes=, AssetTypes=, IncludeOffSale=false})=boolean:true}
+key CatalogSearchParams: invoke ok {string:<CatalogSearchParams> (CatalogSearchParams{SearchKeyword=, CategoryFilter=None, SortType=Relevance, SortAggregation=AllTime, SalesTypeFilter=All, CreatorName=, Limit=30, CreatorType=All, BundleTypes=, AssetTypes=, IncludeOffSale=false})=boolean:true}
+key CatalogSearchParams: json ok string:{"<CatalogSearchParams> (CatalogSearchParams{SearchKeyword=, CategoryFilter=None, SortType=Relevance, SortAggregation=AllTime, SalesTypeFilter=All, CreatorName=, Limit=30, CreatorType=All, BundleTypes=, AssetTypes=, IncludeOffSale=false})":true}
+key CFrame: fire ok nil:nil got {string:<CoordinateFrame> (1, 2, 3, 1, 0, 0, 0, 1, 0, 0, 0, 1)=boolean:true}
+key CFrame: invoke ok {string:<CoordinateFrame> (1, 2, 3, 1, 0, 0, 0, 1, 0, 0, 0, 1)=boolean:true}
+key CFrame: json ok string:{"<CoordinateFrame> (1, 2, 3, 1, 0, 0, 0, 1, 0, 0, 0, 1)":true}
+key Color3: fire ok nil:nil got {string:<Color3> (1, 0, 0)=boolean:true}
+key Color3: invoke ok {string:<Color3> (1, 0, 0)=boolean:true}
+key Color3: json ok string:{"<Color3> (1, 0, 0)":true}
+key ColorSequence: fire ok nil:nil got {string:<ColorSequence> (0 0 1 0 0 1 0 1 0 0 )=boolean:true}
+key ColorSequence: invoke ok {string:<ColorSequence> (0 0 1 0 0 1 0 1 0 0 )=boolean:true}
+key ColorSequence: json ok string:{"<ColorSequence> (0 0 1 0 0 1 0 1 0 0 )":true}
+key ColorSequenceKeypoint: fire ok nil:nil got {string:<ColorSequenceKeypoint> (0.5 0 0 1 0 )=boolean:true}
+key ColorSequenceKeypoint: invoke ok {string:<ColorSequenceKeypoint> (0.5 0 0 1 0 )=boolean:true}
+key ColorSequenceKeypoint: json ok string:{"<ColorSequenceKeypoint> (0.5 0 0 1 0 )":true}
+key Content: fire ok nil:nil got {string:<Content> (Content{SourceType=Uri, Uri=rbxassetid://1})=boolean:true}
+key Content: invoke ok {string:<Content> (Content{SourceType=Uri, Uri=rbxassetid://1})=boolean:true}
+key Content: json ok string:{"<Content> (Content{SourceType=Uri, Uri=rbxassetid://1})":true}
+key DateTime: fire ok nil:nil got {string:<DateTime> (0)=boolean:true}
+key DateTime: invoke ok {string:<DateTime> (0)=boolean:true}
+key DateTime: json ok string:{"<DateTime> (0)":true}
+key DockWidgetPluginGuiInfo: fire ok nil:nil got {string:<DockWidgetPluginGuiInfo> (InitialDockState:Right InitialEnabled:0 InitialEnabledShouldOverrideRestore:0 FloatingXSize:0 FloatingYSize:0 MinWidth:0 MinHeight:0)=boolean:true}
+key DockWidgetPluginGuiInfo: invoke ok {string:<DockWidgetPluginGuiInfo> (InitialDockState:Right InitialEnabled:0 InitialEnabledShouldOverrideRestore:0 FloatingXSize:0 FloatingYSize:0 MinWidth:0 MinHeight:0)=boolean:true}
+key DockWidgetPluginGuiInfo: json ok string:{"<DockWidgetPluginGuiInfo> (InitialDockState:Right InitialEnabled:0 InitialEnabledShouldOverrideRestore:0 FloatingXSize:0 FloatingYSize:0 MinWidth:0 MinHeight:0)":true}
+key Enum: fire ok nil:nil got {string:<null> (Material)=boolean:true}
+key Enum: invoke ok {string:<null> (Material)=boolean:true}
+key Enum: json ok string:{"<null> (Material)":true}
+key Enums: fire ok nil:nil got {string:<null> (Enums)=boolean:true}
+key Enums: invoke ok {string:<null> (Enums)=boolean:true}
+key Enums: json ok string:{"<null> (Enums)":true}
+key EnumItem: fire ok nil:nil got {string:<token> (Enum.Material.Plastic)=boolean:true}
+key EnumItem: invoke ok {string:<token> (Enum.Material.Plastic)=boolean:true}
+key EnumItem: json ok string:{"<token> (Enum.Material.Plastic)":true}
+key Faces: fire ok nil:nil got {string:<Faces> (Top, Left)=boolean:true}
+key Faces: invoke ok {string:<Faces> (Top, Left)=boolean:true}
+key Faces: json ok string:{"<Faces> (Top, Left)":true}
+key FloatCurveKey: fire ok nil:nil got {string:<FloatCurveKey> ({Linear, 0, 1, nil, nil})=boolean:true}
+key FloatCurveKey: invoke ok {string:<FloatCurveKey> ({Linear, 0, 1, nil, nil})=boolean:true}
+key FloatCurveKey: json ok string:{"<FloatCurveKey> ({Linear, 0, 1, nil, nil})":true}
+key Font: fire ok nil:nil got {string:<Font> (Font { Family = rbxasset://fonts/families/Arial.json, Weight = Regular, Style = Normal })=boolean:true}
+key Font: invoke ok {string:<Font> (Font { Family = rbxasset://fonts/families/Arial.json, Weight = Regular, Style = Normal })=boolean:true}
+key Font: json ok string:{"<Font> (Font { Family = rbxasset://fonts/families/Arial.json, Weight = Regular, Style = Normal })":true}
+key Instance: fire ok nil:nil got {string:<Instance> (Workspace)=boolean:true}
+key Instance: invoke ok {string:<Instance> (Workspace)=boolean:true}
+key Instance: json ok string:{"<Instance> (Workspace)":true}
+key NumberRange: fire ok nil:nil got {string:<NumberRange> (1 2 )=boolean:true}
+key NumberRange: invoke ok {string:<NumberRange> (1 2 )=boolean:true}
+key NumberRange: json ok string:{"<NumberRange> (1 2 )":true}
+key NumberSequence: fire ok nil:nil got {string:<NumberSequence> (0 1 0 1 1 0 )=boolean:true}
+key NumberSequence: invoke ok {string:<NumberSequence> (0 1 0 1 1 0 )=boolean:true}
+key NumberSequence: json ok string:{"<NumberSequence> (0 1 0 1 1 0 )":true}
+key NumberSequenceKeypoint: fire ok nil:nil got {string:<NumberSequenceKeypoint> (0.5 2 0 )=boolean:true}
+key NumberSequenceKeypoint: invoke ok {string:<NumberSequenceKeypoint> (0.5 2 0 )=boolean:true}
+key NumberSequenceKeypoint: json ok string:{"<NumberSequenceKeypoint> (0.5 2 0 )":true}
+key OverlapParams: fire ok nil:nil got {string:<OverlapParams> (OverlapParams{MaxParts=0, Tolerance=0, BruteForceAllSlow=false, RespectCanCollide=false, CollisionGroup=Default, FilterDescendantsInstances={}})=boolean:true}
+key OverlapParams: invoke ok {string:<OverlapParams> (OverlapParams{MaxParts=0, Tolerance=0, BruteForceAllSlow=false, RespectCanCollide=false, CollisionGroup=Default, FilterDescendantsInstances={}})=boolean:true}
+key OverlapParams: json ok string:{"<OverlapParams> (OverlapParams{MaxParts=0, Tolerance=0, BruteForceAllSlow=false, RespectCanCollide=false, CollisionGroup=Default, FilterDescendantsInstances={}})":true}
+key Path2DControlPoint: fire ok nil:nil got {string:<Path2DControlPoint> (Path2DControlPoint { Position = {0, 0}, {0, 0}, LeftTangent = {0, 0}, {0, 0}, RightTangent = {0, 0}, {0, 0} })=boolean:true}
+key Path2DControlPoint: invoke ok {string:<Path2DControlPoint> (Path2DControlPoint { Position = {0, 0}, {0, 0}, LeftTangent = {0, 0}, {0, 0}, RightTangent = {0, 0}, {0, 0} })=boolean:true}
+key Path2DControlPoint: json ok string:{"<Path2DControlPoint> (Path2DControlPoint { Position = {0, 0}, {0, 0}, LeftTangent = {0, 0}, {0, 0}, RightTangent = {0, 0}, {0, 0} })":true}
+key PathWaypoint: fire ok nil:nil got {string:<PathWaypoint> ({1, 2, 3}, Jump, label)=boolean:true}
+key PathWaypoint: invoke ok {string:<PathWaypoint> ({1, 2, 3}, Jump, label)=boolean:true}
+key PathWaypoint: json ok string:{"<PathWaypoint> ({1, 2, 3}, Jump, label)":true}
+key PhysicalProperties: fire ok nil:nil got {string:<PhysicalProperties> (1, 1, 1, 1, 1, 1)=boolean:true}
+key PhysicalProperties: invoke ok {string:<PhysicalProperties> (1, 1, 1, 1, 1, 1)=boolean:true}
+key PhysicalProperties: json ok string:{"<PhysicalProperties> (1, 1, 1, 1, 1, 1)":true}
+key Random: fire ok nil:nil got {string:<Random> (Random)=boolean:true}
+key Random: invoke ok {string:<Random> (Random)=boolean:true}
+key Random: json ok string:{"<Random> (Random)":true}
+key Ray: fire ok nil:nil got {string:<Ray> ({1, 2, 3}, {0, 1, 0})=boolean:true}
+key Ray: invoke ok {string:<Ray> ({1, 2, 3}, {0, 1, 0})=boolean:true}
+key Ray: json ok string:{"<Ray> ({1, 2, 3}, {0, 1, 0})":true}
+key RaycastParams: fire ok nil:nil got {string:<RaycastParams> (RaycastParams{IgnoreWater=false, Margin=0, SizeGradient=0, BruteForceAllSlow=false, RespectCanCollide=false, CollisionGroup=Default, FilterDescendantsInstances={}})=boolean:true}
+key RaycastParams: invoke ok {string:<RaycastParams> (RaycastParams{IgnoreWater=false, Margin=0, SizeGradient=0, BruteForceAllSlow=false, RespectCanCollide=false, CollisionGroup=Default, FilterDescendantsInstances={}})=boolean:true}
+key RaycastParams: json ok string:{"<RaycastParams> (RaycastParams{IgnoreWater=false, Margin=0, SizeGradient=0, BruteForceAllSlow=false, RespectCanCollide=false, CollisionGroup=Default, FilterDescendantsInstances={}})":true}
+key RBXScriptConnection: fire ok nil:nil got {string:<Connection> (Connection)=boolean:true}
+key RBXScriptConnection: invoke ok {string:<Connection> (Connection)=boolean:true}
+key RBXScriptConnection: json ok string:{"<Connection> (Connection)":true}
+key RBXScriptSignal: fire ok nil:nil got {string:<EventInstance> (Signal Changed)=boolean:true}
+key RBXScriptSignal: invoke ok {string:<EventInstance> (Signal Changed)=boolean:true}
+key RBXScriptSignal: json ok string:{"<EventInstance> (Signal Changed)":true}
+key Rect: fire ok nil:nil got {string:<Rect2D> (1, 2, 3, 4)=boolean:true}
+key Rect: invoke ok {string:<Rect2D> (1, 2, 3, 4)=boolean:true}
+key Rect: json ok string:{"<Rect2D> (1, 2, 3, 4)":true}
+key Region3: fire ok nil:nil got {string:<Region3> (1, 1, 1, 1, 0, 0, 0, 1, 0, 0, 0, 1; 2, 2, 2)=boolean:true}
+key Region3: invoke ok {string:<Region3> (1, 1, 1, 1, 0, 0, 0, 1, 0, 0, 0, 1; 2, 2, 2)=boolean:true}
+key Region3: json ok string:{"<Region3> (1, 1, 1, 1, 0, 0, 0, 1, 0, 0, 0, 1; 2, 2, 2)":true}
+key Region3int16: fire ok nil:nil got {string:<Region3int16> (0, 0, 0; 2, 2, 2)=boolean:true}
+key Region3int16: invoke ok {string:<Region3int16> (0, 0, 0; 2, 2, 2)=boolean:true}
+key Region3int16: json ok string:{"<Region3int16> (0, 0, 0; 2, 2, 2)":true}
+key RotationCurveKey: fire ok nil:nil got {string:<null> ({Linear, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0})=boolean:true}
+key RotationCurveKey: invoke ok {string:<null> ({Linear, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0})=boolean:true}
+key RotationCurveKey: json ok string:{"<null> ({Linear, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0})":true}
+key SecurityCapabilities: fire ok nil:nil got {string:<SecurityCapabilities> ()=boolean:true}
+key SecurityCapabilities: invoke ok {string:<SecurityCapabilities> ()=boolean:true}
+key SecurityCapabilities: json ok string:{"<SecurityCapabilities> ()":true}
+key SharedTable: fire ok nil:nil got {string:<SharedTable> (SharedTable: ADDR)=boolean:true}
+key SharedTable: invoke ok {string:<SharedTable> (SharedTable: ADDR)=boolean:true}
+key SharedTable: json ok string:{"<SharedTable> (SharedTable: ADDR)":true}
+key TweenInfo: fire ok nil:nil got {string:<TweenInfo> (Time:1 DelayTime:0 RepeatCount:0 Reverses:False EasingDirection:Out EasingStyle:Quad)=boolean:true}
+key TweenInfo: invoke ok {string:<TweenInfo> (Time:1 DelayTime:0 RepeatCount:0 Reverses:False EasingDirection:Out EasingStyle:Quad)=boolean:true}
+key TweenInfo: json ok string:{"<TweenInfo> (Time:1 DelayTime:0 RepeatCount:0 Reverses:False EasingDirection:Out EasingStyle:Quad)":true}
+key UDim: fire ok nil:nil got {string:<UDim> (1, 2)=boolean:true}
+key UDim: invoke ok {string:<UDim> (1, 2)=boolean:true}
+key UDim: json ok string:{"<UDim> (1, 2)":true}
+key UDim2: fire ok nil:nil got {string:<UDim2> ({1, 2}, {3, 4})=boolean:true}
+key UDim2: invoke ok {string:<UDim2> ({1, 2}, {3, 4})=boolean:true}
+key UDim2: json ok string:{"<UDim2> ({1, 2}, {3, 4})":true}
+key ValueCurveKey: fire ok nil:nil got {string:<ValueCurveKey> ()=boolean:true}
+key ValueCurveKey: invoke ok {string:<ValueCurveKey> ()=boolean:true}
+key ValueCurveKey: json ok string:{"<ValueCurveKey> ()":true}
+key Vector2: fire ok nil:nil got {string:<Vector2> (1, 2)=boolean:true}
+key Vector2: invoke ok {string:<Vector2> (1, 2)=boolean:true}
+key Vector2: json ok string:{"<Vector2> (1, 2)":true}
+key Vector2int16: fire ok nil:nil got {string:<Vector2int16> (1, 2)=boolean:true}
+key Vector2int16: invoke ok {string:<Vector2int16> (1, 2)=boolean:true}
+key Vector2int16: json ok string:{"<Vector2int16> (1, 2)":true}
+key Vector3: fire ok nil:nil got {string:<Vector3> (1, 2, 3)=boolean:true}
+key Vector3: invoke ok {string:<Vector3> (1, 2, 3)=boolean:true}
+key Vector3: json ok string:{"<Vector3> (1, 2, 3)":true}
+key Vector3int16: fire ok nil:nil got {string:<Vector3int16> (1, 2, 3)=boolean:true}
+key Vector3int16: invoke ok {string:<Vector3int16> (1, 2, 3)=boolean:true}
+key Vector3int16: json ok string:{"<Vector3int16> (1, 2, 3)":true}
+key vector: fire ok nil:nil got {string:<Vector3> (1, 2, 3)=boolean:true}
+key vector: invoke ok {string:<Vector3> (1, 2, 3)=boolean:true}
+key vector: json ok string:{"<Vector3> (1, 2, 3)":true}
+key buffer: fire ok nil:nil got {string:<Buffer> (buffer: ADDR)=boolean:true}
+key buffer: invoke ok {string:<Buffer> (buffer: ADDR)=boolean:true}
+key buffer: json ok string:{"<Buffer> (buffer: ADDR)":true}
+key function: fire ok nil:nil got {string:<Function> (function: ADDR)=boolean:true}
+key function: invoke ok {string:<Function> (function: ADDR)=boolean:true}
+key function: json ok string:{"<Function> (function: ADDR)":true}
+key newproxy: fire ok nil:nil got {string:<null> (userdata: ADDR)=boolean:true}
+key newproxy: invoke ok {string:<null> (userdata: ADDR)=boolean:true}
+key newproxy: json ok string:{"<null> (userdata: ADDR)":true}
+key newproxy with a metatable: fire ok nil:nil got {string:<null> (userdata: ADDR)=boolean:true}
+key newproxy with a metatable: invoke ok {string:<null> (userdata: ADDR)=boolean:true}
+key newproxy with a metatable: json ok string:{"<null> (userdata: ADDR)":true}
+key newproxy with __tostring: fire ok nil:nil got {string:<null> (proxy text)=boolean:true}
+key newproxy with __tostring: invoke ok {string:<null> (proxy text)=boolean:true}
+key newproxy with __tostring: json ok string:{"<null> (proxy text)":true}
+key thread: fire error string Invalid table key type used got string:none
+key thread: invoke error string Invalid table key type used
+key thread: json error string Invalid table key type used
+key boolean: fire error string Invalid table key type used got string:none
+key boolean: invoke error string Invalid table key type used
+key boolean: json error string Invalid table key type used

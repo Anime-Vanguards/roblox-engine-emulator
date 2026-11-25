@@ -1278,7 +1278,7 @@ fn fresh(lua: &Lua, engine: &Engine, store: &Store, value: LuaValue) -> LuaResul
 /// the price of what is copied is its caller's alone (measured: a loop's step over TweenInfos or Path2DControlPoints cost a
 /// client what one over CFrames does, cost.rs [`cost::SHARED_LOOP_MADE_VALUE`], where the VM's count put 0.012 and 0.015 us on
 /// ree's).
-fn engine_work<T>(engine: &Engine, work: impl FnOnce() -> LuaResult<T>) -> LuaResult<T> {
+pub(crate) fn engine_work<T>(engine: &Engine, work: impl FnOnce() -> LuaResult<T>) -> LuaResult<T> {
     let counters = engine.state.borrow().sched.vm_counters;
     // SAFETY: the VM's own counters, alive as long as the VM, which is running this call
     let priced = || counters.map_or(0.0, |counters| cost::luau(unsafe { &*counters }));
@@ -1521,6 +1521,7 @@ impl Library {
                 Err(Flow::Error(error)) => return Step::Raise(error.message.into_bytes(), error.level.into()),
                 Err(Flow::Yield) => return Step::Raise(b"SharedTable functions cannot yield".to_vec(), 0),
                 Err(Flow::Fail(error)) => return Step::Raise(error.to_string().into_bytes(), 0),
+                Err(Flow::Raised(value)) => return Step::Raise(Flow::raised_text(&value).into_bytes(), 0),
             };
             let count = values.len();
             for (slot, value) in values.into_iter().enumerate() {

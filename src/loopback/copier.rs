@@ -10,14 +10,14 @@ use std::ffi::{c_int, c_void};
 use mlua::{ffi, prelude::*};
 
 use super::wire::{Key, Wire};
-use crate::{Engine, InstanceId, lua::bindable::{self, Tally}};
+use crate::{Engine, InstanceId, lua::bindable::{self, Refused, Tally}};
 
 /// A value whose capture mlua finishes (an object's slot in the side table)
 const PENDING: u32 = u32::MAX;
 
 /// Captures the tables among `values` (the rest as wire.rs captures them) into wire values, tables starting above the call's
 /// frame of `height` values (wire.rs `capture_all`), the call's copy counted against ree's guard (bindable.rs [`Tally`])
-pub fn capture_all(lua: &Lua, engine: &Engine, values: &[LuaValue], height: usize) -> Result<Box<[Wire]>, String> {
+pub fn capture_all(lua: &Lua, engine: &Engine, values: &[LuaValue], height: usize) -> Result<Box<[Wire]>, Refused> {
     let mut out = Vec::with_capacity(values.len());
     let mut tally = Tally::default();
     for value in values {
@@ -38,7 +38,7 @@ struct Walk<'a> {
     tally: &'a mut Tally,
 }
 
-fn capture_table(lua: &Lua, engine: &Engine, table: &LuaTable, height: usize, tally: &mut Tally) -> Result<Wire, String> {
+fn capture_table(lua: &Lua, engine: &Engine, table: &LuaTable, height: usize, tally: &mut Tally) -> Result<Wire, Refused> {
     // (a walk that falls back to the typed copier counts its table again from here)
     let counted = (tally.values, tally.bytes);
     let mut walk = Walk { error: None, objects: 0, tally };
@@ -65,7 +65,7 @@ fn capture_table(lua: &Lua, engine: &Engine, table: &LuaTable, height: usize, ta
             (walk.tally.values, walk.tally.bytes) = counted;
             return super::wire::capture(lua, engine, &LuaValue::Table(table.clone()), &mut Vec::new(), height, walk.tally);
         }
-        return Err(message);
+        return Err(Refused::Message(message));
     }
     let mut tree = tree.unwrap_or(Wire::Nil);
     if walk.objects > 0 {
@@ -297,7 +297,9 @@ fn collect_objects(lua: &Lua, engine: &Engine, wire: &Wire, map: &dyn Fn(Instanc
             Some(mapped) if engine.state.borrow().dom.get(mapped).is_some() => crate::lua::instance_value(lua, engine, mapped)?,
             _ => LuaValue::Boolean(false),
         }),
-        Wire::Value(_) | Wire::Random(_) | Wire::TweenInfo { .. } | Wire::DateTime(_) | Wire::Handle(_) => out.push(super::wire::rebuilt(lua, engine, wire, map)?),
+        Wire::Value(_) | Wire::Random(_) | Wire::TweenInfo { .. } | Wire::DateTime(_) | Wire::Handle(_) | Wire::ColorKeypoint(_) | Wire::NumberKeypoint(_) | Wire::Proxy { .. } => {
+            out.push(super::wire::rebuilt(lua, engine, wire, map)?)
+        }
         _ => {}
     }
     Ok(())
@@ -341,7 +343,15 @@ unsafe fn push_wire(state: *mut ffi::lua_State, wire: &Wire, next: &mut i64) {
                     }
                 }
             }
-            Wire::Instance(_) | Wire::Value(_) | Wire::Random(_) | Wire::TweenInfo { .. } | Wire::DateTime(_) | Wire::Handle(_) => {
+            Wire::Instance(_)
+            | Wire::Value(_)
+            | Wire::Random(_)
+            | Wire::TweenInfo { .. }
+            | Wire::DateTime(_)
+            | Wire::Handle(_)
+            | Wire::ColorKeypoint(_)
+            | Wire::NumberKeypoint(_)
+            | Wire::Proxy { .. } => {
                 ffi::lua_rawgeti(state, 1, *next as _);
                 *next += 1;
                 if matches!(wire, Wire::Instance(_)) && ffi::lua_type(state, -1) == ffi::LUA_TBOOLEAN {

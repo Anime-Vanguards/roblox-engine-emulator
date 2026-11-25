@@ -375,6 +375,28 @@ pub fn load(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
             Ok(e.state.borrow().dom.at(id).callback(name).cloned().unwrap_or(LuaValue::Nil))
         })?,
     )?;
+    // The VM's own coroutine.create, for a callback's thread the engine Luau makes (the scripts' charges a thread's price: lua/
+    // globals.rs; the call that runs the callback is priced whole)
+    r.set("CreateThread", lua.globals().get::<LuaTable>("coroutine")?.get::<LuaFunction>("create")?)?;
+    // A thread the engine Luau parked (a BindableFunction's caller waiting for its callback) resumed as task.spawn resumes one,
+    // without task.spawn's thread price: the call that parked it is priced whole
+    let e = engine.clone();
+    r.set(
+        "Resume",
+        lua.create_function(move |lua, thread: LuaThread| {
+            crate::scheduler::resume(lua, &e, &thread, LuaMultiValue::new());
+            Ok(())
+        })?,
+    )?;
+    // A BindableFunction's callback's error raised before it yielded, logged as a client logs it (scheduler.rs)
+    let e = engine.clone();
+    r.set(
+        "ReportError",
+        lua.create_function(move |lua, problem: LuaValue| {
+            crate::scheduler::report_callback_error(lua, &e, &problem);
+            Ok(())
+        })?,
+    )?;
     // BindableFunction:Invoke's copies of its callback's results and of its arguments (lua/bindable.rs), whose tables
     // start above the call's frame: the results alone, `self` below the arguments
     let e = engine.clone();
@@ -495,6 +517,7 @@ pub fn load(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
                 Flow::Error(error) => LuaError::runtime(error.message),
                 Flow::Fail(error) => error,
                 Flow::Yield => LuaError::runtime("JsonEncode yielded"),
+                Flow::Raised(value) => LuaError::runtime(Flow::raised_text(&value)),
             })?;
             let json: serde_json::Value = lua.from_value_with(
                 safe,

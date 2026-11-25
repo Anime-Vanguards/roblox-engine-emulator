@@ -8,8 +8,13 @@
 //! - A function, a thread, a newproxy userdata, an Enum, a RaycastParams and a SharedTable arrive as nil (a SharedTable alike over
 //!   every remote, each way, at any size and without a warning: Studio 0.748, a play session's server and client, two runs; in a
 //!   table it leaves a hole in an array, its dictionary entry is dropped, and as a key it is named `<SharedTable> (SharedTable:
-//!   0x...)`). CFrame, Color3, UDim, UDim2, Vector2, BrickColor, NumberRange, NumberSequence, ColorSequence, Rect, Ray, Font,
-//!   DateTime, PhysicalProperties, Random, TweenInfo and EnumItems arrive equal.
+//!   0x...)`), and so do an RBXScriptSignal, an OverlapParams, a CatalogSearchParams, a DockWidgetPluginGuiInfo, a
+//!   Path2DControlPoint and the curve keys (FloatCurveKey, RotationCurveKey, ValueCurveKey: Studio 0.747,
+//!   tools/parity/probes/loopback/remote_keys.luau). CFrame, Color3, UDim, UDim2, Vector2, BrickColor, NumberRange,
+//!   NumberSequence, ColorSequence, Rect, Ray, Font, DateTime, PhysicalProperties, Random, TweenInfo and EnumItems arrive
+//!   equal, and Region3, Region3int16, Vector2int16, Vector3int16, Content, ColorSequenceKeypoint, NumberSequenceKeypoint, Axes,
+//!   Faces, PathWaypoint and SecurityCapabilities with the same text (remote_keys.luau, alone and in a table); the last four
+//!   are the prelude's proxies, sent as their fields ([`Wire::Proxy`]).
 //! - An Instance arrives as the receiver's own when it has it (mapped at delivery, after the batch's earlier creations), else
 //!   as nil: a server-only instance, a parentless one, a client-made one. An InstanceHandle arrives as a new handle of the
 //!   receiver's own, else as a handle of none, as one of none does: over a RemoteEvent, an UnreliableRemoteEvent and a
@@ -30,7 +35,7 @@ use lune_roblox::datatypes::types as lune;
 use mlua::prelude::*;
 use rbx_dom_weak::types::{self as dom, Variant};
 
-use crate::{Engine, InstanceId, lua::bindable::{self, Tally}, value::Value};
+use crate::{Engine, InstanceId, lua::bindable::{self, Refused, Tally}, value::Value};
 
 /// A sent value.
 #[derive(Clone, Debug)]
@@ -50,6 +55,11 @@ pub enum Wire {
     Random(crate::lua::types::RandomState),
     TweenInfo { time: f64, style: crate::reflection::EnumItemId, direction: crate::reflection::EnumItemId, repeats: f64, reverses: bool, delay: f64 },
     DateTime(f64),
+    ColorKeypoint(lune::ColorSequenceKeypoint),
+    NumberKeypoint(lune::NumberSequenceKeypoint),
+    /// A prelude proxy datatype (Faces, Axes, PathWaypoint, SecurityCapabilities) as its typeof and fields, which the receiver's
+    /// prelude makes it again from (lua/prelude.luau `ProxyFields`, `ProxyFromFields`)
+    Proxy { kind: Box<str>, fields: Box<[Wire]> },
     Table(Box<[(Key, Wire)]>),
 }
 
@@ -61,7 +71,7 @@ pub enum Key {
 
 /// The arguments of a call, captured, their tables starting above the call's frame of `height` values (the module's notes): an
 /// error's text when one cannot be sent.
-pub fn capture_all(lua: &Lua, engine: &Engine, values: &[LuaValue], height: usize) -> Result<Box<[Wire]>, String> {
+pub fn capture_all(lua: &Lua, engine: &Engine, values: &[LuaValue], height: usize) -> Result<Box<[Wire]>, Refused> {
     // (tables through the C API's copier: copier.rs)
     super::copier::capture_all(lua, engine, values, height)
 }
@@ -100,7 +110,7 @@ pub fn bytes_of(value: &LuaValue) -> usize {
 
 /// A value as it is sent. `ancestors`: the tables it is inside of; `height`: the stack slot a table sits at (bindable.rs
 /// `nested_height`); `tally`: what the call's copy has made so far, each of a table's entries counted as it is walked.
-pub fn capture(lua: &Lua, engine: &Engine, value: &LuaValue, ancestors: &mut Vec<*const std::ffi::c_void>, height: usize, tally: &mut Tally) -> Result<Wire, String> {
+pub fn capture(lua: &Lua, engine: &Engine, value: &LuaValue, ancestors: &mut Vec<*const std::ffi::c_void>, height: usize, tally: &mut Tally) -> Result<Wire, Refused> {
     Ok(match value {
         LuaValue::Nil => Wire::Nil,
         LuaValue::Boolean(flag) => Wire::Bool(*flag),
@@ -110,10 +120,26 @@ pub fn capture(lua: &Lua, engine: &Engine, value: &LuaValue, ancestors: &mut Vec
         LuaValue::Buffer(buffer) => Wire::Buffer(buffer.to_vec().into_boxed_slice()),
         LuaValue::Vector(vector) => Wire::Vector([vector.x(), vector.y(), vector.z()]),
         LuaValue::Table(table) => capture_table(lua, engine, table, ancestors, height, tally)?,
-        LuaValue::UserData(userdata) => capture_userdata(userdata),
+        LuaValue::UserData(userdata) => match capture_userdata(userdata) {
+            Wire::Nil => capture_proxy(lua, engine, userdata)?,
+            wire => wire,
+        },
         // functions, threads, light userdata, errors: nil
         _ => Wire::Nil,
     })
+}
+
+/// A prelude proxy datatype as its typeof and fields (lua/prelude.luau `ProxyFields`); nil for any other userdata
+fn capture_proxy(lua: &Lua, engine: &Engine, userdata: &LuaAnyUserData) -> Result<Wire, Refused> {
+    let failed = |error: LuaError| Refused::Message(error.to_string());
+    let fields: LuaFunction = engine.prelude().exports.get("ProxyFields").map_err(failed)?;
+    let (kind, list) = crate::lua::shared_table::engine_work(engine, || fields.call::<(Option<String>, Option<LuaTable>)>(userdata.clone())).map_err(failed)?;
+    let (Some(kind), Some(list)) = (kind, list) else { return Ok(Wire::Nil) };
+    let mut captured = Vec::new();
+    for field in list.sequence_values::<LuaValue>() {
+        captured.push(capture(lua, engine, &field.map_err(failed)?, &mut Vec::new(), 0, &mut Tally::default())?);
+    }
+    Ok(Wire::Proxy { kind: kind.into(), fields: captured.into_boxed_slice() })
 }
 
 /// A number as it arrives: a subnormal one as 0 (measured), the rest as they are
@@ -155,6 +181,12 @@ fn capture_userdata(userdata: &LuaAnyUserData) -> Wire {
     if let Ok(time) = userdata.borrow::<LDateTime>() {
         return Wire::DateTime(time.0);
     }
+    if let Ok(keypoint) = userdata.borrow::<lune::ColorSequenceKeypoint>() {
+        return Wire::ColorKeypoint(*keypoint);
+    }
+    if let Ok(keypoint) = userdata.borrow::<lune::NumberSequenceKeypoint>() {
+        return Wire::NumberKeypoint(*keypoint);
+    }
     let dom = |variant: Variant| Wire::Value(Value::Dom(Rc::new(variant)));
     if let Ok(v) = userdata.borrow::<lune::Ray>() {
         return dom(Variant::Ray(dom::Ray::from(*v)));
@@ -187,10 +219,10 @@ fn capture_userdata(userdata: &LuaAnyUserData) -> Wire {
     }
 }
 
-fn capture_table(lua: &Lua, engine: &Engine, table: &LuaTable, ancestors: &mut Vec<*const std::ffi::c_void>, height: usize, tally: &mut Tally) -> Result<Wire, String> {
+fn capture_table(lua: &Lua, engine: &Engine, table: &LuaTable, ancestors: &mut Vec<*const std::ffi::c_void>, height: usize, tally: &mut Tally) -> Result<Wire, Refused> {
     let pointer = table.to_pointer();
     if ancestors.contains(&pointer) {
-        return Err("tables cannot be cyclic".into());
+        return Err(Refused::Message("tables cannot be cyclic".into()));
     }
     ancestors.push(pointer);
     let entries = capture_entries(lua, engine, table, ancestors, height, tally);
@@ -204,7 +236,7 @@ fn item_height(item: &LuaValue, height: usize, array: bool) -> Result<usize, Str
     if matches!(item, LuaValue::Table(_)) { bindable::nested_height(height, array) } else { Ok(height) }
 }
 
-fn capture_entries(lua: &Lua, engine: &Engine, table: &LuaTable, ancestors: &mut Vec<*const std::ffi::c_void>, height: usize, tally: &mut Tally) -> Result<Vec<(Key, Wire)>, String> {
+fn capture_entries(lua: &Lua, engine: &Engine, table: &LuaTable, ancestors: &mut Vec<*const std::ffi::c_void>, height: usize, tally: &mut Tally) -> Result<Vec<(Key, Wire)>, Refused> {
     let length = table.raw_len();
     if length > 0 {
         // an array: indices 1 to the border, a value that does not arrive leaving a hole
@@ -223,7 +255,7 @@ fn capture_entries(lua: &Lua, engine: &Engine, table: &LuaTable, ancestors: &mut
     let mut entries = Vec::new();
     for pair in table.pairs::<LuaValue, LuaValue>() {
         let (key, item) = pair.map_err(|error| error.to_string())?;
-        let key = bindable::key_name(lua, engine, &key)?;
+        let key = bindable::key_name(lua, engine, table, &key)?;
         tally.add(key.len() + bytes_of(&item))?;
         let wire = capture(lua, engine, &item, ancestors, item_height(&item, height, false)?, tally)?;
         if !matches!(wire, Wire::Nil) {
@@ -251,7 +283,9 @@ pub fn delivered(lua: &Lua, engine: &Engine, wire: Wire, map: &dyn Fn(InstanceId
             map_instances(&mut kept, map);
             Value::Lua(Box::new(LuaValue::UserData(lua.create_userdata(Delivered(Rc::new(kept)))?)))
         }
-        wire @ (Wire::Random(_) | Wire::TweenInfo { .. } | Wire::DateTime(_)) => Value::Lua(Box::new(object(lua, engine, &wire)?)),
+        wire @ (Wire::Random(_) | Wire::TweenInfo { .. } | Wire::DateTime(_) | Wire::ColorKeypoint(_) | Wire::NumberKeypoint(_) | Wire::Proxy { .. }) => {
+            Value::Lua(Box::new(object(lua, engine, &wire)?))
+        }
     })
 }
 
@@ -272,7 +306,8 @@ pub fn rebuilt(lua: &Lua, engine: &Engine, wire: &Wire, map: &dyn Fn(InstanceId)
     }
 }
 
-/// A Random, TweenInfo or DateTime made in the receiver's VM (a value of its own: no handler shares another's)
+/// A Random, TweenInfo, DateTime, keypoint or prelude proxy made in the receiver's VM (a value of its own: no handler shares
+/// another's)
 fn object(lua: &Lua, engine: &Engine, wire: &Wire) -> LuaResult<LuaValue> {
     use crate::lua::types::{LDateTime, LTweenInfo};
     Ok(match wire {
@@ -286,6 +321,16 @@ fn object(lua: &Lua, engine: &Engine, wire: &Wire) -> LuaResult<LuaValue> {
             delay_time: LuaValue::Number(*delay),
         })?),
         Wire::DateTime(millis) => LuaValue::UserData(lua.create_any_userdata(LDateTime(*millis))?),
+        Wire::ColorKeypoint(keypoint) => LuaValue::UserData(lua.create_userdata(*keypoint)?),
+        Wire::NumberKeypoint(keypoint) => LuaValue::UserData(lua.create_userdata(*keypoint)?),
+        Wire::Proxy { kind, fields } => {
+            let list = lua.create_table_with_capacity(fields.len(), 0)?;
+            for (index, field) in fields.iter().enumerate() {
+                list.raw_set(index + 1, rebuilt(lua, engine, field, &|_| None)?)?;
+            }
+            let make: LuaFunction = engine.prelude().exports.get("ProxyFromFields")?;
+            crate::lua::shared_table::engine_work(engine, || make.call::<LuaValue>((&**kind, list)))?
+        }
         _ => LuaValue::Nil,
     })
 }
@@ -326,6 +371,10 @@ fn size_of(wire: &Wire) -> usize {
         Wire::Random(_) => 17,
         Wire::TweenInfo { .. } => 1 + 8 * 4 + 3,
         Wire::DateTime(_) => 9,
+        // (not measured: their floats, as a datatype's; a proxy's fields)
+        Wire::ColorKeypoint(_) => 1 + 4 * 5,
+        Wire::NumberKeypoint(_) => 1 + 4 * 3,
+        Wire::Proxy { fields, .. } => 1 + fields.iter().map(size_of).sum::<usize>(),
         Wire::Table(entries) => {
             1 + varint(entries.len())
                 + entries

@@ -1195,6 +1195,18 @@ pub const QUERY_SIDE_NOT_FINITE: f64 = 1.3e-6;
 /// value's member 2.2 to 2.9, which ree raises in the VM, mlua or the engine's Luau and does not charge.
 pub const RAISED: f64 = 3.4e-6;
 pub const RAISED_AT_CALLER: f64 = 2.5e-6;
+/// An error a dictionary key's `__tostring` raises while a copy names the key (lua/bindable.rs key_name), beyond the [`RAISED`] the
+/// call charges when it raises it again. A 0.747 playing client and server (roblox-sim, three sessions each; 20 calls a sample, the
+/// median of 15 less an empty loop): `{[key] = 1}` whose key's `__tostring` returns nil took BindableEvent:Fire 5.4 to 9.4 us more
+/// than one whose `__tostring` returns a string (median 9.1) and JSONEncode 6.5 to 9.6 more (median 9.0); ree charged RAISED, 3.4.
+pub const COPY_KEY_RAISED: f64 = 5.6e-6;
+/// Logging an error that a RemoteFunction's or a BindableFunction's callback raised before it yielded, as an uncaught error is
+/// logged (scheduler.rs report_callback_error). The same sessions: BindableFunction:Invoke whose callback raises took 34.7 to 49.7
+/// us more than one whose callback returns (median 40.0 for a string, 39.7 for a table), of which ree charges 3.6 (the [`RAISED`]
+/// of the caller's error and the error's own work). A RemoteFunction's callback is charged the same on its side (not measured
+/// apart: its time falls between the two sides' frames). A spawned thread's uncaught error cost the same client 17.7 us and the
+/// server 21.2 us more than a spawned thread that returns; that report is not charged.
+pub const CALLBACK_ERROR_REPORTED: f64 = 36.2e-6;
 /// A RaycastParams' or OverlapParams' instance list a query reads (world/query.rs list_reads: FilterDescendantsInstances,
 /// ExcludeInstances, IncludeInstances), in a playing client (roblox-sim, Studio 0.747, a headless client; os.clock around calls,
 /// 15 samples less an empty loop, two rounds; lists of 0, 10, 100, 1,000 and 10,000 parts away from the query, which it finds

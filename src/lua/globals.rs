@@ -796,6 +796,7 @@ fn flow_error(flow: Flow) -> LuaError {
         Flow::Error(error) => LuaError::runtime(error.message),
         Flow::Fail(error) => error,
         Flow::Yield => LuaError::runtime("unexpected yield"),
+        Flow::Raised(value) => LuaError::runtime(Flow::raised_text(&value)),
     }
 }
 

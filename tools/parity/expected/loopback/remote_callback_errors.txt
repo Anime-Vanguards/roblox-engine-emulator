@@ -1,0 +1,129 @@
+# engine: Roblox Studio 0.747.0.7471481, a headless play session of one server and one client in processes of their own (the server's half a server Script from the server's start, the client's half a job in the client; script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-25
+# repeated: 3 captures, the same lines
+server: server log, OnServerInvoke string: logged 2 ScriptContext.Error:@40: callback failed trace=<probe>, line @40\x0A<probe>, line @57 - function Callback\x0A<probe>, line @102\x0A || MessageError:@40: callback failed\x0A    Stack Begin\x0A    Script '<probe>', Line @40\x0A    Script '<probe>', Line @57 - function Callback\x0A    Script '<probe>', Line @102\x0A    Stack End
+server: server log, OnServerInvoke level 0: logged 2 ScriptContext.Error:plain failure trace=<probe>, line @41\x0A<probe>, line @57 - function Callback\x0A<probe>, line @102\x0A || MessageError:plain failure\x0A    Stack Begin\x0A    Script '<probe>', Line @41\x0A    Script '<probe>', Line @57 - function Callback\x0A    Script '<probe>', Line @102\x0A    Stack End
+server: server log, OnServerInvoke table: logged 2 ScriptContext.Error:Error occurred, no output from Luau. trace=<probe>, line @42\x0A<probe>, line @57 - function Callback\x0A<probe>, line @102\x0A || MessageError:Error occurred, no output from Luau.\x0A    Stack Begin\x0A    Script '<probe>', Line @42\x0A    Script '<probe>', Line @57 - function Callback\x0A    Script '<probe>', Line @102\x0A    Stack End
+server: server log, OnServerInvoke table shapes: logged 2 ScriptContext.Error:Error occurred, no output from Luau. trace=<probe>, line @43\x0A<probe>, line @57 - function Callback\x0A<probe>, line @102\x0A || MessageError:Error occurred, no output from Luau.\x0A    Stack Begin\x0A    Script '<probe>', Line @43\x0A    Script '<probe>', Line @57 - function Callback\x0A    Script '<probe>', Line @102\x0A    Stack End
+server: server log, OnServerInvoke table with tostring: logged 2 ScriptContext.Error:Error occurred, no output from Luau. trace=<probe>, line @44\x0A<probe>, line @57 - function Callback\x0A<probe>, line @102\x0A || MessageError:Error occurred, no output from Luau.\x0A    Stack Begin\x0A    Script '<probe>', Line @44\x0A    Script '<probe>', Line @57 - function Callback\x0A    Script '<probe>', Line @102\x0A    Stack End
+server: server log, OnServerInvoke nil: logged 2 ScriptContext.Error:Error occurred, no output from Luau. trace=<probe>, line @45\x0A<probe>, line @57 - function Callback\x0A<probe>, line @102\x0A || MessageError:Error occurred, no output from Luau.\x0A    Stack Begin\x0A    Script '<probe>', Line @45\x0A    Script '<probe>', Line @57 - function Callback\x0A    Script '<probe>', Line @102\x0A    Stack End
+server: server log, OnServerInvoke number: logged 2 ScriptContext.Error:@46: 7 trace=<probe>, line @46\x0A<probe>, line @57 - function Callback\x0A<probe>, line @102\x0A || MessageError:@46: 7\x0A    Stack Begin\x0A    Script '<probe>', Line @46\x0A    Script '<probe>', Line @57 - function Callback\x0A    Script '<probe>', Line @102\x0A    Stack End
+server: server log, OnServerInvoke Vector3: logged 2 ScriptContext.Error:Error occurred, no output from Luau. trace=<probe>, line @47\x0A<probe>, line @57 - function Callback\x0A<probe>, line @102\x0A || MessageError:Error occurred, no output from Luau.\x0A    Stack Begin\x0A    Script '<probe>', Line @47\x0A    Script '<probe>', Line @57 - function Callback\x0A    Script '<probe>', Line @102\x0A    Stack End
+server: server log, OnServerInvoke runtime: logged 2 ScriptContext.Error:@48: attempt to index nil with 'Field' trace=<probe>, line @48\x0A<probe>, line @57 - function Callback\x0A<probe>, line @102\x0A || MessageError:@48: attempt to index nil with 'Field'\x0A    Stack Begin\x0A    Script '<probe>', Line @48\x0A    Script '<probe>', Line @57 - function Callback\x0A    Script '<probe>', Line @102\x0A    Stack End
+server: server log, OnServerInvoke after a wait: logged 0
+server: server log, OnServerInvoke result with a failing key: logged 0
+server: server log, OnServerInvoke fine: logged 0
+server: InvokeClient string: error string <position>: callback failed
+server: InvokeClient level 0: error string plain failure
+server: InvokeClient table: error string 
+server: InvokeClient table shapes: error string 
+server: InvokeClient table with tostring: error string 
+server: InvokeClient nil: error string 
+server: InvokeClient number: error string <position>: 7
+server: InvokeClient Vector3: error string 
+server: InvokeClient runtime: error string <position>: attempt to index nil with 'Field'
+server: InvokeClient after a wait: error string <position>: failed after a wait
+server: InvokeClient result with a failing key: error string '__tostring' must return a string
+server: InvokeClient fine: ok
+server: server log, InvokeClient caller string: logged 0
+server: server log, InvokeClient caller level 0: logged 0
+server: server log, InvokeClient caller table: logged 0
+server: server log, InvokeClient caller table shapes: logged 0
+server: server log, InvokeClient caller table with tostring: logged 0
+server: server log, InvokeClient caller nil: logged 0
+server: server log, InvokeClient caller number: logged 0
+server: server log, InvokeClient caller Vector3: logged 0
+server: server log, InvokeClient caller runtime: logged 0
+server: server log, InvokeClient caller after a wait: logged 0
+server: server log, InvokeClient caller result with a failing key: logged 0
+server: server log, InvokeClient caller fine: logged 0
+server: server Bindable string: error string <position>: callback failed
+server: server Bindable level 0: error string plain failure
+server: server Bindable table: error string 
+server: server Bindable table shapes: error string 
+server: server Bindable table with tostring: error string 
+server: server Bindable nil: error string 
+server: server Bindable number: error string <position>: 7
+server: server Bindable Vector3: error string 
+server: server Bindable runtime: error string <position>: attempt to index nil with 'Field'
+server: server Bindable after a wait: error string <position>: failed after a wait
+server: server Bindable result with a failing key: error string '__tostring' must return a string
+server: server Bindable fine: ok
+server: server log, Bindable string: logged 2 ScriptContext.Error:@40: callback failed trace=<probe>, line @40\x0A<probe>, line @57 - function Callback\x0A || MessageError:@40: callback failed\x0A    Stack Begin\x0A    Script '<probe>', Line @40\x0A    Script '<probe>', Line @57 - function Callback\x0A    Stack End
+server: server log, Bindable level 0: logged 2 ScriptContext.Error:plain failure trace=<probe>, line @41\x0A<probe>, line @57 - function Callback\x0A || MessageError:plain failure\x0A    Stack Begin\x0A    Script '<probe>', Line @41\x0A    Script '<probe>', Line @57 - function Callback\x0A    Stack End
+server: server log, Bindable table: logged 2 ScriptContext.Error:Error occurred, no output from Luau. trace=<probe>, line @42\x0A<probe>, line @57 - function Callback\x0A || MessageError:Error occurred, no output from Luau.\x0A    Stack Begin\x0A    Script '<probe>', Line @42\x0A    Script '<probe>', Line @57 - function Callback\x0A    Stack End
+server: server log, Bindable table shapes: logged 2 ScriptContext.Error:Error occurred, no output from Luau. trace=<probe>, line @43\x0A<probe>, line @57 - function Callback\x0A || MessageError:Error occurred, no output from Luau.\x0A    Stack Begin\x0A    Script '<probe>', Line @43\x0A    Script '<probe>', Line @57 - function Callback\x0A    Stack End
+server: server log, Bindable table with tostring: logged 2 ScriptContext.Error:Error occurred, no output from Luau. trace=<probe>, line @44\x0A<probe>, line @57 - function Callback\x0A || MessageError:Error occurred, no output from Luau.\x0A    Stack Begin\x0A    Script '<probe>', Line @44\x0A    Script '<probe>', Line @57 - function Callback\x0A    Stack End
+server: server log, Bindable nil: logged 2 ScriptContext.Error:Error occurred, no output from Luau. trace=<probe>, line @45\x0A<probe>, line @57 - function Callback\x0A || MessageError:Error occurred, no output from Luau.\x0A    Stack Begin\x0A    Script '<probe>', Line @45\x0A    Script '<probe>', Line @57 - function Callback\x0A    Stack End
+server: server log, Bindable number: logged 2 ScriptContext.Error:@46: 7 trace=<probe>, line @46\x0A<probe>, line @57 - function Callback\x0A || MessageError:@46: 7\x0A    Stack Begin\x0A    Script '<probe>', Line @46\x0A    Script '<probe>', Line @57 - function Callback\x0A    Stack End
+server: server log, Bindable Vector3: logged 2 ScriptContext.Error:Error occurred, no output from Luau. trace=<probe>, line @47\x0A<probe>, line @57 - function Callback\x0A || MessageError:Error occurred, no output from Luau.\x0A    Stack Begin\x0A    Script '<probe>', Line @47\x0A    Script '<probe>', Line @57 - function Callback\x0A    Stack End
+server: server log, Bindable runtime: logged 2 ScriptContext.Error:@48: attempt to index nil with 'Field' trace=<probe>, line @48\x0A<probe>, line @57 - function Callback\x0A || MessageError:@48: attempt to index nil with 'Field'\x0A    Stack Begin\x0A    Script '<probe>', Line @48\x0A    Script '<probe>', Line @57 - function Callback\x0A    Stack End
+server: server log, Bindable after a wait: logged 0
+server: server log, Bindable result with a failing key: logged 0
+server: server log, Bindable fine: logged 0
+server: server a BindableFunction's callback on its caller's thread: false
+server: server spawned string: logged 2 ScriptContext.Error:@86: spawned failure trace=<probe>, line @86\x0A || MessageError:@86: spawned failure\x0A    Stack Begin\x0A    Script '<probe>', Line @86\x0A    Stack End
+server: server spawned table: logged 2 ScriptContext.Error:Error occurred, no output from Luau. trace=<probe>, line @86\x0A || MessageError:Error occurred, no output from Luau.\x0A    Stack Begin\x0A    Script '<probe>', Line @86\x0A    Stack End
+client: InvokeServer string: error string <position>: callback failed
+client: InvokeServer level 0: error string plain failure
+client: InvokeServer table: error string 
+client: InvokeServer table shapes: error string 
+client: InvokeServer table with tostring: error string 
+client: InvokeServer nil: error string 
+client: InvokeServer number: error string <position>: 7
+client: InvokeServer Vector3: error string 
+client: InvokeServer runtime: error string <position>: attempt to index nil with 'Field'
+client: InvokeServer after a wait: error string <position>: failed after a wait
+client: InvokeServer result with a failing key: error string '__tostring' must return a string
+client: InvokeServer fine: ok
+client: client log, InvokeServer caller string: logged 0
+client: client log, InvokeServer caller level 0: logged 0
+client: client log, InvokeServer caller table: logged 0
+client: client log, InvokeServer caller table shapes: logged 0
+client: client log, InvokeServer caller table with tostring: logged 0
+client: client log, InvokeServer caller nil: logged 0
+client: client log, InvokeServer caller number: logged 0
+client: client log, InvokeServer caller Vector3: logged 0
+client: client log, InvokeServer caller runtime: logged 0
+client: client log, InvokeServer caller after a wait: logged 0
+client: client log, InvokeServer caller result with a failing key: logged 0
+client: client log, InvokeServer caller fine: logged 0
+client: client log, OnClientInvoke string: logged 2 ScriptContext.Error:@40: callback failed trace=<probe>, line @40\x0A<probe>, line @57 - function Callback\x0A || MessageError:@40: callback failed\x0A    Stack Begin\x0A    Script '<probe>', Line @40\x0A    Script '<probe>', Line @57 - function Callback\x0A    Stack End
+client: client log, OnClientInvoke level 0: logged 2 ScriptContext.Error:plain failure trace=<probe>, line @41\x0A<probe>, line @57 - function Callback\x0A || MessageError:plain failure\x0A    Stack Begin\x0A    Script '<probe>', Line @41\x0A    Script '<probe>', Line @57 - function Callback\x0A    Stack End
+client: client log, OnClientInvoke table: logged 2 ScriptContext.Error:Error occurred, no output from Luau. trace=<probe>, line @42\x0A<probe>, line @57 - function Callback\x0A || MessageError:Error occurred, no output from Luau.\x0A    Stack Begin\x0A    Script '<probe>', Line @42\x0A    Script '<probe>', Line @57 - function Callback\x0A    Stack End
+client: client log, OnClientInvoke table shapes: logged 2 ScriptContext.Error:Error occurred, no output from Luau. trace=<probe>, line @43\x0A<probe>, line @57 - function Callback\x0A || MessageError:Error occurred, no output from Luau.\x0A    Stack Begin\x0A    Script '<probe>', Line @43\x0A    Script '<probe>', Line @57 - function Callback\x0A    Stack End
+client: client log, OnClientInvoke table with tostring: logged 2 ScriptContext.Error:Error occurred, no output from Luau. trace=<probe>, line @44\x0A<probe>, line @57 - function Callback\x0A || MessageError:Error occurred, no output from Luau.\x0A    Stack Begin\x0A    Script '<probe>', Line @44\x0A    Script '<probe>', Line @57 - function Callback\x0A    Stack End
+client: client log, OnClientInvoke nil: logged 2 ScriptContext.Error:Error occurred, no output from Luau. trace=<probe>, line @45\x0A<probe>, line @57 - function Callback\x0A || MessageError:Error occurred, no output from Luau.\x0A    Stack Begin\x0A    Script '<probe>', Line @45\x0A    Script '<probe>', Line @57 - function Callback\x0A    Stack End
+client: client log, OnClientInvoke number: logged 2 ScriptContext.Error:@46: 7 trace=<probe>, line @46\x0A<probe>, line @57 - function Callback\x0A || MessageError:@46: 7\x0A    Stack Begin\x0A    Script '<probe>', Line @46\x0A    Script '<probe>', Line @57 - function Callback\x0A    Stack End
+client: client log, OnClientInvoke Vector3: logged 2 ScriptContext.Error:Error occurred, no output from Luau. trace=<probe>, line @47\x0A<probe>, line @57 - function Callback\x0A || MessageError:Error occurred, no output from Luau.\x0A    Stack Begin\x0A    Script '<probe>', Line @47\x0A    Script '<probe>', Line @57 - function Callback\x0A    Stack End
+client: client log, OnClientInvoke runtime: logged 2 ScriptContext.Error:@48: attempt to index nil with 'Field' trace=<probe>, line @48\x0A<probe>, line @57 - function Callback\x0A || MessageError:@48: attempt to index nil with 'Field'\x0A    Stack Begin\x0A    Script '<probe>', Line @48\x0A    Script '<probe>', Line @57 - function Callback\x0A    Stack End
+client: client log, OnClientInvoke after a wait: logged 0
+client: client log, OnClientInvoke result with a failing key: logged 0
+client: client log, OnClientInvoke fine: logged 0
+client: client Bindable string: error string <position>: callback failed
+client: client Bindable level 0: error string plain failure
+client: client Bindable table: error string 
+client: client Bindable table shapes: error string 
+client: client Bindable table with tostring: error string 
+client: client Bindable nil: error string 
+client: client Bindable number: error string <position>: 7
+client: client Bindable Vector3: error string 
+client: client Bindable runtime: error string <position>: attempt to index nil with 'Field'
+client: client Bindable after a wait: error string <position>: failed after a wait
+client: client Bindable result with a failing key: error string '__tostring' must return a string
+client: client Bindable fine: ok
+client: client log, Bindable string: logged 2 ScriptContext.Error:@40: callback failed trace=<probe>, line @40\x0A<probe>, line @57 - function Callback\x0A || MessageError:@40: callback failed\x0A    Stack Begin\x0A    Script '<probe>', Line @40\x0A    Script '<probe>', Line @57 - function Callback\x0A    Stack End
+client: client log, Bindable level 0: logged 2 ScriptContext.Error:plain failure trace=<probe>, line @41\x0A<probe>, line @57 - function Callback\x0A || MessageError:plain failure\x0A    Stack Begin\x0A    Script '<probe>', Line @41\x0A    Script '<probe>', Line @57 - function Callback\x0A    Stack End
+client: client log, Bindable table: logged 2 ScriptContext.Error:Error occurred, no output from Luau. trace=<probe>, line @42\x0A<probe>, line @57 - function Callback\x0A || MessageError:Error occurred, no output from Luau.\x0A    Stack Begin\x0A    Script '<probe>', Line @42\x0A    Script '<probe>', Line @57 - function Callback\x0A    Stack End
+client: client log, Bindable table shapes: logged 2 ScriptContext.Error:Error occurred, no output from Luau. trace=<probe>, line @43\x0A<probe>, line @57 - function Callback\x0A || MessageError:Error occurred, no output from Luau.\x0A    Stack Begin\x0A    Script '<probe>', Line @43\x0A    Script '<probe>', Line @57 - function Callback\x0A    Stack End
+client: client log, Bindable table with tostring: logged 2 ScriptContext.Error:Error occurred, no output from Luau. trace=<probe>, line @44\x0A<probe>, line @57 - function Callback\x0A || MessageError:Error occurred, no output from Luau.\x0A    Stack Begin\x0A    Script '<probe>', Line @44\x0A    Script '<probe>', Line @57 - function Callback\x0A    Stack End
+client: client log, Bindable nil: logged 2 ScriptContext.Error:Error occurred, no output from Luau. trace=<probe>, line @45\x0A<probe>, line @57 - function Callback\x0A || MessageError:Error occurred, no output from Luau.\x0A    Stack Begin\x0A    Script '<probe>', Line @45\x0A    Script '<probe>', Line @57 - function Callback\x0A    Stack End
+client: client log, Bindable number: logged 2 ScriptContext.Error:@46: 7 trace=<probe>, line @46\x0A<probe>, line @57 - function Callback\x0A || MessageError:@46: 7\x0A    Stack Begin\x0A    Script '<probe>', Line @46\x0A    Script '<probe>', Line @57 - function Callback\x0A    Stack End
+client: client log, Bindable Vector3: logged 2 ScriptContext.Error:Error occurred, no output from Luau. trace=<probe>, line @47\x0A<probe>, line @57 - function Callback\x0A || MessageError:Error occurred, no output from Luau.\x0A    Stack Begin\x0A    Script '<probe>', Line @47\x0A    Script '<probe>', Line @57 - function Callback\x0A    Stack End
+client: client log, Bindable runtime: logged 2 ScriptContext.Error:@48: attempt to index nil with 'Field' trace=<probe>, line @48\x0A<probe>, line @57 - function Callback\x0A || MessageError:@48: attempt to index nil with 'Field'\x0A    Stack Begin\x0A    Script '<probe>', Line @48\x0A    Script '<probe>', Line @57 - function Callback\x0A    Stack End
+client: client log, Bindable after a wait: logged 0
+client: client log, Bindable result with a failing key: logged 0
+client: client log, Bindable fine: logged 0
+client: client a BindableFunction's callback on its caller's thread: false
+client: client spawned string: logged 2 ScriptContext.Error:@86: spawned failure trace=<probe>, line @86\x0A || MessageError:@86: spawned failure\x0A    Stack Begin\x0A    Script '<probe>', Line @86\x0A    Stack End
+client: client spawned table: logged 2 ScriptContext.Error:Error occurred, no output from Luau. trace=<probe>, line @86\x0A || MessageError:Error occurred, no output from Luau.\x0A    Stack Begin\x0A    Script '<probe>', Line @86\x0A    Stack End

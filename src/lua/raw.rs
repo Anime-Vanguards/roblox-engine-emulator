@@ -589,6 +589,7 @@ pub fn install(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
             Err(Flow::Error(error)) => Ok((LuaValue::Nil, LuaValue::String(lua.create_string(&error.message)?), error.level as i64)),
             Err(Flow::Fail(error)) => Err(error),
             Err(Flow::Yield) => Err(LuaError::runtime("attempt to yield across metamethod/C-call boundary")),
+            Err(Flow::Raised(value)) => Ok((LuaValue::Nil, LuaValue::String(lua.create_string(Flow::raised_text(&value))?), 0)),
         }
     })?;
     let e = engine.clone();
@@ -599,6 +600,7 @@ pub fn install(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
             Err(Flow::Error(error)) => Ok((LuaValue::String(lua.create_string(&error.message)?), error.level as i64)),
             Err(Flow::Fail(error)) => Err(error),
             Err(Flow::Yield) => Err(LuaError::runtime("attempt to yield across metamethod/C-call boundary")),
+            Err(Flow::Raised(value)) => Ok((LuaValue::String(lua.create_string(Flow::raised_text(&value))?), 0)),
         }
     })?;
     let e = engine.clone();

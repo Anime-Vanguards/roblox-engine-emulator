@@ -63,6 +63,19 @@ pub enum Flow {
     Yield,
     /// An internal failure (surfaces as an mlua error)
     Fail(LuaError),
+    /// Raise a value a script's own code raised while the engine call ran (a dictionary key's `__tostring` during a copy: lua/
+    /// bindable.rs), as it was raised: a table as that table, a string with the position it already has
+    Raised(LuaValue),
+}
+
+impl Flow {
+    /// A raised value's text, where an error can only be text (an mlua error, a warning): a string's, else tostring's form
+    pub fn raised_text(value: &LuaValue) -> String {
+        match value {
+            LuaValue::String(text) => text.to_string_lossy(),
+            other => other.to_string().unwrap_or_default(),
+        }
+    }
 }
 
 impl From<LuaError> for Flow {
@@ -91,6 +104,8 @@ pub fn encode(lua: &Lua, outcome: Ret) -> LuaResult<LuaMultiValue> {
         ])),
         Err(Flow::Yield) => Ok(LuaMultiValue::from_iter([signal_marker(), LuaValue::Integer(2)])),
         Err(Flow::Fail(error)) => Err(error),
+        // (level 0: raised as it is, no position added)
+        Err(Flow::Raised(value)) => Ok(LuaMultiValue::from_iter([signal_marker(), LuaValue::Integer(1), value, LuaValue::Integer(0)])),
     }
 }
 

@@ -476,6 +476,7 @@ fn write(lua: &Lua, engine: &Rc<Engine>, tweens: &Shared, tween: InstanceId, own
             Err(Flow::Error(error)) => engine.warn(format!("Tween: {}", error.message)),
             Err(Flow::Fail(error)) => engine.warn(format!("Tween: {}", crate::scheduler::error_message(&error))),
             Err(Flow::Yield) => {}
+            Err(Flow::Raised(value)) => engine.warn(format!("Tween: {}", Flow::raised_text(&value))),
         }
     }
     Ok(())

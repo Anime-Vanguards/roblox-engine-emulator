@@ -615,6 +615,96 @@ return {
     assert!(has(&lines, "client print: client got nil [1 nil 3] [nil 2] 3"), "{lines:?}");
 }
 
+/// Over remotes, each way: Axes, Faces, PathWaypoint, SecurityCapabilities and the sequence keypoints arrive with the same text,
+/// alone and in a table, a key with a client's own type name arrives so named, and a key whose `__tostring` fails raises from
+/// the sending call and sends nothing; an error a RemoteFunction's callback raises before it first yields is logged on the
+/// callback's side as an uncaught error is, one after a yield is not (measured, a 0.747 play session's server and client:
+/// tools/parity/probes/loopback/remote_keys.luau, remote_callback_errors.luau). On main those values arrived as nil, the key as
+/// `<Table> ()`, and the server logged nothing.
+#[test]
+fn remotes_carry_proxy_values_and_callbacks_log_their_errors() {
+    let summary = run_pair(
+        "remote-proxies-and-errors",
+        r##"
+local Storage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local function Values()
+	return Axes.new(Enum.Axis.X, Enum.NormalId.Top), Faces.new(Enum.NormalId.Top, Enum.NormalId.Back),
+		PathWaypoint.new(Vector3.new(1, 2, 3), Enum.PathWaypointAction.Jump, "label"),
+		SecurityCapabilities.new(Enum.SecurityCapability.UI, Enum.SecurityCapability.Basic), ColorSequenceKeypoint.new(0.5, Color3.new(0, 0, 1)),
+		{ W = NumberSequenceKeypoint.new(0.5, 2, 0.25), [CFrame.new()] = Faces.new(Enum.NormalId.Left) }
+end
+local function Show(...)
+	local Parts = {}
+	for Index = 1, select("#", ...) do
+		local Value = select(Index, ...)
+		if type(Value) == "table" then
+			local Keys = {}
+			for Key, Item in Value do
+				table.insert(Keys, `{Key}={typeof(Item)} {Item}`)
+			end
+			table.sort(Keys)
+			Value = table.concat(Keys, ",")
+		end
+		table.insert(Parts, `{typeof(Value)} {Value}`)
+	end
+	return table.concat(Parts, " | ")
+end
+local Failing = setmetatable({}, { __tostring = function() return nil end })
+return {
+	Server = function(Context)
+		local Remote = Instance.new("RemoteEvent")
+		Remote.Name = "Values"
+		Remote.Parent = Storage
+		local Callback = Instance.new("RemoteFunction")
+		Callback.Name = "Callback"
+		Callback.OnServerInvoke = function(_, Kind)
+			if Kind == "later" then
+				task.wait()
+				error("failed later", 0)
+			end
+			error("callback failed", 0)
+		end
+		Callback.Parent = Storage
+		Remote.OnServerEvent:Connect(function(Player, ...)
+			print("server got", Show(...))
+			Remote:FireClient(Player, Values())
+			print("server sent", pcall(Remote.FireClient, Remote, Player, { [Failing] = 1 }))
+		end)
+	end,
+	Client = function(Context)
+		local Remote = Storage:WaitForChild("Values")
+		local Callback = Storage:WaitForChild("Callback")
+		Remote.OnClientEvent:Connect(function(...)
+			print("client got", Show(...))
+		end)
+		Remote:FireServer(Values())
+		print("client sent", pcall(Remote.FireServer, Remote, { [Failing] = 1 }))
+		print("invoked", pcall(Callback.InvokeServer, Callback, "now"))
+		print("invoked", pcall(Callback.InvokeServer, Callback, "later"))
+		for _ = 1, 10 do
+			RunService.Heartbeat:Wait()
+		end
+		print("@done")
+	end,
+}
+"##,
+        None,
+        &[],
+    );
+    let lines = lines(&summary);
+    assert_eq!(summary["status"], "ok", "{lines:?}");
+    let got = "got Axes X, Y | Faces Top, Back | PathWaypoint {1, 2, 3}, Jump, label | SecurityCapabilities Basic | UI | ColorSequenceKeypoint 0.5 0 0 1 0  | string <CoordinateFrame> (0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1)=Faces Left,W=NumberSequenceKeypoint 0.5 2 0.25 ";
+    assert!(has(&lines, &format!("server print: server {got}")), "{lines:?}");
+    assert!(has(&lines, &format!("client print: client {got}")), "{lines:?}");
+    assert!(has(&lines, "server print: server sent false '__tostring' must return a string"), "{lines:?}");
+    assert!(has(&lines, "client print: client sent false '__tostring' must return a string"), "{lines:?}");
+    assert!(has(&lines, "client print: invoked false callback failed"), "{lines:?}");
+    assert!(has(&lines, "client print: invoked false failed later"), "{lines:?}");
+    assert!(has(&lines, "server error: callback failed"), "{lines:?}");
+    assert!(!lines.iter().any(|line| line.contains("error: failed later")), "{lines:?}");
+}
+
 /// An InstanceHandle crosses a remote as the receiver's own (measured, Studio 0.748, a play session's server and client:
 /// tools/parity/probes/loopback/remote_instance_handles.luau, loopback/wire.rs): a new handle of the receiver's copy, or of
 /// none when the receiver lacks the instance, alone and in a table, each way, a key named `<InstanceRef> (Name)`; and an

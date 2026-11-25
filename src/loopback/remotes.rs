@@ -19,7 +19,8 @@
 //!   order (no loss is simulated).
 //! - RemoteFunction: the caller yields; the callback runs on a thread of its own when the call arrives (called, not
 //!   deferred: before the legacy wait() resumptions), or once it is set; its results go back as the arguments do, its
-//!   error as a string with its script and line (`error(x, 0)` without, a table as an empty string). A call to a remote
+//!   error as a string with its script and line (`error(x, 0)` without, a table as an empty string), and an error it raises
+//!   before it first yields is logged on its own side as well, as an uncaught error is (loopback.luau Run). A call to a remote
 //!   the other side lacks waits for good. InvokeClient of a harness's fake player waits for that player to leave, as in a
 //!   server run.
 
@@ -29,6 +30,7 @@ use mlua::prelude::*;
 use rustc_hash::FxHashMap;
 
 use super::{Endpoint, Side, bridge::Msg, wire::{self, Wire}};
+use crate::lua::bindable;
 use crate::{
     Engine, InstanceId, NameId,
     lua::{Args, Flow, Ret, instance_value, none, raise, values},
@@ -176,7 +178,16 @@ pub fn install(lua: &Lua, engine: &Rc<Engine>, side: Side) -> LuaResult<()> {
     })?;
     let players = crate::services::get_service(engine, engine.world().game, "Players").map_err(|_| LuaError::runtime("no Players"))?;
     let chunk = crate::lua::modules::load_engine_luau(lua, LOOPBACK, "=rur.loopback", None)?;
-    let exports: LuaTable = crate::cost::engine_luau(lua, chunk)?.call((call, instance_value(lua, engine, players)?))?;
+    // (a callback's error raised before it yielded, logged as a client logs it: loopback.luau Run, scheduler.rs)
+    let report = {
+        let engine = engine.clone();
+        lua.create_function(move |lua, problem: LuaValue| {
+            crate::scheduler::report_callback_error(lua, &engine, &problem);
+            Ok(())
+        })?
+    };
+    let create: LuaFunction = lua.globals().get::<LuaTable>("coroutine")?.get("create")?;
+    let exports: LuaTable = crate::cost::engine_luau(lua, chunk)?.call((call, instance_value(lua, engine, players)?, report, create))?;
     if let Some(function) = reflection.class_id("RemoteFunction") {
         let mut behaviors = engine.behaviors.borrow_mut();
         for member in ["InvokeServer", "InvokeClient"] {
@@ -207,7 +218,7 @@ fn send_event(lua: &Lua, engine: &Rc<Engine>, remote: InstanceId, arguments: &[L
     let Some(endpoint) = engine.loopback() else { return Ok(none()) };
     let args = match wire::capture_all(lua, engine, arguments, height) {
         Ok(args) => args,
-        Err(message) => return raise(message),
+        Err(refused) => return refused.raise(),
     };
     if unreliable {
         let size = wire::encoded_size(&args);
@@ -274,7 +285,7 @@ fn invoke(lua: &Lua, engine: &Rc<Engine>, side: Side, args: Args) -> Ret {
     let arguments: Vec<LuaValue> = args.0.iter().skip(skip).cloned().collect();
     let captured = match wire::capture_all(lua, engine, &arguments, height) {
         Ok(captured) => captured,
-        Err(message) => return raise(message),
+        Err(refused) => return refused.raise(),
     };
     let call = endpoint.remotes.hold(lua.current_thread());
     send(engine, &endpoint, Msg::Invoke { remote, call, args: captured });
@@ -435,7 +446,7 @@ fn answered(lua: &Lua, engine: &Rc<Engine>, call: u32, ok: bool, mut results: Lu
     let result = if ok {
         // (the results alone are the frame their tables' copy starts above: wire.rs)
         let height = results.len();
-        wire::capture_all(lua, engine, results.make_contiguous(), height)
+        wire::capture_all(lua, engine, results.make_contiguous(), height).map_err(bindable::Refused::text)
     } else {
         match results.into_iter().next().unwrap_or(LuaValue::Nil) {
             LuaValue::String(text) => Err(text.to_string_lossy()),

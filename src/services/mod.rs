@@ -1170,7 +1170,7 @@ pub fn install(engine: &Rc<Engine>) {
             for argument in args.0.iter().skip(1) {
                 match super::lua::bindable::sent_value(lua, engine, argument, height, &mut tally) {
                     Ok(value) => arguments.push(value),
-                    Err(message) => return super::lua::raise(message),
+                    Err(refused) => return refused.raise(),
                 }
             }
             core::fire_event_measured(&mut engine.state.borrow_mut(), id, K::Event as NameId, arguments, crate::cost::SignalKind::Bindable);
@@ -1198,7 +1198,7 @@ pub fn install(engine: &Rc<Engine>) {
                     engine.state.borrow().sched.charge(json::priced(encoded.result.len(), encoded.values, false));
                     Ok(values([string_value(lua, &encoded.result)?]))
                 }
-                Err(message) => raise(message),
+                Err(refused) => refused.raise(),
             }));
         }
         if let Some(n) = name(&reflection, "JSONDecode") {
