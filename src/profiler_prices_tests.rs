@@ -329,7 +329,9 @@ fn calibrate_prices() {
     };
     let cpu = std::env::var("PROCESSOR_IDENTIFIER").unwrap_or_default();
     println!("// calibrate_prices: {sessions} sessions of {PROCESSES} processes of {ROUNDS} rounds, each the fastest of {REPEATS} runs of about {:.0} ms; {cpu}", TARGET_SECONDS * 1e3);
-    let bases_text: Vec<String> = bases.iter().map(|(name, values)| { let (median, low, high) = spread(values); format!("{name} {median:.3} ns ({low:.3}-{high:.3})") }).collect();
+    let mut base_entries: Vec<(&String, &Vec<f64>)> = bases.iter().collect();
+    crate::sort::by(&mut base_entries, |a, b| a.0.cmp(b.0));
+    let bases_text: Vec<String> = base_entries.into_iter().map(|(name, values)| { let (median, low, high) = spread(values); format!("{name} {median:.3} ns ({low:.3}-{high:.3})") }).collect();
     println!("// bases: {}", bases_text.join("; "));
     for (name, ratios) in &cases {
         let (median, low, high) = spread(ratios);

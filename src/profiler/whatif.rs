@@ -817,17 +817,17 @@ fn hot_functions(profile: &Json, functions: &FxHashMap<i64, &Json>, top: usize) 
         entry.1 += node[4].as_f64().unwrap_or(0.0);
         entry.2 += node[2].as_f64().unwrap_or(0.0);
     }
-    let mut hot: Vec<Hot> = by_function
+    let mut hot: Vec<(i64, Hot)> = by_function
         .into_iter()
         .filter_map(|(id, (work_ms, insns, calls))| {
             let (key, name, module, line) = function_of(functions, id);
             let skip = skipped_module(&module) || functions.get(&id).is_some_and(|function| function["kind"] == "engine Luau");
-            (!skip && (work_ms > 0.0 || insns > 0.0)).then_some(Hot { key, name, module, line, work_ms, insns, calls })
+            (!skip && (work_ms > 0.0 || insns > 0.0)).then_some((id, Hot { key, name, module, line, work_ms, insns, calls }))
         })
         .collect();
-    crate::sort::by(&mut hot, |a, b| b.work_ms.total_cmp(&a.work_ms).then(a.key.cmp(&b.key)));
+    crate::sort::by(&mut hot, |a, b| b.1.work_ms.total_cmp(&a.1.work_ms).then(a.1.key.cmp(&b.1.key)).then(a.0.cmp(&b.0)));
     hot.truncate(top);
-    hot
+    hot.into_iter().map(|(_, entry)| entry).collect()
 }
 
 /// The work of the variant's own code in `phase` and its cold and first-use charges (ms, the run's total): each function's self work
@@ -3295,5 +3295,41 @@ mod tests {
         let collector_note = notes.iter().find(|note| note.contains("makes the collector work most")).expect("a collector note");
         assert!(collector_note.contains("already holds the collector's charged work"), "{collector_note}");
         assert!(!collector_note.contains("does not charge"), "{collector_note}");
+    }
+
+    #[test]
+    fn hot_functions_breaks_equal_work_and_key_ties_by_ascending_id() {
+        let profile: Json = serde_json::from_str(
+            r#"{
+                "version": 2,
+                "tree": [
+                    [-1, -1, 0, 0.0, 0, "startup"],
+                    [0, -1, 0, 0.0, 0, "run"],
+                    [1, 0, 10, 1000.0, 100, null],
+                    [1, 1, 20, 1000.0, 200, null],
+                    [1, 2, 30, 1000.0, 300, null],
+                    [1, 3, 40, 1000.0, 400, null],
+                    [1, 4, 50, 1000.0, 500, null]
+                ],
+                "functions": [
+                    {"id": 0, "key": "M:same", "name": "same", "module": "M", "line": 1, "kind": "Luau"},
+                    {"id": 1, "key": "M:same", "name": "same", "module": "M", "line": 1, "kind": "Luau"},
+                    {"id": 2, "key": "M:same", "name": "same", "module": "M", "line": 1, "kind": "Luau"},
+                    {"id": 3, "key": "M:same", "name": "same", "module": "M", "line": 1, "kind": "Luau"},
+                    {"id": 4, "key": "M:same", "name": "same", "module": "M", "line": 1, "kind": "Luau"}
+                ]
+            }"#,
+        )
+        .unwrap();
+        let functions: FxHashMap<i64, &Json> = profile["functions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|f| (f["id"].as_i64().unwrap(), f))
+            .collect();
+
+        let hot = hot_functions(&profile, &functions, 3);
+        let calls: Vec<f64> = hot.iter().map(|entry| entry.calls).collect();
+        assert_eq!(calls, vec![10.0, 20.0, 30.0]);
     }
 }

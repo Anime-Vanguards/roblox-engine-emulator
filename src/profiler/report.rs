@@ -431,15 +431,20 @@ impl LinePhase {
 impl LineFigures {
     /// The line's figures summed over the phases in `phases`
     fn within(&self, phases: &[u32]) -> LinePhase {
+        let mut matched: Vec<(u32, &LinePhase)> = self
+            .phases
+            .iter()
+            .filter(|(phase, _)| phases.contains(phase))
+            .map(|(&phase, figures)| (phase, figures))
+            .collect();
+        crate::sort::by_key(&mut matched, |&(phase, _)| phase);
         let mut sum = LinePhase::default();
-        for (phase, figures) in &self.phases {
-            if phases.contains(phase) {
-                sum.insns += figures.insns;
-                sum.work += figures.work;
-                sum.c_work += figures.c_work;
-                sum.cold += figures.cold;
-                sum.total_work += figures.total_work;
-            }
+        for (_, figures) in matched {
+            sum.insns += figures.insns;
+            sum.work += figures.work;
+            sum.c_work += figures.c_work;
+            sum.cold += figures.cold;
+            sum.total_work += figures.total_work;
         }
         sum
     }
@@ -5885,7 +5890,9 @@ fn write_issue_summaries(vm: &vm::Results, rows: &[Row], scope: &[u32], fps: f64
         sides.1 += harness;
         add_row_contributions(vm, row, &sort_keys, &mut contributions);
     }
-    let (game, harness) = frame_work.values().fold((0.0, 0.0), |sum, sides| (sum.0 + sides.0, sum.1 + sides.1));
+    let mut ordered_frames: Vec<(u64, FrameSides)> = frame_work.iter().map(|(&frame, &sides)| (frame, sides)).collect();
+    crate::sort::by_key(&mut ordered_frames, |&(frame, _)| frame);
+    let (game, harness) = ordered_frames.iter().fold((0.0, 0.0), |sum, (_, sides)| (sum.0 + sides.0, sum.1 + sides.1));
     // (a frame's total is the game's work alone when the harness's is set apart, else both sides' together)
     let harness_apart = harness > 0.0 && game >= 0.01 * (game + harness);
     let budget = frame_budget_ms(fps);
@@ -6427,5 +6434,54 @@ mod frame_tests {
         // (a context is [function, node, first frame, last frame]: the frames the node ran in, in the reported phases)
         assert_eq!(timeline_json["function_contexts"], json!([]));
         assert_eq!(timeline_json["replacement_frames"], json!([]));
+    }
+
+    #[test]
+    fn line_figures_within_sums_phases_in_ascending_id_order() {
+        let mut line = LineFigures::default();
+        for (phase, value) in [(0u32, 0.2_f64), (1, 0.1), (2, 0.3)] {
+            line.phases.insert(phase, LinePhase { insns: 1, work: value, c_work: value, cold: value, total_work: value });
+        }
+        let expected = ((0.2_f64 + 0.1) + 0.3).to_bits();
+        let summed = line.within(&[0, 1, 2]);
+        assert_eq!(summed.work.to_bits(), expected);
+        assert_eq!(summed.c_work.to_bits(), expected);
+        assert_eq!(summed.cold.to_bits(), expected);
+        assert_eq!(summed.total_work.to_bits(), expected);
+
+        let mut line2 = LineFigures::default();
+        for (phase, value) in [(0u32, 0.1_f64), (1, 0.2), (2, 0.3)] {
+            line2.phases.insert(phase, LinePhase { insns: 1, work: value, c_work: value, cold: value, total_work: value });
+        }
+        let expected2 = ((0.1_f64 + 0.2) + 0.3).to_bits();
+        let summed2 = line2.within(&[0, 1, 2]);
+        assert_eq!(summed2.work.to_bits(), expected2);
+        assert_eq!(summed2.c_work.to_bits(), expected2);
+        assert_eq!(summed2.cold.to_bits(), expected2);
+        assert_eq!(summed2.total_work.to_bits(), expected2);
+    }
+
+    #[test]
+    fn write_issue_summaries_sums_frame_work_in_ascending_frame_order() {
+        // Ascending frame order (0, 1, 2) sums game = (0.2 + 0.1) + 0.3 = 0.6000000000000001,
+        // crossing >= 0.01 * (game + harness) when harness = 59.4_f64.next_up() so the harness is
+        // separated and frame 0 (0.2 ms game) is not a hitch. Hash iteration order (0, 2, 1) sums
+        // (0.2 + 0.3) + 0.1 = 0.6 < 0.01 * (game + harness), merging harness work into frame 0
+        // (59.6 ms > 16.67 ms budget) and falsely reporting a 200 us hitch peak.
+        let harness = f64::from_bits(0x404d_b333_3333_3334);
+        let mut r0 = row(0, 1, 0.2);
+        r0.sides = Some((0.2, harness));
+        let mut r1 = row(1, 1, 0.1);
+        r1.sides = Some((0.1, 0.0));
+        let mut r2 = row(2, 1, 0.3);
+        r2.sides = Some((0.3, 0.0));
+        let rows = [r0, r1, r2];
+
+        let mut timeline = empty_timeline();
+        write_issue_summaries(&vm::Results::default(), &rows, &[1], 60.0, &mut timeline);
+        let timeline_json = to_json(&timeline.unwrap());
+        let issue_stats = timeline_json["issue_stats"].as_array().unwrap();
+        let function_issue = issue_stats.iter().find(|stat| stat[0] == "function:7").unwrap();
+        assert_eq!(function_issue[4], json!(0.0), "ascending frame sum separates harness work: {function_issue}");
     }
 }
