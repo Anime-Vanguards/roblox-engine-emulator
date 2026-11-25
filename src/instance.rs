@@ -769,7 +769,8 @@ fn reparent(
     for hook in &hooks.hierarchy_changed {
         hook(state, id, old_parent, new_parent);
     }
-    // Joints and parts entering a WorldRoot link up (world::joints)
+    // Joints and parts entering a WorldRoot link up, and those leaving every world leave their parts' lists of active joints
+    // (world::joints)
     super::world::joints::reparented(state, reflection, hooks, id, old_parent, new_parent);
     super::world::broadphase::links_started(state, reflection);
     Ok(())

@@ -1124,6 +1124,1027 @@ fn a_weld_constraint_keeps_where_it_linked_its_parts() {
     );
 }
 
+/// Workspace:PGSIsEnabled and GetPhysicsThrottling as a Studio 0.748 playing client and its server answer: true and 100, whatever
+/// the arguments (tools/parity/probes/workspace_physics_state.luau); plugin code in Studio's edit DataModel reads the same
+/// (identity 5, the probe's calls run there by hand), which the edit run here stands for.
+#[test]
+fn workspace_physics_state_answers_as_a_playing_client() {
+    for mode in ["play", "edit"] {
+        check_running(
+            mode,
+            r##"
+            local function Fails(Want, F)
+                local Ok, Message = pcall(F)
+                assert(not Ok and Message == Want, tostring(Message))
+            end
+            assert(workspace:PGSIsEnabled() == true and workspace:PGSIsEnabled(1, "x") == true)
+            assert(select("#", workspace:PGSIsEnabled()) == 1 and select("#", workspace:GetPhysicsThrottling()) == 1)
+            assert(workspace:GetPhysicsThrottling() == 100 and workspace:GetPhysicsThrottling(true) == 100)
+            Fails("Expected ':' not '.' calling member function PGSIsEnabled", function() return (workspace :: any).PGSIsEnabled(game) end)
+            Fails("Expected ':' not '.' calling member function GetPhysicsThrottling", function() return (workspace :: any).GetPhysicsThrottling(Instance.new("WorldModel")) end)
+            "##,
+            0.1,
+        );
+    }
+}
+
+/// Workspace:UnjoinFromOutsiders(objects) takes out (Parent = nil) every active joint between a listed part and a part that is not
+/// listed, as a Studio 0.748 playing client and its server do: the parts below a listed Instance are listed too; Weld, ManualWeld,
+/// Snap, Glue, ManualGlue, Motor and Motor6D count, but not Rotate, RotateP, RotateV, VelocityMotor, a WeldConstraint or a
+/// disabled joint, nor one out of the Workspace's world; each part's joints go in the order of its list of active joints, as a
+/// client keeps it (the order they were parented, not made); the list is cast whole before anything goes; a nested or repeated
+/// entry lists nothing new (tools/parity/probes/unjoin_from_outsiders.luau). Each entry and each instance below the entries (once
+/// a call, whether a joint exists yet or not) cost the work clock what a client spends on them (cost.rs UNJOIN_ENTRY,
+/// UNJOIN_BELOW); the rest of the place costs nothing. A Weld taken out pays, beyond what a Glue taken out pays, only the link
+/// prices that grow with its assemblies (LINK_FRAME, LINK_PART: world/joints.rs charge_link while Joints::unpriced is up). A Weld
+/// carrying others, ending several links at once, pays every link price, as its Parent = nil does.
+#[test]
+fn unjoin_from_outsiders_takes_out_the_joints_to_unlisted_parts() {
+    check_running(
+        "play",
+        &r##"
+        local Root = Instance.new("Folder")
+        Root.Parent = workspace
+        local JointsService = game:GetService("JointsService")
+        local function Brick(Name, Y, Parent, Anchored)
+            local B = Instance.new("Part")
+            B.Name = Name
+            B.Anchored = Anchored ~= false
+            B.CFrame = CFrame.new(0, Y, 0)
+            B.Parent = Parent or Root
+            return B
+        end
+        local Made = {}
+        local function J(Class, Name, P0, P1, Parent, Enabled)
+            local X = Instance.new(Class)
+            X.Name = Name
+            X.Part0, X.Part1 = P0, P1
+            if Enabled == false then
+                X.Enabled = false
+            end
+            X.Parent = Parent
+            Made[Name] = X
+            return X
+        end
+        local function Fails(Want, F)
+            local Ok, Message = pcall(F)
+            assert(not Ok and Message == Want, tostring(Message))
+        end
+        -- (before any joint is made, a call still looks at what is below its entries, and pays for it; in a frame, where the work
+        -- clock runs)
+        task.wait()
+        do
+            local Folders = Instance.new("Folder")
+            for _ = 1, 2000 do
+                Instance.new("Folder").Parent = Folders
+            end
+            workspace:UnjoinFromOutsiders({})
+            local Start = os.clock()
+            workspace:UnjoinFromOutsiders({})
+            local Nothing = os.clock() - Start
+            Start = os.clock()
+            workspace:UnjoinFromOutsiders({ Folders })
+            local Walked = os.clock() - Start - Nothing
+            -- (an entry and 2,000 instances below it)
+            assert(math.abs(Walked - (0.057e-6 + 2000 * 0.017e-6)) < 1e-7, string.format("a walk of 2,001 instances before any joint %.4g", Walked))
+        end
+        local A, B, C, D = Brick("A", 100), Brick("B", 101), Brick("C", 102), Brick("D", 103)
+        J("Weld", "j1", C, D, Root)
+        J("Weld", "j2", B, A, A)
+        J("ManualWeld", "j3", A, B, JointsService)
+        J("Motor6D", "j4", B, D, B)
+        J("Snap", "j5", D, C, D)
+        J("Glue", "j6", B, C, B)
+        J("ManualGlue", "j7", A, C, workspace)
+        J("Motor", "j8", D, B, D)
+        J("Glue", "j9", C, A, C)
+        local Outside = Brick("Outside", 130, game:GetService("ReplicatedStorage"))
+        local Kept = {
+            J("Weld", "disabled", B, A, B, false),
+            J("Weld", "stored", B, A, game:GetService("ReplicatedStorage")),
+            J("Weld", "half", B, nil, B),
+            J("Weld", "self", B, B, B),
+            J("Rotate", "rotate", B, A, B),
+            J("RotateP", "rotatep", B, A, B),
+            J("RotateV", "rotatev", B, A, B),
+            J("VelocityMotor", "velocitymotor", B, A, B),
+            J("Weld", "to-outside-part", B, Outside, B),
+            J("Glue", "glue-to-outside-part", Outside, C, C),
+        }
+        local World = Instance.new("WorldModel")
+        World.Parent = Root
+        local M = Brick("M", 120, World)
+        table.insert(Kept, J("Weld", "in-worldmodel", B, A, World))
+        table.insert(Kept, J("Weld", "to-worldmodel-part", B, M, B))
+        local Constraint = Instance.new("WeldConstraint")
+        Constraint.Part0, Constraint.Part1 = B, A
+        Constraint.Parent = B
+        -- the list is cast whole first: nothing goes for a bad entry after a good one
+        Fails("Unable to cast value to Object", function() workspace:UnjoinFromOutsiders({ B, nil, 1 }) end)
+        Fails("Argument 1 missing or nil", function() workspace:UnjoinFromOutsiders() end)
+        Fails("Expected table argument, got nil", function() workspace:UnjoinFromOutsiders(nil) end)
+        Fails("Expected table argument, got userdata", function() workspace:UnjoinFromOutsiders(B) end)
+        Fails("Expected ':' not '.' calling member function UnjoinFromOutsiders", function() (workspace :: any).UnjoinFromOutsiders(game, {}) end)
+        assert(Made.j2.Parent == A, "a failed call took a joint out")
+        -- every part listed: nothing is outside
+        workspace:UnjoinFromOutsiders({ game })
+        workspace:UnjoinFromOutsiders({ workspace })
+        assert(Made.j2.Parent == A and Made.j3.Parent == JointsService, "a joint went with nothing outside")
+        task.wait()
+        local Order = {}
+        local Connections = {}
+        for Name, X in Made do
+            table.insert(Connections, X.AncestryChanged:Connect(function(_, Parent)
+                table.insert(Order, Name .. (if Parent then ">" .. Parent.Name else ""))
+            end))
+        end
+        assert(select("#", workspace:UnjoinFromOutsiders({ B, C, B, x = A })) == 0)
+        -- out at once, not destroyed: the parts stay named and the joint can be parented again
+        for _, Name in { "j1", "j2", "j3", "j4", "j5", "j7", "j8", "j9" } do
+            assert(Made[Name].Parent == nil, Name .. " stayed")
+        end
+        assert(Made.j6.Parent == B, "a joint between two listed parts went")
+        for _, X in Kept do
+            assert(X.Parent ~= nil, X.Name .. " went")
+        end
+        assert(Constraint.Parent == B, "the WeldConstraint went")
+        assert(Made.j2.Part0 == B and Made.j2.Part1 == A)
+        task.wait()
+        -- each listed part's joints in the order they were parented (B's, then C's)
+        assert(table.concat(Order, ",") == "j2,j3,j4,j8,j1,j5,j7,j9", table.concat(Order, ","))
+        for _, Connection in Connections do
+            Connection:Disconnect()
+        end
+        Made.j2.Parent = A
+        -- the parts below a listed Instance are listed, and the assemblies split
+        local Model = Instance.new("Model")
+        Model.Parent = Root
+        local E = Brick("E", 110, Model, false)
+        local F = Brick("F", 111, E, false)
+        local G = Brick("G", 112)
+        J("Weld", "e", E, G, E)
+        J("Weld", "f", F, G, F)
+        J("Weld", "ef", E, F, E)
+        assert(E.AssemblyRootPart == G)
+        workspace:UnjoinFromOutsiders({ Model, E })
+        assert(Made.e.Parent == nil and Made.f.Parent == nil and Made.ef.Parent == E)
+        assert(E.AssemblyRootPart ~= G and E.AssemblyRootPart == F.AssemblyRootPart)
+        -- (an entry below one listed before, or above one, or listed again, lists nothing new)
+        Made.e.Parent, Made.f.Parent = E, F
+        assert(E.AssemblyRootPart == G)
+        workspace:UnjoinFromOutsiders({ F, Model, F, E })
+        assert(Made.e.Parent == nil and Made.f.Parent == nil and Made.ef.Parent == E)
+        -- the work clock: each entry, and each instance below them once a call (a list of 2,000 times the same folder walks
+        -- it once and pays for 2,000 entries; 2,000 walks of its 2,001 instances would cost 68 ms)
+        local Deep = Instance.new("Folder")
+        for _ = 1, 2000 do
+            Instance.new("Folder").Parent = Deep
+        end
+        local Many = table.create(2000, Deep)
+        local function Spent(List)
+            local Start = os.clock()
+            workspace:UnjoinFromOutsiders(List)
+            return os.clock() - Start
+        end
+        local Empty, Once, Repeated = Spent({}), Spent({ Deep }), Spent(Many)
+        assert(math.abs(Once - Empty - (0.057e-6 + 2000 * 0.017e-6)) < 1e-8, string.format("one walk %.4g", Once - Empty))
+        assert(math.abs(Repeated - Once - 1999 * 0.057e-6) < 1e-8, string.format("1,999 entries more %.4g", Repeated - Once))
+        -- (what the rest of the place holds costs nothing: one listed part costs the same beside 5,000 more parts)
+        local Lone, Other = Brick("Lone", 150), Brick("Other", 151)
+        local function OnePart()
+            local Weld = Instance.new("Weld")
+            Weld.Part0, Weld.Part1 = Lone, Other
+            Weld.Parent = Lone
+            local Cost = Spent({ Lone })
+            assert(Weld.Parent == nil)
+            return Cost
+        end
+        local Alone = OnePart()
+        local Crowd = Instance.new("Folder")
+        for _ = 1, 5000 do
+            Instance.new("Part").Parent = Crowd
+        end
+        Crowd.Parent = workspace
+        local Beside = OnePart()
+        assert(math.abs(Beside - Alone) < 1e-7, string.format("%.3g beside 5,000 parts, %.3g alone", Beside, Alone))
+        -- (a Weld taken out costs the call what a Glue does but the link prices that grow with its assemblies: UNJOIN_REMOVED holds
+        -- the flat ones; 200 parts each joined to a part of its own outside the list, anchored or not)
+        local function OwnParts(Class, Anchored)
+            local Listed, Outside = Instance.new("Folder"), Instance.new("Folder")
+            Listed.Parent, Outside.Parent = Root, Root
+            local Joints = {}
+            for Index = 1, 200 do
+                table.insert(Joints, J(Class, Class .. Index, Brick("L" .. Index, 300 + Index, Listed), Brick("O" .. Index, 600 + Index, Outside, Anchored), Listed))
+            end
+            task.wait()
+            local Cost = Spent({ Listed })
+            for _, Joint in Joints do
+                assert(Joint.Parent == nil, Joint.Name .. " stayed")
+            end
+            Listed:Destroy()
+            Outside:Destroy()
+            return Cost
+        end
+        -- (each Weld to an unanchored part taken out at a frame's start leaves two parts of one part each, marked once: the frame's
+        -- first change, and each part a link change marks, are all a Weld pays beyond a Glue; a Weld between two anchored parts, each
+        -- an assembly of its own, changes no assembly and pays nothing beyond)
+        local Welded, Glued = OwnParts("Weld", false), OwnParts("Glue", false)
+        local Want = LINK_FRAME + 400 * LINK_PART
+        assert(math.abs(Welded - Glued - Want) < 1e-7, string.format("200 Welds taken out cost %.4g more than 200 Glue, not %.4g", Welded - Glued, Want))
+        local Fixed, FixedGlue = OwnParts("Weld"), OwnParts("Glue")
+        assert(math.abs(Fixed - FixedGlue) < 1e-7, string.format("200 Welds between anchored parts cost %.4g more than 200 Glue", Fixed - FixedGlue))
+        -- (one leaf of an anchored hub welded to 2,000 unanchored leaves: the link change marks both sides, the leaf and the hub with
+        -- its 1,999 other leaves, and its Weld costs the call that many parts' LINK_PART and the frame's first change more than a Glue
+        -- leaf's)
+        do
+            local Star = Instance.new("Folder")
+            Star.Parent = Root
+            local Hub = Brick("Hub", 1000, Star)
+            local Leaves = {}
+            for Index = 1, 2000 do
+                Leaves[Index] = Brick("Leaf" .. Index, 1001 + Index, Star, false)
+                J("Weld", "Spoke" .. Index, Hub, Leaves[Index], Leaves[Index])
+            end
+            local Glued = Brick("GluedLeaf", 4000, Star, false)
+            J("Glue", "GlueSpoke", Hub, Glued, Glued)
+            -- (each call at a frame's start, after an empty one there, which takes on what the first call after building the star
+            -- would pay besides)
+            task.wait()
+            Spent({})
+            local WeldLeaf = Spent({ Leaves[1] })
+            assert(Made.Spoke1.Parent == nil, "the leaf's Weld stayed")
+            task.wait()
+            Spent({})
+            local GlueLeaf = Spent({ Glued })
+            assert(Made.GlueSpoke.Parent == nil, "the leaf's Glue stayed")
+            local Want = LINK_FRAME + 2001 * LINK_PART
+            assert(math.abs(WeldLeaf - GlueLeaf - Want) < 1e-7, string.format("a leaf's Weld cost %.4g more than a Glue leaf's, not %.4g", WeldLeaf - GlueLeaf, Want))
+            Star:Destroy()
+        end
+        -- (a listed part's Weld to an unlisted part, carrying a Folder of 100 Welds between fresh unanchored pairs, ends 101 links in
+        -- one write when it goes, splitting each pair: the call pays every link price, as the same Weld's Parent = nil does, at most
+        -- the flat prices of the Weld's own change less)
+        do
+            local Carry = Instance.new("Folder")
+            Carry.Parent = Root
+            local Listed, Outside = Brick("CarryListed", 6000, Carry), Brick("CarryOutside", 6001, Carry, false)
+            local Pairs = Instance.new("Folder")
+            for Index = 1, 100 do
+                J("Weld", "Pair" .. Index, Brick("PairA" .. Index, 6100 + 2 * Index, Carry, false), Brick("PairB" .. Index, 6101 + 2 * Index, Carry, false), Pairs)
+            end
+            local Carrier = J("Weld", "Carrier", Listed, Outside, Listed)
+            Pairs.Parent = Carrier
+            task.wait()
+            Spent({})
+            local Call = Spent({ Listed })
+            assert(Carrier.Parent == nil, "the carrying Weld stayed")
+            Carrier.Parent = Listed
+            task.wait()
+            local Start = os.clock()
+            Carrier.Parent = nil
+            local Plain = os.clock() - Start
+            local Waived = LINK_CHANGED + LINK_SPLIT_AGAIN + 2 * LINK_ASSEMBLY
+            assert(Call >= Plain - Waived, string.format("the carrying Weld's removal cost the call %.4g, its Parent = nil %.4g", Call, Plain))
+            Carry:Destroy()
+        end
+
+        -- the order is each part's list of active joints, as a client keeps it (Studio 0.748): a joint goes last when it is
+        -- parented with its parts set, not when it is made; one taken out and parented again goes last, and the list's last
+        -- joint takes its old place
+        local function Order(Build)
+            local P0, P1 = Brick("P0", 160), Brick("P1", 161)
+            local X = {}
+            for Index = 1, 4 do
+                X[Index] = Instance.new("Weld")
+                X[Index].Name = "x" .. Index
+                X[Index].Part0, X[Index].Part1 = P0, P1
+            end
+            Build(X, P0)
+            task.wait()
+            local Went = {}
+            local Watching = {}
+            for _, Weld in X do
+                table.insert(Watching, Weld.AncestryChanged:Connect(function(_, Parent)
+                    if Parent == nil then
+                        table.insert(Went, Weld.Name)
+                    end
+                end))
+            end
+            workspace:UnjoinFromOutsiders({ P0 })
+            task.wait()
+            for _, Connection in Watching do
+                Connection:Disconnect()
+            end
+            P0:Destroy()
+            P1:Destroy()
+            return table.concat(Went, ",")
+        end
+        local Parented = Order(function(X, P0)
+            for Index = 4, 1, -1 do
+                X[Index].Parent = P0
+            end
+        end)
+        assert(Parented == "x4,x3,x2,x1", Parented)
+        local Back = Order(function(X, P0)
+            for Index = 1, 4 do
+                X[Index].Parent = P0
+            end
+            X[2].Parent = nil
+            X[2].Parent = P0
+        end)
+        assert(Back == "x1,x4,x3,x2", Back)
+        "##
+        .replace("LINK_FRAME", &format!("{:e}", crate::cost::LINK_FRAME))
+        .replace("LINK_PART", &format!("{:e}", crate::cost::LINK_PART))
+        .replace("LINK_CHANGED", &format!("{:e}", crate::cost::LINK_CHANGED))
+        .replace("LINK_SPLIT_AGAIN", &format!("{:e}", crate::cost::LINK_SPLIT_AGAIN))
+        .replace("LINK_ASSEMBLY", &format!("{:e}", crate::cost::LINK_ASSEMBLY)),
+        0.75,
+    );
+}
+
+/// A joint leaves its parts' lists of active joints at the same cost however long they are (joints.rs Joints::detach swaps at the
+/// place it keeps for the joint): a part holding 30,000 Glue to another leaves the Workspace and comes back 16 times, and then
+/// UnjoinFromOutsiders takes the Glue out, in at most twice the host time the same 30,000 Glue take spread over 30 parts of 1,000,
+/// each part glued to one of its own, which is the same work (0.29 s and 0.25 s here, the trips the faster of two runs taken in
+/// turn). Glue links nothing, so the lists are all that changes. A joint used to be looked for in each list before it left it,
+/// about 9e8 comparisons a trip with one part and 3e7 with 30: 2.2 s and 0.30 s.
+#[test]
+fn a_part_with_many_joints_moves_and_unjoins_on_little_host_time() {
+    let rigs = [many_joints(1), many_joints(30)];
+    let time = |(lua, engine): &(Lua, Rc<Engine>), source: &str| {
+        let start = std::time::Instant::now();
+        run(lua, engine, source);
+        start.elapsed().as_secs_f64()
+    };
+    let trips = r#"
+        local Moving = shared.Moving
+        for _ = 1, 16 do
+            Moving.Parent = game:GetService("ReplicatedStorage")
+            Moving.Parent = shared.Box
+        end
+        "#;
+    let mut host = [f64::INFINITY; 2];
+    for _ in 0..2 {
+        for (arm, rig) in rigs.iter().enumerate() {
+            host[arm] = host[arm].min(time(rig, trips));
+        }
+    }
+    for (arm, rig) in rigs.iter().enumerate() {
+        host[arm] += time(rig, "workspace:UnjoinFromOutsiders({ shared.Moving })");
+        run(
+            &rig.0,
+            &rig.1,
+            r#"
+            for _, Glue in shared.Joints do
+                assert(Glue.Parent == nil, "a Glue stayed")
+            end
+            "#,
+        );
+    }
+    let [one, spread] = host;
+    assert!(one < 2.0 * spread + 0.05, "16 trips and an unjoin took {one:.3} s of host time with 30,000 Glue to one part, {spread:.3} s with them spread over 30");
+}
+
+/// An engine with 30,000 Glue spread over `parts` parts that move together (`shared.Moving`), each part glued to one of its own
+/// that stays.
+fn many_joints(parts: usize) -> (Lua, Rc<Engine>) {
+    let (lua, engine) = start_play();
+    run(
+        &lua,
+        &engine,
+        &r#"
+        -- (made out of the DataModel and moved in at once; a hundred Glue to a folder, so that taking one out of its parent's
+        -- children is not what is timed; the parts that move in a Model of their own)
+        local Box, Moving = Instance.new("Model"), Instance.new("Model")
+        Moving.Parent = Box
+        local Joints = {}
+        for _ = 1, PARTS do
+            local P, Q = Instance.new("Part"), Instance.new("Part")
+            P.Anchored, Q.Anchored = true, true
+            P.Parent, Q.Parent = Moving, Box
+            for _ = 1, 300 // PARTS do
+                local Holder = Instance.new("Folder")
+                for _ = 1, 100 do
+                    local Glue = Instance.new("Glue")
+                    Glue.Part0, Glue.Part1 = P, Q
+                    Glue.Parent = Holder
+                    table.insert(Joints, Glue)
+                end
+                Holder.Parent = Box
+            end
+        end
+        assert(#Joints == 30000)
+        Box.Parent = workspace
+        shared.Box, shared.Moving, shared.Joints = Box, Moving, Joints
+        "#
+        .replace("PARTS", &parts.to_string()),
+    );
+    (lua, engine)
+}
+
+/// UnjoinFromOutsiders looks at each instance below its entries once a call, making it whole as the walk reaches it when it was
+/// imported lazily (joints.rs unjoin_from_outsiders): a list holding the same Folder of 10,000 Folders 2,000 times takes at most
+/// twice the host time of a list holding it once (0.33 ms and 0.27 ms here). Each entry's subtree used to be made whole before
+/// the repeats were dropped, 2,000 walks of its 10,001 instances: 0.16 s.
+#[test]
+fn a_repeated_entry_unjoins_on_little_host_time() {
+    let (lua, engine) = start_play();
+    run(
+        &lua,
+        &engine,
+        r#"
+        local Deep = Instance.new("Folder")
+        for _ = 1, 10000 do
+            Instance.new("Folder").Parent = Deep
+        end
+        Deep.Parent = workspace
+        shared.Deep, shared.Many = Deep, table.create(2000, Deep)
+        workspace:UnjoinFromOutsiders({})
+        "#,
+    );
+    let time = |source: &str| {
+        let start = std::time::Instant::now();
+        run(&lua, &engine, source);
+        start.elapsed().as_secs_f64()
+    };
+    let once = time("workspace:UnjoinFromOutsiders({ shared.Deep })");
+    let repeated = time("workspace:UnjoinFromOutsiders(shared.Many)");
+    assert!(repeated < 2.0 * once + 0.05, "a list of the same Folder 2,000 times took {repeated:.4} s of host time, the Folder once {once:.4} s");
+}
+
+/// A WorldRoot that leaves every world takes its world along, so nothing below it is looked at, and an instance that leaves walks
+/// down to the WorldRoots below it, not into them (joints.rs left_every_world): a chain of 2,000 nested WorldModels whose bottom
+/// part 20,000 welds name is taken apart from the top, one WorldModel at a time, and so is a chain of 2,000 WorldModels each
+/// inside a Folder, one Folder at a time, in about the host time the same chains take with 20,000 Folders in place of the welds
+/// (most of it the AncestryChanged walk of each removed subtree, instance.rs fire_ancestry_changed), and the welds still link
+/// afterwards. Each WorldModel used to walk everything below it as it left, and re-check every weld and each of the bottom
+/// parts' joints: 5.7 s for the first chain alone, where the Folders' take 0.2. A Folder that walked below the WorldModel it
+/// holds would take the welds out of their parts' lists, which are the bottom WorldModel's still, and charge for it: the first
+/// Folder's move costs the same work with the welds enabled as with them disabled. The two chains are timed in turn, up to three
+/// tries, so a busy host weighs on both alike.
+#[test]
+fn nested_world_models_leave_their_worlds_on_little_host_time() {
+    for wrapped in [false, true] {
+        let (mut welded, mut plain, mut first) = (0.0, 0.0, 0.0);
+        for _ in 0..3 {
+            (welded, first) = nested_world_models_leave(wrapped, "enabled");
+            (plain, _) = nested_world_models_leave(wrapped, "folders");
+            if welded < 2.0 * plain + 0.05 {
+                break;
+            }
+        }
+        let chain = if wrapped { "2,000 WorldModels each in a Folder" } else { "2,000 nested WorldModels" };
+        assert!(welded < 2.0 * plain + 0.05, "{chain} taken apart from the top took {welded:.3} s of host time with 20,000 welds at the bottom, {plain:.3} s with 20,000 Folders");
+        if wrapped {
+            let (_, disabled) = nested_world_models_leave(wrapped, "disabled");
+            assert!((first - disabled).abs() < 1e-6, "the first Folder's move cost {first:.6} s of work, {disabled:.6} s with the welds disabled");
+        }
+    }
+}
+
+/// Builds the chain (`wrapped`: each WorldModel in a Folder of its own, the chain of the Folders; `holds`: what the bottom holds,
+/// 20,000 "enabled" or "disabled" welds or "folders") and takes it apart from the top: the host time that took, and the work the
+/// first link's move charged.
+fn nested_world_models_leave(wrapped: bool, holds: &str) -> (f64, f64) {
+    let (lua, engine) = start_play();
+    run(
+        &lua,
+        &engine,
+        &r#"
+        -- (made out of the DataModel and moved in at once: the chain from the top down, the welds named before their parts are in
+        -- any world, a hundred to a folder. Wrapped, each WorldModel is in a Folder of its own, and the chain is of the Folders)
+        local Wrapped, Holds = WRAPPED, "HOLDS"
+        local function Link(Parent)
+            local World = Instance.new("WorldModel")
+            if Wrapped then
+                local Holder = Instance.new("Folder")
+                World.Parent = Holder
+                Holder.Parent = Parent
+                return Holder, World
+            end
+            World.Parent = Parent
+            return World, World
+        end
+        local Top, Inner = Link(nil)
+        local Chain = { Top }
+        for _ = 2, 2000 do
+            local Holder, World = Link(Inner)
+            Inner = World
+            table.insert(Chain, Holder)
+        end
+        local P, Q = Instance.new("Part"), Instance.new("Part")
+        P.Anchored, Q.Anchored = true, true
+        local Holders, Welds = {}, {}
+        for _ = 1, 200 do
+            local Holder = Instance.new("Folder")
+            for _ = 1, 100 do
+                if Holds == "folders" then
+                    Instance.new("Folder").Parent = Holder
+                    continue
+                end
+                local Weld = Instance.new("Weld")
+                Weld.Part0, Weld.Part1 = P, Q
+                Weld.Enabled = Holds == "enabled"
+                Weld.Parent = Holder
+                table.insert(Welds, Weld)
+            end
+            table.insert(Holders, Holder)
+        end
+        P.Parent, Q.Parent = Inner, Inner
+        for _, Holder in Holders do
+            Holder.Parent = Inner
+        end
+        Top.Parent = workspace
+        shared.Chain, shared.Holders, shared.Welds, shared.P, shared.Q = Chain, Holders, Welds, P, Q
+        "#
+        .replace("WRAPPED", if wrapped { "true" } else { "false" })
+        .replace("HOLDS", holds),
+    );
+    let work = || engine.state.borrow().sched.work_total();
+    let start = std::time::Instant::now();
+    let before = work();
+    run(&lua, &engine, "shared.Chain[1].Parent = nil");
+    let first = work() - before;
+    run(
+        &lua,
+        &engine,
+        r#"
+        for Index = 2, #shared.Chain do
+            shared.Chain[Index].Parent = nil
+        end
+        "#,
+    );
+    let host = start.elapsed().as_secs_f64();
+    if holds == "enabled" {
+        run(
+            &lua,
+            &engine,
+            r#"
+            -- (the welds are as they were: moved into the Workspace with their parts, they are its joints, and all of them go)
+            shared.P.Parent, shared.Q.Parent = workspace, workspace
+            for _, Holder in shared.Holders do
+                Holder.Parent = workspace
+            end
+            workspace:UnjoinFromOutsiders({ shared.P })
+            for _, Weld in shared.Welds do
+                assert(Weld.Parent == nil, "a weld stayed")
+            end
+            "#,
+        );
+    }
+    (host, first)
+}
+
+/// One Parent write that takes several joints out of their parts' lists of active joints, or puts several in, does it in the order
+/// a Studio 0.748 client takes the moved subtree up (joints.rs taken_up): the moved instance first, then the rest from the bottom
+/// up, each part's joints the last named first, and an instance the walk has not reached yet counts as where it was
+/// (tools/parity/probes/unjoin_from_outsiders.luau section 6). The lists show through UnjoinFromOutsiders' order.
+#[test]
+fn a_move_takes_joints_out_and_puts_them_in_as_a_client_takes_its_subtree_up() {
+    check_running(
+        "play",
+        r##"
+        local Root = Instance.new("Folder")
+        Root.Parent = workspace
+        local Storage = game:GetService("ReplicatedStorage")
+        local function Brick(Name, Y)
+            local B = Instance.new("Part")
+            B.Name, B.Anchored, B.CFrame, B.Parent = Name, true, CFrame.new(0, Y, 0), Root
+            return B
+        end
+        local function Folder(Name, Parent)
+            local F = Instance.new("Folder")
+            F.Name, F.Parent = Name, Parent
+            return F
+        end
+        -- (welds x1, x2, ... join B to the parts Others names, get their parts in index order or Order's, and are parented in
+        -- index order, to B or where Places says; B's list is read back through UnjoinFromOutsiders({B}))
+        local function Case(Others, Build)
+            task.wait()
+            local Q = { A = Brick("A", 1), B = Brick("B", 2), C = Brick("C", 3), D = Brick("D", 4) }
+            local X = {}
+            for Index = 1, #Others do
+                X[Index] = Instance.new("Weld")
+                X[Index].Name = "x" .. Index
+            end
+            local function Name(Order)
+                for Position = 1, #X do
+                    local Index = if Order then Order[Position] else Position
+                    X[Index].Part0, X[Index].Part1 = Q.B, Q[Others[Index]]
+                end
+            end
+            local function Put(Places)
+                for Index, Weld in X do
+                    if Weld.Parent == nil then
+                        Weld.Parent = Places and Places[Index] or Q.B
+                    end
+                end
+            end
+            local Made = Build(X, Q, Name, Put)
+            task.wait()
+            local Went = {}
+            for _, Weld in X do
+                Weld.AncestryChanged:Connect(function(_, Parent)
+                    if Parent == nil then
+                        table.insert(Went, Weld.Name)
+                    end
+                end)
+            end
+            workspace:UnjoinFromOutsiders({ Q.B })
+            task.wait()
+            local Order = table.concat(Went, ",")
+            for _, Weld in X do
+                Weld:Destroy()
+            end
+            if Made then
+                Made:Destroy()
+            end
+            for _, Part in Q do
+                Part:Destroy()
+            end
+            Root:ClearAllChildren()
+            return Order
+        end
+        local function Check(Label, Want, Got)
+            assert(Got == Want, Label .. ": " .. Got .. ", not " .. Want)
+        end
+        -- (leaving: the part's own joints the last named first, whatever the order they were parented in)
+        Check("A out, x1 x3 to A, named 3 1 2 4 5", "x5,x2,x4", Case({ "A", "C", "A", "C", "C" }, function(X, Q, Name, Put)
+            Name({ 3, 1, 2, 4, 5 })
+            Put()
+            Q.A.Parent = Storage
+            return Q.A
+        end))
+        -- (below the moved Folder, x1 before the part A that holds it: x1 first, then x3)
+        Check("Folder [A [x1]] out, x1 x3 to A", "x5,x2,x4", Case({ "A", "C", "A", "C", "C" }, function(X, Q, Name, Put)
+            local Fo = Folder("Fo", Root)
+            Q.A.Parent = Fo
+            Name()
+            Put({ Q.A })
+            Fo.Parent = Storage
+            return Fo
+        end))
+        -- (x3 below x2: x3 first)
+        Check("Folder [x2 [x3]] out", "x1,x4,x5", Case({ "A", "A", "A", "A", "A" }, function(X, Q, Name, Put)
+            local Fo = Folder("Fo", Root)
+            Name()
+            Put({ nil, Fo })
+            X[3].Parent = X[2]
+            Fo.Parent = nil
+        end))
+        -- (x3, below A, before A's own x1)
+        Check("Folder [A [x3]] out, x1 to A, x3 to C", "x5,x2,x6,x4", Case({ "A", "D", "C", "D", "D", "D" }, function(X, Q, Name, Put)
+            local Fo = Folder("Fo", Root)
+            Q.A.Parent = Fo
+            Name()
+            Put({ nil, nil, Q.A })
+            Fo.Parent = Storage
+            return Fo
+        end))
+        -- (entering: x3, below A, before A brings back x2)
+        Check("Folder [A [x3]] in, x2 to A, x3 to C", "x1,x3,x2", Case({ "D", "A", "C" }, function(X, Q, Name, Put)
+            local Fo = Folder("Fo", Storage)
+            Q.A.Parent = Fo
+            Name()
+            Put({ nil, nil, Q.A })
+            Fo.Parent = Root
+        end))
+        -- (A comes back first and brings back x2; x3, below it and not reached yet, joins after)
+        Check("A [x3] in, x2 x3 to A", "x1,x2,x3", Case({ "D", "A", "A" }, function(X, Q, Name, Put)
+            Q.A.Parent = Storage
+            Name()
+            Put({ nil, nil, Q.A })
+            Q.A.Parent = Root
+        end))
+        Check("A [x2] in, x2 x3 to A", "x1,x3,x2", Case({ "D", "A", "A" }, function(X, Q, Name, Put)
+            Q.A.Parent = Storage
+            Name()
+            Put({ nil, Q.A })
+            Q.A.Parent = Root
+        end))
+        -- (x1's other part re-pointed and back: x1 still named A before x3, which leaves first; its own side re-pointed: after)
+        Check("A out, x1's Part0 to D and back first", "x4,x2,x5", Case({ "A", "C", "A", "C", "C" }, function(X, Q, Name, Put)
+            Name()
+            X[1].Part0 = Q.D
+            X[1].Part0 = Q.B
+            Put()
+            Q.A.Parent = Storage
+            return Q.A
+        end))
+        Check("A out, x1's Part1 to C and back first", "x5,x2,x4", Case({ "A", "C", "A", "C", "C" }, function(X, Q, Name, Put)
+            Name()
+            X[1].Part1 = Q.C
+            X[1].Part1 = Q.A
+            Put()
+            Q.A.Parent = Storage
+            return Q.A
+        end))
+        Check("Folder [x3, Sub [x2]] in", "x1,x3,x2", Case({ "A", "A", "A" }, function(X, Q, Name, Put)
+            local Fo = Folder("Fo", Storage)
+            Name()
+            X[3].Parent = Fo
+            Put({ nil, Folder("Sub", Fo) })
+            Fo.Parent = Root
+            return Fo
+        end))
+        "##,
+        1.0,
+    );
+}
+
+/// A part that leaves every world takes its active joints out of their parts' lists, and the work clock pays what a Studio 0.748
+/// playing client spends on that (cost.rs JOINT_TAKEN_OUT for each joint, JOINT_LIST_LEFT for each part whose list changes) beyond
+/// the Parent write's own price: a part with 1,000 Glue to one other part pays 1,000 joints and 2 lists more than one with 1,000
+/// disabled Glue, and one with 1,000 Glue each to a part of its own 1,000 joints and 1,001 lists more. Joints that are not active
+/// are not looked at, and cost nothing. (A client spends as much on Glue as on Welds; Glue links nothing, so the lists are all it
+/// pays for, where a Weld's link ending pays a link change besides: joints.rs left_world.)
+#[test]
+fn a_part_leaving_every_world_pays_for_the_joints_it_takes_out_of_their_lists() {
+    check_running(
+        "play",
+        r##"
+        local function Part(Parent)
+            local B = Instance.new("Part")
+            B.Anchored = true
+            B.Parent = Parent
+            return B
+        end
+        -- (P and the parts its Glue join it to in one Folder of the Workspace, the Glue in another)
+        local function Leaving(Count, Mode)
+            local Holder, Joints = Instance.new("Folder"), Instance.new("Folder")
+            Holder.Parent, Joints.Parent = workspace, workspace
+            local P, Q = Part(Holder), Part(Holder)
+            for _ = 1, Count do
+                local Glue = Instance.new("Glue")
+                Glue.Part0, Glue.Part1 = P, if Mode == "many" then Part(Holder) else Q
+                Glue.Enabled = Mode ~= "disabled"
+                Glue.Parent = if Mode == "out" then nil else Joints
+            end
+            task.wait()
+            local Start = os.clock()
+            P.Parent = nil
+            local Spent = os.clock() - Start
+            Holder:Destroy()
+            Joints:Destroy()
+            return Spent
+        end
+        -- (within 0.1 us: the Luau around the write varies by a few ns between scenes)
+        local Alone, Disabled, Out = Leaving(0, "one"), Leaving(1000, "disabled"), Leaving(1000, "out")
+        assert(math.abs(Disabled - Alone) < 1e-7 and math.abs(Out - Alone) < 1e-7, string.format("%.4g disabled, %.4g out of the DataModel, %.4g alone", Disabled, Out, Alone))
+        local One, Many = Leaving(1000, "one"), Leaving(1000, "many")
+        assert(math.abs(One - Alone - (1000 * 0.25e-6 + 2 * 0.5e-6)) < 1e-7, string.format("1,000 joints to one part %.4g", One - Alone))
+        assert(math.abs(Many - Alone - (1000 * 0.25e-6 + 1001 * 0.5e-6)) < 1e-7, string.format("1,000 joints to parts of their own %.4g", Many - Alone))
+        "##,
+        0.5,
+    );
+}
+
+/// A part that leaves every world looks only at its active joints (joints.rs left_every_world: a joint that is not active cannot
+/// become active by leaving), and one that enters a world only at its joints in a world: 100 parts, each named by 1,000 Welds out
+/// of the DataModel, moved out of the Workspace and back 50 times while a Weld is active elsewhere, take about the host time 100
+/// parts named by none take, and the work clock charges the two the same. Each part used to re-check every joint that named it
+/// as it left: 100,000 checks a trip.
+#[test]
+fn parts_named_by_joints_out_of_the_data_model_leave_on_little_host_time() {
+    let (lua, engine) = start_play();
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    run(
+        &lua,
+        &engine,
+        r#"
+        local function Part(Parent)
+            local B = Instance.new("Part")
+            B.Anchored, B.CanCollide = true, false
+            B.Parent = Parent
+            return B
+        end
+        -- (a Weld active elsewhere, so the lists of active joints are not empty)
+        local Other = Instance.new("Folder")
+        Other.Parent = workspace
+        local Active = Instance.new("Weld")
+        Active.Part0, Active.Part1 = Part(Other), Part(Other)
+        Active.Parent = Other
+        -- (each named part's Welds to a part of its own, out of the DataModel)
+        shared.Sets, shared.Work = {}, {}
+        for _, Name in { "Lone", "Named" } do
+            local Holder = Instance.new("Folder")
+            Holder.Parent = workspace
+            local Parts = {}
+            for Index = 1, 100 do
+                Parts[Index] = Part(Holder)
+                if Name == "Named" then
+                    local Partner = Part(nil)
+                    for _ = 1, 1000 do
+                        local Weld = Instance.new("Weld")
+                        Weld.Part0, Weld.Part1 = Parts[Index], Partner
+                    end
+                end
+            end
+            shared.Sets[Name] = { Holder = Holder, Parts = Parts }
+        end
+        local function Trips(Set)
+            for _ = 1, 50 do
+                for _, P in Set.Parts do
+                    P.Parent = nil
+                end
+                for _, P in Set.Parts do
+                    P.Parent = Set.Holder
+                end
+            end
+        end
+        function shared.Move(Name)
+            local Set = shared.Sets[Name]
+            Trips(Set)
+            local Start = os.clock()
+            Trips(Set)
+            shared.Work[Name] = os.clock() - Start
+        end
+        shared.Active = Active
+        "#,
+    );
+    let mut host = Vec::new();
+    for name in ["Lone", "Named"] {
+        let start = std::time::Instant::now();
+        run(&lua, &engine, &format!("shared.Move(\"{name}\")"));
+        host.push(start.elapsed().as_secs_f64());
+    }
+    run(&lua, &engine, r#"assert(math.abs(shared.Work.Named - shared.Work.Lone) < 1e-9, `the named parts' trips cost {shared.Work.Named} s of work where the lone ones' {shared.Work.Lone}`)"#);
+    run(
+        &lua,
+        &engine,
+        r#"
+        -- (the active Weld is still in its parts' lists, and goes)
+        workspace:UnjoinFromOutsiders({ shared.Active.Part0 })
+        assert(shared.Active.Parent == nil, "the active Weld stayed")
+        "#,
+    );
+    let (lone, named) = (host[0], host[1]);
+    assert!(named < 2.0 * lone + 0.05, "10,000 moves took {named:.3} s of host time for parts each named by 1,000 Welds out of the DataModel, {lone:.3} s for parts named by none");
+}
+
+/// A part moved between two worlds, or out of every world and back, takes its active joints out of their parts' lists and puts them
+/// back, Glue and ManualGlue among them, and the work clock pays what a playing client spends on each (Studio 0.748: a part with
+/// 1,000 or 10,000 Welds or Glue to another, moved between the Workspace and a WorldModel in it, into JointsService, out of the
+/// DataModel and into ReplicatedStorage, and back, spent the same on Glue as on Welds): each joint the move takes out at
+/// JOINT_TAKEN_OUT and each part whose list changes at JOINT_LIST_LEFT, each Glue it puts in at GLUE_LISTED, and each of the part's
+/// joints in a world it looks at, at JOINT_LOOKED_AT (cost.rs). A part moved into JointsService, where none of its joints can be
+/// active, only takes its active ones out. The Folder holding the Glue, carried out and back, pays the same for each Glue it takes
+/// out and puts in, and a Folder of disabled Glue pays what one of disabled Welds pays (a client spent the same on them). 20,000
+/// Glue to one part take at most twice the host time of the same 20,000 spread over 20 parts, each glued to one of its own, which
+/// is the same work (0.27 s and 0.26 s here, each the faster of two runs taken in turn; a joint looked for in each list before it
+/// left it, 3.1 s and 0.65 s).
+#[test]
+fn glue_moved_between_worlds_pays_for_its_list_changes() {
+    let rigs = [glue_between_worlds(1), glue_between_worlds(20)];
+    let mut host = [f64::INFINITY; 2];
+    for _ in 0..2 {
+        for (arm, (lua, engine)) in rigs.iter().enumerate() {
+            let start = std::time::Instant::now();
+            run(lua, engine, "shared.Move(\"Glued\")");
+            host[arm] = host[arm].min(start.elapsed().as_secs_f64());
+        }
+    }
+    let [one, spread] = host;
+    assert!(one < 2.0 * spread + 0.05, "10 rounds of moves took {one:.3} s of host time with 20,000 Glue to one part, {spread:.3} s with them spread over 20");
+}
+
+/// An engine where `parts` parts move together, 20,000 Glue spread over them, each part glued to one of its own, between the
+/// Workspace, a WorldModel in it and JointsService, and out of the DataModel and into ReplicatedStorage and back, 10 rounds a
+/// `shared.Move("Glued")`. Checks the work those rounds are charged beyond the same parts' moves with no joint, and what the Folder
+/// holding the Glue, and Folders of as many disabled Glue and Welds, are charged carried out of the DataModel and back.
+fn glue_between_worlds(parts: usize) -> (Lua, Rc<Engine>) {
+    let count = 20_000;
+    let (lua, engine) = start_play();
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    run(
+        &lua,
+        &engine,
+        &r#"
+        local function Part(Parent)
+            local B = Instance.new("Part")
+            B.Anchored, B.CanCollide = true, false
+            B.Parent = Parent
+            return B
+        end
+        local World = Instance.new("WorldModel")
+        World.Parent = workspace
+        local Service, Storage = game:GetService("JointsService"), game:GetService("ReplicatedStorage")
+        shared.Sets, shared.Work = {}, {}
+        -- (Lone: PARTS parts no joint names; Glued: PARTS parts COUNT Glue name; Idle and IdleWelds: COUNT disabled Glue or Welds.
+        -- The parts that move in a Model of their own, the parts they are glued to and the joints beside it)
+        for _, Name in { "Lone", "Glued", "Idle", "IdleWelds" } do
+            local Holder, Moving, Joints = Instance.new("Folder"), Instance.new("Model"), Instance.new("Folder")
+            Holder.Parent = workspace
+            Moving.Parent = Holder
+            for _ = 1, PARTS do
+                local P, Q = Part(Moving), Part(Holder)
+                if Name ~= "Lone" then
+                    for _ = 1, COUNT // PARTS do
+                        local Joint = Instance.new(if Name == "IdleWelds" then "Weld" else "Glue")
+                        Joint.Part0, Joint.Part1 = P, Q
+                        Joint.Enabled = Name == "Glued"
+                        Joint.Parent = Joints
+                    end
+                end
+            end
+            Joints.Parent = Holder
+            shared.Sets[Name] = { Holder = Holder, Moving = Moving, Joints = Joints }
+        end
+        function shared.Move(Name)
+            local Set = shared.Sets[Name]
+            local Start = os.clock()
+            for _ = 1, 10 do
+                Set.Moving.Parent = World
+                Set.Moving.Parent = Set.Holder
+                Set.Moving.Parent = Service
+                Set.Moving.Parent = Set.Holder
+                Set.Moving.Parent = nil
+                Set.Moving.Parent = Set.Holder
+                Set.Moving.Parent = Storage
+                Set.Moving.Parent = Set.Holder
+            end
+            shared.Work[Name] = os.clock() - Start
+        end
+        function shared.Carry(Name)
+            local Set = shared.Sets[Name]
+            local Start = os.clock()
+            Set.Joints.Parent = nil
+            Set.Joints.Parent = Set.Holder
+            return os.clock() - Start
+        end
+        "#
+        .replace("COUNT", &count.to_string())
+        .replace("PARTS", &parts.to_string()),
+    );
+    run(&lua, &engine, "shared.Move(\"Lone\")");
+    run(&lua, &engine, "shared.Move(\"Glued\")");
+    // (a round: into the WorldModel, COUNT taken out of the moving parts' and their partners' lists and COUNT looked at; back,
+    // COUNT put in and looked at; into JointsService, out of the DataModel and into ReplicatedStorage, COUNT taken out each; back
+    // from each, COUNT put in and looked at. A Folder of COUNT disabled Glue carried out and back costs what one of disabled Welds
+    // does; the Glue's own Folder COUNT taken out of the lists and put back in more)
+    run(
+        &lua,
+        &engine,
+        &r#"
+        local N, Lists = COUNT, 2 * PARTS
+        local Out, Left, Looked, Listed = 0.25e-6, 0.5e-6, 0.05e-6, 0.37e-6
+        local Round = 4 * (N * Out + Lists * Left) + N * Looked + 4 * N * (Looked + Listed)
+        local Extra = shared.Work.Glued - shared.Work.Lone
+        assert(math.abs(Extra - 10 * Round) < 1e-7 * (1 + N / 1000), `10 rounds charged {Extra} s more than the lone parts', not {10 * Round}`)
+        local Idle, IdleWelds, Carried = shared.Carry("Idle"), shared.Carry("IdleWelds"), shared.Carry("Glued")
+        assert(math.abs(Idle - IdleWelds) < 1e-7 * (1 + N / 1000), `a Folder of disabled Glue carried out and back charged {Idle} s, of disabled Welds {IdleWelds} s`)
+        local Changed = N * Out + Lists * Left + N * Listed
+        assert(math.abs(Carried - Idle - Changed) < 1e-7 * (1 + N / 1000), `the Glue's Folder charged {Carried - Idle} s more than the disabled Glue's, not {Changed}`)
+        "#
+        .replace("COUNT", &count.to_string())
+        .replace("PARTS", &parts.to_string()),
+    );
+    super::joints::check_index(&mut engine.state.borrow_mut(), &engine.reflection).expect("the joint index");
+    (lua, engine)
+}
+
+/// An AssemblyRootPart read right after UnjoinFromOutsiders answers as a fresh walk does: the reads before it keep the assembly
+/// (world/joints.rs Component), and each joint UnjoinFromOutsiders takes out drops what was kept, as any joint taken out does.
+#[test]
+fn an_assembly_read_after_unjoin_from_outsiders_answers_as_a_fresh_walk() {
+    let script = r#"
+        local function Part(Name, Anchored)
+            local B = Instance.new("Part")
+            B.Name, B.Anchored, B.CanCollide = Name, Anchored, false
+            B.Parent = workspace
+            return B
+        end
+        local A, B, C, D = Part("A", true), Part("B", false), Part("C", false), Part("D", false)
+        local function Weld(P0, P1)
+            local W = Instance.new("Weld")
+            W.Part0, W.Part1 = P0, P1
+            W.Parent = workspace
+        end
+        Weld(A, B)
+        Weld(B, C)
+        Weld(C, D)
+        local function Roots(Label)
+            print(Label, B.AssemblyRootPart.Name, C.AssemblyRootPart.Name, D.AssemblyRootPart.Name)
+        end
+        Roots("before")
+        workspace:UnjoinFromOutsiders({ C, D })
+        Roots("C and D unjoined")
+        workspace:UnjoinFromOutsiders({ B })
+        Roots("B unjoined")
+    "#;
+    let mut logs: Vec<Vec<String>> = Vec::new();
+    for keeping in [true, false] {
+        super::joints::set_keeping(keeping);
+        let (lua, engine) = start_play();
+        run(&lua, &engine, script);
+        logs.push(engine.state.borrow().output.entries.iter().map(|line| line.message.to_string()).collect());
+    }
+    super::joints::set_keeping(true);
+    assert_eq!(logs[0], ["before A A A", "C and D unjoined A D D", "B unjoined B D D"], "what the kept assemblies answered");
+    assert_eq!(logs[0], logs[1], "what the kept assemblies answered, then what fresh walks did");
+}
+
 #[test]
 fn a_rig_follows_its_humanoid_root_part() {
     check_running(
@@ -1964,6 +2985,34 @@ fn a_joints_mark_follows_its_home_when_the_log_overflows() {
     super::joints::check_index(&mut engine.state.borrow_mut(), &engine.reflection).expect("the joint index");
 }
 
+/// A part whose only active joint is a Glue, which links nothing, moved out of every world straight through the dom (no Parent
+/// write) takes the Glue out of its parts' lists of active joints at the next look (joints.rs take_homes queues the joints of a part
+/// that holds some in its list, list_logged), as a part whose joints link does.
+#[test]
+fn glue_leaves_the_lists_when_the_dom_moves_its_part_out_of_every_world() {
+    let (lua, engine) = start_play();
+    run(
+        &lua,
+        &engine,
+        r#"
+        local A, B = Instance.new("WedgePart"), Instance.new("Part")
+        A.Anchored, B.Anchored = true, true
+        A.Parent, B.Parent = workspace, workspace
+        local Glue = Instance.new("Glue")
+        Glue.Part0, Glue.Part1 = A, B
+        Glue.Parent = workspace
+        "#,
+    );
+    super::joints::check_index(&mut engine.state.borrow_mut(), &engine.reflection).expect("the joint index, the Glue listed");
+    {
+        let mut state = engine.state.borrow_mut();
+        let wedge = engine.reflection.class_id("WedgePart").expect("class");
+        let part = state.dom.instances_of_class(wedge)[0];
+        state.dom.reparent(part, None);
+    }
+    super::joints::check_index(&mut engine.state.borrow_mut(), &engine.reflection).expect("the joint index, the Glue out of the lists");
+}
+
 /// A part's assembly reads walk no joint while nothing changed, and a part's joints that cannot link cost its writes and reads
 /// nothing: 2,000 AssemblyRootPart, AssemblyMass and AssemblyCenterOfMass reads of one of 2,000 parts welded to an anchored hub,
 /// and 2,000 CFrame and Anchored writes and AssemblyRootPart and AssemblyMass reads of an unanchored part named by 10,000 welds in
@@ -2370,13 +3419,16 @@ fn a_write_that_changes_several_links_pays_for_each_and_each_piece() {
     let n = 100usize;
     let piece = link_assembly(1);
     let more = (n - 1) as f64 * LINK_MORE;
-    let free_out = LINK_FRAME + LINK_CHANGED + n as f64 * piece + more;
+    // (taken out, the welds also leave their parts' lists of active joints: each weld and each part whose list changes, the hub's and
+    // the leaves', or the leaves' alone for welds among them)
+    let listed = n as f64 * JOINT_TAKEN_OUT + (n + 1) as f64 * JOINT_LIST_LEFT;
+    let free_out = LINK_FRAME + LINK_CHANGED + n as f64 * piece + more + listed;
     // (taken in, each link is a joint looked at and a link made beyond the joints looked at alike with the welds disabled)
     let free_in = n as f64 * (JOINT_LOOKED_AT + JOINT_LINKED) + LINK_CHANGED + LINK_REJOINED + more + (n - 1) as f64 * LINK_PIECE;
-    let free_again = LINK_CHANGED + more + (n - 1) as f64 * LINK_PIECE;
-    let fixed_out = LINK_CHANGED + more;
+    let free_again = LINK_CHANGED + more + (n - 1) as f64 * LINK_PIECE + listed;
+    let fixed_out = LINK_CHANGED + more + listed;
     let fixed_in = n as f64 * (JOINT_LOOKED_AT + JOINT_LINKED) + LINK_CHANGED + more;
-    let one_out = LINK_FRAME + LINK_CHANGED + link_assembly(n + 1) + more;
+    let one_out = LINK_FRAME + LINK_CHANGED + link_assembly(n + 1) + more + n as f64 * (JOINT_TAKEN_OUT + JOINT_LIST_LEFT);
     run(
         &lua,
         &engine,

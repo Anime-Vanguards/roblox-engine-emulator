@@ -684,6 +684,32 @@ pub fn install(engine: &Rc<Engine>) {
             Ok(none())
         }));
     }
+    // Workspace:UnjoinFromOutsiders(objects): the list is checked as an ignore list is (objects_arg; an entry that is no Instance
+    // "Unable to cast value to Object", nil holes skipped, measured on 0.748), every entry before any joint goes (joints.rs). Each
+    // entry read and each hole cost what a playing client spends on them (cost.rs UNJOIN_ENTRY, UNJOIN_HOLE), and each entry
+    // before one that raises LIST_CAST_FAILED, as an ignore list's do; the holes are counted, not kept
+    if let (Some(workspace), Some(member)) = (reflection.class_id("Workspace"), name(engine, "UnjoinFromOutsiders")) {
+        behaviors.add_method(workspace, member, method(|_, engine, id, args| {
+            let objects = objects_arg(args, 1)?;
+            let mut listed = Vec::new();
+            let length = objects.raw_len();
+            for index in 1..=length {
+                let entry: LuaValue = objects.raw_get(index).map_err(Flow::from)?;
+                if entry.is_nil() {
+                    continue;
+                }
+                let Some(entry) = super::lua::instance_id(&entry) else {
+                    query::charge_query(engine, (index - 1) as f64 * crate::cost::LIST_CAST_FAILED);
+                    return raise("Unable to cast value to Object");
+                };
+                listed.push(entry);
+            }
+            let holes = length - listed.len();
+            query::charge_query(engine, listed.len() as f64 * crate::cost::UNJOIN_ENTRY + holes as f64 * crate::cost::UNJOIN_HOLE);
+            joints::unjoin_from_outsiders(engine, id, &listed)?;
+            Ok(none())
+        }));
+    }
     drop(behaviors);
     broadphase::install(engine);
     query::install(engine);
