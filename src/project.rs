@@ -928,9 +928,9 @@ fn hash_file_128(path: &Path) -> Option<(u64, u64)> {
     Some(h.finish())
 }
 
-/// Whether `stamp`'s mtime is recent enough that a same-length rewrite could share the same tick.
-fn stamp_is_recent(stamp: crate::files::Stamp) -> bool {
-    let Ok(since_epoch) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) else {
+/// Whether `stamp`'s mtime is recent enough relative to `now` that a same-length rewrite could share the same tick.
+fn stamp_is_recent_at(stamp: crate::files::Stamp, now: std::time::SystemTime) -> bool {
+    let Ok(since_epoch) = now.duration_since(std::time::UNIX_EPOCH) else {
         return true;
     };
     #[cfg(windows)]
@@ -1032,6 +1032,10 @@ fn studio_cache_file(dir: &Path, hash: (u64, u64)) -> PathBuf {
 /// in memory, and never caches a recent mtime stamp that could hide a same-tick edit after the
 /// recency window closes.
 fn load_studio_index_in(path: &str, read_dirs: &[PathBuf], write_dir: Option<&Path>) -> Option<std::sync::Arc<StudioIndex>> {
+    load_studio_index_in_at(path, read_dirs, write_dir, std::time::SystemTime::now())
+}
+
+fn load_studio_index_in_at(path: &str, read_dirs: &[PathBuf], write_dir: Option<&Path>, now: std::time::SystemTime) -> Option<std::sync::Arc<StudioIndex>> {
     use std::sync::{Arc, Mutex, OnceLock};
     type Entry = (String, Option<crate::files::Stamp>, (u64, u64), Arc<StudioIndex>);
     static CACHE: OnceLock<Mutex<Vec<Entry>>> = OnceLock::new();
@@ -1039,7 +1043,7 @@ fn load_studio_index_in(path: &str, read_dirs: &[PathBuf], write_dir: Option<&Pa
     let source_path = Path::new(path);
     crate::files::note(source_path);
     let stamp = crate::files::stamp(source_path);
-    let stable_stamp = stamp.filter(|st| !stamp_is_recent(*st));
+    let stable_stamp = stamp.filter(|st| !stamp_is_recent_at(*st, now));
     let cache = CACHE.get_or_init(Default::default);
     if let Some(st) = stable_stamp {
         if let Ok(entries) = cache.lock() {
@@ -1089,7 +1093,7 @@ fn load_studio_index_in(path: &str, read_dirs: &[PathBuf], write_dir: Option<&Pa
         StudioIndex::from_owned(encoded)?
     };
     let index = crate::alloc::long_lived(|| Arc::new(index));
-    let actual_stable_stamp = crate::files::stamp(source_path).filter(|st| !stamp_is_recent(*st));
+    let actual_stable_stamp = crate::files::stamp(source_path).filter(|st| !stamp_is_recent_at(*st, now));
     if let Ok(mut entries) = cache.lock() {
         entries.retain(|(p, _, _, _)| p != path);
         crate::alloc::long_lived(|| entries.push((path.to_string(), actual_stable_stamp, actual_hash, index.clone())));
@@ -2807,12 +2811,12 @@ mod studio_index_tests {
         let idx2 = load_studio_index_test(&snap_str, &cache).unwrap();
         assert_eq!(idx2.name(6), b"Arena2", "immediate same-tick edit must not return stale data");
 
-        // Rewrite again with identical length + original mtime, then wait past the 2 s recency window.
+        // Rewrite again with identical length + original mtime, then query past the 2 s recency window.
         // Because the recent stamp was never cached, the lookup after the window must STILL see Arena3.
         std::fs::write(&snap, &third).unwrap();
         std::fs::File::options().write(true).open(&snap).unwrap().set_modified(orig_mtime).unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(2200));
-        let idx3 = load_studio_index_test(&snap_str, &cache).unwrap();
+        let after_window = std::time::SystemTime::now() + std::time::Duration::from_secs(3);
+        let idx3 = load_studio_index_in_at(&snap_str, &[cache.clone()], Some(&cache), after_window).unwrap();
         assert_eq!(idx3.name(6), b"Arena3", "same-tick edit observed after recency window must not return stale data");
 
         let _ = std::fs::remove_dir_all(&dir);

@@ -41,8 +41,8 @@
 //! `__tostring` returns a number, a string, nil, a boolean or a table, raises a string, a table, nil or a number, yields,
 //! fails in its own code, or clears the table or takes its own entry out of it.
 
-use mlua::prelude::*;
-use std::ffi::c_void;
+use mlua::{ffi, prelude::*};
+use std::ffi::{c_int, c_void};
 use std::rc::Rc;
 
 use super::{Flow, Ret, raise};
@@ -233,15 +233,90 @@ fn capture_entries(lua: &Lua, engine: &Engine, table: &LuaTable, height: usize, 
     let mut entries = Vec::new();
     let length = table.raw_len();
     if length > 0 {
-        for index in 1..=length {
-            let item: LuaValue = table.raw_get(index).map_err(|error| error.to_string())?;
-            // (every slot, a hole too: walking it is the copy's work)
-            tally.add(buffer_bytes(&item))?;
-            if item.is_nil() {
-                continue;
+        // Walk array slots directly on the C stack so nil/thread/primitive/buffer elements avoid
+        // per-element mlua registry refs; pause onto `raw_get` + `capture_item` only for tables,
+        // strings, functions, and userdata.
+        let mut cursor = 1usize;
+        while cursor <= length {
+            let mut pause_at: Option<usize> = None;
+            let mut refused: Option<Refused> = None;
+            unsafe {
+                lua.exec_raw::<()>(table, |state| {
+                    while cursor <= length {
+                        let kind = ffi::lua_rawgeti_(state, 1, cursor as c_int);
+                        match kind {
+                            ffi::LUA_TNIL | ffi::LUA_TTHREAD => {
+                                ffi::lua_pop(state, 1);
+                                // (every slot, a hole too: walking it is the copy's work)
+                                if let Err(msg) = tally.add(0) {
+                                    refused = Some(Refused::Message(msg));
+                                    return;
+                                }
+                            }
+                            ffi::LUA_TBOOLEAN => {
+                                let b = ffi::lua_toboolean(state, -1) != 0;
+                                ffi::lua_pop(state, 1);
+                                if let Err(msg) = tally.add(0) {
+                                    refused = Some(Refused::Message(msg));
+                                    return;
+                                }
+                                entries.push((Key::Index(cursor as i64), Sent::Value(LuaValue::Boolean(b))));
+                            }
+                            ffi::LUA_TNUMBER => {
+                                let n = ffi::lua_tonumber(state, -1);
+                                ffi::lua_pop(state, 1);
+                                if let Err(msg) = tally.add(0) {
+                                    refused = Some(Refused::Message(msg));
+                                    return;
+                                }
+                                entries.push((Key::Index(cursor as i64), Sent::Value(LuaValue::Number(n))));
+                            }
+                            ffi::LUA_TVECTOR => {
+                                let v = ffi::lua_tovector(state, -1);
+                                let vec = mlua::Vector::new(*v, *v.add(1), *v.add(2));
+                                ffi::lua_pop(state, 1);
+                                if let Err(msg) = tally.add(0) {
+                                    refused = Some(Refused::Message(msg));
+                                    return;
+                                }
+                                entries.push((Key::Index(cursor as i64), Sent::Value(LuaValue::Vector(vec))));
+                            }
+                            ffi::LUA_TBUFFER => {
+                                let mut len = 0usize;
+                                let ptr = ffi::lua_tobuffer(state, -1, &mut len) as *const u8;
+                                if let Err(msg) = tally.add(len) {
+                                    ffi::lua_pop(state, 1);
+                                    refused = Some(Refused::Message(msg));
+                                    return;
+                                }
+                                let bytes = if len == 0 { &[] } else { std::slice::from_raw_parts(ptr, len) };
+                                let copied: Rc<[u8]> = Rc::from(bytes);
+                                ffi::lua_pop(state, 1);
+                                entries.push((Key::Index(cursor as i64), Sent::Buffer(copied)));
+                            }
+                            _ => {
+                                ffi::lua_pop(state, 1);
+                                pause_at = Some(cursor);
+                                return;
+                            }
+                        }
+                        cursor += 1;
+                    }
+                })
             }
-            if let Some(copy) = capture_item(lua, engine, &item, height, true, ancestors, tally)? {
-                entries.push((Key::Index(index as i64), copy));
+            .map_err(|error| error.to_string())?;
+            if let Some(err) = refused {
+                return Err(err);
+            }
+            if let Some(index) = pause_at {
+                let item: LuaValue = table.raw_get(index).map_err(|error| error.to_string())?;
+                tally.add(buffer_bytes(&item))?;
+                if !item.is_nil()
+                    && let Some(copy) = capture_item(lua, engine, &item, height, true, ancestors, tally)?
+                {
+                    entries.push((Key::Index(index as i64), copy));
+                }
+                cursor = index + 1;
             }
         }
         return Ok(entries);

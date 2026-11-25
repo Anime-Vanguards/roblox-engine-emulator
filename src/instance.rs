@@ -154,6 +154,9 @@ pub fn event_signal(state: &mut State, reflection: &Reflection, id: InstanceId, 
         .get_or_insert_with(Box::default)
         .events
         .push((name, signal));
+    if name == K::AncestryChanged as NameId {
+        state.ancestry_signals = state.ancestry_signals.saturating_add(1);
+    }
     signal
 }
 
@@ -485,7 +488,16 @@ fn subtree_depths(state: &State, id: InstanceId) -> (usize, [usize; 2]) {
         let instance = state.dom.at(node);
         count += 1;
         nested[usize::from(touched.kind(instance.class) == crate::cost::ColdKind::Part)] += depth.saturating_sub(1);
-        walk.extend(instance.children.iter().map(|&child| (child, depth + 1)));
+        let child_depth = depth + 1;
+        for &child in instance.children.iter() {
+            let child_inst = state.dom.at(child);
+            if child_inst.children.is_empty() {
+                count += 1;
+                nested[usize::from(touched.kind(child_inst.class) == crate::cost::ColdKind::Part)] += depth;
+            } else {
+                walk.push((child, child_depth));
+            }
+        }
     }
     (count, nested)
 }
@@ -529,6 +541,9 @@ fn fire_descendant_events(state: &mut State, ancestors: &[InstanceId], root: Ins
 /// AncestryChanged of every instance of the moved subtree, children before the instance (post-order, measured in Studio
 /// with the others above: A1, A2, A, B1, B, C, U for U(A(A1, A2), B(B1), C)).
 fn fire_ancestry_changed(state: &mut State, root: InstanceId, new_parent: Option<InstanceId>) {
+    if state.ancestry_signals == 0 {
+        return;
+    }
     let parent = new_parent.map_or(Value::Nil, Value::Instance);
     for node in state.dom.subtree_post_order(root) {
         if let Some(signal) = existing_event(state, node, K::AncestryChanged as NameId) {

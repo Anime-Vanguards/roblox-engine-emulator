@@ -818,15 +818,21 @@ fn clock_priced_indexes(issues: &[Issue]) -> Vec<usize> {
 /// issue that states an upper bound counts at the bound, since the edit may save that much. This runs before the
 /// listing floor drops issues, so an unlisted issue can still stand in the way of a strongest-saving claim.
 fn set_saving_ceilings(issues: &mut [Issue]) {
-    let possible_savings: Vec<f64> = issues.iter().map(Issue::largest_possible_saving).collect();
-    for (index, issue) in issues.iter_mut().enumerate() {
-        let mut ceiling: f64 = 0.0;
-        for (other, saving) in possible_savings.iter().enumerate() {
-            if other != index {
-                ceiling = ceiling.max(*saving);
-            }
+    let mut best = 0.0_f64;
+    let mut best_index = None;
+    let mut second = 0.0_f64;
+    for (index, issue) in issues.iter().enumerate() {
+        let saving = issue.largest_possible_saving();
+        if saving >= best {
+            second = best;
+            best = saving;
+            best_index = Some(index);
+        } else if saving > second {
+            second = saving;
         }
-        issue.saving_ceiling = ceiling;
+    }
+    for (index, issue) in issues.iter_mut().enumerate() {
+        issue.saving_ceiling = if best_index == Some(index) { second } else { best };
     }
 }
 
@@ -839,10 +845,17 @@ fn is_listed(s: &Scoped, issue: &Issue) -> bool {
 /// A priced issue is as severe as the more severe of its saving and its own work in the frames over the budget. Its
 /// largest frame is the most of its work any one frame held.
 fn grade_by_hitch_share(s: &Scoped, frames: &FrameWork, issues: &mut [Issue]) {
+    let mut summaries: rustc_hash::FxHashMap<&str, &crate::model::IssueStats> = rustc_hash::FxHashMap::default();
+    if let Some(timeline) = s.p.raw.timeline.as_ref() {
+        summaries.reserve(timeline.issue_stats.len());
+        for stat in &timeline.issue_stats {
+            summaries.entry(stat.key.as_str()).or_insert(stat);
+        }
+    }
     for issue in issues.iter_mut().filter(|issue| issue.ms.is_some() && !issue.host_time) {
         // A newer ree summarises every frame before it drops detail, so the summary is complete where the kept frames
         // may not be
-        if let Some(stat) = issue_summary(s.p, &issue.summary_key) {
+        if let Some(stat) = summaries.get(issue.summary_key.as_str()).copied() {
             issue.active_frames = stat.active;
             issue.frame_ms = Some(stat.largest_us / 1000.0);
             issue.over_budget_ms = stat.over_budget_us / 1000.0;
@@ -864,12 +877,6 @@ fn grade_by_hitch_share(s: &Scoped, frames: &FrameWork, issues: &mut [Issue]) {
         issue.severity = issue.severity.min(Severity::of_hitch(largest_over_budget, s.budget));
         issue.evidence.push(format!("largest own contribution to an over-budget frame: {}; budget {}", fmt::ms(largest_over_budget), fmt::ms(s.budget)));
     }
-}
-
-/// The producer's frame summary for the issue with this key, if the profile has one
-fn issue_summary<'a>(p: &'a Profile, key: &str) -> Option<&'a crate::model::IssueStats> {
-    let timeline = p.raw.timeline.as_ref()?;
-    timeline.issue_stats.iter().find(|stat| stat.key == key)
 }
 
 /// Tells each pair of priced issues how much work they share (ms a frame), so a reader knows their prices do not add up

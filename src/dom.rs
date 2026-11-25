@@ -739,10 +739,13 @@ pub struct Dom {
     /// WorldRoots and JointsService, where world/joints.rs and world/gravity.rs ask which world a part or a joint is in), kept
     /// as the tree changes so that question costs one lookup however deep the instance is
     homes: Vec<Option<InstanceId>>,
-    /// What is above each instance's home, by slot, kept with `homes` ([`Dom::homes_above`]): the outermost home it leads to and
-    /// how many homes are above the instance, so whether it is in the Workspace, and how many WorldModels it is below, cost one
-    /// lookup however many WorldModels are nested above it
+    /// What is above each home instance's home, by slot, kept with `homes` ([`Dom::homes_above`]): the outermost home it leads to
+    /// and how many homes are above it, so whether any instance is in the Workspace, and how many WorldModels are above it, cost
+    /// one lookup via its home however many WorldModels are nested above it
     above: Vec<Above>,
+    /// Direct child home instances under each home instance (`homes[child] == Some(parent)`), so updating `above` below a moved
+    /// home walks only nested homes rather than non-home descendants
+    home_children: FxHashMap<InstanceId, Vec<InstanceId>>,
     /// Whether each class (by id) is a home class; empty while homes are not kept
     home_classes: Vec<bool>,
     /// Whether each class (by id) is one a [`WorldLog`] logs below an instance leaving its world, and whose writes it logs (the
@@ -751,9 +754,10 @@ pub struct Dom {
     /// The properties no spatial index reads, the Workspace's or a WorldModel's ([`Dom::keep_unread`]: a part's collision group):
     /// a write of one leaves the instance out of the [`Watch`] and of its world's [`WorldLog`] alike ([`Dom::bump_version_of`])
     unread: Vec<NameId>,
-    /// A stack reused to walk a subtree whose home changed, or whose homes' outermost home did (each entry: whether it takes the
-    /// new home, or keeps its own and only what is above it changed)
-    home_walk: Vec<(InstanceId, bool)>,
+    /// A stack reused to walk a subtree whose home changed ([`Dom::spread_home`])
+    home_walk: Vec<InstanceId>,
+    /// A stack reused to walk nested homes whose outermost home or depth changed ([`Dom::spread_above`])
+    above_walk: Vec<InstanceId>,
     /// A stack reused to walk a subtree that leaves a followed world ([`Dom::log_world_leaving`])
     world_walk: Vec<InstanceId>,
     /// What changed in each world a spatial index of its own follows, by its home ([`Dom::follow_world`]: a WorldModel's,
@@ -1013,8 +1017,21 @@ impl Dom {
         }
         // (one that becomes or stops being a WorldRoot moves its descendants' world)
         if self.is_home(id) != was_home {
-            let home = if was_home { self.home(id) } else { Some(id) };
-            self.spread_home(id, home);
+            let old_home = self.home(id);
+            if was_home {
+                if let Some(parent_home) = old_home {
+                    self.remove_home_child(parent_home, id);
+                }
+                self.above[id.index as usize] = Above::default();
+                self.spread_home(id, old_home);
+                self.home_children.remove(&id);
+            } else {
+                self.above[id.index as usize] = self.above_below(old_home);
+                if let Some(parent_home) = old_home {
+                    self.home_children.entry(parent_home).or_default().push(id);
+                }
+                self.spread_home(id, Some(id));
+            }
         }
     }
 
@@ -1026,13 +1043,20 @@ impl Dom {
         self.homes.resize(self.slots.len(), None);
         self.above.clear();
         self.above.resize(self.slots.len(), Above::default());
+        self.home_children.clear();
         let mut walk: Vec<(InstanceId, Option<InstanceId>)> =
             (0..self.slots.len() as u32).filter_map(|slot| self.id_at_slot(slot)).filter(|&id| self.at(id).parent.is_none()).map(|root| (root, None)).collect();
         while let Some((node, home)) = walk.pop() {
             // (a home is above each instance below it, so it was worked out before them)
             self.homes[node.index as usize] = home;
-            self.above[node.index as usize] = self.above_below(home);
-            let below = if self.is_home(node) { Some(node) } else { home };
+            let is_home = self.is_home(node);
+            if is_home {
+                self.above[node.index as usize] = self.above_below(home);
+                if let Some(parent_home) = home {
+                    self.home_children.entry(parent_home).or_default().push(node);
+                }
+            }
+            let below = if is_home { Some(node) } else { home };
             walk.extend(self.at(node).children.iter().map(|&child| (child, below)));
         }
     }
@@ -1054,7 +1078,7 @@ impl Dom {
     /// ancestors or its homes: none and 0 while homes are not kept.
     #[inline]
     pub fn homes_above(&self, id: InstanceId) -> Above {
-        self.above.get(id.index as usize).copied().unwrap_or_default()
+        self.above_below(self.home(id))
     }
 
     /// The nearest ancestor of the live instance `id` of a home class ([`Dom::keep_homes`]: the WorldRoots and JointsService),
@@ -1127,16 +1151,37 @@ impl Dom {
         Some(std::mem::take(&mut self.home_log))
     }
 
+    fn remove_home_child(&mut self, parent: InstanceId, child: InstanceId) {
+        if let Some(children) = self.home_children.get_mut(&parent) {
+            if let Some(pos) = children.iter().position(|&id| id == child) {
+                children.swap_remove(pos);
+            }
+            if children.is_empty() {
+                self.home_children.remove(&parent);
+            }
+        }
+    }
+
     /// Gives the live instance `id` the home `home`, logged when it is another and its class is ([`Dom::log_homes`]), and what is
-    /// above it with it; whether what is above it changed.
+    /// above it with it when `id` is a home; whether what is above it changed.
     #[inline]
     fn put_home(&mut self, id: InstanceId, home: Option<InstanceId>) -> bool {
         let slot = id.index as usize;
-        if self.homes[slot] != home {
+        let old = self.homes[slot];
+        let is_home = self.is_home(id);
+        if old != home {
             self.homes[slot] = home;
             self.log_home(id, self.at(id).class);
+            if is_home {
+                if let Some(old_home) = old {
+                    self.remove_home_child(old_home, id);
+                }
+                if let Some(new_home) = home {
+                    self.home_children.entry(new_home).or_default().push(id);
+                }
+            }
         }
-        self.put_above(id)
+        if is_home { self.put_above(id) } else { false }
     }
 
     /// Logs `id` when `class` is logged ([`Dom::log_homes`]): its home changed, or it took or left that class.
@@ -1180,35 +1225,37 @@ impl Dom {
     }
 
     /// Gives `home` to the descendants of `id` down to and including the instances of a home class (below which the homes stay),
-    /// and what is above them; below a home whose own changed, everything takes in what is above it again.
+    /// and updates `above` on every nested home below one whose own changed.
     fn spread_home(&mut self, id: InstanceId, home: Option<InstanceId>) {
         let mut walk = std::mem::take(&mut self.home_walk);
         walk.clear();
-        walk.extend(self.at(id).children.iter().map(|&child| (child, true)));
-        self.spread(&mut walk, home);
-        self.home_walk = walk;
-    }
-
-    /// Works out again what is above each descendant of the home `id` (whose own changed), their homes staying.
-    fn spread_above(&mut self, id: InstanceId) {
-        let mut walk = std::mem::take(&mut self.home_walk);
-        walk.clear();
-        walk.extend(self.at(id).children.iter().map(|&child| (child, false)));
-        self.spread(&mut walk, None);
-        self.home_walk = walk;
-    }
-
-    /// The walk of [`Dom::spread_home`] and [`Dom::spread_above`]: an entry that takes `home` passes it on to its children unless
-    /// it is of a home class; one that keeps its home (or a home whose own was given) has its children look again at what is above
-    /// them when what is above it changed. Each instance is reached after its parent, so after its home.
-    fn spread(&mut self, walk: &mut Vec<(InstanceId, bool)>, home: Option<InstanceId>) {
-        while let Some((node, homed)) = walk.pop() {
-            let moved = if homed { self.put_home(node, home) } else { self.put_above(node) };
-            let next = if homed && !self.is_home(node) { Some(true) } else { moved.then_some(false) };
-            if let Some(next) = next {
-                walk.extend(self.at(node).children.iter().map(|&child| (child, next)));
+        walk.extend(self.at(id).children.iter().copied());
+        while let Some(node) = walk.pop() {
+            let moved = self.put_home(node, home);
+            if !self.is_home(node) {
+                walk.extend(self.at(node).children.iter().copied());
+            } else if moved {
+                self.spread_above(node);
             }
         }
+        self.home_walk = walk;
+    }
+
+    /// Works out again what is above each descendant home of the home `id` (whose own changed), their homes staying.
+    fn spread_above(&mut self, id: InstanceId) {
+        let mut walk = std::mem::take(&mut self.above_walk);
+        walk.clear();
+        if let Some(children) = self.home_children.get(&id) {
+            walk.extend_from_slice(children);
+        }
+        while let Some(node) = walk.pop() {
+            if self.put_above(node)
+                && let Some(children) = self.home_children.get(&node)
+            {
+                walk.extend_from_slice(children);
+            }
+        }
+        self.above_walk = walk;
     }
 
     fn track_class(&mut self, class: ClassId) {
@@ -1240,6 +1287,16 @@ impl Dom {
         self.pins.remove(&id);
         self.rig_watch.remove(&id);
         self.world_logs.remove(&id);
+        if !self.home_classes.is_empty() {
+            if self.home_classes.get(instance.class as usize).copied().unwrap_or(false) {
+                if let Some(old_home) = self.homes[id.index as usize] {
+                    self.remove_home_child(old_home, id);
+                }
+                self.home_children.remove(&id);
+            }
+            self.homes[id.index as usize] = None;
+            self.above[id.index as usize] = Above::default();
+        }
         Some(instance)
     }
 

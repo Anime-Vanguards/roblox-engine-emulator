@@ -8980,7 +8980,6 @@ fn shared_table_conversions_stop_at_rees_guard_on_a_copy() {
 #[test]
 fn a_deep_copy_of_shallow_clones_walks_only_to_the_tables_they_hold() {
     let (lua, engine) = start();
-    engine_lua::modules::interpret_all(&lua, &engine);
     crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
     run(
         &lua,
@@ -8999,6 +8998,7 @@ fn a_deep_copy_of_shallow_clones_walks_only_to_the_tables_they_hold() {
         shared.T, shared.U = T, U
         "#,
     );
+    engine_lua::modules::interpret_all(&lua, &engine);
     let started = std::time::Instant::now();
     let output = run(
         &lua,

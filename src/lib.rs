@@ -679,6 +679,8 @@ pub struct State {
     pub loopback_log: Option<Vec<loopback::replicate::Change>>,
     /// A physics move is being stored (instance::raw_set_unsignalled): its property hooks see it as one
     pub quiet_write: bool,
+    /// Number of instances that have ever created an AncestryChanged signal (instance::event_signal)
+    pub ancestry_signals: u32,
 }
 
 /// Rust-side hooks (the Luau runtime's InstanceModule.Hooks that engine subsystems install).
@@ -786,6 +788,7 @@ impl Engine {
                 localization: Default::default(),
                 loopback_log: None,
                 quiet_write: false,
+                ancestry_signals: 0,
             }),
             options,
             lua: RefCell::new(lua::LuaRefs::default()),

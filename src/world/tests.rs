@@ -1802,7 +1802,7 @@ fn join_to_outsiders_costs_what_a_client_spends() {
 #[test]
 fn a_part_with_many_joints_moves_and_unjoins_on_little_host_time() {
     let rigs = [many_joints(1), many_joints(30)];
-    let time = |(lua, engine): &(Lua, Rc<Engine>), source: &str| {
+    let time = |(lua, engine, _): &(Lua, Rc<Engine>, Vec<crate::InstanceId>), source: &str| {
         let start = std::time::Instant::now();
         run(lua, engine, source);
         start.elapsed().as_secs_f64()
@@ -1822,15 +1822,10 @@ fn a_part_with_many_joints_moves_and_unjoins_on_little_host_time() {
     }
     for (arm, rig) in rigs.iter().enumerate() {
         host[arm] += time(rig, "workspace:UnjoinFromOutsiders({ shared.Moving })");
-        run(
-            &rig.0,
-            &rig.1,
-            r#"
-            for _, Glue in shared.Joints do
-                assert(Glue.Parent == nil, "a Glue stayed")
-            end
-            "#,
-        );
+        let state = rig.1.state.borrow();
+        for &glue in &rig.2 {
+            assert!(state.dom.at(glue).parent.is_none(), "a Glue stayed");
+        }
     }
     let [one, spread] = host;
     assert!(one < 2.0 * spread + 0.05, "16 trips and an unjoin took {one:.3} s of host time with 30,000 Glue to one part, {spread:.3} s with them spread over 30");
@@ -1839,39 +1834,55 @@ fn a_part_with_many_joints_moves_and_unjoins_on_little_host_time() {
 /// An engine with 30,000 Glue spread over `parts` parts that move together (`shared.Moving`), each part glued to one of its own
 /// that stays.
 #[inline(never)]
-fn many_joints(parts: usize) -> (Lua, Rc<Engine>) {
+fn many_joints(parts: usize) -> (Lua, Rc<Engine>, Vec<crate::InstanceId>) {
     let (lua, engine) = start_play();
-    run(
-        &lua,
-        &engine,
-        &r#"
-        -- (made out of the DataModel and moved in at once; a hundred Glue to a folder, so that taking one out of its parent's
-        -- children is not what is timed; the parts that move in a Model of their own)
-        local Box, Moving = Instance.new("Model"), Instance.new("Model")
-        Moving.Parent = Box
-        local Joints = {}
-        for _ = 1, PARTS do
-            local P, Q = Instance.new("Part"), Instance.new("Part")
-            P.Anchored, Q.Anchored = true, true
-            P.Parent, Q.Parent = Moving, Box
-            for _ = 1, 300 // PARTS do
-                local Holder = Instance.new("Folder")
-                for _ = 1, 100 do
-                    local Glue = Instance.new("Glue")
-                    Glue.Part0, Glue.Part1 = P, Q
-                    Glue.Parent = Holder
-                    table.insert(Joints, Glue)
-                end
-                Holder.Parent = Box
-            end
-        end
-        assert(#Joints == 30000)
-        Box.Parent = workspace
-        shared.Box, shared.Moving, shared.Joints = Box, Moving, Joints
-        "#
-        .replace("PARTS", &parts.to_string()),
-    );
-    (lua, engine)
+    let reflection = engine.reflection.clone();
+    let workspace = engine.world().workspace;
+    let model_class = reflection.class_id("Model").unwrap();
+    let folder_class = reflection.class_id("Folder").unwrap();
+    let part_class = reflection.class_id("Part").unwrap();
+    let glue_class = reflection.class_id("Glue").unwrap();
+    let anchored_prop = reflection.name_id("Anchored").unwrap();
+    let part0_prop = reflection.name_id("Part0").unwrap();
+    let part1_prop = reflection.name_id("Part1").unwrap();
+    let (box_id, moving_id, joints) = {
+        let mut state = engine.state.borrow_mut();
+        // (made out of the DataModel and moved in at once; a hundred Glue to a folder, so that taking one out of its parent's
+        // children is not what is timed; the parts that move in a Model of their own)
+        let box_id = crate::instance::create_named(&mut state, &reflection, model_class, "Model");
+        let moving_id = crate::instance::create_named(&mut state, &reflection, model_class, "Model");
+        state.dom.attach(moving_id, box_id);
+        let mut joints = Vec::with_capacity(30_000);
+        for _ in 0..parts {
+            let p = crate::instance::create_named(&mut state, &reflection, part_class, "Part");
+            let q = crate::instance::create_named(&mut state, &reflection, part_class, "Part");
+            crate::instance::raw_set_silent(&mut state, &reflection, p, anchored_prop, crate::value::Value::Bool(true));
+            crate::instance::raw_set_silent(&mut state, &reflection, q, anchored_prop, crate::value::Value::Bool(true));
+            state.dom.attach(p, moving_id);
+            state.dom.attach(q, box_id);
+            for _ in 0..(300 / parts) {
+                let holder = crate::instance::create_named(&mut state, &reflection, folder_class, "Folder");
+                for _ in 0..100 {
+                    let glue = crate::instance::create_named(&mut state, &reflection, glue_class, "Glue");
+                    crate::instance::raw_set_silent(&mut state, &reflection, glue, part0_prop, crate::value::Value::Instance(p));
+                    crate::instance::raw_set_silent(&mut state, &reflection, glue, part1_prop, crate::value::Value::Instance(q));
+                    state.dom.attach(glue, holder);
+                    super::joints::made_in_place(&mut state, &reflection, glue);
+                    joints.push(glue);
+                }
+                state.dom.attach(holder, box_id);
+            }
+        }
+        assert_eq!(joints.len(), 30_000);
+        (box_id, moving_id, joints)
+    };
+    engine_lua::instance::set_parent(&engine, box_id, Some(workspace)).expect("box in workspace");
+    {
+        let shared: LuaTable = engine.lua.borrow().shared.as_ref().expect("shared").get("shared").expect("shared");
+        shared.set("Box", engine_lua::instance_value(&lua, &engine, box_id).unwrap()).unwrap();
+        shared.set("Moving", engine_lua::instance_value(&lua, &engine, moving_id).unwrap()).unwrap();
+    }
+    (lua, engine, joints)
 }
 
 /// UnjoinFromOutsiders looks at each instance below its entries once a call, making it whole as the walk reaches it when it was
@@ -1940,59 +1951,92 @@ fn nested_world_models_leave_their_worlds_on_little_host_time() {
 #[inline(never)]
 fn nested_world_models_leave(wrapped: bool, holds: &str) -> (f64, f64) {
     let (lua, engine) = start_play();
-    run(
-        &lua,
-        &engine,
-        &r#"
-        -- (made out of the DataModel and moved in at once: the chain from the top down, the welds named before their parts are in
-        -- any world, a hundred to a folder. Wrapped, each WorldModel is in a Folder of its own, and the chain is of the Folders)
-        local Wrapped, Holds = WRAPPED, "HOLDS"
-        local function Link(Parent)
-            local World = Instance.new("WorldModel")
-            if Wrapped then
-                local Holder = Instance.new("Folder")
-                World.Parent = Holder
-                Holder.Parent = Parent
-                return Holder, World
-            end
-            World.Parent = Parent
-            return World, World
-        end
-        local Top, Inner = Link(nil)
-        local Chain = { Top }
-        for _ = 2, 2000 do
-            local Holder, World = Link(Inner)
-            Inner = World
-            table.insert(Chain, Holder)
-        end
-        local P, Q = Instance.new("Part"), Instance.new("Part")
-        P.Anchored, Q.Anchored = true, true
-        local Holders, Welds = {}, {}
-        for _ = 1, 200 do
-            local Holder = Instance.new("Folder")
-            for _ = 1, 100 do
-                if Holds == "folders" then
-                    Instance.new("Folder").Parent = Holder
-                    continue
-                end
-                local Weld = Instance.new("Weld")
-                Weld.Part0, Weld.Part1 = P, Q
-                Weld.Enabled = Holds == "enabled"
-                Weld.Parent = Holder
-                table.insert(Welds, Weld)
-            end
-            table.insert(Holders, Holder)
-        end
-        P.Parent, Q.Parent = Inner, Inner
-        for _, Holder in Holders do
-            Holder.Parent = Inner
-        end
-        Top.Parent = workspace
-        shared.Chain, shared.Holders, shared.Welds, shared.P, shared.Q = Chain, Holders, Welds, P, Q
-        "#
-        .replace("WRAPPED", if wrapped { "true" } else { "false" })
-        .replace("HOLDS", holds),
-    );
+    let reflection = engine.reflection.clone();
+    let workspace = engine.world().workspace;
+    let world_model_class = reflection.class_id("WorldModel").unwrap();
+    let folder_class = reflection.class_id("Folder").unwrap();
+    let part_class = reflection.class_id("Part").unwrap();
+    let weld_class = reflection.class_id("Weld").unwrap();
+    let anchored_prop = reflection.name_id("Anchored").unwrap();
+    let part0_prop = reflection.name_id("Part0").unwrap();
+    let part1_prop = reflection.name_id("Part1").unwrap();
+    let enabled_prop = reflection.name_id("Enabled").unwrap();
+    let (top, chain, holders, welds, p_id, q_id) = {
+        let mut state = engine.state.borrow_mut();
+        // (made out of the DataModel and moved in at once: the chain from the top down, the welds named before their parts are in
+        // any world, a hundred to a folder. Wrapped, each WorldModel is in a Folder of its own, and the chain is of the Folders)
+        let make_link = |state: &mut crate::State, parent: Option<crate::InstanceId>| {
+            let world = crate::instance::create_named(state, &reflection, world_model_class, "WorldModel");
+            if wrapped {
+                let holder = crate::instance::create_named(state, &reflection, folder_class, "Folder");
+                state.dom.attach(world, holder);
+                if let Some(parent) = parent {
+                    state.dom.attach(holder, parent);
+                }
+                (holder, world)
+            } else {
+                if let Some(parent) = parent {
+                    state.dom.attach(world, parent);
+                }
+                (world, world)
+            }
+        };
+        let (top, mut inner) = make_link(&mut state, None);
+        let mut chain = Vec::with_capacity(2_000);
+        chain.push(top);
+        for _ in 1..2_000 {
+            let (holder, world) = make_link(&mut state, Some(inner));
+            inner = world;
+            chain.push(holder);
+        }
+        let p_id = crate::instance::create_named(&mut state, &reflection, part_class, "Part");
+        let q_id = crate::instance::create_named(&mut state, &reflection, part_class, "Part");
+        crate::instance::raw_set_silent(&mut state, &reflection, p_id, anchored_prop, crate::value::Value::Bool(true));
+        crate::instance::raw_set_silent(&mut state, &reflection, q_id, anchored_prop, crate::value::Value::Bool(true));
+        let mut holders = Vec::with_capacity(200);
+        let mut welds = Vec::with_capacity(if holds == "folders" { 0 } else { 20_000 });
+        let enabled = holds == "enabled";
+        for _ in 0..200 {
+            let holder = crate::instance::create_named(&mut state, &reflection, folder_class, "Folder");
+            for _ in 0..100 {
+                if holds == "folders" {
+                    let f = crate::instance::create_named(&mut state, &reflection, folder_class, "Folder");
+                    state.dom.attach(f, holder);
+                    continue;
+                }
+                let weld = crate::instance::create_named(&mut state, &reflection, weld_class, "Weld");
+                crate::instance::raw_set_silent(&mut state, &reflection, weld, part0_prop, crate::value::Value::Instance(p_id));
+                crate::instance::raw_set_silent(&mut state, &reflection, weld, part1_prop, crate::value::Value::Instance(q_id));
+                crate::instance::raw_set_silent(&mut state, &reflection, weld, enabled_prop, crate::value::Value::Bool(enabled));
+                state.dom.attach(weld, holder);
+                super::joints::made_in_place(&mut state, &reflection, weld);
+                welds.push(weld);
+            }
+            holders.push(holder);
+        }
+        state.dom.attach(p_id, inner);
+        state.dom.attach(q_id, inner);
+        for &holder in &holders {
+            state.dom.attach(holder, inner);
+        }
+        (top, chain, holders, welds, p_id, q_id)
+    };
+    engine_lua::instance::set_parent(&engine, top, Some(workspace)).expect("top in workspace");
+    {
+        let shared: LuaTable = engine.lua.borrow().shared.as_ref().expect("shared").get("shared").expect("shared");
+        let chain_tbl = lua.create_table_with_capacity(chain.len(), 0).unwrap();
+        for (i, &id) in chain.iter().enumerate() {
+            chain_tbl.raw_set(i + 1, engine_lua::instance_value(&lua, &engine, id).unwrap()).unwrap();
+        }
+        let holders_tbl = lua.create_table_with_capacity(holders.len(), 0).unwrap();
+        for (i, &id) in holders.iter().enumerate() {
+            holders_tbl.raw_set(i + 1, engine_lua::instance_value(&lua, &engine, id).unwrap()).unwrap();
+        }
+        shared.set("Chain", chain_tbl).unwrap();
+        shared.set("Holders", holders_tbl).unwrap();
+        shared.set("P", engine_lua::instance_value(&lua, &engine, p_id).unwrap()).unwrap();
+        shared.set("Q", engine_lua::instance_value(&lua, &engine, q_id).unwrap()).unwrap();
+    }
     let work = || engine.state.borrow().sched.work_total();
     let start = std::time::Instant::now();
     let before = work();
@@ -2019,11 +2063,12 @@ fn nested_world_models_leave(wrapped: bool, holds: &str) -> (f64, f64) {
                 Holder.Parent = workspace
             end
             workspace:UnjoinFromOutsiders({ shared.P })
-            for _, Weld in shared.Welds do
-                assert(Weld.Parent == nil, "a weld stayed")
-            end
             "#,
         );
+        let state = engine.state.borrow();
+        for &weld in &welds {
+            assert!(state.dom.at(weld).parent.is_none(), "a weld stayed");
+        }
     }
     (host, first)
 }
@@ -2347,43 +2392,85 @@ fn glue_moved_between_worlds_pays_for_its_list_changes() {
 /// holding the Glue, and Folders of as many disabled Glue and Welds, are charged carried out of the DataModel and back.
 #[inline(never)]
 fn glue_between_worlds(parts: usize) -> (Lua, Rc<Engine>) {
-    let count = 20_000;
+    let count = 20_000usize;
     let (lua, engine) = start_play();
     crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    let reflection = engine.reflection.clone();
+    let workspace = engine.world().workspace;
+    let world_model_class = reflection.class_id("WorldModel").unwrap();
+    let folder_class = reflection.class_id("Folder").unwrap();
+    let model_class = reflection.class_id("Model").unwrap();
+    let part_class = reflection.class_id("Part").unwrap();
+    let glue_class = reflection.class_id("Glue").unwrap();
+    let weld_class = reflection.class_id("Weld").unwrap();
+    let anchored_prop = reflection.name_id("Anchored").unwrap();
+    let collide_prop = reflection.name_id("CanCollide").unwrap();
+    let part0_prop = reflection.name_id("Part0").unwrap();
+    let part1_prop = reflection.name_id("Part1").unwrap();
+    let enabled_prop = reflection.name_id("Enabled").unwrap();
+
+    let world_id = {
+        let mut state = engine.state.borrow_mut();
+        crate::instance::create_named(&mut state, &reflection, world_model_class, "WorldModel")
+    };
+    engine_lua::instance::set_parent(&engine, world_id, Some(workspace)).expect("world in workspace");
+
+    let mut sets: Vec<(&str, crate::InstanceId, crate::InstanceId, crate::InstanceId)> = Vec::with_capacity(4);
+    for name in ["Lone", "Glued", "Idle", "IdleWelds"] {
+        let (holder, moving, joints) = {
+            let mut state = engine.state.borrow_mut();
+            let holder = crate::instance::create_named(&mut state, &reflection, folder_class, "Folder");
+            let moving = crate::instance::create_named(&mut state, &reflection, model_class, "Model");
+            let joints = crate::instance::create_named(&mut state, &reflection, folder_class, "Folder");
+            state.dom.attach(moving, holder);
+            for _ in 0..parts {
+                let p = crate::instance::create_named(&mut state, &reflection, part_class, "Part");
+                let q = crate::instance::create_named(&mut state, &reflection, part_class, "Part");
+                crate::instance::raw_set_silent(&mut state, &reflection, p, anchored_prop, crate::value::Value::Bool(true));
+                crate::instance::raw_set_silent(&mut state, &reflection, p, collide_prop, crate::value::Value::Bool(false));
+                crate::instance::raw_set_silent(&mut state, &reflection, q, anchored_prop, crate::value::Value::Bool(true));
+                crate::instance::raw_set_silent(&mut state, &reflection, q, collide_prop, crate::value::Value::Bool(false));
+                state.dom.attach(p, moving);
+                state.dom.attach(q, holder);
+                if name != "Lone" {
+                    let (jclass, jname) = if name == "IdleWelds" { (weld_class, "Weld") } else { (glue_class, "Glue") };
+                    let enabled = name == "Glued";
+                    for _ in 0..(count / parts) {
+                        let joint = crate::instance::create_named(&mut state, &reflection, jclass, jname);
+                        crate::instance::raw_set_silent(&mut state, &reflection, joint, part0_prop, crate::value::Value::Instance(p));
+                        crate::instance::raw_set_silent(&mut state, &reflection, joint, part1_prop, crate::value::Value::Instance(q));
+                        crate::instance::raw_set_silent(&mut state, &reflection, joint, enabled_prop, crate::value::Value::Bool(enabled));
+                        state.dom.attach(joint, joints);
+                        super::joints::made_in_place(&mut state, &reflection, joint);
+                    }
+                }
+            }
+            (holder, moving, joints)
+        };
+        engine_lua::instance::set_parent(&engine, holder, Some(workspace)).expect("holder in workspace");
+        engine_lua::instance::set_parent(&engine, joints, Some(holder)).expect("joints in holder");
+        sets.push((name, holder, moving, joints));
+    }
+    {
+        let shared: LuaTable = engine.lua.borrow().shared.as_ref().expect("shared").get("shared").expect("shared");
+        shared.set("World", engine_lua::instance_value(&lua, &engine, world_id).unwrap()).unwrap();
+        let sets_tbl = lua.create_table_with_capacity(0, 4).unwrap();
+        for (name, holder, moving, joints) in sets {
+            let entry = lua.create_table_with_capacity(0, 3).unwrap();
+            entry.raw_set("Holder", engine_lua::instance_value(&lua, &engine, holder).unwrap()).unwrap();
+            entry.raw_set("Moving", engine_lua::instance_value(&lua, &engine, moving).unwrap()).unwrap();
+            entry.raw_set("Joints", engine_lua::instance_value(&lua, &engine, joints).unwrap()).unwrap();
+            sets_tbl.raw_set(name, entry).unwrap();
+        }
+        shared.set("Sets", sets_tbl).unwrap();
+        shared.set("Work", lua.create_table().unwrap()).unwrap();
+    }
     run(
         &lua,
         &engine,
-        &r#"
-        local function Part(Parent)
-            local B = Instance.new("Part")
-            B.Anchored, B.CanCollide = true, false
-            B.Parent = Parent
-            return B
-        end
-        local World = Instance.new("WorldModel")
-        World.Parent = workspace
+        r#"
+        local World = shared.World
         local Service, Storage = game:GetService("JointsService"), game:GetService("ReplicatedStorage")
-        shared.Sets, shared.Work = {}, {}
-        -- (Lone: PARTS parts no joint names; Glued: PARTS parts COUNT Glue name; Idle and IdleWelds: COUNT disabled Glue or Welds.
-        -- The parts that move in a Model of their own, the parts they are glued to and the joints beside it)
-        for _, Name in { "Lone", "Glued", "Idle", "IdleWelds" } do
-            local Holder, Moving, Joints = Instance.new("Folder"), Instance.new("Model"), Instance.new("Folder")
-            Holder.Parent = workspace
-            Moving.Parent = Holder
-            for _ = 1, PARTS do
-                local P, Q = Part(Moving), Part(Holder)
-                if Name ~= "Lone" then
-                    for _ = 1, COUNT // PARTS do
-                        local Joint = Instance.new(if Name == "IdleWelds" then "Weld" else "Glue")
-                        Joint.Part0, Joint.Part1 = P, Q
-                        Joint.Enabled = Name == "Glued"
-                        Joint.Parent = Joints
-                    end
-                end
-            end
-            Joints.Parent = Holder
-            shared.Sets[Name] = { Holder = Holder, Moving = Moving, Joints = Joints }
-        end
         function shared.Move(Name)
             local Set = shared.Sets[Name]
             local Start = os.clock()
@@ -2406,9 +2493,7 @@ fn glue_between_worlds(parts: usize) -> (Lua, Rc<Engine>) {
             Set.Joints.Parent = Set.Holder
             return os.clock() - Start
         end
-        "#
-        .replace("COUNT", &count.to_string())
-        .replace("PARTS", &parts.to_string()),
+        "#,
     );
     run(&lua, &engine, "shared.Move(\"Lone\")");
     run(&lua, &engine, "shared.Move(\"Glued\")");
@@ -4383,32 +4468,26 @@ fn a_link_change_costs_the_assembly_a_client_keeps() {
 fn parallel_joints_cost_a_link_change_the_same_however_many() {
     let (lua, engine) = start_play();
     crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    let reflection = engine.reflection.clone();
+    let workspace = engine.world().workspace;
+    let folder_class = reflection.class_id("Folder").unwrap();
+    let part_class = reflection.class_id("Part").unwrap();
+    let weld_class = reflection.class_id("Weld").unwrap();
+    let anchored_prop = reflection.name_id("Anchored").unwrap();
+    let collide_prop = reflection.name_id("CanCollide").unwrap();
+    let cframe_prop = reflection.name_id("CFrame").unwrap();
+    let part0_prop = reflection.name_id("Part0").unwrap();
+    let part1_prop = reflection.name_id("Part1").unwrap();
+    let c0_prop = reflection.name_id("C0").unwrap();
+    let gravity_prop = reflection.name_id("Gravity").unwrap();
+    {
+        let mut state = engine.state.borrow_mut();
+        crate::instance::raw_set_silent(&mut state, &reflection, workspace, gravity_prop, crate::value::Value::Number(0.0));
+    }
     run(
         &lua,
         &engine,
         r#"
-        workspace.Gravity = 0
-        local Spot = 0
-        local function Part(Anchored)
-            Spot += 1
-            local P = Instance.new("Part")
-            P.Anchored, P.CanCollide = Anchored, false
-            P.CFrame = CFrame.new(300 + Spot % 60 * 6, 300 + Spot // 60 % 60 * 6, 300)
-            P.Parent = workspace
-            return P
-        end
-        function shared.Scene(Free)
-            local H, U = Part(true), Part(not Free)
-            local Folder, Welds = Instance.new("Folder"), {}
-            Folder.Parent = workspace
-            for I = 1, 8000 do
-                local W = Instance.new("Weld")
-                W.Part0, W.Part1, W.C0 = H, U, H.CFrame:ToObjectSpace(U.CFrame)
-                W.Parent = Folder
-                Welds[I] = W
-            end
-            shared.Welds = Welds
-        end
         function shared.Off()
             for _, W in shared.Welds do
                 W.Enabled = false
@@ -4416,10 +4495,66 @@ fn parallel_joints_cost_a_link_change_the_same_however_many() {
         end
         "#,
     );
-    let scene = compile(&lua, &engine, "shared.Scene(...)");
     let off = compile(&lua, &engine, "shared.Off()");
-    let time = |free: bool| {
-        call(&lua, &engine, &scene, free);
+    let mut spot = 0u32;
+    let mut make_scene = |free: bool| {
+        let mut next_pos = || {
+            spot += 1;
+            rbx_dom_weak::types::Vector3::new(
+                300.0 + (spot % 60 * 6) as f32,
+                300.0 + ((spot / 60) % 60 * 6) as f32,
+                300.0,
+            )
+        };
+        let h_pos = next_pos();
+        let u_pos = next_pos();
+        let h_cf = crate::value::Value::Dom(Rc::new(rbx_dom_weak::types::Variant::CFrame(
+            rbx_dom_weak::types::CFrame::new(h_pos, rbx_dom_weak::types::Matrix3::identity()),
+        )));
+        let u_cf = crate::value::Value::Dom(Rc::new(rbx_dom_weak::types::Variant::CFrame(
+            rbx_dom_weak::types::CFrame::new(u_pos, rbx_dom_weak::types::Matrix3::identity()),
+        )));
+        let c0 = crate::value::Value::Dom(Rc::new(rbx_dom_weak::types::Variant::CFrame(
+            rbx_dom_weak::types::CFrame::new(
+                rbx_dom_weak::types::Vector3::new(u_pos.x - h_pos.x, u_pos.y - h_pos.y, u_pos.z - h_pos.z),
+                rbx_dom_weak::types::Matrix3::identity(),
+            ),
+        )));
+        let (h_id, u_id, folder_id, welds) = {
+            let mut state = engine.state.borrow_mut();
+            let h_id = crate::instance::create_named(&mut state, &reflection, part_class, "Part");
+            crate::instance::raw_set_silent(&mut state, &reflection, h_id, anchored_prop, crate::value::Value::Bool(true));
+            crate::instance::raw_set_silent(&mut state, &reflection, h_id, collide_prop, crate::value::Value::Bool(false));
+            crate::instance::raw_set_silent(&mut state, &reflection, h_id, cframe_prop, h_cf);
+            let u_id = crate::instance::create_named(&mut state, &reflection, part_class, "Part");
+            crate::instance::raw_set_silent(&mut state, &reflection, u_id, anchored_prop, crate::value::Value::Bool(!free));
+            crate::instance::raw_set_silent(&mut state, &reflection, u_id, collide_prop, crate::value::Value::Bool(false));
+            crate::instance::raw_set_silent(&mut state, &reflection, u_id, cframe_prop, u_cf);
+            let folder_id = crate::instance::create_named(&mut state, &reflection, folder_class, "Folder");
+            let mut welds = Vec::with_capacity(8_000);
+            for _ in 0..8_000 {
+                let w = crate::instance::create_named(&mut state, &reflection, weld_class, "Weld");
+                crate::instance::raw_set_silent(&mut state, &reflection, w, part0_prop, crate::value::Value::Instance(h_id));
+                crate::instance::raw_set_silent(&mut state, &reflection, w, part1_prop, crate::value::Value::Instance(u_id));
+                crate::instance::raw_set_silent(&mut state, &reflection, w, c0_prop, c0.clone());
+                state.dom.attach(w, folder_id);
+                super::joints::made_in_place(&mut state, &reflection, w);
+                welds.push(w);
+            }
+            (h_id, u_id, folder_id, welds)
+        };
+        engine_lua::instance::set_parent(&engine, h_id, Some(workspace)).expect("h in workspace");
+        engine_lua::instance::set_parent(&engine, u_id, Some(workspace)).expect("u in workspace");
+        engine_lua::instance::set_parent(&engine, folder_id, Some(workspace)).expect("folder in workspace");
+        let welds_tbl = lua.create_table_with_capacity(welds.len(), 0).unwrap();
+        for (i, &w) in welds.iter().enumerate() {
+            welds_tbl.raw_set(i + 1, engine_lua::instance_value(&lua, &engine, w).unwrap()).unwrap();
+        }
+        let shared: LuaTable = engine.lua.borrow().shared.as_ref().expect("shared").get("shared").expect("shared");
+        shared.set("Welds", welds_tbl).unwrap();
+    };
+    let mut time = |free: bool| {
+        make_scene(free);
         let start = std::time::Instant::now();
         call(&lua, &engine, &off, ());
         start.elapsed().as_secs_f64()
@@ -9045,20 +9180,12 @@ fn query_order_is_the_order_of_whole_attach_number_lists() {
 fn query_order_walks_the_tree_only_up_to_where_the_parts_paths_meet() {
     let (lua, engine) = start_play();
     crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    register_wrap(&lua, &engine);
     run(
         &lua,
         &engine,
         r#"
-        -- (a chain of folders `Depth` deep holding `Inner`, made from the bottom up so that making it walks nothing)
-        local function Wrap(Inner, Depth)
-            local Outer = Inner
-            for _ = 1, Depth do
-                local Folder = Instance.new("Folder")
-                Outer.Parent = Folder
-                Outer = Folder
-            end
-            return Outer
-        end
+        local Wrap = shared.Wrap
         -- `Count` parts in a stack along Z at X, in a folder `Depth` deep, or each in a chain of its own `Apart` deep
         local function Scene(X, Count, Depth, Apart)
             local Parts = {}
@@ -9122,9 +9249,11 @@ fn query_order_walks_the_tree_only_up_to_where_the_parts_paths_meet() {
     let use_scene = compile(&lua, &engine, "local Name = ...; shared.Use(Name)");
     let (mut flat, mut deep) = (0.0, 0.0);
     for _ in 0..3 {
+        lua.gc_collect().expect("gc");
         let start = std::time::Instant::now();
         call(&lua, &engine, &use_scene, "Flat");
         flat = start.elapsed().as_secs_f64();
+        lua.gc_collect().expect("gc");
         let start = std::time::Instant::now();
         call(&lua, &engine, &use_scene, "Deep");
         deep = start.elapsed().as_secs_f64();
@@ -9132,7 +9261,9 @@ fn query_order_walks_the_tree_only_up_to_where_the_parts_paths_meet() {
             break;
         }
     }
+    lua.gc_collect().expect("gc");
     call(&lua, &engine, &use_scene, "Few");
+    lua.gc_collect().expect("gc");
     call(&lua, &engine, &use_scene, "Apart");
     run(
         &lua,

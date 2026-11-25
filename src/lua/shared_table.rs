@@ -1171,18 +1171,125 @@ fn converted(lua: &Lua, engine: &Engine, store: &Store, table: &LuaTable, conver
     conversion.open.push(pointer);
     conversion.height += NESTED;
     let mut entries = Entries::default();
-    for pair in table.pairs::<LuaValue, LuaValue>() {
-        let (key, value) = pair?;
-        let key = key_of(&key)?;
+    // Walk entries directly on the C stack with `lua_next` so primitive/string/buffer/thread
+    // pairs avoid per-entry mlua registry refs; pause onto `key_of` + `stored` only when a value
+    // is a nested table or userdata (which may recurse or call into mlua/typeof).
+    let mut cursor = LuaValue::Nil;
+    loop {
+        let mut paused = false;
+        let mut failed: Option<Flow> = None;
+        let (paused_key, paused_val): (LuaValue, LuaValue) = unsafe {
+            lua.exec_raw((table, cursor), |state| {
+                while ffi::lua_next(state, 1) != 0 {
+                    // stack: 1 = table, 2 = key, 3 = value
+                    let val_type = ffi::lua_type(state, 3);
+                    if val_type == ffi::LUA_TTABLE || val_type == ffi::LUA_TUSERDATA {
+                        // Leave [key, value] on the stack for `exec_raw` to return and resume after.
+                        ffi::lua_remove(state, 1);
+                        paused = true;
+                        return;
+                    }
+                    let key_type = ffi::lua_type(state, 2);
+                    let (is_string, key_len, num_key, str_ptr, str_bits) = match key_type {
+                        ffi::LUA_TNUMBER => {
+                            let number = ffi::lua_tonumber(state, 2);
+                            if !((0.0..4294967296.0).contains(&number) && number.fract() == 0.0) {
+                                ffi::lua_settop(state, 0);
+                                failed = Some(raise_at_caller::<()>(KEY_NUMBER).unwrap_err());
+                                return;
+                            }
+                            (false, 0usize, number as u32, std::ptr::null(), 0u64)
+                        }
+                        ffi::LUA_TSTRING => {
+                            let mut len = 0usize;
+                            let ptr = ffi::lua_tolstring(state, 2, &mut len) as *const u8;
+                            let bytes = if len == 0 { &[] } else { std::slice::from_raw_parts(ptr, len) };
+                            (true, len, 0u32, ptr, fnv1a(bytes))
+                        }
+                        _ => {
+                            ffi::lua_settop(state, 0);
+                            failed = Some(raise_at_caller::<()>(KEY_TYPE).unwrap_err());
+                            return;
+                        }
+                    };
+                    conversion.tally.count(is_string);
+                    conversion.tally.seconds += key_len as f64 * cost::SHARED_KEY_BYTE;
+                    if let Err(message) = conversion.made.add_bytes(key_len) {
+                        ffi::lua_settop(state, 0);
+                        failed = Some(raise::<()>(message).unwrap_err());
+                        return;
+                    }
+                    let val_bytes = if val_type == ffi::LUA_TSTRING || val_type == ffi::LUA_TBUFFER {
+                        ffi::lua_objlen(state, 3) as usize
+                    } else {
+                        0
+                    };
+                    if let Err(message) = conversion.made.add(val_bytes) {
+                        ffi::lua_settop(state, 0);
+                        failed = Some(raise::<()>(message).unwrap_err());
+                        return;
+                    }
+                    if val_type == ffi::LUA_TSTRING || val_type == ffi::LUA_TBUFFER {
+                        conversion.tally.seconds += copied_in(val_bytes, val_type == ffi::LUA_TBUFFER, !conversion.open.is_empty());
+                    }
+                    let value = match val_type {
+                        ffi::LUA_TNIL | ffi::LUA_TTHREAD | ffi::LUA_TLIGHTUSERDATA => None,
+                        ffi::LUA_TBOOLEAN => Some(Stored::Boolean(ffi::lua_toboolean(state, 3) != 0)),
+                        ffi::LUA_TNUMBER => Some(Stored::Number(ffi::lua_tonumber(state, 3))),
+                        ffi::LUA_TVECTOR => {
+                            let v = ffi::lua_tovector(state, 3);
+                            Some(Stored::Vector(*v, *v.add(1), *v.add(2)))
+                        }
+                        ffi::LUA_TSTRING => {
+                            let mut len = 0usize;
+                            let ptr = ffi::lua_tolstring(state, 3, &mut len) as *const u8;
+                            let bytes = if len == 0 { &[] } else { std::slice::from_raw_parts(ptr, len) };
+                            Some(Stored::String(Rc::from(bytes)))
+                        }
+                        ffi::LUA_TBUFFER => {
+                            let mut len = 0usize;
+                            let ptr = ffi::lua_tobuffer(state, 3, &mut len) as *const u8;
+                            let bytes = if len == 0 { &[] } else { std::slice::from_raw_parts(ptr, len) };
+                            Some(Stored::Buffer(Rc::from(bytes)))
+                        }
+                        ffi::LUA_TFUNCTION => {
+                            ffi::lua_settop(state, 0);
+                            failed = Some(refused::<()>("Function").unwrap_err());
+                            return;
+                        }
+                        _ => None,
+                    };
+                    let key_ref = if is_string {
+                        let bytes = if key_len == 0 { &[] } else { std::slice::from_raw_parts(str_ptr, key_len) };
+                        KeyRef::String(bytes, str_bits)
+                    } else {
+                        KeyRef::Number(num_key)
+                    };
+                    let mut work = Work::default();
+                    entries.set(key_ref, value, &mut work);
+                    conversion.tally.seconds += work.price(is_string);
+                    ffi::lua_pop(state, 1);
+                }
+                ffi::lua_settop(state, 0);
+            })
+        }?;
+        if let Some(flow) = failed {
+            return Err(flow);
+        }
+        if !paused {
+            break;
+        }
+        let key = key_of(&paused_key)?;
         conversion.tally.count(key.is_string());
         conversion.tally.seconds += key.price();
         if let Err(message) = conversion.made.add_bytes(key.len()) {
             return raise(message);
         }
-        let value = stored(lua, engine, store, &value, conversion)?;
+        let value = stored(lua, engine, store, &paused_val, conversion)?;
         let mut work = Work::default();
         entries.set(key.key(), value, &mut work);
         conversion.tally.seconds += work.price(key.is_string());
+        cursor = paused_key;
     }
     conversion.height -= NESTED;
     conversion.open.pop();
