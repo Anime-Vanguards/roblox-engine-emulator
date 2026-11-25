@@ -25,7 +25,6 @@
 
 #include "ltable.h"
 
-#include <unordered_map>
 #include <stdlib.h>
 #include "lobject.h"
 #include "lstate.h"
@@ -104,15 +103,130 @@ static unsigned int mixid(unsigned int h)
 
 struct HashIds
 {
-    std::unordered_map<const void*, unsigned int> ids;
+    struct Entry
+    {
+        const void* key;
+        unsigned int id;
+    };
+
+    Entry* slots = nullptr;
+    size_t capacity = 0;
+    size_t count = 0;
     unsigned int next = 1;
+
+    ~HashIds()
+    {
+        free(slots);
+    }
+
+    static LUAU_FORCEINLINE size_t hashptr(const void* p)
+    {
+        uint64_t x = uint64_t(uintptr_t(p)) >> 4;
+        x ^= x >> 30;
+        x *= 0xbf58476d1ce4e5b9ull;
+        x ^= x >> 27;
+        return size_t(x);
+    }
+
+    void grow()
+    {
+        size_t newcap = capacity ? capacity * 2 : 256;
+        Entry* newslots = static_cast<Entry*>(calloc(newcap, sizeof(Entry)));
+        if (!newslots)
+            return;
+        size_t mask = newcap - 1;
+        for (size_t i = 0; i < capacity; ++i)
+        {
+            if (slots[i].key)
+            {
+                size_t idx = hashptr(slots[i].key) & mask;
+                while (newslots[idx].key)
+                    idx = (idx + 1) & mask;
+                newslots[idx] = slots[i];
+            }
+        }
+        free(slots);
+        slots = newslots;
+        capacity = newcap;
+    }
+
+    unsigned int find_or_insert(const void* o, bool& inserted)
+    {
+        if (capacity)
+        {
+            size_t mask = capacity - 1;
+            size_t idx = hashptr(o) & mask;
+            for (;;)
+            {
+                const void* k = slots[idx].key;
+                if (k == o)
+                {
+                    inserted = false;
+                    return slots[idx].id;
+                }
+                if (!k)
+                    break;
+                idx = (idx + 1) & mask;
+            }
+        }
+        // (a thread whose states are all closed starts from 1 again: a second run in one process orders as the first did)
+        if (count == 0)
+            next = 1;
+        if ((count + 1) * 4 > capacity * 3)
+            grow();
+        unsigned int id = next++;
+        if (capacity)
+        {
+            size_t mask = capacity - 1;
+            size_t idx = hashptr(o) & mask;
+            while (slots[idx].key)
+                idx = (idx + 1) & mask;
+            slots[idx].key = o;
+            slots[idx].id = id;
+            count++;
+        }
+        inserted = true;
+        return id;
+    }
+
+    void erase(const void* o)
+    {
+        if (!capacity)
+            return;
+        size_t mask = capacity - 1;
+        size_t idx = hashptr(o) & mask;
+        for (;;)
+        {
+            const void* k = slots[idx].key;
+            if (!k)
+                return;
+            if (k == o)
+                break;
+            idx = (idx + 1) & mask;
+        }
+        size_t hole = idx;
+        size_t cur = (hole + 1) & mask;
+        while (slots[cur].key != nullptr)
+        {
+            size_t home = hashptr(slots[cur].key) & mask;
+            if (((hole - home) & mask) < ((cur - home) & mask))
+            {
+                slots[hole] = slots[cur];
+                hole = cur;
+            }
+            cur = (cur + 1) & mask;
+        }
+        slots[hole].key = nullptr;
+        slots[hole].id = 0;
+        count--;
+    }
 };
 
 static thread_local HashIds hashids;
 
 void luaH_forgetid(const void* object)
 {
-    hashids.ids.erase(object);
+    hashids.erase(object);
 }
 
 static LuaNode* hashgcobject(const LuaTable* t, GCObject* o)
@@ -121,21 +235,10 @@ static LuaNode* hashgcobject(const LuaTable* t, GCObject* o)
     if (byaddress)
         return hashpointer(t, o);
 
-    unsigned int id;
-    auto found = hashids.ids.find(o);
-    if (found != hashids.ids.end())
-    {
-        id = found->second;
-    }
-    else
-    {
-        // (a thread whose states are all closed starts from 1 again: a second run in one process orders as the first did)
-        if (hashids.ids.empty())
-            hashids.next = 1;
-        id = hashids.next++;
-        hashids.ids.emplace(o, id);
+    bool inserted = false;
+    unsigned int id = hashids.find_or_insert(o, inserted);
+    if (inserted)
         o->gch.marked |= cast_byte(bitmask(HASHIDBIT));
-    }
     return hashpow2(t, mixid(id * 0x9e3779b1u));
 }
 
@@ -623,16 +726,24 @@ static int hashslotsused(const LuaTable* t)
 // counts the table storage a script's own instruction allocates (lua_WorkCounters)
 static void countstored(lua_State* L, size_t bytes)
 {
+    if (L->global->workoff || !L->stack)
+        return;
     uint64_t dirty = 0;
+    bool active;
     if (luaE_scriptinsn(L))
     {
         L->global->work.stored += bytes;
         dirty |= luaE_workbit(LUA_WBIT_STORED);
+        active = true;
     }
-    else if (luaP_state)
-        luaP_callstorage(L, bytes);
+    else
+    {
+        if (luaP_state)
+            luaP_callstorage(L, bytes);
+        active = luaE_worklib_active(L);
+    }
     // (a table part a library or engine call allocated for a script counts as its allocation too: table.create, a decoded table)
-    if (luaE_scriptwork(L) && !luaE_hostcall(L))
+    if (active)
     {
         L->global->work.hostops[LUA_WORK_ALLOCBYTES] += bytes;
         dirty |= luaE_workhostopbit(LUA_WORK_ALLOCBYTES);

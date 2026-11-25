@@ -3333,7 +3333,7 @@ void luaP_rehash(lua_State* L, LuaTable* t, int oldarray, int oldnodes, int keys
 void luaP_callstorage(lua_State* L, size_t bytes)
 {
     lua_ProfileState* s = stateof(L);
-    if (s && s->stepping && s->pricing && luaE_scriptwork(L) && !luaE_hostcall(L))
+    if (s && s->stepping && s->pricing && luaE_worklib_active(L))
         s->callstored += bytes;
 }
 

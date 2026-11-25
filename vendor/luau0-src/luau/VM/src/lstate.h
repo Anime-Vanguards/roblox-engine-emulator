@@ -426,13 +426,24 @@ inline int luaE_workframe(lua_State* L, CallInfo* ci)
     return 0;
 }
 
+// whether the innermost Luau frame from ci down is a script's (not exempt): stops at the first Luau frame (identical to luaE_workframe(L, ci) == 1)
+inline bool luaE_scriptframe_fast(lua_State* L, CallInfo* ci)
+{
+    if (L->global->workoff || !L->stack)
+        return false;
+    for (; ci >= L->base_ci; --ci)
+        if (isLua(ci))
+            return (ci_func(ci)->l.p->flags & LUAU_PROTO_WORK_EXEMPT) == 0;
+    return false;
+}
+
 // whether a script function's own instruction is running (the innermost frame is a script's Luau frame, not a C function's)
 #define luaE_scriptinsn(L) (!(L)->global->workoff && (L)->stack && isLua((L)->ci) && !(ci_func((L)->ci)->l.p->flags & LUAU_PROTO_WORK_EXEMPT))
 
 // the same, for an interpreted function only: a vector's members and methods are instructions of their own in native code (nativeops)
 #define luaE_interpretedinsn(L) (luaE_scriptinsn(L) && !(ci_func((L)->ci)->l.p->flags & LUAU_PROTO_WORK_NATIVE))
 
-#define luaE_scriptframe(L, ci) (luaE_workframe(L, ci) == 1)
+#define luaE_scriptframe(L, ci) luaE_scriptframe_fast(L, ci)
 #define luaE_scriptwork(L) luaE_scriptframe(L, (L)->ci)
 
 // whether the innermost frame of L is one of the host's own C functions (lua_sethostcfunction)
@@ -446,10 +457,41 @@ LUAI_FUNC bool luaE_hostcall(lua_State* L);
 #define LUAE_SERVEDCFUNCTION 4
 LUAI_FUNC int luaE_cfunctionkind(Closure* cl);
 
+inline int luaE_cfunctionkind_fast(Closure* cl)
+{
+    return cl->preload ? int(cl->preload) : luaE_cfunctionkind(cl);
+}
+
 // whether frame `ci` is an engine function's (lua_setenginecfunction): a C function it calls is part of its work
-#define luaE_engineframe(L, ci)     ((ci) > (L)->base_ci && ttisfunction((ci)->func) && clvalue((ci)->func)->isC && luaE_cfunctionkind(clvalue((ci)->func)) >= LUAE_ENGINECFUNCTION)
+#define luaE_engineframe(L, ci)     ((ci) > (L)->base_ci && ttisfunction((ci)->func) && clvalue((ci)->func)->isC && luaE_cfunctionkind_fast(clvalue((ci)->func)) >= LUAE_ENGINECFUNCTION)
 // whether frame `ci` is an engine function's that was charged as a script's C call: the host's own Luau it runs is part of that call
 #define luaE_enginecallframe(L, ci) (((ci)->flags & LUA_CALLINFO_WORK_CCALL) && luaE_engineframe(L, ci))
+
+// inline equivalent of `luaE_scriptwork(L) && !luaE_hostcall(L)`: checks Luau frames and already-classified host C frames without walking the stack,
+// preserving the exact short-circuit classification order when `cl->preload == 0`.
+inline bool luaE_worklib_active(lua_State* L)
+{
+    if (L->global->workoff || !L->stack)
+        return false;
+    CallInfo* ci = L->ci;
+    if (ci > L->base_ci && ttisfunction(ci->func))
+    {
+        Closure* cl = clvalue(ci->func);
+        if (!cl->isC)
+            return (cl->l.p->flags & LUAU_PROTO_WORK_EXEMPT) == 0;
+        uint8_t kind = cl->preload;
+        if (kind >= LUAE_HOSTCFUNCTION)
+            return false;
+        if (kind == 0)
+        {
+            if (!luaE_scriptframe_fast(L, ci - 1))
+                return false;
+            return luaE_cfunctionkind(cl) < LUAE_HOSTCFUNCTION;
+        }
+        --ci;
+    }
+    return luaE_scriptframe_fast(L, ci);
+}
 // Bit indices in global_State::workdirty, in strictly ascending lua_WorkCounters slot order so the stepping profiler
 // visits dirty slots in the exact order its scalar scan did (identical floating-point summation).
 enum
@@ -514,7 +556,7 @@ static_assert(LUA_WBIT_COUNT <= 64, "workdirty bitmask must fit in uint64_t");
 #define luaE_worklib(L, slot, n) \
     do \
     { \
-        if (luaE_scriptwork(L) && !luaE_hostcall(L)) \
+        if (luaE_worklib_active(L)) \
         { \
             (L)->global->work.hostops[(slot)] += uint64_t(n); \
             luaE_workmarkhostop((L)->global, (slot)); \
@@ -524,23 +566,45 @@ static_assert(LUA_WBIT_COUNT <= 64, "workdirty bitmask must fit in uint64_t");
 #define luaE_workbufnew(L, n) \
     do \
     { \
-        size_t workbytes = size_t(n); \
-        luaE_worklib(L, LUA_WORK_BUFBYTES, workbytes); \
-        if (workbytes > 1024) \
-            luaE_worklib(L, LUA_WORK_BUFFRESH, workbytes); \
-        if (workbytes >= 65536) \
-            luaE_worklib(L, LUA_WORK_LARGEBUFFER, 1); \
+        if (luaE_worklib_active(L)) \
+        { \
+            size_t workbytes = size_t(n); \
+            uint64_t bufdirty = luaE_workhostopbit(LUA_WORK_BUFBYTES); \
+            (L)->global->work.hostops[LUA_WORK_BUFBYTES] += uint64_t(workbytes); \
+            if (workbytes > 1024) \
+            { \
+                (L)->global->work.hostops[LUA_WORK_BUFFRESH] += uint64_t(workbytes); \
+                bufdirty |= luaE_workhostopbit(LUA_WORK_BUFFRESH); \
+            } \
+            if (workbytes >= 65536) \
+            { \
+                (L)->global->work.hostops[LUA_WORK_LARGEBUFFER] += 1; \
+                bufdirty |= luaE_workhostopbit(LUA_WORK_LARGEBUFFER); \
+            } \
+            luaE_workmark((L)->global, bufdirty); \
+        } \
     } while (0)
 // bytes a buffer copy, fill or string write moved (lua.h LUA_WORK_BUFBYTES), and those of a call over 64 KB again (LUA_WORK_BUFBIGCOPY)
 #define luaE_workbufmove(L, n) \
     do \
     { \
-        size_t workbytes = size_t(n); \
-        luaE_worklib(L, LUA_WORK_BUFBYTES, workbytes); \
-        if (workbytes > 65536) \
-            luaE_worklib(L, LUA_WORK_BUFBIGCOPY, workbytes); \
-        if (workbytes > 1048576) \
-            luaE_worklib(L, LUA_WORK_BUFDRAMCOPY, workbytes); \
+        if (luaE_worklib_active(L)) \
+        { \
+            size_t workbytes = size_t(n); \
+            uint64_t bufdirty = luaE_workhostopbit(LUA_WORK_BUFBYTES); \
+            (L)->global->work.hostops[LUA_WORK_BUFBYTES] += uint64_t(workbytes); \
+            if (workbytes > 65536) \
+            { \
+                (L)->global->work.hostops[LUA_WORK_BUFBIGCOPY] += uint64_t(workbytes); \
+                bufdirty |= luaE_workhostopbit(LUA_WORK_BUFBIGCOPY); \
+            } \
+            if (workbytes > 1048576) \
+            { \
+                (L)->global->work.hostops[LUA_WORK_BUFDRAMCOPY] += uint64_t(workbytes); \
+                bufdirty |= luaE_workhostopbit(LUA_WORK_BUFDRAMCOPY); \
+            } \
+            luaE_workmark((L)->global, bufdirty); \
+        } \
     } while (0)
 
 LUAI_FUNC lua_State* luaE_newthread(lua_State* L);

@@ -659,6 +659,8 @@ static LUAU_FORCEINLINE void freegcoblock(lua_State* L, int sizeClass, void* blo
 // count with its call
 static void countallocated(lua_State* L, size_t nsize, int tt)
 {
+    if (L->global->workoff || !L->stack)
+        return;
     uint64_t dirty = luaE_workhostopbit(LUA_WORK_ALLOCBYTES) | luaE_workhostopbit(LUA_WORK_GCOBJECTS);
     if (luaE_scriptinsn(L))
     {
@@ -667,7 +669,7 @@ static void countallocated(lua_State* L, size_t nsize, int tt)
         dirty |= luaE_workbit(LUA_WBIT_ALLOCATED) | luaE_workbit(LUA_WBIT_OBJECTS);
     }
     // (a library or engine call made it for a script; a userdata is a host's datatype value, which the host prices with its operation)
-    else if (tt != LUA_TUSERDATA && luaE_scriptwork(L) && !luaE_hostcall(L))
+    else if (tt != LUA_TUSERDATA && luaE_worklib_active(L))
     {
         L->global->work.hostops[LUA_WORK_LIBOBJECTS]++;
         dirty |= luaE_workhostopbit(LUA_WORK_LIBOBJECTS);

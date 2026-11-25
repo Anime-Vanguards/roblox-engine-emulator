@@ -1745,25 +1745,40 @@ const char* luaC_statename(int state)
 ** heap's size, the collector's pace and every value a script reads stay the same. A collected object's page goes back to the allocator
 ** only after the marks are cleared (luaC_colddefer), so the list never points into freed memory.
 */
+static const uint16_t kColdOverflowSlot = 0xffffu;
+
 struct ColdCode
 {
     std::vector<int> ran;
     size_t active = SIZE_MAX;
 };
 
+struct ColdProtoSlot
+{
+    Proto* proto = nullptr;
+    std::vector<int> ran;
+    size_t active = SIZE_MAX;
+    uint32_t lastframe = 0;
+};
+
 struct ColdState
 {
-    GCObject** touched;
-    size_t touchedcount;
-    size_t touchedcapacity;
-    lua_Page** pages;
-    size_t pagecount;
-    size_t pagecapacity;
+    GCObject** touched = nullptr;
+    size_t touchedcount = 0;
+    size_t touchedcapacity = 0;
+    lua_Page** pages = nullptr;
+    size_t pagecount = 0;
+    size_t pagecapacity = 0;
     // the frames lua_coldframe began, and the last of them each function's code ran in (LUA_WORK_RAREPROTOS)
-    uint32_t frame;
-    std::unordered_map<const void*, uint32_t>* protolast;
-    std::unordered_map<Proto*, ColdCode> code;
-    std::vector<Proto*> active;
+    uint32_t frame = 0;
+    // direct-indexed slots keyed by 1-based Proto::coldslot (1..65534); avoids per-instruction hash lookups
+    std::vector<ColdProtoSlot> slots;
+    std::vector<uint16_t> freeslots;
+    std::vector<uint16_t> activeSlots;
+    // rare fallbacks: protos touched before coldprepare (lazy stubs / toggle-off), or >65534 live armed protos
+    std::unordered_map<const void*, uint32_t>* protolast = nullptr;
+    std::unordered_map<Proto*, ColdCode>* overflow = nullptr;
+    std::vector<Proto*> activeOverflow;
 };
 
 // the states that track cold touches, by global_State::coldslot (0: none); slots are taken and given back under the lock, and each
@@ -1816,6 +1831,19 @@ static void coldpush(global_State* g, GCObject* o)
 static void coldrecent(global_State* g, GCObject* o, bool charge = true)
 {
     ColdState* c = coldstates[g->coldslot];
+    Proto* p = gco2p(o);
+    uint16_t slot = p->coldslot;
+    if (slot != 0 && slot != kColdOverflowSlot)
+    {
+        uint32_t& last = c->slots[slot - 1].lastframe;
+        if (charge && (last == 0 || last + 1 < c->frame))
+        {
+            g->work.hostops[LUA_WORK_RAREPROTOS]++;
+            luaE_workmarkhostop(g, LUA_WORK_RAREPROTOS);
+        }
+        last = c->frame;
+        return;
+    }
     if (!c->protolast)
         c->protolast = new (std::nothrow) std::unordered_map<const void*, uint32_t>();
     if (!c->protolast)
@@ -1863,8 +1891,50 @@ void luaC_coldprepare(lua_State* L, Proto* p)
     if (p->coldslot)
         return;
     ColdState* c = coldstates[L->global->coldslot];
-    c->code.emplace(p, ColdCode{});
-    p->coldslot = 1;
+    uint32_t prevLast = 0;
+    if (c->protolast)
+    {
+        auto it = c->protolast->find(p);
+        if (it != c->protolast->end())
+        {
+            prevLast = it->second;
+            c->protolast->erase(it);
+        }
+    }
+    uint16_t slotId;
+    if (!c->freeslots.empty())
+    {
+        slotId = c->freeslots.back();
+        c->freeslots.pop_back();
+        ColdProtoSlot& s = c->slots[slotId - 1];
+        s.proto = p;
+        s.ran.clear();
+        s.active = SIZE_MAX;
+        s.lastframe = prevLast;
+    }
+    else if (c->slots.size() < size_t(kColdOverflowSlot) - 1)
+    {
+        slotId = uint16_t(c->slots.size() + 1);
+        ColdProtoSlot s;
+        s.proto = p;
+        s.lastframe = prevLast;
+        c->slots.push_back(std::move(s));
+    }
+    else
+    {
+        slotId = kColdOverflowSlot;
+        if (!c->overflow)
+            c->overflow = new std::unordered_map<Proto*, ColdCode>();
+        c->overflow->emplace(p, ColdCode{});
+        if (prevLast != 0)
+        {
+            if (!c->protolast)
+                c->protolast = new (std::nothrow) std::unordered_map<const void*, uint32_t>();
+            if (c->protolast)
+                (*c->protolast)[p] = prevLast;
+        }
+    }
+    p->coldslot = slotId;
     for (int pc = 0; pc < p->sizecode;)
     {
         int op = LUAU_INSN_OP(p->code[pc]);
@@ -1880,15 +1950,31 @@ void luaC_coldinstruction(lua_State* L, Closure* cl, const Instruction* pc)
     Proto* p = L->ci->p;
     *const_cast<Instruction*>(pc) &= ~Instruction(LUAU_INSN_COLD);
     ColdState* c = coldstates[L->global->coldslot];
-    ColdCode& code = c->code.at(p);
-    bool first = code.active == SIZE_MAX;
-    if (first)
-    {
-        code.active = c->active.size();
-        c->active.push_back(p);
-    }
+    uint16_t slotId = p->coldslot;
     int at = int(pc - p->code);
-    code.ran.push_back(at);
+    bool first;
+    if (slotId != 0 && slotId != kColdOverflowSlot)
+    {
+        ColdProtoSlot& s = c->slots[slotId - 1];
+        first = s.active == SIZE_MAX;
+        if (first)
+        {
+            s.active = c->activeSlots.size();
+            c->activeSlots.push_back(slotId);
+        }
+        s.ran.push_back(at);
+    }
+    else
+    {
+        ColdCode& code = c->overflow->at(p);
+        first = code.active == SIZE_MAX;
+        if (first)
+        {
+            code.active = c->activeOverflow.size();
+            c->activeOverflow.push_back(p);
+        }
+        code.ran.push_back(at);
+    }
     if (luaE_scriptwork(L))
     {
         luaC_touch(L, cl);
@@ -1944,13 +2030,33 @@ void luaC_coldtouch(lua_State* L, GCObject* o)
 
 void luaC_coldfreed(lua_State* L, Proto* p)
 {
-    ColdState* c = coldstates[L->global->coldslot];
-    auto found = c->code.find(p);
-    if (found != c->code.end())
+    if (!L->global->coldslot)
     {
-        if (found->second.active != SIZE_MAX)
-            c->active[found->second.active] = NULL;
-        c->code.erase(found);
+        p->coldslot = 0;
+        return;
+    }
+    ColdState* c = coldstates[L->global->coldslot];
+    uint16_t slotId = p->coldslot;
+    if (slotId != 0 && slotId != kColdOverflowSlot)
+    {
+        ColdProtoSlot& s = c->slots[slotId - 1];
+        if (s.active != SIZE_MAX)
+            c->activeSlots[s.active] = 0;
+        s.proto = nullptr;
+        s.ran.clear();
+        s.active = SIZE_MAX;
+        s.lastframe = 0;
+        c->freeslots.push_back(slotId);
+    }
+    else if (slotId == kColdOverflowSlot && c->overflow)
+    {
+        auto found = c->overflow->find(p);
+        if (found != c->overflow->end())
+        {
+            if (found->second.active != SIZE_MAX)
+                c->activeOverflow[found->second.active] = NULL;
+            c->overflow->erase(found);
+        }
     }
     if (c->protolast)
         c->protolast->erase(p);
@@ -2008,17 +2114,32 @@ bool luaC_colddefer(lua_State* L, lua_Page* page)
 // clears the marks of the objects marked since the last frame and returns the pages freed since then to the allocator
 static void coldclear(lua_State* L, ColdState* c)
 {
-    for (Proto* p : c->active)
+    for (uint16_t slotId : c->activeSlots)
     {
-        if (!p)
+        if (!slotId)
             continue;
-        ColdCode& code = c->code.at(p);
-        for (int pc : code.ran)
+        ColdProtoSlot& s = c->slots[slotId - 1];
+        Proto* p = s.proto;
+        for (int pc : s.ran)
             p->code[pc] |= LUAU_INSN_COLD;
-        code.ran.clear();
-        code.active = SIZE_MAX;
+        s.ran.clear();
+        s.active = SIZE_MAX;
     }
-    c->active.clear();
+    c->activeSlots.clear();
+    if (!c->activeOverflow.empty())
+    {
+        for (Proto* p : c->activeOverflow)
+        {
+            if (!p)
+                continue;
+            ColdCode& code = c->overflow->at(p);
+            for (int pc : code.ran)
+                p->code[pc] |= LUAU_INSN_COLD;
+            code.ran.clear();
+            code.active = SIZE_MAX;
+        }
+        c->activeOverflow.clear();
+    }
     // (a marked object may have been collected since: its block is still in a page of the VM's, kept by luaC_colddefer, and a mark
     // written into a free block or a new object of another kind means nothing)
     for (size_t i = 0; i < c->touchedcount; ++i)
@@ -2029,15 +2150,37 @@ static void coldclear(lua_State* L, ColdState* c)
     c->pagecount = 0;
 }
 
-static void coldrestore(ColdState* c)
+static void coldrestore(ColdState* c, bool preserveLast)
 {
-    for (auto& entry : c->code)
+    for (ColdProtoSlot& s : c->slots)
     {
-        Proto* p = entry.first;
-        coldunarm(p);
-        p->coldslot = 0;
+        if (s.proto)
+        {
+            if (preserveLast && s.lastframe != 0)
+            {
+                if (!c->protolast)
+                    c->protolast = new (std::nothrow) std::unordered_map<const void*, uint32_t>();
+                if (c->protolast)
+                    (*c->protolast)[s.proto] = s.lastframe;
+            }
+            coldunarm(s.proto);
+            s.proto->coldslot = 0;
+        }
     }
-    c->code.clear();
+    c->slots.clear();
+    c->freeslots.clear();
+    c->activeSlots.clear();
+    if (c->overflow)
+    {
+        for (auto& entry : *c->overflow)
+        {
+            Proto* p = entry.first;
+            coldunarm(p);
+            p->coldslot = 0;
+        }
+        c->overflow->clear();
+    }
+    c->activeOverflow.clear();
 }
 
 void luaC_coldfree(lua_State* L)
@@ -2047,10 +2190,11 @@ void luaC_coldfree(lua_State* L)
         return;
     ColdState* c = coldstates[g->coldslot];
     coldclear(L, c);
-    coldrestore(c);
+    coldrestore(c, false);
     free(c->touched);
     free(c->pages);
     delete c->protolast;
+    delete c->overflow;
     delete c;
     {
         std::lock_guard<std::mutex> guard(coldlock);
@@ -2100,7 +2244,7 @@ LUA_API void lua_coldtracking(lua_State* L, int on)
     else if (!on && g->coldon)
     {
         coldclear(L, coldstates[g->coldslot]);
-        coldrestore(coldstates[g->coldslot]);
+        coldrestore(coldstates[g->coldslot], true);
         g->coldon = 0;
     }
 }

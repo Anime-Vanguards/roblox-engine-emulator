@@ -1213,7 +1213,7 @@ reentry:
                     lua_CFunction func = ccl->c.f;
                     if (CountWork && (cl->l.p->flags & LUAU_PROTO_WORK_EXEMPT) == 0)
                     {
-                        if (luaE_hostcall(L))
+                        if (luaE_cfunctionkind_fast(ccl) >= LUAE_HOSTCFUNCTION)
                             ci->flags |= LUA_CALLINFO_WORK_CCALL;
                         luaE_workccall(L, ccl);
                         luaC_coldcall(L, ccl, 0, L->base < L->top ? L->base : NULL, cl->l.p);
@@ -1353,7 +1353,7 @@ reentry:
                     lua_CFunction func = ccl->c.f;
                     if (CountWork && (cl->l.p->flags & LUAU_PROTO_WORK_EXEMPT) == 0)
                     {
-                        if (luaE_hostcall(L))
+                        if (luaE_cfunctionkind_fast(ccl) >= LUAE_HOSTCFUNCTION)
                             ci->flags |= LUA_CALLINFO_WORK_CCALL;
                         luaE_workccall(L, ccl);
                         luaC_coldcall(L, ccl, 0, L->base < L->top ? L->base : NULL, cl->l.p);
@@ -4333,7 +4333,7 @@ int luau_precall(lua_State* L, StkId func, int nresults)
         // (a C function an engine function calls is part of its work, whoever called the engine function: lua_setenginecfunction)
         if (luaE_scriptwork(L) && !((L->ci - 1)->flags & LUA_CALLINFO_WORK_CCALL) && !luaE_engineframe(L, L->ci - 1))
         {
-            if (luaE_hostcall(L))
+            if (luaE_cfunctionkind_fast(ccl) >= LUAE_HOSTCFUNCTION)
                 ci->flags |= LUA_CALLINFO_WORK_CCALL;
             luaE_workccall(L, ccl);
             luaC_coldcall(L, ccl, 0, L->base < L->top ? L->base : NULL, isLua(L->ci - 1) ? clvalue((L->ci - 1)->func)->l.p : NULL);
