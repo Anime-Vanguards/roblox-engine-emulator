@@ -29,10 +29,20 @@ fn number(value: f64) -> Json {
 }
 
 /// A CFrame as playback numbers: `CFrame.new(x, y, z, R00, R01, R02, ...)`'s twelve.
-pub fn cframe_json(transform: &Affine3A) -> Json {
+pub fn cframe_numbers(transform: &Affine3A) -> [f64; 12] {
     let cframe = frame::from_affine(transform);
     let (p, o) = (cframe.position, cframe.orientation);
-    Json::Array([p.x, p.y, p.z, o.x.x, o.x.y, o.x.z, o.y.x, o.y.y, o.y.z, o.z.x, o.z.y, o.z.z].iter().map(|&v| number(v as f64)).collect())
+    [
+        round(p.x as f64), round(p.y as f64), round(p.z as f64),
+        round(o.x.x as f64), round(o.x.y as f64), round(o.x.z as f64),
+        round(o.y.x as f64), round(o.y.y as f64), round(o.y.z as f64),
+        round(o.z.x as f64), round(o.z.y as f64), round(o.z.z as f64),
+    ]
+}
+
+/// A CFrame as playback numbers: `CFrame.new(x, y, z, R00, R01, R02, ...)`'s twelve.
+pub fn cframe_json(transform: &Affine3A) -> Json {
+    Json::Array(cframe_numbers(transform).into_iter().map(|v| json!(v)).collect())
 }
 
 /// A content URI naming a relative local file (`checker.png` the project holds, `./x.png`, `output/x.mesh`,
@@ -242,6 +252,28 @@ pub fn untyped_variant(engine: &Engine, value: &Value, engine_type: crate::refle
         }),
         Value::Dom(v) => (**v).clone(),
         _ => return None,
+    })
+}
+
+/// `uri` (from a Content property's string sibling) as the variant rbx-dom stores `data_type` in,
+/// without allocating an intermediate `Rc<ContentValue>`.
+pub fn content_uri_to_variant(uri: &crate::value::Str, data_type: &DataType) -> Option<Variant> {
+    let DataType::Value(kind) = data_type else { return None };
+    match kind {
+        VariantType::ContentId => Some(Variant::ContentId(
+            if uri.is_empty() { String::new() } else { uri.to_str_lossy().into_owned() }.into(),
+        )),
+        VariantType::Content => Some(content_uri_untyped(uri)),
+        _ => None,
+    }
+}
+
+/// `uri` (from a Content property's string sibling) as an untyped `Variant::Content`.
+pub fn content_uri_untyped(uri: &crate::value::Str) -> Variant {
+    Variant::Content(if uri.is_empty() {
+        dom::Content::none()
+    } else {
+        dom::Content::from_uri(uri.to_str_lossy().into_owned())
     })
 }
 

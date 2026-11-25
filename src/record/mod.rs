@@ -48,8 +48,9 @@ mod tests;
 use std::{cell::RefCell, path::Path, rc::Rc};
 
 use glam::Affine3A;
-use rbx_dom_weak::{InstanceBuilder, WeakDom, types as dom, types::Variant};
+use rbx_dom_weak::{InstanceBuilder, Ustr, WeakDom, types as dom, types::Variant, ustr};
 use rustc_hash::{FxHashMap, FxHashSet};
+use serde::Serialize;
 use serde_json::{Map, Value as Json, json};
 
 use super::{
@@ -231,8 +232,8 @@ struct Record {
     appear: u32,
     visibility: Visibility,
     /// The copy as it appeared: (property, value) as rbx-dom stores them, references separately
-    properties: Vec<(String, Variant)>,
-    references: Vec<(String, InstanceId)>,
+    properties: Vec<(Ustr, Variant)>,
+    references: Vec<(Ustr, InstanceId)>,
     /// Encoded values: as in the file, and as last recorded
     file: FxHashMap<NameId, Json>,
     last: FxHashMap<NameId, Json>,
@@ -280,6 +281,49 @@ struct SoundEvent {
 }
 
 #[derive(Default)]
+struct SiblingNames {
+    used: FxHashSet<String>,
+    /// Next suffix to try for a base name that has already collided (starts at 2)
+    next: FxHashMap<String, usize>,
+}
+
+struct SerializedProp {
+    dom_name: Ustr,
+    stored: NameId,
+    sibling: Option<NameId>,
+    data_type: &'static rbx_reflection::DataType<'static>,
+    is_ref: bool,
+}
+
+struct ExtraProp {
+    dom_name: Ustr,
+    name: NameId,
+    sibling: Option<NameId>,
+    engine_type: crate::reflection::EngineType,
+}
+
+struct TrackedProp {
+    name: NameId,
+    track: Track,
+    sibling: Option<NameId>,
+    is_content_id: bool,
+    file_key: NameId,
+}
+
+struct SnapshotPlan {
+    serialized: Vec<SerializedProp>,
+    extra: Vec<ExtraProp>,
+    known_attrs: bool,
+    visibility: Visibility,
+    is_part: bool,
+    is_attachment: bool,
+    is_bone: bool,
+    is_viewport: bool,
+    is_explosion: bool,
+    tracked: Vec<TrackedProp>,
+}
+
+#[derive(Default)]
 struct Inner {
     frame: u32,
     fps: f64,
@@ -314,7 +358,9 @@ struct Inner {
     warnings: Vec<String>,
     unsupported: FxHashSet<String>,
     /// Sibling names already used in the scene, by parent record (None: the file's roots)
-    names: FxHashMap<Option<usize>, FxHashSet<String>>,
+    names: FxHashMap<Option<usize>, SiblingNames>,
+    /// Precomputed per-class snapshot & tracking plans
+    plans: FxHashMap<ClassId, Rc<SnapshotPlan>>,
     tracked: FxHashMap<ClassId, Rc<[(NameId, Track)]>>,
     /// The instance references the scene file holds, per class
     reference_names: FxHashMap<ClassId, Rc<[NameId]>>,
@@ -365,7 +411,7 @@ impl Recorder {
     pub fn install(engine: &Rc<Engine>, fps: f64) -> Recorder {
         let mut state = Inner { fps, ..Default::default() };
         // (a world root named PlayerGui is renamed rather than mixed with the scene's PlayerGui)
-        state.names.entry(None).or_default().insert(PLAYER_GUI.to_string());
+        state.names.entry(None).or_default().used.insert(PLAYER_GUI.to_string());
         for property in ["Transparency", "Enabled", "Visible", "CameraCFrame", "CameraFieldOfView"] {
             if let Some(name) = engine.reflection.name_id(property) {
                 state.property_names.insert(name, property.to_string());
@@ -583,34 +629,59 @@ fn write_events(path: &Path, events: &Json, lines: Option<std::fs::File>) -> Res
     }
 }
 
+/// Writes pretty-printed JSON with a 4-space prefix on every line directly into `out`,
+/// matching `serde_json::to_writer_pretty` followed by prefixing every line with four spaces.
+struct Indent4Writer<'a>(&'a mut Vec<u8>);
+
+impl std::io::Write for Indent4Writer<'_> {
+    #[inline]
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if buf == b"\n" {
+            self.0.extend_from_slice(b"\n    ");
+            return Ok(1);
+        }
+        if !buf.contains(&b'\n') {
+            self.0.extend_from_slice(buf);
+            return Ok(buf.len());
+        }
+        let mut start = 0;
+        for (i, &b) in buf.iter().enumerate() {
+            if b == b'\n' {
+                self.0.extend_from_slice(&buf[start..i]);
+                self.0.extend_from_slice(b"\n    ");
+                start = i + 1;
+            }
+        }
+        self.0.extend_from_slice(&buf[start..]);
+        Ok(buf.len())
+    }
+
+    #[inline]
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+fn indented_serialize<T: Serialize>(value: &T, out: &mut Vec<u8>) {
+    let start = out.len();
+    out.extend_from_slice(b"    ");
+    let mut serializer = serde_json::Serializer::pretty(Indent4Writer(out));
+    if value.serialize(&mut serializer).is_err() {
+        out.truncate(start);
+        out.extend_from_slice(b"    ");
+    }
+}
+
 /// `value` as pretty JSON two levels in (an element of a top-level object's array): each line 4
 /// spaces in, as the object's pretty JSON holds it.
 fn indented(value: &Json, out: &mut Vec<u8>) {
-    thread_local! {
-        static TEXT: std::cell::RefCell<Vec<u8>> = const { std::cell::RefCell::new(Vec::new()) };
-    }
-    TEXT.with(|text| {
-        let mut text = text.borrow_mut();
-        text.clear();
-        if serde_json::to_writer_pretty(&mut *text, value).is_err() {
-            text.clear();
-        }
-        // (a string's newline is escaped: every raw one ends a line)
-        out.reserve(text.len() + 4 * (1 + text.iter().filter(|&&byte| byte == b'\n').count()));
-        for (index, line) in text.split(|&byte| byte == b'\n').enumerate() {
-            if index > 0 {
-                out.push(b'\n');
-            }
-            out.extend_from_slice(b"    ");
-            out.extend_from_slice(line);
-        }
-    });
+    indented_serialize(value, out);
 }
 
 /// [`indented`] as a block of its own.
-fn element(value: &Json) -> Box<[u8]> {
-    let mut out = Vec::new();
-    indented(value, &mut out);
+fn serialize_element<T: Serialize>(value: &T) -> Box<[u8]> {
+    let mut out = Vec::with_capacity(192);
+    indented_serialize(value, &mut out);
     out.into_boxed_slice()
 }
 
@@ -619,7 +690,7 @@ pub(crate) fn event_line(entry: &crate::output::Entry, out: &mut Vec<u8>) {
     indented(&event_json(entry), out);
 }
 
-/// playback.json: its arrays as their elements' bytes ([`element`]; a recording of a busy scene made
+/// playback.json: its arrays as their elements' bytes ([`serialize_element`]; a recording of a busy scene made
 /// a JSON value of hundreds of thousands of actions and a string of all of it, ~3 GB for one effect scene's).
 struct Playback {
     /// (time, bytes) of each action, in time order
@@ -627,11 +698,6 @@ struct Playback {
     tweens: Vec<Box<[u8]>>,
     motion: Vec<Box<[u8]>>,
     frames: Option<Json>,
-}
-
-/// An action and the time it is sorted by (what its `at` reads as a JSON number, 0 when it is none).
-fn action(value: Json) -> (f64, Box<[u8]>) {
-    (value["at"].as_f64().unwrap_or_default(), element(&value))
 }
 
 fn write_playback(path: &Path, playback: &Playback) -> Result<(), String> {
@@ -908,14 +974,31 @@ fn finite_affine(transform: &Affine3A) -> bool {
 /// A unique name for a copy under `parent` (the file's roots for None): siblings sharing a name
 /// get `~2`, `~3`, ... so every playback path names one instance.
 fn unique_name(inner: &mut Inner, parent: Option<usize>, name: &str) -> String {
-    let used = inner.names.entry(parent).or_default();
-    let mut candidate = name.to_string();
-    let mut count = 1;
-    while used.contains(&candidate) {
-        count += 1;
-        candidate = format!("{name}~{count}");
+    use std::fmt::Write;
+    let entry = inner.names.entry(parent).or_default();
+    if !entry.used.contains(name) {
+        let owned = name.to_string();
+        entry.used.insert(owned.clone());
+        return owned;
     }
-    used.insert(candidate.clone());
+    let mut count = entry.next.get(name).copied().unwrap_or(2);
+    let mut candidate = String::with_capacity(name.len() + 8);
+    loop {
+        candidate.clear();
+        candidate.push_str(name);
+        candidate.push('~');
+        let _ = write!(&mut candidate, "{count}");
+        if !entry.used.contains(&candidate) {
+            break;
+        }
+        count += 1;
+    }
+    entry.used.insert(candidate.clone());
+    if let Some(slot) = entry.next.get_mut(name) {
+        *slot = count + 1;
+    } else {
+        entry.next.insert(name.to_string(), count + 1);
+    }
     candidate
 }
 
@@ -939,28 +1022,17 @@ fn join(path: Option<&str>, name: &str) -> String {
     }
 }
 
-/// The copy of `id` as it is now: its serialized properties (as rbx-dom names and stores them, then
-/// those only Studio's newer dump serializes, such as a UICorner's per-corner radii), references,
-/// attributes and tags.
-#[inline(never)]
-fn snapshot(state: &State, engine: &Engine, id: InstanceId, class: ClassId) -> (Vec<(String, Variant)>, Vec<(String, InstanceId)>) {
-    let mut properties = Vec::new();
-    let mut references = Vec::new();
+/// Precomputes the per-class reflection and tracking metadata once per `ClassId` so `snapshot`
+/// and `appear` avoid repeated `rbx_reflection_database` walks, sorting, and string interning.
+fn snapshot_plan(inner: &mut Inner, engine: &Engine, class: ClassId) -> Rc<SnapshotPlan> {
+    if let Some(found) = inner.plans.get(&class) {
+        return found.clone();
+    }
     let class_name = class_name(engine, class);
     // the builder sets the name, the parent and the class, and the attributes and tags are written below
     let reserved = |property: &str| matches!(property, "Parent" | "Name" | "ClassName" | "Tags" | "Attributes" | "Source");
-    // a Content property the engine keeps as its string sibling (TextureContent: Texture,
-    // MeshContent: MeshId); reading the sibling covers both rbx-dom's database and Studio
-    // properties newer than it (ParticleEmitter, Beam and Trail TextureContent)
-    let read_property = |name: NameId, stored: NameId| -> Option<Value> {
-        if let Some(sibling) = engine.reflection.content_sibling(class, name) {
-            if let Some(Value::String(uri)) = state.dom.raw_get(id, sibling) {
-                let content = if uri.is_empty() { crate::value::ContentValue::None } else { crate::value::ContentValue::Uri(uri.clone()) };
-                return Some(Value::Content(std::rc::Rc::new(content)));
-            }
-        }
-        state.dom.raw_get(id, stored).cloned()
-    };
+    let mut serialized = Vec::new();
+    let mut serialized_names: FxHashSet<&str> = FxHashSet::default();
     for (property, data_type) in encode::serialized_properties(class_name) {
         if reserved(&property) {
             continue;
@@ -969,64 +1041,133 @@ fn snapshot(state: &State, engine: &Engine, id: InstanceId, class: ClassId) -> (
         // a view whose value lives in another property: UICorner's CornerRadius reads TopLeftRadius
         // (services/mod.rs, measured)
         let stored = if class_name == "UICorner" && &*property == "CornerRadius" { K::TopLeftRadius as NameId } else { name };
-        let Some(value) = read_property(name, stored) else { continue };
-        if matches!(data_type, rbx_reflection::DataType::Value(dom::VariantType::Ref)) {
-            if let Value::Instance(target) = value {
-                references.push((property.to_string(), target));
-            }
-            continue;
-        }
-        if let Some(variant) = encode::to_variant(engine, &value, data_type, &|_| None) {
-            properties.push((property.to_string(), variant));
-        }
+        let sibling = engine.reflection.content_sibling(class, name);
+        let is_ref = matches!(data_type, rbx_reflection::DataType::Value(dom::VariantType::Ref));
+        let dom_name = ustr(&property);
+        serialized_names.insert(dom_name.as_str());
+        serialized.push(SerializedProp { dom_name, stored, sibling, data_type, is_ref });
     }
     // serialized in Studio's dump but unknown to rbx-dom's database (every property of a class it does
     // not know, such as UIShadow, Name among them)
     let info = engine.reflection.class(class);
-    let mut extra: Vec<(&str, NameId, u32)> = info
+    let mut extra_raw: Vec<(&str, NameId, crate::reflection::EngineType)> = info
         .properties
         .iter()
         .filter_map(|(&name, &index)| {
             let property = engine.reflection.property(index);
             let text = engine.reflection.name(name);
-            (property.serialized && !reserved(text) && encode::dom_property(class_name, text).is_none() && !properties.iter().any(|(p, _)| p == text))
-                .then_some((text, name, index))
+            (property.serialized
+                && !reserved(text)
+                && encode::dom_property(class_name, text).is_none()
+                && !serialized_names.contains(text))
+            .then_some((text, name, property.engine_type))
         })
         .collect();
-    crate::sort::by(&mut extra, |a, b| a.0.cmp(b.0));
-    for (text, name, index) in extra {
-        let property = engine.reflection.property(index);
-        if let Some(variant) = read_property(name, name).and_then(|value| encode::untyped_variant(engine, &value, property.engine_type)) {
-            properties.push((text.to_string(), variant));
+    crate::sort::by(&mut extra_raw, |a, b| a.0.cmp(b.0));
+    let extra: Vec<ExtraProp> = extra_raw
+        .into_iter()
+        .map(|(text, name, engine_type)| ExtraProp {
+            dom_name: ustr(text),
+            name,
+            sibling: engine.reflection.content_sibling(class, name),
+            engine_type,
+        })
+        .collect();
+    let known_attrs = encode::dom_property(class_name, "Attributes").is_some();
+    let tracked_list = tracked(inner, engine, class);
+    let transp = transparency_name(engine);
+    let tracked_props: Vec<TrackedProp> = tracked_list
+        .iter()
+        .filter(|&&(_, track)| !matches!(track, Track::Motion | Track::Attachment))
+        .map(|&(name, track)| TrackedProp {
+            name,
+            track,
+            sibling: if track == Track::Effective { None } else { engine.reflection.content_sibling(class, name) },
+            is_content_id: engine
+                .reflection
+                .class_property(class, name)
+                .is_some_and(|property| property.engine_type == crate::reflection::EngineType::ContentId),
+            file_key: if track == Track::Effective { transp } else { name },
+        })
+        .collect();
+    let plan = Rc::new(SnapshotPlan {
+        serialized,
+        extra,
+        known_attrs,
+        visibility: visibility_of(engine, class),
+        is_part: is_a(engine, class, "BasePart"),
+        is_attachment: is_a(engine, class, "Attachment"),
+        is_bone: is_a(engine, class, "Bone"),
+        is_viewport: class_name == "ViewportFrame",
+        is_explosion: class_name == "Explosion",
+        tracked: tracked_props,
+    });
+    inner.plans.insert(class, plan.clone());
+    plan
+}
+
+/// The copy of `id` as it is now: its serialized properties (as rbx-dom names and stores them, then
+/// those only Studio's newer dump serializes, such as a UICorner's per-corner radii), references,
+/// attributes and tags.
+#[inline(never)]
+fn snapshot(state: &State, engine: &Engine, id: InstanceId, plan: &SnapshotPlan) -> (Vec<(Ustr, Variant)>, Vec<(Ustr, InstanceId)>) {
+    let mut properties = Vec::with_capacity(plan.serialized.len() + plan.extra.len());
+    let mut references = Vec::new();
+    for prop in &plan.serialized {
+        if prop.is_ref {
+            if let Some(Value::Instance(target)) = state.dom.raw_get(id, prop.stored) {
+                references.push((prop.dom_name, *target));
+            }
+            continue;
+        }
+        let variant = if let Some(sibling) = prop.sibling
+            && let Some(Value::String(uri)) = state.dom.raw_get(id, sibling)
+        {
+            encode::content_uri_to_variant(uri, prop.data_type)
+        } else {
+            state.dom.raw_get(id, prop.stored).and_then(|value| encode::to_variant(engine, value, prop.data_type, &|_| None))
+        };
+        if let Some(mut variant) = variant {
+            encode::localize(engine, &mut variant);
+            properties.push((prop.dom_name, variant));
+        }
+    }
+    for prop in &plan.extra {
+        let variant = if let Some(sibling) = prop.sibling
+            && let Some(Value::String(uri)) = state.dom.raw_get(id, sibling)
+        {
+            Some(encode::content_uri_untyped(uri))
+        } else {
+            state.dom.raw_get(id, prop.name).and_then(|value| encode::untyped_variant(engine, value, prop.engine_type))
+        };
+        if let Some(mut variant) = variant {
+            encode::localize(engine, &mut variant);
+            properties.push((prop.dom_name, variant));
         }
     }
     let instance = state.dom.at(id);
     // what the model it came from held that the engine does not model (a mesh's InitialSize, ...)
     if let Some(unmodeled) = &instance.unmodeled {
-        for (name, value) in unmodeled.iter() {
+        for (name, mut value) in unmodeled.iter() {
             if !properties.iter().any(|(property, _)| property.as_str() == name) {
-                properties.push((name.to_string(), value));
+                encode::localize(engine, &mut value);
+                properties.push((ustr(name), value));
             }
         }
     }
-    // a Content or content ID naming a relative local file names the file the engine read (encode::local_uri)
-    for (_, variant) in properties.iter_mut() {
-        encode::localize(engine, variant);
-    }
     // rbx-binary writes attributes and tags only through its database's Instance entry
-    let known = encode::dom_property(class_name, "Attributes").is_some();
-    if known && !instance.attributes.is_empty() {
+    if plan.known_attrs && !instance.attributes.is_empty() {
         let mut attributes = dom::Attributes::new();
         for (key, value) in &instance.attributes {
             if let Some(variant) = attribute_variant(engine, value) {
                 attributes.insert(key.to_str_lossy().into_owned(), variant);
             }
         }
-        properties.push(("Attributes".into(), Variant::Attributes(attributes)));
+        properties.push((ustr("Attributes"), Variant::Attributes(attributes)));
     }
-    if known && !instance.tags.is_empty() {
+    if plan.known_attrs && !instance.tags.is_empty() {
         let tags: Vec<String> = instance.tags.iter().map(|t| t.to_str_lossy().into_owned()).collect();
-        properties.push(("Tags".into(), Variant::Tags(tags.into())));
+        properties.push((ustr("Tags"), Variant::Tags(tags.into())));
     }
     (properties, references)
 }
@@ -1230,12 +1371,13 @@ fn appear(inner: &mut Inner, state: &State, engine: &Engine, id: InstanceId, par
     } else {
         join(parent.map(|p| inner.records[p].path.as_str()), &unique)
     };
-    let (properties, references) = snapshot(state, engine, id, class);
+    let plan = snapshot_plan(inner, engine, class);
+    let (properties, references) = snapshot(state, engine, id, &plan);
     let refs = reference_names(inner, engine, class).iter().map(|&name| (name, state.dom.raw_get(id, name).and_then(Value::as_instance))).collect();
-    let visibility = if lighting_root { Visibility::Lighting } else { visibility_of(engine, class) };
+    let visibility = if lighting_root { Visibility::Lighting } else { plan.visibility };
     let visibility = if visibility == Visibility::Transparency && is_glass(state, engine, id) { Visibility::Detach } else { visibility };
-    let is_part = is_a(engine, class, "BasePart");
-    let is_attachment = is_a(engine, class, "Attachment");
+    let is_part = plan.is_part;
+    let is_attachment = plan.is_attachment;
     let rest = (is_part || is_attachment).then(|| world::world_cframe(state, engine, id));
     let mut record = Record {
         id,
@@ -1271,25 +1413,39 @@ fn appear(inner: &mut Inner, state: &State, engine: &Engine, id: InstanceId, par
     }
     // a ViewportFrame's camera as Roblox files keep it: its CameraCFrame and CameraFieldOfView (the
     // CurrentCamera reference is not saved), followed as the camera moves (sample_changes)
-    if class_name(engine, class) == "ViewportFrame" {
+    if plan.is_viewport {
         let index = inner.records.len();
         if let Some(camera) = viewport_camera(state, engine, id) {
             inner.viewports.entry(camera).or_default().push(index);
             for (name, variant, json) in camera_values(state, engine, camera) {
-                record.properties.retain(|(property, _)| property.as_str() != engine.reflection.name(name));
-                record.properties.push((engine.reflection.name(name).to_string(), variant));
+                let key = ustr(engine.reflection.name(name));
+                record.properties.retain(|(property, _)| *property != key);
+                record.properties.push((key, variant));
                 record.file.insert(name, json);
             }
         }
     }
     // the file's values of what is tracked
-    for &(name, track) in tracked(inner, engine, class).iter() {
-        if matches!(track, Track::Motion | Track::Attachment) {
-            continue;
-        }
-        if let Some(value) = current(state, engine, id, name, track) {
-            let key = if track == Track::Effective { transparency_name(engine) } else { name };
-            record.file.insert(key, value);
+    for prop in &plan.tracked {
+        let value = if prop.track == Track::Effective {
+            Some(json!(round(effective_transparency(state, engine, id))))
+        } else if let Some(sibling) = prop.sibling {
+            let uri = state.dom.raw_get(id, sibling).and_then(|value| match value {
+                Value::String(uri) => Some(uri.to_string()),
+                _ => None,
+            }).unwrap_or_default();
+            Some(json!(encode::local_uri(engine, &uri).unwrap_or(uri)))
+        } else if let Some(raw) = state.dom.raw_get(id, prop.name) {
+            let content = prop.is_content_id || matches!(raw, Value::Content(_));
+            to_json(engine, raw).map(|encoded| match encoded {
+                Json::String(uri) if content => json!(encode::local_uri(engine, &uri).unwrap_or(uri)),
+                other => other,
+            })
+        } else {
+            None
+        };
+        if let Some(value) = value {
+            record.file.insert(prop.file_key, value);
         }
     }
     // hidden in the file until it appears, then shown by the playback (a Lighting child is kept in the
@@ -1298,7 +1454,7 @@ fn appear(inner: &mut Inner, state: &State, engine: &Engine, id: InstanceId, par
         hide_in_file(&mut record, engine);
         show(&mut record, state, engine, frame);
     }
-    if class_name(engine, class) == "Explosion" && frame > 0 {
+    if plan.is_explosion && frame > 0 {
         record.emits.push((frame, 1.0, None));
     }
     // an attachment hanging off something that is not a part is not carried by a part's motion
@@ -1306,7 +1462,7 @@ fn appear(inner: &mut Inner, state: &State, engine: &Engine, id: InstanceId, par
         inner.sampled.insert(inner.records.len());
     }
     // a bone posed before it appears: the file holds its CFrame without the Transform
-    if posed_bone(state, engine, id) {
+    if plan.is_bone && posed_bone(state, engine, id) {
         inner.sampled.insert(inner.records.len());
     }
     let index = inner.records.len();
@@ -1330,8 +1486,9 @@ fn visible_name() -> NameId {
 /// The file holds the copy hidden (it appears later).
 fn hide_in_file(record: &mut Record, engine: &Engine) {
     let set = |record: &mut Record, property: &str, variant: Variant, name: NameId, encoded: Json| {
-        record.properties.retain(|(p, _)| p != property);
-        record.properties.push((property.to_string(), variant));
+        let key = ustr(property);
+        record.properties.retain(|(p, _)| *p != key);
+        record.properties.push((key, variant));
         record.file.insert(name, encoded);
     };
     match record.visibility {
@@ -1836,6 +1993,7 @@ fn scene(inner: &Inner) -> Result<Vec<u8>, String> {
     let mut roots: Vec<dom::Ref> = Vec::new();
     let mut unique_ids: FxHashSet<dom::UniqueId> = FxHashSet::default();
     let mut next_index = 0u32;
+    let unique_id_key = ustr("UniqueId");
     for record in &inner.records {
         let parent = match record.parent {
             Some(index) => refs[index],
@@ -1851,24 +2009,25 @@ fn scene(inner: &Inner) -> Result<Vec<u8>, String> {
             }),
             None => root,
         };
-        let mut builder = InstanceBuilder::new(record.class_name.as_str()).with_name(record.name.as_str());
-        for (property, value) in &record.properties {
-            let value = match value {
-                // (rbx-dom keeps only the UniqueId property unique)
-                Variant::UniqueId(id) if property == "UniqueId" && !unique_ids.insert(*id) => {
-                    let unique = loop {
-                        let candidate = dom::UniqueId::new(next_index, id.time(), id.random());
-                        next_index = next_index.wrapping_add(1);
-                        if unique_ids.insert(candidate) {
-                            break candidate;
-                        }
-                    };
-                    Variant::UniqueId(unique)
-                }
-                other => other.clone(),
-            };
-            builder = builder.with_property(property.as_str(), value);
-        }
+        let builder = InstanceBuilder::new(record.class_name.as_str())
+            .with_name(record.name.as_str())
+            .with_properties(record.properties.iter().map(|&(property, ref value)| {
+                let value = match value {
+                    // (rbx-dom keeps only the UniqueId property unique)
+                    Variant::UniqueId(id) if property == unique_id_key && !unique_ids.insert(*id) => {
+                        let unique = loop {
+                            let candidate = dom::UniqueId::new(next_index, id.time(), id.random());
+                            next_index = next_index.wrapping_add(1);
+                            if unique_ids.insert(candidate) {
+                                break candidate;
+                            }
+                        };
+                        Variant::UniqueId(unique)
+                    }
+                    other => other.clone(),
+                };
+                (property, value)
+            }));
         let referent = dom.insert(parent, builder);
         if parent == root {
             roots.push(referent);
@@ -1876,37 +2035,16 @@ fn scene(inner: &Inner) -> Result<Vec<u8>, String> {
         refs.push(referent);
     }
     for (index, record) in inner.records.iter().enumerate() {
-        for (property, target) in &record.references {
-            let target = inner.by_id.get(target).map(|&i| refs[i]).unwrap_or_else(dom::Ref::none);
+        for &(property, target) in &record.references {
+            let target = inner.by_id.get(&target).map(|&i| refs[i]).unwrap_or_else(dom::Ref::none);
             if let Some(instance) = dom.get_by_ref_mut(refs[index]) {
-                instance.properties.insert(property.as_str().into(), Variant::Ref(target));
+                instance.properties.insert(property, Variant::Ref(target));
             }
         }
     }
-    let mut bytes = Vec::new();
+    let mut bytes = Vec::with_capacity(inner.records.len().saturating_mul(128));
     rbx_binary::to_writer(&mut bytes, &dom, &roots).map_err(|e| format!("scene.rbxm: {e}"))?;
     Ok(bytes)
-}
-
-/// Frames with values as playback keys: a key the frame before a change after a pause (the value
-/// holds until then), then one per change.
-fn frame_keys(inner: &Inner, list: &[(u32, Json)], initial: Option<&Json>, field: &str) -> Vec<Json> {
-    let mut keys = Vec::new();
-    let mut previous: (Option<u32>, Option<&Json>) = (None, initial);
-    for (frame, value) in list {
-        let gap = match previous.0 {
-            None => *frame > 0,
-            Some(last) => last + 1 < *frame,
-        };
-        if gap {
-            if let Some(held) = previous.1 {
-                keys.push(json!({ "at": time_of(inner, frame - 1), field: held }));
-            }
-        }
-        keys.push(json!({ "at": time_of(inner, *frame), field: value }));
-        previous = (Some(*frame), Some(value));
-    }
-    keys
 }
 
 /// How far a motion track's line may stray from a dropped key's position, in studs. A fixed distance: a bound that
@@ -1915,33 +2053,200 @@ fn frame_keys(inner: &Inner, list: &[(u32, Json)], initial: Option<&Json>, field
 const MOTION_POSITION_STUDS: f64 = 2e-3;
 
 /// What a motion key's numbers may stray by: its position by a fixed distance, its rotation by a proportion.
+#[inline]
 fn motion_allowance(component: usize, value: f64) -> f64 {
     if component < 3 { MOTION_POSITION_STUDS } else { 2e-4 * (1.0 + value.abs()) }
 }
 
-/// Drops keys a straight line between their neighbours reproduces (each number within what `allowed` gives for its
-/// index and value).
-#[inline(never)]
-fn reduce(keys: Vec<Json>, field: &str, allowed: fn(usize, f64) -> f64) -> Vec<Json> {
+/// Typed playback JSON records with fields in exact alphabetical key order (matching `serde_json::Map`).
+#[derive(Serialize)]
+struct EnabledAction<'a> {
+    at: f64,
+    class: &'a str,
+    enabled: bool,
+    target: &'a str,
+}
+
+#[derive(Serialize)]
+struct TimeScaleAction<'a> {
+    at: f64,
+    class: &'a str,
+    target: &'a str,
+    #[serde(rename = "timeScale")]
+    time_scale: &'a Json,
+}
+
+struct SingleField<'a, V: Serialize>(&'a str, &'a V);
+
+impl<V: Serialize> Serialize for SingleField<'_, V> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut map = serializer.serialize_map(Some(1))?;
+        map.serialize_entry(self.0, self.1)?;
+        map.end()
+    }
+}
+
+#[derive(Serialize)]
+struct SetAction<'a, V: Serialize> {
+    at: f64,
+    set: SingleField<'a, V>,
+    target: &'a str,
+}
+
+#[derive(Serialize)]
+struct EmitAction<'a> {
+    at: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cframe: Option<[f64; 12]>,
+    class: &'a str,
+    emit: u64,
+    #[serde(rename = "partSize", skip_serializing_if = "Option::is_none")]
+    part_size: Option<[f64; 3]>,
+    target: &'a str,
+}
+
+#[derive(Serialize)]
+struct ClearAction<'a> {
+    at: f64,
+    class: &'a str,
+    clear: bool,
+    target: &'a str,
+}
+
+#[derive(Serialize)]
+struct ParentAction<'a> {
+    at: f64,
+    parent: &'a str,
+    target: &'a str,
+}
+
+#[derive(Serialize)]
+struct StageAction<'a> {
+    at: f64,
+    class: &'a str,
+    parent: &'a str,
+    target: &'a str,
+}
+
+#[derive(Serialize)]
+struct TweenKey<'a> {
+    at: f64,
+    value: &'a Json,
+}
+
+#[derive(Serialize)]
+struct TweenTrack<'a> {
+    keys: &'a [TweenKey<'a>],
+    property: &'a str,
+    target: &'a str,
+}
+
+#[derive(Serialize)]
+struct MotionKey {
+    at: f64,
+    cframe: [f64; 12],
+}
+
+#[derive(Serialize)]
+struct MotionTrack<'a> {
+    keys: &'a [MotionKey],
+    #[serde(rename = "physicsFrom", skip_serializing_if = "Option::is_none")]
+    physics_from: Option<f64>,
+    target: &'a str,
+}
+
+#[derive(Serialize)]
+struct StillMotionKey {
+    at: u32,
+    cframe: [f64; 12],
+}
+
+#[derive(Serialize)]
+struct StillMotionTrack<'a> {
+    keys: [StillMotionKey; 1],
+    target: &'a str,
+}
+
+/// Drops motion keys a straight line between their neighbours reproduces, directly on `[f64; 12]`.
+fn reduce_motion(keys: Vec<MotionKey>) -> Vec<MotionKey> {
     if keys.len() <= 2 {
         return keys;
     }
-    // (each key's time and numbers read once: the test below visits every key between the anchor and the next)
-    let at: Vec<f64> = keys.iter().map(|key| key["at"].as_f64().unwrap_or_default()).collect();
-    let values: Vec<Option<Vec<f64>>> = keys.iter().map(|key| numbers(&key[field])).collect();
-    let mut kept = vec![keys[0].clone()];
-    let mut anchor = 0;
+    let mut kept = Vec::with_capacity(keys.len());
+    kept.push(MotionKey { at: keys[0].at, cframe: keys[0].cframe });
+    let mut anchor = 0usize;
+    for index in 1..keys.len() - 1 {
+        let a = &keys[anchor].cframe;
+        let b = &keys[index + 1].cframe;
+        let ta = keys[anchor].at;
+        let tb = keys[index + 1].at;
+        let fits = (anchor + 1..=index).all(|between| {
+            let v = &keys[between].cframe;
+            let alpha = (keys[between].at - ta) / (tb - ta).max(1e-9);
+            (0..12).all(|c| (a[c] + (b[c] - a[c]) * alpha - v[c]).abs() <= motion_allowance(c, v[c]))
+        });
+        if !fits {
+            kept.push(MotionKey { at: keys[index].at, cframe: keys[index].cframe });
+            anchor = index;
+        }
+    }
+    let last = &keys[keys.len() - 1];
+    kept.push(MotionKey { at: last.at, cframe: last.cframe });
+    kept
+}
+
+/// Drops tween keys a straight line between their neighbours reproduces, without cloning `Json` values.
+fn reduce_tween<'a>(keys: Vec<TweenKey<'a>>, values: &[Option<Vec<f64>>]) -> Vec<TweenKey<'a>> {
+    if keys.len() <= 2 {
+        return keys;
+    }
+    let mut kept = Vec::with_capacity(keys.len());
+    kept.push(TweenKey { at: keys[0].at, value: keys[0].value });
+    let mut anchor = 0usize;
     for index in 1..keys.len() - 1 {
         let (a, b) = (&values[anchor], &values[index + 1]);
-        let (ta, tb) = (at[anchor], at[index + 1]);
+        let (ta, tb) = (keys[anchor].at, keys[index + 1].at);
         let fits = match (a, b) {
             (Some(a), Some(b)) if a.len() == b.len() => (anchor + 1..=index).all(|between| {
                 let Some(v) = &values[between] else { return false };
                 if v.len() != a.len() {
                     return false;
                 }
-                let alpha = (at[between] - ta) / (tb - ta).max(1e-9);
-                v.iter().zip(a.iter().zip(b.iter())).enumerate().all(|(component, (v, (a, b)))| (a + (b - a) * alpha - v).abs() <= allowed(component, *v))
+                let alpha = (keys[between].at - ta) / (tb - ta).max(1e-9);
+                v.iter().zip(a.iter().zip(b.iter())).all(|(v, (a, b))| (a + (b - a) * alpha - v).abs() <= 1e-4 * (1.0 + v.abs()))
+            }),
+            _ => false,
+        };
+        if !fits {
+            kept.push(TweenKey { at: keys[index].at, value: keys[index].value });
+            anchor = index;
+        }
+    }
+    let last = &keys[keys.len() - 1];
+    kept.push(TweenKey { at: last.at, value: last.value });
+    kept
+}
+
+#[cfg(test)]
+fn reduce(keys: Vec<Json>, field: &str, allowance: fn(usize, f64) -> f64) -> Vec<Json> {
+    if keys.len() <= 2 {
+        return keys;
+    }
+    let numbers = |key: &Json| key.get(field).and_then(encode::numbers);
+    let mut kept = vec![keys[0].clone()];
+    let mut anchor = 0usize;
+    for index in 1..keys.len() - 1 {
+        let (a, b) = (numbers(&keys[anchor]), numbers(&keys[index + 1]));
+        let (ta, tb) = (keys[anchor]["at"].as_f64().unwrap_or(0.0), keys[index + 1]["at"].as_f64().unwrap_or(0.0));
+        let fits = match (&a, &b) {
+            (Some(a), Some(b)) if a.len() == b.len() => (anchor + 1..=index).all(|between| {
+                let Some(v) = numbers(&keys[between]) else { return false };
+                if v.len() != a.len() {
+                    return false;
+                }
+                let alpha = (keys[between]["at"].as_f64().unwrap_or(0.0) - ta) / (tb - ta).max(1e-9);
+                v.iter().enumerate().all(|(c, v)| (a[c] + (b[c] - a[c]) * alpha - v).abs() <= allowance(c, *v))
             }),
             _ => false,
         };
@@ -1966,34 +2271,89 @@ fn playback(inner: &Inner) -> Playback {
     for (record, staged) in records {
         let target = record.path.as_str();
         for (name, track, list) in &record.changes {
-            let property = inner.property_names.get(name).cloned().unwrap_or_default();
+            let property = inner.property_names.get(name).map_or("", String::as_str);
             match track {
                 Track::Enabled => {
                     for (frame, value) in list {
-                        actions.push(action(json!({ "at": time_of(inner, *frame), "target": target, "enabled": value.as_bool() == Some(true), "class": record.class_name })));
+                        let at = time_of(inner, *frame);
+                        actions.push((at, serialize_element(&EnabledAction { at, class: &record.class_name, enabled: value.as_bool() == Some(true), target })));
                     }
                     continue;
                 }
                 Track::TimeScale => {
                     for (frame, value) in list {
-                        actions.push(action(json!({ "at": time_of(inner, *frame), "target": target, "timeScale": value, "class": record.class_name })));
+                        let at = time_of(inner, *frame);
+                        actions.push((at, serialize_element(&TimeScaleAction { at, class: &record.class_name, target, time_scale: value })));
                     }
                     continue;
                 }
                 _ => {}
             }
-            let shape = numbers(&list[0].1).map(|n| n.len());
-            let lerpable = shape.is_some() && list.iter().all(|(_, v)| numbers(v).map(|n| n.len()) == shape);
             let continuous = list.windows(2).any(|pair| pair[1].0 == pair[0].0 + 1);
-            if continuous && lerpable {
-                let initial = if staged { Some(&stage) } else { record.file.get(name).filter(|v| numbers(v).map(|n| n.len()) == shape) };
-                let keys = reduce(frame_keys(inner, list, initial, "value"), "value", |_, value| 1e-4 * (1.0 + value.abs()));
-                tweens.push(element(&json!({ "target": target, "property": property, "keys": keys })));
+            let list_nums: Option<Vec<Vec<f64>>> = if continuous {
+                let first = numbers(&list[0].1);
+                if let Some(first_nums) = first {
+                    let shape = first_nums.len();
+                    let mut all = Vec::with_capacity(list.len());
+                    all.push(first_nums);
+                    let mut ok = true;
+                    for (_, v) in &list[1..] {
+                        match numbers(v) {
+                            Some(n) if n.len() == shape => all.push(n),
+                            _ => {
+                                ok = false;
+                                break;
+                            }
+                        }
+                    }
+                    ok.then_some(all)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            if let Some(list_nums) = list_nums {
+                let shape = list_nums[0].len();
+                let (initial, initial_nums): (Option<&Json>, Option<Vec<f64>>) = if staged {
+                    (Some(&stage), None)
+                } else {
+                    match record.file.get(name) {
+                        Some(v) => match numbers(v) {
+                            Some(n) if n.len() == shape => (Some(v), Some(n)),
+                            _ => (None, None),
+                        },
+                        None => (None, None),
+                    }
+                };
+                let mut keys: Vec<TweenKey<'_>> = Vec::with_capacity(list.len() * 2);
+                let mut key_nums: Vec<Option<Vec<f64>>> = Vec::with_capacity(list.len() * 2);
+                let mut prev_frame: Option<u32> = None;
+                let mut prev_val: Option<&Json> = initial;
+                let mut prev_nums: Option<Vec<f64>> = initial_nums;
+                for ((frame, value), nums) in list.iter().zip(list_nums.into_iter()) {
+                    let gap = match prev_frame {
+                        None => *frame > 0,
+                        Some(last) => last + 1 < *frame,
+                    };
+                    if gap {
+                        if let Some(held) = prev_val {
+                            keys.push(TweenKey { at: time_of(inner, frame - 1), value: held });
+                            key_nums.push(prev_nums.clone());
+                        }
+                    }
+                    keys.push(TweenKey { at: time_of(inner, *frame), value });
+                    key_nums.push(Some(nums.clone()));
+                    prev_frame = Some(*frame);
+                    prev_val = Some(value);
+                    prev_nums = Some(nums);
+                }
+                let keys = reduce_tween(keys, &key_nums);
+                tweens.push(serialize_element(&TweenTrack { keys: &keys, property, target }));
             } else {
                 for (frame, value) in list {
-                    let mut set = Map::new();
-                    set.insert(property.clone(), value.clone());
-                    actions.push(action(json!({ "at": time_of(inner, *frame), "target": target, "set": set })));
+                    let at = time_of(inner, *frame);
+                    actions.push((at, serialize_element(&SetAction { at, set: SingleField(property, value), target })));
                 }
             }
         }
@@ -2002,41 +2362,59 @@ fn playback(inner: &Inner) -> Playback {
         for (frame, count, from) in &record.emits {
             let count = count.round();
             if count > 0.0 {
-                let mut action = json!({ "at": time_of(inner, *frame), "target": target, "emit": count as u64, "class": record.class_name });
-                if let Some(from) = from.filter(|from| finite_affine(&from.cframe)) {
-                    action["cframe"] = cframe_json(&from.cframe);
-                    if let Some(size) = from.part_size.filter(|size| size.is_finite()) {
-                        action["partSize"] = json!([round(size.x as f64), round(size.y as f64), round(size.z as f64)]);
-                    }
-                }
-                actions.push(self::action(action));
+                let at = time_of(inner, *frame);
+                let (cframe, part_size) = match from.filter(|from| finite_affine(&from.cframe)) {
+                    Some(from) => (
+                        Some(encode::cframe_numbers(&from.cframe)),
+                        from.part_size.filter(|size| size.is_finite()).map(|size| [round(size.x as f64), round(size.y as f64), round(size.z as f64)]),
+                    ),
+                    None => (None, None),
+                };
+                actions.push((at, serialize_element(&EmitAction { at, cframe, class: &record.class_name, emit: count as u64, part_size, target })));
             }
         }
         // instance references written after it appeared: the path of the instance named, or none
         for (frame, name, named) in &record.ref_changes {
-            let property = inner.property_names.get(name).cloned().unwrap_or_default();
-            let value = named.and_then(|named| inner.by_id.get(&named)).map_or(Json::Null, |&found| json!(inner.records[found].path));
-            let mut set = Map::new();
-            set.insert(property, value);
-            actions.push(action(json!({ "at": time_of(inner, *frame), "target": target, "set": set })));
+            let property = inner.property_names.get(name).map_or("", String::as_str);
+            let target_path: Option<&str> = named.and_then(|named| inner.by_id.get(&named)).map(|&found| inner.records[found].path.as_str());
+            let at = time_of(inner, *frame);
+            actions.push((at, serialize_element(&SetAction { at, set: SingleField(property, &target_path), target })));
         }
         for frame in &record.clears {
-            actions.push(action(json!({ "at": time_of(inner, *frame), "target": target, "clear": true, "class": record.class_name })));
+            let at = time_of(inner, *frame);
+            actions.push((at, serialize_element(&ClearAction { at, class: &record.class_name, clear: true, target })));
         }
         for (frame, _, path) in &record.parents {
-            actions.push(action(json!({ "at": time_of(inner, *frame), "target": target, "parent": path })));
+            let at = time_of(inner, *frame);
+            actions.push((at, serialize_element(&ParentAction { at, parent: path, target })));
         }
         if !record.motion.is_empty() {
-            let list: Vec<(u32, Json)> = record.motion.iter().map(|(frame, cframe)| (*frame, cframe_json(cframe))).collect();
-            let keys = reduce(frame_keys(inner, &list, None, "cframe"), "cframe", motion_allowance);
-            match record.physics_from.filter(|_| !record.physics_steered) {
-                Some(frame) => motion.push(element(&json!({ "target": target, "keys": keys, "physicsFrom": time_of(inner, frame) }))),
-                None => motion.push(element(&json!({ "target": target, "keys": keys }))),
+            let mut keys: Vec<MotionKey> = Vec::with_capacity(record.motion.len() * 2);
+            let mut prev_frame: Option<u32> = None;
+            let mut prev_val: Option<[f64; 12]> = None;
+            for (frame, cframe) in &record.motion {
+                let gap = match prev_frame {
+                    None => *frame > 0,
+                    Some(last) => last + 1 < *frame,
+                };
+                if gap {
+                    if let Some(held) = prev_val {
+                        keys.push(MotionKey { at: time_of(inner, frame - 1), cframe: held });
+                    }
+                }
+                let val = encode::cframe_numbers(cframe);
+                keys.push(MotionKey { at: time_of(inner, *frame), cframe: val });
+                prev_frame = Some(*frame);
+                prev_val = Some(val);
             }
+            let keys = reduce_motion(keys);
+            let physics_from = record.physics_from.filter(|_| !record.physics_steered).map(|frame| time_of(inner, frame));
+            motion.push(serialize_element(&MotionTrack { keys: &keys, physics_from, target }));
         }
     }
     for (frame, class, shown) in &inner.stage {
-        actions.push(action(json!({ "at": time_of(inner, *frame), "target": "Lighting", "class": class, "parent": if *shown { "Lighting" } else { "" } })));
+        let at = time_of(inner, *frame);
+        actions.push((at, serialize_element(&StageAction { at, class, parent: if *shown { "Lighting" } else { "" }, target: "Lighting" })));
     }
     // a part that stays put under a part that moves stays put (ror carries what is under a moving part);
     // an attachment or a bone (an Attachment) is never pinned: it goes where its part goes
@@ -2046,7 +2424,10 @@ fn playback(inner: &Inner) -> Playback {
             while let Some(index) = ancestor {
                 let above = &inner.records[index];
                 if !above.motion.is_empty() && above.rest.is_some() {
-                    motion.push(element(&json!({ "target": record.path, "keys": [{ "at": 0, "cframe": cframe_json(&record.rest.unwrap()) }] })));
+                    motion.push(serialize_element(&StillMotionTrack {
+                        keys: [StillMotionKey { at: 0, cframe: encode::cframe_numbers(&record.rest.unwrap()) }],
+                        target: &record.path,
+                    }));
                     break;
                 }
                 ancestor = above.parent;
