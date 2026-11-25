@@ -117,7 +117,7 @@ impl Permits {
                 Some((action, capabilities.as_str()?.into()))
             })
             .collect();
-        permits.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+        crate::sort::by(&mut permits, |a, b| a.0.cmp(&b.0));
         Permits(permits.into_boxed_slice())
     }
 
@@ -208,6 +208,7 @@ impl ParameterInfo {
     }
 }
 
+#[inline(never)]
 fn luau_text(value: &serde_json::Value) -> String {
     use serde_json::Value as J;
     match value {
@@ -221,7 +222,7 @@ fn luau_text(value: &serde_json::Value) -> String {
             },
             (Some("table"), Some(J::Object(items)), _) => {
                 let mut parts: Vec<String> = items.iter().map(|(key, item)| format!("{key} = {}", luau_text(item))).collect();
-                parts.sort();
+                crate::sort::ord(&mut parts);
                 format!("{{{}}}", parts.join(", "))
             }
             (Some("table"), _, _) => "{}".into(),
@@ -550,6 +551,7 @@ impl Members {
     /// The members of every class of `reflection`, from the dump it was read from: its own lists give each class's
     /// members and order (then the methods and properties it has only through behaviours), the dump's entry the rest (an
     /// engine member has none). The load made class n of the dump's n-th entry with a name, so entries are matched by place.
+    #[inline(never)]
     pub(super) fn build(reflection: &Reflection, dump: &[u8]) -> Members {
         let classes = serde_json::from_slice::<Dump<MemberClass>>(dump).map(|dump| dump.classes).unwrap_or_default();
         let entries: Vec<&MemberClass> = classes.iter().filter(|class| text(class.name.as_ref()).is_some()).collect();
@@ -862,13 +864,14 @@ impl Reflection {
 
     /// Every property rbx-dom's database lists for `class` itself (not its superclasses), by name: the ones files hold that
     /// no script reaches as well (BasePart's `size`, `Color3uint8`; Instance's `Tags`, `AttributesSerialize`).
+    #[inline(never)]
     pub fn dom_properties(&self, class: ClassId) -> Vec<DomProperty> {
         let Some(descriptor) = rbx_reflection_database::get().ok().and_then(|database| database.classes.get(&*self.classes[class as usize].name)) else {
             return Vec::new();
         };
         let mut properties: Vec<DomProperty> =
             descriptor.properties.iter().map(|(name, property)| dom_property(&descriptor.name, name, property)).collect();
-        properties.sort_unstable_by(|a, b| a.name.cmp(b.name));
+        crate::sort::by(&mut properties, |a, b| a.name.cmp(b.name));
         properties
     }
 }
@@ -1434,7 +1437,7 @@ mod tests {
             .flat_map(|(class, names)| names.iter().map(move |name| (class.to_string(), "method", name.to_string(), false)))
             .chain(BEHAVIOR_PROPERTIES.iter().map(|&(class, name, _, _, read_only, _)| (class.to_string(), "property", name.to_string(), read_only)))
             .collect();
-        listed.sort();
+        crate::sort::ord(&mut listed);
         assert_eq!(listed.iter().filter(|entry| entry.1 == "method").count(), BEHAVIOR_ONLY_NAMES.len());
         for (mode, context) in [("play", crate::RunContext::Client), ("play", crate::RunContext::Server), ("edit", crate::RunContext::Edit)] {
             let engine = crate::Engine::new(crate::Options { mode: mode.into(), run_context: context, ..crate::Options::default() }).unwrap();
@@ -1456,7 +1459,7 @@ mod tests {
                     found.push((info.name.to_string(), "property", reflection.name(name).to_string(), read_only));
                 }
             }
-            found.sort();
+            crate::sort::ord(&mut found);
             assert_eq!(found, listed, "{mode} {}", context.name());
         }
         // the metadata finds them, as the engine's members with no recorded signature
@@ -1493,7 +1496,7 @@ mod tests {
         let font = reflection.enum_by_name("Font").unwrap();
         let medium = reflection.enum_item("Font", "GothamMedium").unwrap();
         let mut legacy: Vec<&str> = reflection.legacy_names(medium).collect();
-        legacy.sort_unstable();
+        crate::sort::ord(&mut legacy);
         assert_eq!(legacy, ["GothamSemibold", "MontserratMedium"]);
         assert!(reflection.enum_items_of(font.id).all(|item| reflection.legacy_names(item.id).all(|name| name != &*item.name)));
         assert!(reflection.enum_items_of(font.id).any(|item| item.id == medium));
