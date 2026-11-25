@@ -404,7 +404,7 @@ test("every workspace manifest enters both CI and release cache keys, and Part 2
 	assert.doesNotMatch(standaloneJob, /components: clippy/);
 });
 
-test("the resource budgets run once, in Part 2 after the release build, writing only under the runner's temp folder", () => {
+test("the resource budgets run once, last in Part 2, after the caches are stored, writing only under the runner's temp folder", () => {
 	const testJob = WORKFLOW.split(/^  test:\r?\n/m)[1].split(/^  planted:\r?\n/m)[0];
 	const steps = testJob.split(/^      - /m);
 	const index = name => steps.findIndex(step => step.startsWith(`name: ${name}\n`) || step.startsWith(`name: ${name}\r\n`));
@@ -412,7 +412,12 @@ test("the resource budgets run once, in Part 2 after the release build, writing 
 	const figures = steps[index("Keep the resource figures")];
 	assert.ok(budgets && figures, "the test job has the resource budget steps");
 	assert.equal(WORKFLOW.split("tools/resources/measure.mjs").length, 2, "the budgets run once");
-	assert.ok(index("Build release binaries") < index("Resource budgets") && index("Resource budgets") < index("Keep the resource figures") && index("Keep the resource figures") < index("Compile cache statistics"));
+	// after the release build, sccache's stop and the compile cache's store, so a red budget never keeps a cache from being
+	// saved; the two are the job's last steps
+	const order = ["Build release binaries", "Compile cache statistics", "Store the compile cache", "Resource budgets", "Keep the resource figures"].map(index);
+	assert.ok(order.every(at => at > 0), "a step is missing");
+	assert.deepEqual(order, [...order].sort((a, b) => a - b));
+	assert.equal(index("Keep the resource figures"), steps.length - 1, "the figures are the job's last step");
 	for (const step of [budgets, figures]) assert.match(step, /if: \$\{\{ !cancelled\(\) && strategy\.job-index == 1 \}\}/);
 	// what it writes goes under runner.temp, passed through env (no context in the script itself)
 	assert.match(budgets, /FIGURES: \$\{\{ runner\.temp \}\}\/resource-figures/);

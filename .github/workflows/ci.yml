@@ -109,10 +109,24 @@ jobs:
       - name: Build release binaries
         if: ${{ !cancelled() && strategy.job-index == 1 }}
         run: cargo build --release --locked
+      - name: Compile cache statistics
+        if: ${{ !cancelled() }}
+        run: node tools/ci/compile-cache.mjs stop
+      # Stored by main alone, from this job's second part alone (which compiles the workspace libraries including the
+      # engine rlib), and only under a key that is not stored yet: a run that found its key has compiled nothing new from
+      # vendor/. A red job stores nothing.
+      - name: Store the compile cache
+        if: ${{ github.ref == 'refs/heads/main' && steps.compile-cache-restore.outputs.cache-hit != 'true' && strategy.job-index == 1 }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/compile-cache
+          key: ${{ steps.compile-cache.outputs.key }}
       # Resource budgets (tools/resources; AGENTS.md "Resource budgets"): the ci suite's workloads run with the ree the
-      # step above built, and what each one wrote to disk, kept on it, left behind, and held in memory is checked against
-      # tools/resources/baseline.json. A figure over its budget fails the job; the plain-language report is the job
-      # summary. Everything it writes (workloads, figures, the watcher it builds) is under the runner's temp folder.
+      # release build made, and what each one wrote to disk, kept on it, left behind, and held in memory is checked
+      # against tools/resources/baseline.json. A figure over its budget fails the job; the plain-language report is the
+      # job summary. Everything it writes (workloads, figures, the watcher it builds) is under the runner's temp folder.
+      # It runs last, after the caches are stored and sccache has stopped, so a red budget never keeps them from being
+      # saved.
       - name: Resource budgets
         if: ${{ !cancelled() && strategy.job-index == 1 }}
         env:
@@ -136,18 +150,6 @@ jobs:
           path: ${{ runner.temp }}/resource-figures
           retention-days: 90
           if-no-files-found: ignore
-      - name: Compile cache statistics
-        if: ${{ !cancelled() }}
-        run: node tools/ci/compile-cache.mjs stop
-      # Stored by main alone, from this job's second part alone (which compiles the workspace libraries including the
-      # engine rlib), and only under a key that is not stored yet: a run that found its key has compiled nothing new from
-      # vendor/. A red job stores nothing.
-      - name: Store the compile cache
-        if: ${{ github.ref == 'refs/heads/main' && steps.compile-cache-restore.outputs.cache-hit != 'true' && strategy.job-index == 1 }}
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ${{ runner.temp }}/compile-cache
-          key: ${{ steps.compile-cache.outputs.key }}
 
   planted:
     if: ${{ !github.event.repository.private }}

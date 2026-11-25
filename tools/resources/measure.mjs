@@ -42,6 +42,9 @@ import * as suite from "./suite.mjs";
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, "..", "..");
 const BASELINE = path.join(HERE, "baseline.json");
+// A service or worker that has just exited can hold a handle in the run's folder for a few ms more on Windows (EBUSY,
+// EPERM): its removal is tried again
+const REMOVE_WORK = { recursive: true, force: true, maxRetries: 5, retryDelay: 200 };
 
 function parseArgs(argv) {
 	const args = { watch: [], rest: null };
@@ -164,7 +167,7 @@ async function main() {
 		const rows = check(result, null);
 		console.log(text({ suite: "command", platform, against: "nothing", checked: [{ workload, rows, result, verdict: result.exitCode === 0 ? "new" : "fail" }] }));
 		if (args.out) fs.writeFileSync(args.out, `${JSON.stringify({ platform, workloads: { command: { ...result } } }, null, "\t")}\n`);
-		if (!args.keep) fs.rmSync(work, { recursive: true, force: true });
+		if (!args.keep) fs.rmSync(work, REMOVE_WORK);
 		return result.exitCode === 0 ? 0 : 1;
 	}
 
@@ -199,7 +202,7 @@ async function main() {
 
 	const repeat = saved ? 0 : Math.max(1, Number(args.repeat) || 1);
 	if (!saved) {
-		fs.rmSync(work, { recursive: true, force: true });
+		fs.rmSync(work, REMOVE_WORK);
 		fs.mkdirSync(work, { recursive: true });
 	}
 	const order = [];
@@ -272,7 +275,7 @@ async function main() {
 		writeBaseline(BASELINE, platform, entries);
 		console.log(`baseline.json: ${Object.keys(entries).length} workloads recorded for ${platform} (${repeat} runs each)`);
 	}
-	if (!args.keep && !saved) fs.rmSync(work, { recursive: true, force: true });
+	if (!args.keep && !saved) fs.rmSync(work, REMOVE_WORK);
 	else if (!saved) console.error(`kept the run's folders in ${work}`);
 	if (args["write-baseline"]) return checked.some(item => item.result.exitCode !== 0) ? 1 : 0;
 	return checked.some(item => item.verdict === "fail") ? 1 : 0;
