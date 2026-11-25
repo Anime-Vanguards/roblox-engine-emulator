@@ -1559,20 +1559,25 @@ pub const GLUE_LISTED: f64 = 0.37e-6;
 /// four cases that take Welds out), of which ree's Parent write of it (instance.rs: 0.54 to 0.77 us here), [`JOINT_TAKEN_OUT`], two
 /// [`JOINT_LIST_LEFT`] and UNJOIN_NAMED pay 1.9 to 2.1, and UNJOIN_REMOVED the rest on average, its link change's flat prices among
 /// it (those Welds join anchored parts, whose links change no assembly and pay [`LINK_CHANGED`] alone: world/joints.rs
-/// charge_link). While the call takes joints out (Joints::unpriced), charge_link charges a removal that ends a single link only
-/// what grows with the links and the assemblies, [`LINK_FRAME`] for the frame's first change, [`LINK_PART`] for each part it marks
-/// and [`links_more`], and a removal that ends several links at once (a joint carrying others) every link price, as its Parent = nil
-/// pays; so taking one leaf off a hub costs the call what the leaf's Parent = nil costs, as a client's does
+/// charge_link). While the call takes joints out (Joints::unpriced), charge_link charges a removal that ends a single link no flat
+/// link-change price ([`LINK_CHANGED`], [`LINK_SPLIT_AGAIN`], [`LINK_REJOINED`]) and the rest as ever, [`LINK_FRAME`] for the frame's
+/// first change, [`link_assembly`] for each assembly's first and [`links_more`] (a client's call pays each split's assembly price as
+/// the same Welds' Parent = nil in a loop does: world/joints.rs charge_link), and a removal that ends several links at once (a joint
+/// carrying others) every link price, as its Parent = nil pays; so taking one leaf off a hub costs the call what the leaf's Parent =
+/// nil costs, as a client's does
 /// (Studio 0.748, the same method, one leaf of an anchored hub welded to N unanchored parts, at a frame's start:
 /// UnjoinFromOutsiders({leaf}) 91 to 118 us at N = 1,000 and 975 to 1,154 at 10,000, the leaf's Weld's Parent = nil 99 to 129 and
 /// 1,026 to 1,201; ree reads 124 and 889 for the call, 133 and 898 for the write); the entries before one that raises are an ignore
 /// list's [`LIST_CAST_FAILED`] (0.19). ree's clock then reads 0.82 to 1.08 of the client's call at 10,000 entries in each case but
 /// the Welded pairs (0.63 to 0.64), the Welds taken out 0.86 to 0.97; and 0.74 to 1.29 at 1,000 but the nil holes (0.50 to 0.56)
-/// and a call that raises (0.64 to 0.70), the Welds taken out 1.07 to 1.25 (each case's whole call against both runs'). Not
-/// modelled: a joint taken off a part that keeps many active joints costs a client about 0.1 us for each it keeps, whatever their
-/// class (a Weld or a Glue leaf off a hub of 10,000 Welds, or off a hub of 10,000 Glue, 0.97 to 1.17 ms; off a hub of 10,000
-/// disabled Welds 0.11 to 0.13), which ree charges a Weld through its assembly's parts (the same count for a hub of Welds) and a
-/// Glue not at all.
+/// and a call that raises (0.64 to 0.70), the Welds taken out 1.07 to 1.25 (each case's whole call against both runs'). What a joint
+/// taken off a part that keeps many others costs a client follows the parts of the part's assembly, not the joints it keeps
+/// (roblox-sim, Studio 0.747, two sessions; one leaf's Weld out at a frame's start, an anchored hub keeping N joints, less 51 to 72 us
+/// with none): 0.082 and 0.096 us a joint kept at N = 1,000 and 10,000 for Welds to unanchored parts (ree's LINK_PART 0.085 a part
+/// of the assembly: x1.0 and x0.88), 0.093 for Glue to unanchored parts (a client's Glue joins assemblies; ree's links nothing:
+/// x0.33 and x0.05), 0.073 and 0.045 for N Welds between the hub and the leaf (parallel, the link kept: x0.34 and x0.08), 0.005 for
+/// Welds to anchored parts (each an assembly of its own; ree charges the hub's component, anchored parts and all: x2.4 and x7.8)
+/// and 0.002 for disabled ones. Not modelled: those three differ from the assemblies ree prices by.
 pub const UNJOIN_ENTRY: f64 = 0.057e-6;
 pub const UNJOIN_HOLE: f64 = 0.065e-6;
 pub const UNJOIN_PART: f64 = 0.35e-6;
@@ -1831,10 +1836,18 @@ pub fn link_assembly(parts: usize) -> f64 {
 /// and 5.4 ms right after they joined in the same frame, where these charged 5.1 ms and 2 us), joined 3.5 to 7.1, the same welds in
 /// a Folder 3.2 to 5.2 out and 1.9 to 6.0 in, N pairs 4.2 to 5.8 a pair; links that split nothing off (a Folder of welds among a
 /// star's leaves, or between two parts) 0.3 to 1.3 us a link out and 1.0 to 4.1 in, links between anchored parts 0.5 to 1.7 out
-/// (1,000 of them 1.4 ms at a frame's start, charged 5.1 ms) and 1.2 to 2.2 in. Fitted on 133 rows: x0.6 to x1.6 for most (rms
-/// of the log ratio 0.49); pieces of two parts x0.4 to x0.7.
-pub const LINK_MORE: f64 = 0.6e-6;
-pub const LINK_PIECE: f64 = 4e-6;
+/// (1,000 of them 1.4 ms at a frame's start, charged 5.1 ms) and 1.2 to 2.2 in. Those timings hold the joints' list work, which
+/// [`JOINT_TAKEN_OUT`] and [`JOINT_LIST_LEFT`] (each joint taken out of its parts' lists) and [`GLUE_LISTED`] price since, so the two
+/// were fitted again with them charged (2026-11-25, the same client, two sessions that agreed: single Parent writes, out at a frame's
+/// start and in right after it in the same frame, the welds' C0 keeping each part in place, less the same with the welds disabled;
+/// N = 100 and 1,000: an anchored hub's N unanchored leaves by their welds' Folder 2.0 ms out and 1.7 in at 1,000, by the hub 2.2
+/// and 1.8, N anchored leaves 0.51 and 0.36, N welds between two parts 0.29 and 2.1, N pairs' welds in 2.7, 18 rows; N pairs out
+/// left aside, quadratic on a client): rms of the log ratio 0.62 where the old prices read 0.97, the joins x0.86 to x1.10 (x2.5 to
+/// x3.6 before) and links between anchored parts x1.4 to x1.8 (x2.5 to x3.3). Not changed by these two: a split at a frame's start
+/// pays each fresh piece's [`link_assembly`], x1.6 to x3.0 of a client's there, and links joined between two parts read x0.26 to
+/// x0.32 (a client's 2.1 us a link).
+pub const LINK_MORE: f64 = 0.06e-6;
+pub const LINK_PIECE: f64 = 1.05e-6;
 /// What a write's further links cost ([`LINK_MORE`]): `links` links beyond its first, `pieces` pieces.
 pub fn links_more(links: usize, pieces: usize) -> f64 {
     links as f64 * LINK_MORE + pieces as f64 * LINK_PIECE

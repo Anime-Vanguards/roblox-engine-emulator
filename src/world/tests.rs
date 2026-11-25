@@ -1382,16 +1382,17 @@ fn unjoin_from_outsiders_takes_out_the_joints_to_unlisted_parts() {
             return Cost
         end
         -- (each Weld to an unanchored part taken out at a frame's start leaves two parts of one part each, marked once: the frame's
-        -- first change, and each part a link change marks, are all a Weld pays beyond a Glue; a Weld between two anchored parts, each
-        -- an assembly of its own, changes no assembly and pays nothing beyond)
+        -- first change, and each assembly's first change with each part it marks, are all a Weld pays beyond a Glue, as a client's
+        -- call pays each split's assembly price; a Weld between two anchored parts, each an assembly of its own, changes no assembly
+        -- and pays nothing beyond)
         local Welded, Glued = OwnParts("Weld", false), OwnParts("Glue", false)
-        local Want = LINK_FRAME + 400 * LINK_PART
+        local Want = LINK_FRAME + 400 * (LINK_ASSEMBLY + LINK_PART)
         assert(math.abs(Welded - Glued - Want) < 1e-7, string.format("200 Welds taken out cost %.4g more than 200 Glue, not %.4g", Welded - Glued, Want))
         local Fixed, FixedGlue = OwnParts("Weld"), OwnParts("Glue")
         assert(math.abs(Fixed - FixedGlue) < 1e-7, string.format("200 Welds between anchored parts cost %.4g more than 200 Glue", Fixed - FixedGlue))
         -- (one leaf of an anchored hub welded to 2,000 unanchored leaves: the link change marks both sides, the leaf and the hub with
-        -- its 1,999 other leaves, and its Weld costs the call that many parts' LINK_PART and the frame's first change more than a Glue
-        -- leaf's)
+        -- its 1,999 other leaves, and its Weld costs the call their two assemblies' prices and the frame's first change more than a
+        -- Glue leaf's)
         do
             local Star = Instance.new("Folder")
             Star.Parent = Root
@@ -1413,7 +1414,7 @@ fn unjoin_from_outsiders_takes_out_the_joints_to_unlisted_parts() {
             Spent({})
             local GlueLeaf = Spent({ Glued })
             assert(Made.GlueSpoke.Parent == nil, "the leaf's Glue stayed")
-            local Want = LINK_FRAME + 2001 * LINK_PART
+            local Want = LINK_FRAME + 2 * LINK_ASSEMBLY + 2001 * LINK_PART
             assert(math.abs(WeldLeaf - GlueLeaf - Want) < 1e-7, string.format("a leaf's Weld cost %.4g more than a Glue leaf's, not %.4g", WeldLeaf - GlueLeaf, Want))
             Star:Destroy()
         end
@@ -1439,7 +1440,7 @@ fn unjoin_from_outsiders_takes_out_the_joints_to_unlisted_parts() {
             local Start = os.clock()
             Carrier.Parent = nil
             local Plain = os.clock() - Start
-            local Waived = LINK_CHANGED + LINK_SPLIT_AGAIN + 2 * LINK_ASSEMBLY
+            local Waived = LINK_CHANGED + LINK_SPLIT_AGAIN
             assert(Call >= Plain - Waived, string.format("the carrying Weld's removal cost the call %.4g, its Parent = nil %.4g", Call, Plain))
             Carry:Destroy()
         end
@@ -3970,11 +3971,14 @@ fn link_changes_of_every_kind_pay_for_their_assembly_once_a_frame() {
 }
 
 /// One write that ends or starts several links pays for each beyond the first and for each piece it splits off or joins, at a
-/// frame's start and later in it, as a playing client's does (cost.rs LINK_MORE, LINK_PIECE; Studio 0.747: an anchored part's 1,000
-/// leaves split off by one write 5.4 ms at a frame's start and right after they joined in the frame alike): beyond the same writes
-/// with the welds disabled, an anchored hub welded to 100 unanchored parts taken out at a frame's start, put back and taken out again
-/// in that frame; the same with 100 anchored parts, whose links change no assembly (no frame's or assembly's price, as a client's
-/// cost it 4 to 8 us for one); and a Folder of 100 welds among a star's leaves taken out at a frame's start, which splits nothing.
+/// frame's start and later in it, as a playing client's does (cost.rs LINK_MORE, LINK_PIECE, fitted with the joints' list prices
+/// charged; Studio 0.747, two sessions: an anchored hub's 100 unanchored leaves joined right after they split off in the frame 162
+/// us beyond the same with the welds disabled, 100 anchored leaves split off at a frame's start 55 us and joined 47): beyond the
+/// same writes with the welds disabled, an anchored hub welded to 100 unanchored parts taken out at a frame's start, put back and
+/// taken out again in that frame; the same with 100 anchored parts, whose links change no assembly (no frame's or assembly's price,
+/// as a client's cost it 4 to 8 us for one); and a Folder of 100 welds among a star's leaves taken out at a frame's start, which
+/// splits nothing. The joins read within x0.7 to x1.5 of the client's and the anchored leaves within x2 (x3.2 and x2.5 to x2.6
+/// with the prices fitted before the list prices).
 #[test]
 fn a_write_that_changes_several_links_pays_for_each_and_each_piece() {
     let (lua, engine) = start_play();
@@ -4057,6 +4061,14 @@ fn a_write_that_changes_several_links_pays_for_each_and_each_piece() {
         local Fixed, FixedOff = Rounds(Star(true, true)), Rounds(Star(true, false))
         Is("anchored leaves split off", Fixed[1] - FixedOff[1], {fixed_out:e})
         Is("anchored leaves joined", Fixed[2] - FixedOff[2], {fixed_in:e})
+        -- (against the client's medians: the joins and the anchored leaves)
+        local function Near(Name, Got, Client, Low, High)
+            local Ratio = Got / Client
+            assert(Ratio > Low and Ratio < High, string.format("%s: x%.2f of a client's %.0f us", Name, Ratio, Client * 1e6))
+        end
+        Near("free leaves joined later in the frame", Free[2] - FreeOff[2], 162e-6, 0.7, 1.5)
+        Near("anchored leaves split off", Fixed[1] - FixedOff[1], 55e-6, 0.5, 2)
+        Near("anchored leaves joined", Fixed[2] - FixedOff[2], 47e-6, 0.5, 2)
         local One, OneOff = Rounds(Star(false, true, Instance.new("Folder"))), Rounds(Star(false, false, Instance.new("Folder")))
         Is("welds among leaves taken out", One[1] - OneOff[1], {one_out:e})
         "#

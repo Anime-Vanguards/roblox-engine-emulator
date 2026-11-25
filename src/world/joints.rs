@@ -199,10 +199,10 @@ pub struct Joints {
     unlisted: Vec<InstanceId>,
     /// How many Parent writes' walks changed the lists ([`relist_moved`]); the last marks the joints it took up ([`Indexed::listed`])
     walks: u64,
-    /// While positive, a link change that ends a single link charges only what grows with its assemblies ([`charge_link`]):
-    /// Workspace:UnjoinFromOutsiders' removals, whose flat link-change prices its own price covers, as a client's measured cost of the
-    /// call does (cost.rs UNJOIN_REMOVED; [`Unpriced`] holds it up). A removal that ends several links at once (a joint carrying
-    /// others) pays every link price.
+    /// While positive, a link change that ends a single link charges no flat link-change price ([`charge_link`]: LINK_CHANGED,
+    /// LINK_SPLIT_AGAIN, LINK_REJOINED), its frame's and assemblies' prices as ever: Workspace:UnjoinFromOutsiders' removals, whose
+    /// flat prices its own price covers, as a client's measured cost of the call does (cost.rs UNJOIN_REMOVED; [`Unpriced`] holds it
+    /// up). A removal that ends several links at once (a joint carrying others) pays every link price.
     unpriced: u32,
     /// The components found, by each of their parts ([`component`]), kept until something they depend on changes ([`stored`],
     /// [`drop_component`])
@@ -1062,6 +1062,10 @@ impl Drop for BulkMoving<'_> {
     fn drop(&mut self) {
         if let Ok(mut state) = self.0.try_borrow_mut() {
             bulk_moves(&mut state, false);
+        } else {
+            // (a borrow still held would leave the count raised and no later CFrame write paying for the joints between assemblies:
+            // never so today)
+            debug_assert!(std::thread::panicking(), "BulkMoveTo's count stays raised: the state is still borrowed");
         }
     }
 }
@@ -3301,11 +3305,15 @@ fn attach(state: &mut State, reflection: &Reflection, hooks: &Hooks, setup: &Set
 /// its first and each further piece holding no anchored part that it split off or joined (cost.rs links_more, [`Change`]). Links
 /// between two anchored parts, each an assembly of its own, change no assembly: a write whose links all are pays the changes alone,
 /// nothing for the frame or the assemblies, and marks nothing. While [`Joints::unpriced`] is positive (UnjoinFromOutsiders'
-/// removals, whose UNJOIN_REMOVED holds each change's flat prices: LINK_CHANGED, LINK_SPLIT_AGAIN, LINK_REJOINED and an assembly's
-/// LINK_ASSEMBLY) a change that ends a single link charges what grows with the links and the assemblies alone: the frame's first
-/// change, each part it marks and each further link and piece (LINK_FRAME, LINK_PART, links_more), the marks and the reads owed kept
-/// as ever. A removal that ends several links at once (a joint carrying others, whose pieces each pay their assembly's price) pays
-/// every link price, as the same Parent write does.
+/// removals, whose UNJOIN_REMOVED holds each change's flat prices: LINK_CHANGED, LINK_SPLIT_AGAIN and LINK_REJOINED) a change that
+/// ends a single link charges the rest: the frame's first change, each assembly's first change and each part it marks, and each
+/// further link and piece (LINK_FRAME, link_assembly, links_more), the marks and the reads owed kept as ever. Measured (roblox-sim,
+/// Studio 0.747, two sessions; os.clock around single calls at a frame's start, medians of 7): UnjoinFromOutsiders of 1,000 and
+/// 10,000 listed anchored parts, each welded to an unanchored part of its own, cost a client 5.0 and 65 ms, the same Welds' Parent
+/// = nil in a loop 4.0 and 44 ms, so the call pays each split's assembly price as the loop does (ree: 9.2 and 91 ms for the call,
+/// 13.7 and 136 for the loop, whose single link changes read x3.1 to x3.4 of a client's here; until 2026-11-25 the call was
+/// charged 4.2 and 41 ms, LINK_ASSEMBLY waived). A removal that ends several links at once (a joint carrying others, whose pieces
+/// each pay their assembly's price) pays every link price, as the same Parent write does.
 fn charge_link(state: &mut State, reflection: &Reflection, setup: &Setup, parts: &[InstanceId], change: Change) {
     let Change { ends, starts, links, joined, rigid } = change;
     let flat = state.joints.unpriced == 0 || links > 1;
@@ -3343,7 +3351,7 @@ fn charge_link(state: &mut State, reflection: &Reflection, setup: &Setup, parts:
     for &part in parts {
         state.joints.owed.insert(part);
         if let Some(size) = mark_component(state, reflection, setup, part) {
-            work += if flat { crate::cost::link_assembly(size) } else { size as f64 * crate::cost::LINK_PART };
+            work += crate::cost::link_assembly(size);
         }
     }
     state.sched.charge(work);
