@@ -636,6 +636,17 @@ pub fn required_files(engine: &Engine) -> Vec<String> {
     files
 }
 
+/// Buffers small module-store deltas in memory between jobs of a long-lived batch worker until
+/// enough entries or bytes accumulate or [`flush_module_store`] is called before exit.
+pub fn set_deferred_store_flush(defer: bool) {
+    store::set_deferred_flush(defer);
+}
+
+/// Flushes every pending entry to the persistent cross-process module store unconditionally.
+pub fn flush_module_store() {
+    store::flush_all_now();
+}
+
 /// Roblox compiles scripts at optimization level 2 (a UI library detects O2 through debug.info).
 /// Scripts see the engine's `typeof` (Vector3 for native vectors, registered table types), so
 /// the compiler must not fold or fast-call the builtin.

@@ -28,9 +28,9 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex, OnceLock, RwLock,
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     },
-    time::{Duration, SystemTime},
+    time::{Duration, Instant, SystemTime},
 };
 
 use mlua::{ffi, prelude::*};
@@ -56,6 +56,22 @@ const COMPACT_LOCK: &str = "compact.lock";
 /// The entry count up to which [`Pack::covers`] reads the covering pack's payloads, not only its records
 const COVER_PAYLOADS_UP_TO: usize = 64;
 const STALE_TMP_AGE: Duration = Duration::from_secs(300);
+/// Pending entries or payload bytes a long-lived batch worker accumulates before publishing a delta pack.
+const DEFERRED_FLUSH_ENTRIES: usize = 128;
+const DEFERRED_FLUSH_BYTES: usize = 2 * 1024 * 1024;
+/// Minimum interval between `packs/` mtime checks on cold misses so sibling workers pick up fresh packs cheaply.
+const MISS_REFRESH_INTERVAL_MS: u64 = 500;
+
+static DEFERRED_FLUSH: AtomicBool = AtomicBool::new(false);
+
+pub(crate) fn set_deferred_flush(defer: bool) {
+    DEFERRED_FLUSH.store(defer, Ordering::Relaxed);
+}
+
+fn elapsed_ms() -> u64 {
+    static START: OnceLock<Instant> = OnceLock::new();
+    START.get_or_init(Instant::now).elapsed().as_millis() as u64
+}
 
 const BJSON_MAGIC: &[u8; 4] = b"RBJ1";
 const TAG_NULL: u8 = 0;
@@ -326,7 +342,11 @@ pub(crate) struct Store {
     packs: RwLock<Vec<Arc<Pack>>>,
     loaded: Mutex<FxHashSet<OsString>>,
     pending: Mutex<FxHashMap<EntryKey, Arc<[u8]>>>,
+    pending_entries: AtomicUsize,
+    pending_bytes: AtomicUsize,
     has_pending: AtomicBool,
+    last_dir_modified: AtomicU64,
+    last_miss_probe_ms: AtomicU64,
     flush_lock: Mutex<()>,
 }
 
@@ -339,15 +359,22 @@ impl Store {
             packs: RwLock::new(Vec::new()),
             loaded: Mutex::new(FxHashSet::default()),
             pending: Mutex::new(FxHashMap::default()),
+            pending_entries: AtomicUsize::new(0),
+            pending_bytes: AtomicUsize::new(0),
             has_pending: AtomicBool::new(false),
+            last_dir_modified: AtomicU64::new(0),
+            last_miss_probe_ms: AtomicU64::new(0),
             flush_lock: Mutex::new(()),
         });
         store.refresh_from_disk();
         store
     }
 
-    fn refresh_from_disk(&self) {
-        let Ok(read_dir) = std::fs::read_dir(&self.packs_dir) else { return };
+    fn refresh_from_disk(&self) -> bool {
+        if let Some(stamp) = crate::files::stamp(&self.packs_dir) {
+            self.last_dir_modified.store(stamp.modified, Ordering::Relaxed);
+        }
+        let Ok(read_dir) = std::fs::read_dir(&self.packs_dir) else { return false };
         let mut candidates: Vec<(OsString, PathBuf, u64)> = Vec::new();
         {
             let loaded = self.loaded.lock().unwrap_or_else(|e| e.into_inner());
@@ -362,7 +389,7 @@ impl Store {
             }
         }
         if candidates.is_empty() {
-            return;
+            return false;
         }
         // Largest packs first so binary search hits the compacted main pack first.
         candidates.sort_by(|a, b| b.2.cmp(&a.2));
@@ -375,7 +402,7 @@ impl Store {
             }
         }
         if opened.is_empty() {
-            return;
+            return false;
         }
         {
             let mut loaded = self.loaded.lock().unwrap_or_else(|e| e.into_inner());
@@ -391,6 +418,23 @@ impl Store {
             Err(_) => Vec::new(),
         };
         remove_packs(pruned);
+        true
+    }
+
+    fn maybe_refresh_on_miss(&self) -> bool {
+        let now = elapsed_ms();
+        let last = self.last_miss_probe_ms.load(Ordering::Relaxed);
+        if now.saturating_sub(last) < MISS_REFRESH_INTERVAL_MS {
+            return false;
+        }
+        if self.last_miss_probe_ms.compare_exchange(last, now, Ordering::Relaxed, Ordering::Relaxed).is_err() {
+            return false;
+        }
+        let Some(stamp) = crate::files::stamp(&self.packs_dir) else { return false };
+        if stamp.modified == self.last_dir_modified.load(Ordering::Relaxed) {
+            return false;
+        }
+        self.refresh_from_disk()
     }
 
     #[inline]
@@ -409,6 +453,15 @@ impl Store {
                 }
             }
         }
+        if self.maybe_refresh_on_miss() {
+            if let Ok(packs) = self.packs.read() {
+                for pack in packs.iter() {
+                    if let Some(found) = pack.get(key) {
+                        return Some(found);
+                    }
+                }
+            }
+        }
         None
     }
 
@@ -421,39 +474,62 @@ impl Store {
             }
         }
         if let Ok(mut pending) = self.pending.lock() {
-            pending.entry(key).or_insert(payload);
-            self.has_pending.store(true, Ordering::Release);
+            if let std::collections::hash_map::Entry::Vacant(slot) = pending.entry(key) {
+                let len = payload.len();
+                slot.insert(payload);
+                self.pending_entries.fetch_add(1, Ordering::Relaxed);
+                self.pending_bytes.fetch_add(len, Ordering::Relaxed);
+                self.has_pending.store(true, Ordering::Release);
+            }
         }
+    }
+
+    /// Flushes only once enough pending entries or bytes have accumulated (used between jobs of a
+    /// long-lived batch worker to avoid publishing a tiny delta pack per job).
+    pub(crate) fn flush_deferred(&self) {
+        self.flush_inner(true);
     }
 
     /// Writes pending entries into a new content-addressed immutable `.mpack` file (atomic rename)
     /// and compacts if too many small delta packs have accumulated.
     pub(crate) fn flush(&self) {
+        self.flush_inner(false);
+    }
+
+    fn flush_inner(&self, defer: bool) {
         if !self.has_pending.load(Ordering::Acquire) {
             return;
         }
+        if defer
+            && self.pending_entries.load(Ordering::Relaxed) < DEFERRED_FLUSH_ENTRIES
+            && self.pending_bytes.load(Ordering::Relaxed) < DEFERRED_FLUSH_BYTES
+        {
+            return;
+        }
         let Ok(_guard) = self.flush_lock.lock() else { return };
-        let pending = {
-            let Ok(mut map) = self.pending.lock() else { return };
-            if map.is_empty() {
-                self.has_pending.store(false, Ordering::Release);
-                return;
-            }
-            self.has_pending.store(false, Ordering::Release);
-            std::mem::take(&mut *map)
-        };
         // Pick up any pack another process just published before deciding what is still missing.
         self.refresh_from_disk();
         let mut to_write: Vec<(EntryKey, Arc<[u8]>)> = {
             let Ok(packs) = self.packs.read() else { return };
-            pending
-                .into_iter()
-                .filter(|(key, _)| !packs.iter().any(|p| p.get(key).is_some()))
-                .collect()
+            let Ok(mut map) = self.pending.lock() else { return };
+            map.retain(|key, _| !packs.iter().any(|p| p.get(key).is_some()));
+            if map.is_empty() {
+                self.has_pending.store(false, Ordering::Release);
+                self.pending_entries.store(0, Ordering::Relaxed);
+                self.pending_bytes.store(0, Ordering::Relaxed);
+                return;
+            }
+            let remaining_bytes: usize = map.values().map(|v| v.len()).sum();
+            if defer && map.len() < DEFERRED_FLUSH_ENTRIES && remaining_bytes < DEFERRED_FLUSH_BYTES {
+                self.pending_entries.store(map.len(), Ordering::Relaxed);
+                self.pending_bytes.store(remaining_bytes, Ordering::Relaxed);
+                return;
+            }
+            self.has_pending.store(false, Ordering::Release);
+            self.pending_entries.store(0, Ordering::Relaxed);
+            self.pending_bytes.store(0, Ordering::Relaxed);
+            std::mem::take(&mut *map).into_iter().collect()
         };
-        if to_write.is_empty() {
-            return;
-        }
         to_write.sort_by_key(|(key, _)| *key);
         let entries: Vec<(EntryKey, &[u8], u64)> = to_write.iter().map(|(k, v)| (*k, &**v, payload_check(v))).collect();
         let Some(buf) = serialize_pack(&entries, &self.abi) else { return };
@@ -681,16 +757,28 @@ pub(crate) fn for_engine(engine: &crate::Engine) -> Option<Arc<Store>> {
     for_state_dir(&state)
 }
 
-pub(crate) fn flush_all() {
+fn for_each_store(mut f: impl FnMut(&Store)) {
     if let Some((_, primary)) = PRIMARY_STORE.get() {
-        primary.flush();
+        f(primary);
     }
     if let Some(map) = STORES.get() {
         let list: Vec<Arc<Store>> = map.read().map(|m| m.values().cloned().collect()).unwrap_or_default();
         for store in list {
-            store.flush();
+            f(&store);
         }
     }
+}
+
+pub(crate) fn flush_all() {
+    if DEFERRED_FLUSH.load(Ordering::Relaxed) {
+        for_each_store(|store| store.flush_deferred());
+    } else {
+        for_each_store(|store| store.flush());
+    }
+}
+
+pub(crate) fn flush_all_now() {
+    for_each_store(|store| store.flush());
 }
 
 /// Content hash key for a source buffer and artifact kind.
@@ -1485,5 +1573,49 @@ mod tests {
         let g: LuaTable = tbl.get("g").unwrap();
         let nested: LuaTable = g.get("nested").unwrap();
         assert_eq!(nested.get::<f64>(2).unwrap(), 2.0);
+    }
+
+    #[test]
+    fn deferred_flush_buffers_small_deltas_until_threshold_or_explicit_flush() {
+        let dir = temp_dir("deferred");
+        let (abi, _) = abi_info();
+        let store = Store::open_at(dir.clone(), *abi);
+        for index in 0..4 {
+            store.put(stress_key(index), Arc::from(format!("small-{index}").into_bytes()));
+            store.flush_deferred();
+        }
+        assert!(pack_files(&dir).is_empty(), "small deltas stay buffered in memory");
+        for index in 0..4 {
+            assert_eq!(store.get(&stress_key(index)).as_deref(), Some(format!("small-{index}").as_bytes()));
+        }
+        // Adding entries past DEFERRED_FLUSH_ENTRIES publishes one combined pack.
+        for index in 4..DEFERRED_FLUSH_ENTRIES {
+            store.put(stress_key(index), Arc::from(format!("small-{index}").into_bytes()));
+        }
+        store.flush_deferred();
+        assert_eq!(pack_files(&dir).len(), 1, "one pack published once threshold is reached");
+        // Another sibling store that compiled the same entries plus a tiny delta drops the
+        // already-published duplicates on refresh and keeps its tiny remainder buffered.
+        let sibling = Store::open_at(dir.clone(), *abi);
+        for index in 0..DEFERRED_FLUSH_ENTRIES {
+            sibling.put(stress_key(index), Arc::from(format!("small-{index}").into_bytes()));
+        }
+        sibling.put(stress_key(888), Arc::from(b"tiny-unique".as_slice()));
+        sibling.flush_deferred();
+        assert_eq!(pack_files(&dir).len(), 1, "post-dedup remainder below threshold stays buffered");
+        sibling.flush();
+        assert_eq!(pack_files(&dir).len(), 2);
+
+        // Another small delta stays buffered until explicit flush.
+        store.put(stress_key(999), Arc::from(b"tail".as_slice()));
+        store.flush_deferred();
+        assert_eq!(pack_files(&dir).len(), 2);
+        store.flush();
+        assert_eq!(pack_files(&dir).len(), 3);
+        let reader = Store::open_at(dir.clone(), *abi);
+        assert_eq!(reader.get(&stress_key(888)).as_deref(), Some(b"tiny-unique".as_slice()));
+        assert_eq!(reader.get(&stress_key(999)).as_deref(), Some(b"tail".as_slice()));
+        assert_eq!(reader.get(&stress_key(0)).as_deref(), Some(b"small-0".as_slice()));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
