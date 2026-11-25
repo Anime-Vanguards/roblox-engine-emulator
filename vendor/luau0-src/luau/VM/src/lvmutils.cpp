@@ -48,7 +48,10 @@ int luaV_tostring(lua_State* L, StkId obj)
         LUAU_ASSERT(e < s + sizeof(s));
         setsvalue(L, obj, luaS_newlstr(L, s, e - s));
         if (luaE_scriptwork(L))
+        {
             L->global->work.numtostr++;
+            luaE_workmarkbit(L->global, LUA_WBIT_NUMTOSTR);
+        }
         return 1;
     }
 }
@@ -195,7 +198,10 @@ static bool luaV_vectormember(lua_State* L, const float* v, const TString* name,
     if (strcmp(s + 1, "agnitude") == 0 && (s[0] == 'M' || s[0] == 'm'))
     {
         if (luaE_interpretedinsn(L))
+        {
             L->global->work.vectormagnitudes++;
+            luaE_workmarkbit(L->global, LUA_WBIT_VECTORMAGNITUDES);
+        }
 #if LUA_VECTOR_SIZE == 4
         setnvalue(res, sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2] + v[3] * v[3]));
 #else
@@ -206,7 +212,10 @@ static bool luaV_vectormember(lua_State* L, const float* v, const TString* name,
     if (strcmp(s + 1, "nit") == 0 && (s[0] == 'U' || s[0] == 'u'))
     {
         if (luaE_interpretedinsn(L))
+        {
             L->global->work.vectorunits++;
+            luaE_workmarkbit(L->global, LUA_WBIT_VECTORUNITS);
+        }
 #if LUA_VECTOR_SIZE == 4
         float invSqrt = 1.0f / sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2] + v[3] * v[3]);
         setvvalue(L, res, v[0] * invSqrt, v[1] * invSqrt, v[2] * invSqrt, v[3] * invSqrt);
@@ -831,6 +840,7 @@ LUAU_NOINLINE void luaV_callTM(lua_State* L, int nparams, int res)
     if (luaE_scriptwork(L))
     {
         L->global->work.tmcalls++;
+        luaE_workmarkbit(L->global, LUA_WBIT_TMCALLS);
         // (an engine function that is a metamethod is priced as the call it stands for, the host's own Luau that served it before
         // included: lua_setenginecfunction)
         Closure* ccl = clvalue(fun);

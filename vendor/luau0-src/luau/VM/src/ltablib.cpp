@@ -332,7 +332,10 @@ static int tconcat(lua_State* L)
 
     LuaTable* t = hvalue(L->base);
     if (last >= i && luaE_scriptwork(L))
+    {
         L->global->work.concatitems += unsigned(last - i + 1);
+        luaE_workmarkbit(L->global, LUA_WBIT_CONCATITEMS);
+    }
 
     luaL_Strbuf b;
     luaL_buffinit(L, &b);
@@ -411,7 +414,10 @@ static int sort_func(lua_State* L, const TValue* l, const TValue* r)
     setobj2s(L, L->top + 2, r);
     L->top += 3; // safe because of LUA_MINSTACK guarantee
     if (!L->global->workoff)
+    {
         L->global->work.sortcalls++;
+        luaE_workmarkbit(L->global, LUA_WBIT_SORTCALLS);
+    }
     luaD_call(L, L->top - 3, 1);
     L->top -= 1; // maintain stack depth
 
@@ -438,7 +444,10 @@ inline int sort_less(lua_State* L, LuaTable* t, int i, int j, SortPredicate pred
     LUAU_ASSERT(unsigned(i) < unsigned(n) && unsigned(j) < unsigned(n)); // contract maintained in sort_less after predicate call
 
     if (!L->global->workoff)
+    {
         L->global->work.sortcompares++;
+        luaE_workmarkbit(L->global, LUA_WBIT_SORTCOMPARES);
+    }
     int res = pred(L, &arr[i], &arr[j]);
 
     // predicate call may resize the table, which is invalid
@@ -591,6 +600,7 @@ static int tsort(lua_State* L)
             {
                 L->global->work.sortcompares = compares;
                 L->global->work.sortcalls = calls;
+                luaE_workmark(L->global, luaE_workbit(LUA_WBIT_SORTCOMPARES) | luaE_workbit(LUA_WBIT_SORTCALLS));
             }
         }
     }
@@ -603,7 +613,10 @@ static int tcreate(lua_State* L)
     if (size < 0)
         luaL_argerror(L, 1, "size out of range");
     if (luaE_scriptwork(L))
+    {
         L->global->work.createitems += unsigned(size);
+        luaE_workmarkbit(L->global, LUA_WBIT_CREATEITEMS);
+    }
 
     if (!lua_isnoneornil(L, 2))
     {
@@ -731,7 +744,10 @@ static int tclone(lua_State* L)
 
     LuaTable* source = hvalue(L->base);
     if (luaE_scriptwork(L))
+    {
         L->global->work.cloneitems += unsigned(source->sizearray) + (source->node == &luaH_dummynode ? 0u : unsigned(sizenode(source)));
+        luaE_workmarkbit(L->global, LUA_WBIT_CLONEITEMS);
+    }
     LuaTable* tt = luaH_clone(L, source);
 
     TValue v;

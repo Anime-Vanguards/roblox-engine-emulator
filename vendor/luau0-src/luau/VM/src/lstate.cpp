@@ -242,6 +242,7 @@ lua_State* lua_newstate(lua_Alloc allocator, void* ud)
     g->ecb = lua_ExecutionCallbacks();
     g->gcstats = GCStats();
     g->work = lua_WorkCounters();
+    g->workdirty = 0;
     g->gcclock = NULL;
     g->gcclockud = NULL;
     g->typeofnames = NULL;

@@ -659,14 +659,19 @@ static LUAU_FORCEINLINE void freegcoblock(lua_State* L, int sizeClass, void* blo
 // count with its call
 static void countallocated(lua_State* L, size_t nsize, int tt)
 {
+    uint64_t dirty = luaE_workhostopbit(LUA_WORK_ALLOCBYTES) | luaE_workhostopbit(LUA_WORK_GCOBJECTS);
     if (luaE_scriptinsn(L))
     {
         L->global->work.allocated += nsize;
         L->global->work.objects++;
+        dirty |= luaE_workbit(LUA_WBIT_ALLOCATED) | luaE_workbit(LUA_WBIT_OBJECTS);
     }
     // (a library or engine call made it for a script; a userdata is a host's datatype value, which the host prices with its operation)
     else if (tt != LUA_TUSERDATA && luaE_scriptwork(L) && !luaE_hostcall(L))
+    {
         L->global->work.hostops[LUA_WORK_LIBOBJECTS]++;
+        dirty |= luaE_workhostopbit(LUA_WORK_LIBOBJECTS);
+    }
     else
         return;
     // (every object's bytes, whoever of the script's work made it, and the object again for the collector, which sweeps each)
@@ -674,7 +679,11 @@ static void countallocated(lua_State* L, size_t nsize, int tt)
     L->global->work.hostops[LUA_WORK_GCOBJECTS]++;
     // (and an object no size class holds: a page of its own from the host's allocator)
     if (nsize > kMaxSmallSizeUsed)
+    {
         L->global->work.hostops[LUA_WORK_LARGEBLOCKS]++;
+        dirty |= luaE_workhostopbit(LUA_WORK_LARGEBLOCKS);
+    }
+    luaE_workmark(L->global, dirty);
 }
 
 void* luaM_new_(lua_State* L, size_t nsize, uint8_t memcat)

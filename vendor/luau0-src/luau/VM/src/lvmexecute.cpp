@@ -317,6 +317,7 @@ static bool luau_execute(lua_State* L)
         !luaE_enginecallframe(L, L->ci - 1))
     {
         L->global->work.hostcalls++;
+        luaE_workmarkbit(L->global, LUA_WBIT_HOSTCALLS);
         luaC_coldcall(L, clvalue(L->ci->func), 1, NULL, isLua(L->ci - 1) ? clvalue((L->ci - 1)->func)->l.p : NULL);
     }
 
@@ -561,7 +562,10 @@ reentry:
 
                     // (a host's work counters: the lookup a resolved import saves)
                     if (CountWork && !(cl->l.p->flags & LUAU_PROTO_WORK_EXEMPT))
+                    {
                         L->global->work.slowimports++;
+                        luaE_workmarkbit(L->global, LUA_WBIT_SLOWIMPORTS);
+                    }
                     VM_PROTECT(luaV_getimport(L, cl->env, k, ra, aux, /* propagatenil= */ false));
                     VM_NEXT();
                 }
@@ -1043,7 +1047,10 @@ reentry:
                     const TValue* tmi = 0;
 
                     if (ttisvector(rb) && luaE_interpretedinsn(L))
+                    {
                         L->global->work.vectormethods++;
+                        luaE_workmarkbit(L->global, LUA_WBIT_VECTORMETHODS);
+                    }
 
                     // fast-path: metatable with __namecall
                     if (const TValue* fn = fasttm(L, mt, TM_NAMECALL))
@@ -1189,6 +1196,7 @@ reentry:
                         if ((ccl->l.p->flags & LUAU_PROTO_WORK_EXEMPT) && !(cl->l.p->flags & LUAU_PROTO_WORK_EXEMPT))
                         {
                             L->global->work.hostcalls++;
+                            luaE_workmarkbit(L->global, LUA_WBIT_HOSTCALLS);
                             luaC_coldcall(L, ccl, 1, NULL, cl->l.p);
                         }
                         workops = luaE_workops(L, ccl);
@@ -1325,6 +1333,7 @@ reentry:
                         if ((ccl->l.p->flags & LUAU_PROTO_WORK_EXEMPT) && !(cl->l.p->flags & LUAU_PROTO_WORK_EXEMPT))
                         {
                             L->global->work.hostcalls++;
+                            luaE_workmarkbit(L->global, LUA_WBIT_HOSTCALLS);
                             luaC_coldcall(L, ccl, 1, NULL, cl->l.p);
                         }
                         workops = luaE_workops(L, ccl);
@@ -3913,7 +3922,10 @@ reentry:
                 // (the call of pcall / xpcall the skipped fallback makes, counted as the C call it is: a client's fast protected
                 // call costs what that call did, 18 ns a pcall in a 0.747 client against 17.9 in a 0.744 one that made the call)
                 if (CountWork && (cl->l.p->flags & LUAU_PROTO_WORK_EXEMPT) == 0)
+                {
                     L->global->work.ccalls++;
+                    luaE_workmarkbit(L->global, LUA_WBIT_CCALLS);
+                }
 
                 L->ci->savedpc = pc + skip + 1; // return skips the fallback path
 
@@ -3942,6 +3954,7 @@ reentry:
                         if ((fcl->l.p->flags & LUAU_PROTO_WORK_EXEMPT) && !(cl->l.p->flags & LUAU_PROTO_WORK_EXEMPT))
                         {
                             L->global->work.hostcalls++;
+                            luaE_workmarkbit(L->global, LUA_WBIT_HOSTCALLS);
                             luaC_coldcall(L, fcl, 1, NULL, cl->l.p);
                         }
                         workops = luaE_workops(L, fcl);

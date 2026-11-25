@@ -623,18 +623,28 @@ static int hashslotsused(const LuaTable* t)
 // counts the table storage a script's own instruction allocates (lua_WorkCounters)
 static void countstored(lua_State* L, size_t bytes)
 {
+    uint64_t dirty = 0;
     if (luaE_scriptinsn(L))
+    {
         L->global->work.stored += bytes;
+        dirty |= luaE_workbit(LUA_WBIT_STORED);
+    }
     else if (luaP_state)
         luaP_callstorage(L, bytes);
     // (a table part a library or engine call allocated for a script counts as its allocation too: table.create, a decoded table)
     if (luaE_scriptwork(L) && !luaE_hostcall(L))
     {
         L->global->work.hostops[LUA_WORK_ALLOCBYTES] += bytes;
+        dirty |= luaE_workhostopbit(LUA_WORK_ALLOCBYTES);
         // (a part too large for Luau's own pages is a block of the host's allocator: lmem.cpp kMaxSmallSizeUsed)
         if (bytes > 1024)
+        {
             L->global->work.hostops[LUA_WORK_LARGEBLOCKS]++;
+            dirty |= luaE_workhostopbit(LUA_WORK_LARGEBLOCKS);
+        }
     }
+    if (dirty)
+        luaE_workmark(L->global, dirty);
 }
 
 static void setarrayvector(lua_State* L, LuaTable* t, int size)
@@ -855,6 +865,7 @@ static void rehash(lua_State* L, LuaTable* t, int newintkey)
         {
             L->global->work.rehashed += nh;
             L->global->work.hostops[LUA_WORK_HASHREHASHED] += nh;
+            luaE_workmark(L->global, luaE_workbit(LUA_WBIT_REHASHED) | luaE_workhostopbit(LUA_WORK_HASHREHASHED));
         }
         // (the hash part's size before, for a profile's rehash hook)
         int oldnodes = t->node == dummynode ? 0 : sizenode(t);
@@ -918,6 +929,7 @@ static void rehash(lua_State* L, LuaTable* t, int newintkey)
         L->global->work.rehashed += totaluse;
         // (the keys that do not go to the array part are reinserted into the hash part)
         L->global->work.hostops[LUA_WORK_HASHREHASHED] += unsigned(nh);
+        luaE_workmark(L->global, luaE_workbit(LUA_WBIT_REHASHED) | luaE_workhostopbit(LUA_WORK_HASHREHASHED));
     }
 
     // (the sizes before, for a profile's rehash hook)

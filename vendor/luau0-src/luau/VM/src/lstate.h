@@ -296,6 +296,9 @@ typedef struct global_State
 
     uint64_t ptrenckeynew[8]; // pointer encoding key for display
     bool ptrencactive;
+    uint8_t floatmode; // the float mode the interpreter runs in and native code compiles in (lua_setfloatmode)
+    bool floatchanged; // the outermost interpreter entry changed the thread's mode bits, which floatsaved holds
+    bool tiered_on_load; // whether newly loaded Protos arm for tiered compilation
 
     GCStats gcstats;
     uint32_t lastprotoid;
@@ -314,14 +317,12 @@ typedef struct global_State
     TString* vectortypename; // the name typeof gives a vector (NULL: the type's own)
     struct LuaTable* safebase; // immutable shared global base for safe-sandbox setfenv preservation (NULL: disabled)
 
-    uint8_t floatmode; // the float mode the interpreter runs in and native code compiles in (lua_setfloatmode)
-    bool floatchanged; // the outermost interpreter entry changed the thread's mode bits, which floatsaved holds
     unsigned int floatsaved;
     int floatdepth; // interpreter entries in progress (luau_execute)
 
     uint32_t tiered_threshold; // calls before on-demand single-proto native compile (0: disabled)
-    bool tiered_on_load;       // whether newly loaded Protos arm for tiered compilation
     void (*tiered_compile)(lua_State* L, struct Proto* p); // compiles one hot Proto in place
+    uint64_t workdirty; // dirty bitmask of scalar/hostops work slots (uses padding reclaimed by packing floatmode/floatchanged/tiered_on_load after ptrencactive, keeping sizeof(global_State) identical)
 } global_State;
 // clang-format on
 
@@ -449,9 +450,64 @@ LUAI_FUNC int luaE_cfunctionkind(Closure* cl);
 #define luaE_engineframe(L, ci)     ((ci) > (L)->base_ci && ttisfunction((ci)->func) && clvalue((ci)->func)->isC && luaE_cfunctionkind(clvalue((ci)->func)) >= LUAE_ENGINECFUNCTION)
 // whether frame `ci` is an engine function's that was charged as a script's C call: the host's own Luau it runs is part of that call
 #define luaE_enginecallframe(L, ci) (((ci)->flags & LUA_CALLINFO_WORK_CCALL) && luaE_engineframe(L, ci))
+// Bit indices in global_State::workdirty, in strictly ascending lua_WorkCounters slot order so the stepping profiler
+// visits dirty slots in the exact order its scalar scan did (identical floating-point summation).
+enum
+{
+    LUA_WBIT_ALLOCATED = 0,
+    LUA_WBIT_CCALLS,
+    LUA_WBIT_TMCALLS,
+    LUA_WBIT_HOSTOPS_BASE, // LUA_WORK_FIRSTSLOT..255 in ascending order
+    LUA_WBIT_HOSTCALLS = LUA_WBIT_HOSTOPS_BASE + (256 - LUA_WORK_FIRSTSLOT),
+    LUA_WBIT_OBJECTS,
+    LUA_WBIT_STORED,
+    LUA_WBIT_REHASHED,
+    LUA_WBIT_HOSTNANOS,
+    LUA_WBIT_MUTED,
+    LUA_WBIT_VECTORMAGNITUDES,
+    LUA_WBIT_VECTORUNITS,
+    LUA_WBIT_VECTORMETHODS,
+    LUA_WBIT_SLOWIMPORTS,
+    LUA_WBIT_NUMTOSTR,
+    LUA_WBIT_SORTCOMPARES,
+    LUA_WBIT_SORTCALLS,
+    LUA_WBIT_CREATEITEMS,
+    LUA_WBIT_CLONEITEMS,
+    LUA_WBIT_CONCATITEMS,
+    LUA_WBIT_SPLITPARTS,
+    LUA_WBIT_FORMATS,
+    LUA_WBIT_FORMATSPECS,
+    LUA_WBIT_NEWSTRINGS,
+    LUA_WBIT_COLDTABLES,
+    LUA_WBIT_COLDCLOSURES,
+    LUA_WBIT_COLDPROTOS,
+    LUA_WBIT_COLDCODE,
+    LUA_WBIT_COUNT
+};
+static_assert(LUA_WBIT_COUNT <= 64, "workdirty bitmask must fit in uint64_t");
+
+#define luaE_workbit(bit) (uint64_t(1) << (bit))
+#define luaE_workhostopbit(slot) (uint64_t(1) << (LUA_WBIT_HOSTOPS_BASE + ((slot) - LUA_WORK_FIRSTSLOT)))
+#define luaE_workmark(g, mask) ((g)->workdirty |= (mask))
+#define luaE_workmarkbit(g, bit) ((g)->workdirty |= luaE_workbit(bit))
+#define luaE_workmarkhostop(g, slot) ((g)->workdirty |= luaE_workhostopbit(slot))
+
 // a script's call of the C closure `ccl` (classified by luaE_hostcall first): a C call (work.ccalls), or for an engine function the
 // host serves the host call the host's own Luau that stood for it was (work.hostcalls)
-#define luaE_workccall(L, ccl)     do     {         if ((ccl)->preload == LUAE_SERVEDCFUNCTION)             (L)->global->work.hostcalls++;         else             (L)->global->work.ccalls++;     } while (0)
+#define luaE_workccall(L, ccl) \
+    do \
+    { \
+        if ((ccl)->preload == LUAE_SERVEDCFUNCTION) \
+        { \
+            (L)->global->work.hostcalls++; \
+            luaE_workmarkbit((L)->global, LUA_WBIT_HOSTCALLS); \
+        } \
+        else \
+        { \
+            (L)->global->work.ccalls++; \
+            luaE_workmarkbit((L)->global, LUA_WBIT_CCALLS); \
+        } \
+    } while (0)
 
 // counts `n` units of a library or engine function's work in the work counters' hostops slot `slot` (lua.h LUA_WORK_SCANNED and the
 // rest) when a script's work asked for it
@@ -459,7 +515,10 @@ LUAI_FUNC int luaE_cfunctionkind(Closure* cl);
     do \
     { \
         if (luaE_scriptwork(L) && !luaE_hostcall(L)) \
+        { \
             (L)->global->work.hostops[(slot)] += uint64_t(n); \
+            luaE_workmarkhostop((L)->global, (slot)); \
+        } \
     } while (0)
 // a new buffer's bytes (lua.h LUA_WORK_BUFBYTES), and those past Luau's own pages again (LUA_WORK_BUFFRESH)
 #define luaE_workbufnew(L, n) \

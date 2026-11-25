@@ -1194,6 +1194,7 @@ static int str_format(lua_State* L)
     {
         L->global->work.formats++;
         L->global->work.formatspecs += arg - 1;
+        luaE_workmark(L->global, luaE_workbit(LUA_WBIT_FORMATS) | luaE_workbit(LUA_WBIT_FORMATSPECS));
     }
     luaL_pushresult(&b);
     return 1;
@@ -1228,7 +1229,10 @@ static int str_split(lua_State* L)
             }
 
             if (luaE_scriptwork(L))
+            {
                 L->global->work.splitparts += numMatches;
+                luaE_workmarkbit(L->global, LUA_WBIT_SPLITPARTS);
+            }
             return 1;
         }
         else if (needleLen == 1)
@@ -1283,7 +1287,10 @@ static int str_split(lua_State* L)
         lua_rawseti(L, -2, ++numMatches);
 
         if (luaE_scriptwork(L))
+        {
             L->global->work.splitparts += numMatches;
+            luaE_workmarkbit(L->global, LUA_WBIT_SPLITPARTS);
+        }
     }
     else
     {
@@ -1326,7 +1333,10 @@ static int str_split(lua_State* L)
         }
 
         if (luaE_scriptwork(L))
+        {
             L->global->work.splitparts += numMatches;
+            luaE_workmarkbit(L->global, LUA_WBIT_SPLITPARTS);
+        }
     }
 
     return 1;

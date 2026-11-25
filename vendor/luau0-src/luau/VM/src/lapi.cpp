@@ -1589,7 +1589,10 @@ void lua_workhostcalls(lua_State* L, int calls)
     if (L->global->workoff)
         return;
     if (luaE_scriptwork(L))
+    {
         L->global->work.hostcalls += calls;
+        luaE_workmarkbit(L->global, LUA_WBIT_HOSTCALLS);
+    }
 }
 
 void lua_workhostnanos(lua_State* L, int nanos)
@@ -1598,16 +1601,25 @@ void lua_workhostnanos(lua_State* L, int nanos)
         return;
     // (also for a constructor the engine's wrapper calls for a script: the host's work for a script)
     if (L->global->work.muted == 0 && luaE_workframe(L, L->ci) != 0)
+    {
         L->global->work.hostnanos += nanos;
+        luaE_workmarkbit(L->global, LUA_WBIT_HOSTNANOS);
+    }
 }
 
 void lua_workmute(lua_State* L, int on)
 {
     uint64_t& muted = L->global->work.muted;
     if (on)
+    {
         ++muted;
+        luaE_workmarkbit(L->global, LUA_WBIT_MUTED);
+    }
     else if (muted > 0)
+    {
         --muted;
+        luaE_workmarkbit(L->global, LUA_WBIT_MUTED);
+    }
 }
 
 void lua_setworkcounting(lua_State* L, int on)

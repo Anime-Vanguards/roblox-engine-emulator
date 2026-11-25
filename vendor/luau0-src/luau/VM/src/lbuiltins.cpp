@@ -1335,7 +1335,10 @@ static int luauF_tostring(lua_State* L, StkId res, TValue* arg0, int nresults, S
             char* e = luai_num2str(s, nvalue(arg0));
             setsvalue(L, res, luaS_newlstr(L, s, e - s));
             if (luaE_scriptwork(L))
+            {
                 L->global->work.numtostr++;
+                luaE_workmarkbit(L->global, LUA_WBIT_NUMTOSTR);
+            }
             return 1;
         }
         case LUA_TSTRING:

@@ -1,0 +1,1170 @@
+# Topic: dirty bitmask and hot-path optimizations for the stepping profiler
+#
+# What it does: adds a 64-bit workdirty bitmask in global_State (reclaiming existing padding
+# by packing floatmode/floatchanged/tiered_on_load next to ptrencactive so sizeof(global_State)
+# and totalbytes stay unchanged across all vector-size and GC-metrics configurations), with bit
+# positions in strictly ascending lua_WorkCounters slot order so every non-opcode scalar counter
+# write marks its bit and book(s, L) only inspects dirty slots in the exact order of its previous
+# full scan. Splits book() into an inline pure-Luau fast path (skipping stack-array zeroing,
+# hostkinds loops, and zero-kind split writes when no scalar or host work moved) and an
+# out-of-line bookSlow(), gates bookcallee() on a 3-bit calleeMask, caches the active phase id
+# on ProfFunction for inline phaselinesof(), and places a 1024-bit Bloom filter + 64-entry
+# direct-mapped cache in front of coldframe hash lookups in luaP_step().
+#
+# Why upstream lacks it: the stepping work profiler (12-profiling) and its scalar counters
+# are emulator-specific patches.
+diff --git a/luau/VM/src/lapi.cpp b/luau/VM/src/lapi.cpp
+index 2a25af6..b57bfad 100644
+--- a/luau/VM/src/lapi.cpp
++++ b/luau/VM/src/lapi.cpp
+@@ -1589,7 +1589,10 @@ void lua_workhostcalls(lua_State* L, int calls)
+     if (L->global->workoff)
+         return;
+     if (luaE_scriptwork(L))
++    {
+         L->global->work.hostcalls += calls;
++        luaE_workmarkbit(L->global, LUA_WBIT_HOSTCALLS);
++    }
+ }
+ 
+ void lua_workhostnanos(lua_State* L, int nanos)
+@@ -1598,16 +1601,25 @@ void lua_workhostnanos(lua_State* L, int nanos)
+         return;
+     // (also for a constructor the engine's wrapper calls for a script: the host's work for a script)
+     if (L->global->work.muted == 0 && luaE_workframe(L, L->ci) != 0)
++    {
+         L->global->work.hostnanos += nanos;
++        luaE_workmarkbit(L->global, LUA_WBIT_HOSTNANOS);
++    }
+ }
+ 
+ void lua_workmute(lua_State* L, int on)
+ {
+     uint64_t& muted = L->global->work.muted;
+     if (on)
++    {
+         ++muted;
++        luaE_workmarkbit(L->global, LUA_WBIT_MUTED);
++    }
+     else if (muted > 0)
++    {
+         --muted;
++        luaE_workmarkbit(L->global, LUA_WBIT_MUTED);
++    }
+ }
+ 
+ void lua_setworkcounting(lua_State* L, int on)
+diff --git a/luau/VM/src/lbuiltins.cpp b/luau/VM/src/lbuiltins.cpp
+index 35c2285..e0d1b15 100644
+--- a/luau/VM/src/lbuiltins.cpp
++++ b/luau/VM/src/lbuiltins.cpp
+@@ -1335,7 +1335,10 @@ static int luauF_tostring(lua_State* L, StkId res, TValue* arg0, int nresults, S
+             char* e = luai_num2str(s, nvalue(arg0));
+             setsvalue(L, res, luaS_newlstr(L, s, e - s));
+             if (luaE_scriptwork(L))
++            {
+                 L->global->work.numtostr++;
++                luaE_workmarkbit(L->global, LUA_WBIT_NUMTOSTR);
++            }
+             return 1;
+         }
+         case LUA_TSTRING:
+diff --git a/luau/VM/src/lgc.cpp b/luau/VM/src/lgc.cpp
+index b9fe003..d7198f8 100644
+--- a/luau/VM/src/lgc.cpp
++++ b/luau/VM/src/lgc.cpp
+@@ -1822,7 +1822,10 @@ static void coldrecent(global_State* g, GCObject* o, bool charge = true)
+         return;
+     uint32_t& last = (*c->protolast)[o];
+     if (charge && (last == 0 || last + 1 < c->frame))
++    {
+         g->work.hostops[LUA_WORK_RAREPROTOS]++;
++        luaE_workmarkhostop(g, LUA_WORK_RAREPROTOS);
++    }
+     last = c->frame;
+ }
+ 
+@@ -1895,6 +1898,7 @@ void luaC_coldinstruction(lua_State* L, Closure* cl, const Instruction* pc)
+         if (first)
+             coldrecent(L->global, obj2gco(p), false);
+         L->global->work.coldcode++;
++        luaE_workmarkbit(L->global, LUA_WBIT_COLDCODE);
+         if (luaP_state)
+             luaP_coldcode(L, p, at);
+     }
+@@ -1918,6 +1922,7 @@ void luaC_coldtouch(lua_State* L, GCObject* o)
+     {
+     case LUA_TTABLE:
+         g->work.coldtables++;
++        luaE_workmarkbit(g, LUA_WBIT_COLDTABLES);
+         if (luaP_state)
+         {
+             luaP_coldtouch(L, o);
+@@ -1926,9 +1931,11 @@ void luaC_coldtouch(lua_State* L, GCObject* o)
+         break;
+     case LUA_TFUNCTION:
+         g->work.coldclosures++;
++        luaE_workmarkbit(g, LUA_WBIT_COLDCLOSURES);
+         break;
+     case LUA_TPROTO:
+         g->work.coldprotos++;
++        luaE_workmarkbit(g, LUA_WBIT_COLDPROTOS);
+         coldrecent(g, o);
+         luaC_coldprepare(L, gco2p(o));
+         break;
+@@ -1973,6 +1980,7 @@ void luaC_coldcall(lua_State* L, Closure* cl, int host, const TValue* self, cons
+     bool served = !host && cl->isC && luaE_cfunctionkind(cl) == LUAE_SERVEDCFUNCTION;
+     int slot = host || served ? LUA_WORK_COLDHOSTFUNCS : LUA_WORK_COLDCFUNCS;
+     g->work.hostops[slot]++;
++    luaE_workmarkhostop(g, slot);
+     if (luaP_state)
+         luaP_cold(L, obj2gco(cl), host ? LUA_COLD_HOSTFUNCTION : LUA_COLD_CFUNCTION, int(offsetof(lua_WorkCounters, hostops) / sizeof(uint64_t)) + slot);
+ }
+diff --git a/luau/VM/src/lmem.cpp b/luau/VM/src/lmem.cpp
+index f3d93c0..a6e82e2 100644
+--- a/luau/VM/src/lmem.cpp
++++ b/luau/VM/src/lmem.cpp
+@@ -659,14 +659,19 @@ static LUAU_FORCEINLINE void freegcoblock(lua_State* L, int sizeClass, void* blo
+ // count with its call
+ static void countallocated(lua_State* L, size_t nsize, int tt)
+ {
++    uint64_t dirty = luaE_workhostopbit(LUA_WORK_ALLOCBYTES) | luaE_workhostopbit(LUA_WORK_GCOBJECTS);
+     if (luaE_scriptinsn(L))
+     {
+         L->global->work.allocated += nsize;
+         L->global->work.objects++;
++        dirty |= luaE_workbit(LUA_WBIT_ALLOCATED) | luaE_workbit(LUA_WBIT_OBJECTS);
+     }
+     // (a library or engine call made it for a script; a userdata is a host's datatype value, which the host prices with its operation)
+     else if (tt != LUA_TUSERDATA && luaE_scriptwork(L) && !luaE_hostcall(L))
++    {
+         L->global->work.hostops[LUA_WORK_LIBOBJECTS]++;
++        dirty |= luaE_workhostopbit(LUA_WORK_LIBOBJECTS);
++    }
+     else
+         return;
+     // (every object's bytes, whoever of the script's work made it, and the object again for the collector, which sweeps each)
+@@ -674,7 +679,11 @@ static void countallocated(lua_State* L, size_t nsize, int tt)
+     L->global->work.hostops[LUA_WORK_GCOBJECTS]++;
+     // (and an object no size class holds: a page of its own from the host's allocator)
+     if (nsize > kMaxSmallSizeUsed)
++    {
+         L->global->work.hostops[LUA_WORK_LARGEBLOCKS]++;
++        dirty |= luaE_workhostopbit(LUA_WORK_LARGEBLOCKS);
++    }
++    luaE_workmark(L->global, dirty);
+ }
+ 
+ void* luaM_new_(lua_State* L, size_t nsize, uint8_t memcat)
+diff --git a/luau/VM/src/lprofile.cpp b/luau/VM/src/lprofile.cpp
+index 4a09e0f..eda1009 100644
+--- a/luau/VM/src/lprofile.cpp
++++ b/luau/VM/src/lprofile.cpp
+@@ -37,6 +37,9 @@
+ 
+ #include <algorithm>
+ #include <atomic>
++#ifdef _MSC_VER
++#include <intrin.h>
++#endif
+ #include <string.h>
+ #include <string>
+ #include <unordered_map>
+@@ -103,6 +106,8 @@ struct ProfFunction
+     std::vector<std::vector<double>> phasework;
+     std::vector<std::vector<double>> phasecold;
+     int lastphaseline = -1;
++    // the phase id held at `lastphaseline`, so hot stepping avoids touching `phaselines` on every step
++    int cachedphase = -1;
+     // a helper chunk of the host's binding (mlua's "=__mlua..."): its instructions are a script's but its work is booked to the
+     // script instruction that called it, as an engine call's is
+     bool binding = false;
+@@ -289,6 +294,104 @@ const int kRehashedSlot = int(offsetof(lua_WorkCounters, rehashed) / sizeof(uint
+ const int kNewStringsSlot = int(offsetof(lua_WorkCounters, newstrings) / sizeof(uint64_t));
+ const int kNumToStrSlot = int(offsetof(lua_WorkCounters, numtostr) / sizeof(uint64_t));
+ 
++static LUAU_FORCEINLINE int ctz64(uint64_t v)
++{
++#if defined(_MSC_VER) && (defined(_M_X64) || defined(_M_ARM64))
++    unsigned long idx;
++    _BitScanForward64(&idx, v);
++    return int(idx);
++#elif defined(__GNUC__) || defined(__clang__)
++    return __builtin_ctzll(v);
++#else
++    int idx = 0;
++    while ((v & 1) == 0)
++    {
++        v >>= 1;
++        idx++;
++    }
++    return idx;
++#endif
++}
++
++// Maps a lua_WorkCounters slot index to its bit index in global_State::workdirty, or -1 if not a tracked scalar slot.
++static int slotToWorkBit(int slot)
++{
++    if (slot >= kHostOpsSlot + LUA_WORK_FIRSTSLOT && slot < kHostOpsSlot + 256)
++        return LUA_WBIT_HOSTOPS_BASE + (slot - (kHostOpsSlot + LUA_WORK_FIRSTSLOT));
++    if (slot == int(offsetof(lua_WorkCounters, allocated) / sizeof(uint64_t)))
++        return LUA_WBIT_ALLOCATED;
++    if (slot == int(offsetof(lua_WorkCounters, ccalls) / sizeof(uint64_t)))
++        return LUA_WBIT_CCALLS;
++    if (slot == int(offsetof(lua_WorkCounters, tmcalls) / sizeof(uint64_t)))
++        return LUA_WBIT_TMCALLS;
++    if (slot == int(offsetof(lua_WorkCounters, hostcalls) / sizeof(uint64_t)))
++        return LUA_WBIT_HOSTCALLS;
++    if (slot == int(offsetof(lua_WorkCounters, objects) / sizeof(uint64_t)))
++        return LUA_WBIT_OBJECTS;
++    if (slot == int(offsetof(lua_WorkCounters, stored) / sizeof(uint64_t)))
++        return LUA_WBIT_STORED;
++    if (slot == int(offsetof(lua_WorkCounters, rehashed) / sizeof(uint64_t)))
++        return LUA_WBIT_REHASHED;
++    if (slot == int(offsetof(lua_WorkCounters, hostnanos) / sizeof(uint64_t)))
++        return LUA_WBIT_HOSTNANOS;
++    if (slot == int(offsetof(lua_WorkCounters, muted) / sizeof(uint64_t)))
++        return LUA_WBIT_MUTED;
++    if (slot == int(offsetof(lua_WorkCounters, vectormagnitudes) / sizeof(uint64_t)))
++        return LUA_WBIT_VECTORMAGNITUDES;
++    if (slot == int(offsetof(lua_WorkCounters, vectorunits) / sizeof(uint64_t)))
++        return LUA_WBIT_VECTORUNITS;
++    if (slot == int(offsetof(lua_WorkCounters, vectormethods) / sizeof(uint64_t)))
++        return LUA_WBIT_VECTORMETHODS;
++    if (slot == int(offsetof(lua_WorkCounters, slowimports) / sizeof(uint64_t)))
++        return LUA_WBIT_SLOWIMPORTS;
++    if (slot == int(offsetof(lua_WorkCounters, numtostr) / sizeof(uint64_t)))
++        return LUA_WBIT_NUMTOSTR;
++    if (slot == int(offsetof(lua_WorkCounters, sortcompares) / sizeof(uint64_t)))
++        return LUA_WBIT_SORTCOMPARES;
++    if (slot == int(offsetof(lua_WorkCounters, sortcalls) / sizeof(uint64_t)))
++        return LUA_WBIT_SORTCALLS;
++    if (slot == int(offsetof(lua_WorkCounters, createitems) / sizeof(uint64_t)))
++        return LUA_WBIT_CREATEITEMS;
++    if (slot == int(offsetof(lua_WorkCounters, cloneitems) / sizeof(uint64_t)))
++        return LUA_WBIT_CLONEITEMS;
++    if (slot == int(offsetof(lua_WorkCounters, concatitems) / sizeof(uint64_t)))
++        return LUA_WBIT_CONCATITEMS;
++    if (slot == int(offsetof(lua_WorkCounters, splitparts) / sizeof(uint64_t)))
++        return LUA_WBIT_SPLITPARTS;
++    if (slot == int(offsetof(lua_WorkCounters, formats) / sizeof(uint64_t)))
++        return LUA_WBIT_FORMATS;
++    if (slot == int(offsetof(lua_WorkCounters, formatspecs) / sizeof(uint64_t)))
++        return LUA_WBIT_FORMATSPECS;
++    if (slot == int(offsetof(lua_WorkCounters, newstrings) / sizeof(uint64_t)))
++        return LUA_WBIT_NEWSTRINGS;
++    if (slot == int(offsetof(lua_WorkCounters, coldtables) / sizeof(uint64_t)))
++        return LUA_WBIT_COLDTABLES;
++    if (slot == int(offsetof(lua_WorkCounters, coldclosures) / sizeof(uint64_t)))
++        return LUA_WBIT_COLDCLOSURES;
++    if (slot == int(offsetof(lua_WorkCounters, coldprotos) / sizeof(uint64_t)))
++        return LUA_WBIT_COLDPROTOS;
++    if (slot == int(offsetof(lua_WorkCounters, coldcode) / sizeof(uint64_t)))
++        return LUA_WBIT_COLDCODE;
++    return -1;
++}
++
++static const int kColdBloomWords = 16; // 1024-bit Bloom filter over coldframe keys
++static const unsigned kColdBloomBits = kColdBloomWords * 64;
++static const int kColdCacheSize = 64;  // direct-mapped cache in front of coldframe
++
++struct ColdCacheEntry
++{
++    GCObject* obj = NULL;
++    uint32_t gen = 0;
++    int payer = -1;
++    uint8_t state = 0; // 0 = absent, 1 = shared, 2 = unshared non-cfunc, 3 = unshared cfunc
++};
++
++static LUAU_FORCEINLINE uint64_t coldhash(const void* p)
++{
++    return uintptr_t(p) * 0x9e3779b97f4a7c15ull;
++}
++
+ // What a builtin's fast path takes (lbuiltins.cpp, the conditions before each `return -1`), to tell why it declined a call:
+ // the argument count, the results the call asks for, the arguments' types (the first ones, then `rest` for every one after),
+ // and whether it declines while a collector step is owed (before checking the arguments' types, or after)
+@@ -481,6 +584,13 @@ struct lua_ProfileState
+     bool pricing = false;
+     std::vector<double> prices;
+     std::vector<int> scalars;
++    // bitmask of tracked scalar slots in `scalars` and `calleeslots`, mapping each bit back to its slot index
++    uint64_t scalarMask = 0;
++    uint64_t calleeMask = 0;
++    int bitSlot[64] = {};
++    bool bitFastPath[64] = {};
++    // any scalar slot not covered by workdirty (empty for all VM work counters)
++    std::vector<int> untrackedScalars;
+     const double* hostwork = NULL;
+     const double* hostdrained = NULL;
+     double lasthost = 0;
+@@ -577,6 +687,9 @@ struct lua_ProfileState
+     int coldcodeslot = -1;
+     // the frame's cold charges for objects (luaP_cold), their totals over the profile, and the instruction that made each table
+     std::unordered_map<GCObject*, ColdRecord> coldframe;
++    uint64_t coldbloom[kColdBloomWords] = {};
++    ColdCacheEntry coldcache[kColdCacheSize];
++    uint32_t coldgen = 1;
+     std::unordered_map<uint64_t, ColdTotal> coldtotals;
+     std::unordered_map<const void*, uint64_t> tablesites;
+     // the host's hook around the calls it samples (lua_setprofilecalls), and each function's sampling, by function id
+@@ -1055,21 +1168,32 @@ static void addmask(double* kinds, signed char mask, double moved)
+ }
+ 
+ // the arrays of `f` for the profile's current phase (lines per phase)
+-static int phaselinesof(lua_ProfileState* s, ProfFunction& f)
++static LUAU_NOINLINE int phaselinesofSlow(lua_ProfileState* s, ProfFunction& f)
+ {
+-    if (f.lastphaseline >= 0 && f.phaselines[f.lastphaseline].phase == s->phase)
+-        return f.lastphaseline;
+     for (size_t i = 0; i < f.phaselines.size(); ++i)
++    {
+         if (f.phaselines[i].phase == s->phase)
++        {
++            f.cachedphase = s->phase;
+             return f.lastphaseline = int(i);
++        }
++    }
+     size_t n = f.code.size();
+     f.phasecounts.emplace_back(n, 0);
+     f.phasework.emplace_back(n, 0.0);
+     f.phasecold.emplace_back(n, 0.0);
+     f.phaselines.push_back(lua_ProfilePhaseLines{s->phase, NULL, NULL, NULL});
++    f.cachedphase = s->phase;
+     return f.lastphaseline = int(f.phaselines.size() - 1);
+ }
+ 
++static LUAU_FORCEINLINE int phaselinesof(lua_ProfileState* s, ProfFunction& f)
++{
++    if (LUAU_LIKELY(f.cachedphase == s->phase))
++        return f.lastphaseline;
++    return phaselinesofSlow(s, f);
++}
++
+ // a cold charge that is the function's own (its code's first run, its closure's and prototype's first touch): cutting the function saves
+ // it, whatever else ran in the frame
+ static void addexclusive(lua_ProfileState* s, int function, int pc, int node, double cost)
+@@ -1092,18 +1216,33 @@ static void addkinds(lua_ProfileState* s, int function, int pc, int node, const
+ {
+     if (!kinds)
+         return;
++    bool any = false;
++    for (int k = 0; k < LUA_PROFILE_SPLITS; ++k)
++        if (kinds[k] != 0.0)
++            any = true;
+     if (function >= 0 && pc >= 0)
+     {
+         ProfFunction& f = s->functions[function];
+         LUAU_ASSERT(size_t(pc) < f.code.size());
+-        if (f.split.empty())
++        if (LUAU_UNLIKELY(f.split.empty()))
+             f.split.assign(f.code.size() * LUA_PROFILE_SPLITS, 0.0);
++        if (any)
++        {
++            double* fsplit = &f.split[size_t(pc) * LUA_PROFILE_SPLITS];
++            for (int k = 0; k < LUA_PROFILE_SPLITS; ++k)
++                if (kinds[k] != 0.0)
++                    fsplit[k] += kinds[k];
++            if (kinds[LUA_PROFILE_COLD] != 0.0)
++                f.phasecold[phaselinesof(s, f)][pc] += kinds[LUA_PROFILE_COLD];
++        }
++    }
++    if (any)
++    {
++        double* nsplit = s->nodes[node].split;
+         for (int k = 0; k < LUA_PROFILE_SPLITS; ++k)
+-            f.split[size_t(pc) * LUA_PROFILE_SPLITS + k] += kinds[k];
+-        f.phasecold[phaselinesof(s, f)][pc] += kinds[LUA_PROFILE_COLD];
++            if (kinds[k] != 0.0)
++                nsplit[k] += kinds[k];
+     }
+-    for (int k = 0; k < LUA_PROFILE_SPLITS; ++k)
+-        s->nodes[node].split[k] += kinds[k];
+ }
+ 
+ static void add(lua_ProfileState* s, double delta, const double* kinds = NULL)
+@@ -1157,18 +1296,47 @@ static bool isFastPathCounter(int slot)
+            hostop == LUA_WORK_HASHREHASHED || hostop == LUA_WORK_STRBYTES;
+ }
+ 
+-static void book(lua_ProfileState* s, lua_State* L)
++static void rebuildMasks(lua_ProfileState* s)
+ {
+-    if (!s->pricing)
+-        return;
++    s->scalarMask = 0;
++    s->calleeMask = 0;
++    s->untrackedScalars.clear();
++    int prevBit = -1;
++    for (int slot : s->scalars)
++    {
++        int bit = slotToWorkBit(slot);
++        if (bit >= 0)
++        {
++            LUAU_ASSERT(bit > prevBit && bit < LUA_WBIT_COUNT);
++            prevBit = bit;
++            s->scalarMask |= uint64_t(1) << bit;
++            s->bitSlot[bit] = slot;
++            s->bitFastPath[bit] = isFastPathCounter(slot);
++        }
++        else
++        {
++            s->untrackedScalars.push_back(slot);
++        }
++    }
++    for (int slot : s->calleeslots)
++    {
++        int bit = slotToWorkBit(slot);
++        LUAU_ASSERT(bit >= 0 && bit < LUA_WBIT_COUNT);
++        s->calleeMask |= uint64_t(1) << bit;
++    }
++}
++
++static LUAU_NOINLINE void bookSlow(lua_ProfileState* s, lua_State* L, uint64_t dirty, double host, double hostdelta)
++{
++    const uint64_t* now = reinterpret_cast<const uint64_t*>(&s->g->work);
++    uint64_t* last = reinterpret_cast<uint64_t*>(&s->last);
+     double dispatch = 0;
+     double rest = 0;
+     double dispatchkinds[LUA_PROFILE_SPLITS] = {};
+     double restkinds[LUA_PROFILE_SPLITS] = {};
+     if (s->hostwork && s->hostdrained)
+     {
+-        double host = *s->hostwork + *s->hostdrained;
+-        rest = host - s->lasthost;
++        rest = hostdelta;
+         s->lasthost = host;
+     }
+     if (s->splitting && s->hostkinds)
+@@ -1179,8 +1347,6 @@ static void book(lua_ProfileState* s, lua_State* L)
+             s->lasthostkinds[kind] = s->hostkinds[kind];
+         }
+     }
+-    const uint64_t* now = reinterpret_cast<const uint64_t*>(&s->g->work);
+-    uint64_t* last = reinterpret_cast<uint64_t*>(&s->last);
+     if (s->nativeseen && (L != s->lastL || L->ci != s->lastci))
+     {
+         for (int i = 0; i < LOP__COUNT; ++i)
+@@ -1215,17 +1381,40 @@ static void book(lua_ProfileState* s, lua_State* L)
+     // inside the library include the fast path's object and byte prices too.
+     double fastwork = double(s->callstored) * s->prices[kStoredSlot];
+     s->callstored = 0;
+-    for (int slot : s->scalars)
++    if (dirty)
+     {
+-        if (now[slot] != last[slot])
++        s->g->workdirty &= ~dirty;
++        while (dirty)
+         {
+-            double charge = s->prices[slot] * double(int64_t(now[slot] - last[slot]));
+-            rest += charge;
+-            if (s->splitting)
+-                addmask(restkinds, s->kinds[slot], charge);
+-            if (isFastPathCounter(slot))
+-                fastwork += charge;
+-            last[slot] = now[slot];
++            int bit = ctz64(dirty);
++            dirty &= dirty - 1;
++            int slot = s->bitSlot[bit];
++            if (now[slot] != last[slot])
++            {
++                double charge = s->prices[slot] * double(int64_t(now[slot] - last[slot]));
++                rest += charge;
++                if (s->splitting)
++                    addmask(restkinds, s->kinds[slot], charge);
++                if (s->bitFastPath[bit])
++                    fastwork += charge;
++                last[slot] = now[slot];
++            }
++        }
++    }
++    if (LUAU_UNLIKELY(!s->untrackedScalars.empty()))
++    {
++        for (int slot : s->untrackedScalars)
++        {
++            if (now[slot] != last[slot])
++            {
++                double charge = s->prices[slot] * double(int64_t(now[slot] - last[slot]));
++                rest += charge;
++                if (s->splitting)
++                    addmask(restkinds, s->kinds[slot], charge);
++                if (isFastPathCounter(slot))
++                    fastwork += charge;
++                last[slot] = now[slot];
++            }
+         }
+     }
+     if ((dispatch + rest != 0 || fastwork != 0) && s->target >= 0 && s->targetpc >= 0)
+@@ -1277,12 +1466,115 @@ static void book(lua_ProfileState* s, lua_State* L)
+     s->owntouch = 0;
+ }
+ 
++static LUAU_FORCEINLINE void book(lua_ProfileState* s, lua_State* L)
++{
++    if (!s->pricing)
++        return;
++    uint64_t dirty = s->g->workdirty & s->scalarMask;
++    double host = 0;
++    double hostdelta = 0;
++    if (s->hostwork && s->hostdrained)
++    {
++        host = *s->hostwork + *s->hostdrained;
++        hostdelta = host - s->lasthost;
++    }
++    // Common case: pure-Luau step with no scalar counters, host charges, or C-call target.
++    if (LUAU_LIKELY(dirty == 0 && hostdelta == 0.0 && s->callstored == 0 && s->ctarget < 0 && s->lastop >= 0 &&
++                    s->untrackedScalars.empty() && (!s->nativeseen || (L == s->lastL && L->ci == s->lastci))))
++    {
++        bool hostkindsSame = true;
++        if (s->splitting && s->hostkinds)
++        {
++            const double* hk = s->hostkinds;
++            const double* lhk = s->lasthostkinds;
++            hostkindsSame = hk[0] == lhk[0] && hk[1] == lhk[1] && hk[2] == lhk[2] && hk[3] == lhk[3] && hk[4] == lhk[4];
++        }
++        if (LUAU_LIKELY(hostkindsSame))
++        {
++            const uint64_t* now = reinterpret_cast<const uint64_t*>(&s->g->work);
++            uint64_t* last = reinterpret_cast<uint64_t*>(&s->last);
++            int slot = s->lastbase + s->lastop;
++            uint64_t cur = now[slot];
++            uint64_t prev = last[slot];
++            if (LUAU_LIKELY(cur != prev))
++            {
++                last[slot] = cur;
++                double moved = s->prices[slot] * double(int64_t(cur - prev));
++                if (LUAU_LIKELY(moved != 0.0))
++                {
++                    if (LUAU_LIKELY(s->target >= 0))
++                    {
++                        ProfFunction& f = s->functions[s->target];
++                        int pc = s->targetpc;
++                        int node = s->targetnode;
++                        if (LUAU_LIKELY(pc >= 0 && size_t(pc) < f.work.size()))
++                        {
++                            if (LUAU_UNLIKELY(!f.fallbackof.empty()))
++                            {
++                                if (lua_ProfileBuiltinSite* site = fallbacksite(f, pc, node, s->phase))
++                                    site->charged += moved;
++                            }
++                            f.work[pc] += moved;
++                            int pidx = phaselinesof(s, f);
++                            f.phasework[pidx][pc] += moved;
++                            if (s->splitting)
++                            {
++                                if (LUAU_UNLIKELY(f.split.empty()))
++                                    f.split.assign(f.code.size() * LUA_PROFILE_SPLITS, 0.0);
++                                signed char mask = s->kinds[slot];
++                                if (LUAU_UNLIKELY(mask != 0))
++                                {
++                                    double* fsplit = &f.split[size_t(pc) * LUA_PROFILE_SPLITS];
++                                    double* nsplit = s->nodes[node].split;
++                                    for (int k = 0; k < LUA_PROFILE_SPLITS; ++k)
++                                    {
++                                        if (mask & (1 << k))
++                                        {
++                                            fsplit[k] += moved;
++                                            nsplit[k] += moved;
++                                        }
++                                    }
++                                    if (mask & (1 << LUA_PROFILE_COLD))
++                                        f.phasecold[pidx][pc] += moved;
++                                }
++                            }
++                        }
++                        else
++                        {
++                            f.nativework += moved;
++                            if (s->splitting)
++                            {
++                                signed char mask = s->kinds[slot];
++                                if (LUAU_UNLIKELY(mask != 0))
++                                {
++                                    double* nsplit = s->nodes[node].split;
++                                    for (int k = 0; k < LUA_PROFILE_SPLITS; ++k)
++                                        if (mask & (1 << k))
++                                            nsplit[k] += moved;
++                                }
++                            }
++                        }
++                        s->nodes[node].work += moved;
++                    }
++                    else
++                    {
++                        s->enginework += moved;
++                    }
++                }
++            }
++            if (LUAU_UNLIKELY(s->owntouch != 0))
++                s->owntouch = 0;
++            return;
++        }
++    }
++    bookSlow(s, L, dirty, host, hostdelta);
++}
++
+ // books what the slots of a call's callee moved (a closure's and a function's first touch in a frame, its code's first run in a while)
+ // to the instruction about to run: the callee's first, not the call
+-static void bookcallee(lua_ProfileState* s)
++static LUAU_NOINLINE void bookcalleeSlow(lua_ProfileState* s, uint64_t dirty)
+ {
+-    if (!s->pricing || s->calleeslots.empty())
+-        return;
++    s->g->workdirty &= ~dirty;
+     const uint64_t* now = reinterpret_cast<const uint64_t*>(&s->g->work);
+     uint64_t* last = reinterpret_cast<uint64_t*>(&s->last);
+     double delta = 0;
+@@ -1304,6 +1596,16 @@ static void bookcallee(lua_ProfileState* s)
+     }
+ }
+ 
++static LUAU_FORCEINLINE void bookcallee(lua_ProfileState* s)
++{
++    if (!s->pricing || s->calleeMask == 0)
++        return;
++    uint64_t dirty = s->g->workdirty & s->calleeMask;
++    if (LUAU_LIKELY(!dirty))
++        return;
++    bookcalleeSlow(s, dirty);
++}
++
+ static bool slothit(LuaNode* n, const TValue* kv)
+ {
+     return ttisstring(gkey(n)) && tsvalue(gkey(n)) == tsvalue(kv) && !ttisnil(gval(n));
+@@ -1945,6 +2247,25 @@ static void markfresh(lua_ProfileState* s, lua_State* L)
+         frames->back().returning = true;
+ }
+ 
++static LUAU_NOINLINE void coldcheck(lua_ProfileState* s, GCObject* touched, uint64_t h)
++{
++    ColdCacheEntry& ce = s->coldcache[unsigned((h >> 58) & (kColdCacheSize - 1))];
++    ce.obj = touched;
++    ce.gen = s->coldgen;
++    auto found = s->coldframe.find(touched);
++    if (found == s->coldframe.end())
++    {
++        ce.payer = -1;
++        ce.state = 0;
++        return;
++    }
++    int payer = found->second.kind == LUA_COLD_CFUNCTION && s->ctarget >= 0 ? s->nodes[s->ctarget].function : s->target;
++    if (found->second.payer != payer)
++        found->second.shared = true;
++    ce.payer = found->second.payer;
++    ce.state = found->second.shared ? 1 : (found->second.kind == LUA_COLD_CFUNCTION ? 3 : 2);
++}
++
+ void luaP_step(lua_State* L, Closure* cl, const Instruction* pc)
+ {
+     lua_ProfileState* s = luaP_state;
+@@ -2124,12 +2445,18 @@ void luaP_step(lua_State* L, Closure* cl, const Instruction* pc)
+         }
+         if (touched)
+         {
+-            auto found = s->coldframe.find(touched);
+-            if (found != s->coldframe.end())
++            uint64_t h = coldhash(touched);
++            unsigned b1 = unsigned((h >> 54) & (kColdBloomBits - 1));
++            unsigned b2 = unsigned((h >> 44) & (kColdBloomBits - 1));
++            if (((s->coldbloom[b1 >> 6] >> (b1 & 63)) & (s->coldbloom[b2 >> 6] >> (b2 & 63)) & 1u) != 0)
+             {
+-                int payer = found->second.kind == LUA_COLD_CFUNCTION && s->ctarget >= 0 ? s->nodes[s->ctarget].function : s->target;
+-                if (found->second.payer != payer)
+-                    found->second.shared = true;
++                const ColdCacheEntry& ce = s->coldcache[unsigned((h >> 58) & (kColdCacheSize - 1))];
++                bool hit = ce.gen == s->coldgen && ce.obj == touched &&
++                           (ce.state <= 1 ||
++                            (ce.state == 2 && ce.payer == s->target) ||
++                            (ce.state == 3 && ce.payer == (s->ctarget >= 0 ? s->nodes[s->ctarget].function : s->target)));
++                if (LUAU_UNLIKELY(!hit))
++                    coldcheck(s, touched, h);
+             }
+         }
+     }
+@@ -2367,11 +2694,23 @@ void luaP_cold(lua_State* L, GCObject* o, int kind, int slot)
+     else
+         record.sitefunction = functionof(s, gco2cl(o)->l.p);
+     s->coldframe[o] = record;
++    uint64_t h = coldhash(o);
++    unsigned b1 = unsigned((h >> 54) & (kColdBloomBits - 1));
++    unsigned b2 = unsigned((h >> 44) & (kColdBloomBits - 1));
++    s->coldbloom[b1 >> 6] |= uint64_t(1) << (b1 & 63);
++    s->coldbloom[b2 >> 6] |= uint64_t(1) << (b2 & 63);
++    ColdCacheEntry& ce = s->coldcache[unsigned((h >> 58) & (kColdCacheSize - 1))];
++    ce.obj = o;
++    ce.gen = s->coldgen;
++    ce.payer = record.payer;
++    ce.state = record.shared ? 1 : (kind == LUA_COLD_CFUNCTION ? 3 : 2);
+ }
+ 
+ // settles the frame's cold charges for objects: their totals, and the payers' charges nothing else shared
+ static void coldsettle(lua_ProfileState* s)
+ {
++    if (s->coldframe.empty())
++        return;
+     for (auto& entry : s->coldframe)
+     {
+         const ColdRecord& r = entry.second;
+@@ -2388,6 +2727,12 @@ static void coldsettle(lua_ProfileState* s)
+             addexclusive(s, r.payer, r.pc, r.node, r.cost);
+     }
+     s->coldframe.clear();
++    memset(s->coldbloom, 0, sizeof(s->coldbloom));
++    if (++s->coldgen == 0)
++    {
++        memset(s->coldcache, 0, sizeof(s->coldcache));
++        s->coldgen = 1;
++    }
+ }
+ 
+ void luaP_coldframe(lua_State* L)
+@@ -2425,6 +2770,7 @@ void lua_profilesplit(lua_State* L, const signed char* kinds, int nkinds, const
+         if (slot != s->coldcodeslot && std::find(s->calleeslots.begin(), s->calleeslots.end(), slot) == s->calleeslots.end())
+             scalars.push_back(slot);
+     s->scalars = scalars;
++    rebuildMasks(s);
+ }
+ 
+ int lua_profilecoldobjects(lua_State* L, void (*each)(void* ud, const lua_ProfileColdObject* o), void* ud)
+@@ -2541,8 +2887,10 @@ int lua_profilestart(lua_State* L, int stepping, const double* prices, int npric
+         s->hostwork = hostwork;
+         s->hostdrained = hostdrained;
+         s->lasthost = hostwork && hostdrained ? *hostwork + *hostdrained : 0;
++        rebuildMasks(s);
+     }
+     s->last = L->global->work;
++    L->global->workdirty = 0;
+     ProfNode root = {-1, -1, -1, 0, 0, 0.0, {}, 0.0};
+     s->nodes.push_back(root);
+     luaP_allockind = 0;
+diff --git a/luau/VM/src/lstate.cpp b/luau/VM/src/lstate.cpp
+index 8f15d74..c84a7b2 100644
+--- a/luau/VM/src/lstate.cpp
++++ b/luau/VM/src/lstate.cpp
+@@ -242,6 +242,7 @@ lua_State* lua_newstate(lua_Alloc allocator, void* ud)
+     g->ecb = lua_ExecutionCallbacks();
+     g->gcstats = GCStats();
+     g->work = lua_WorkCounters();
++    g->workdirty = 0;
+     g->gcclock = NULL;
+     g->gcclockud = NULL;
+     g->typeofnames = NULL;
+diff --git a/luau/VM/src/lstate.h b/luau/VM/src/lstate.h
+index c3902a3..d8c88ee 100644
+--- a/luau/VM/src/lstate.h
++++ b/luau/VM/src/lstate.h
+@@ -296,6 +296,9 @@ typedef struct global_State
+ 
+     uint64_t ptrenckeynew[8]; // pointer encoding key for display
+     bool ptrencactive;
++    uint8_t floatmode; // the float mode the interpreter runs in and native code compiles in (lua_setfloatmode)
++    bool floatchanged; // the outermost interpreter entry changed the thread's mode bits, which floatsaved holds
++    bool tiered_on_load; // whether newly loaded Protos arm for tiered compilation
+ 
+     GCStats gcstats;
+     uint32_t lastprotoid;
+@@ -314,14 +317,12 @@ typedef struct global_State
+     TString* vectortypename; // the name typeof gives a vector (NULL: the type's own)
+     struct LuaTable* safebase; // immutable shared global base for safe-sandbox setfenv preservation (NULL: disabled)
+ 
+-    uint8_t floatmode; // the float mode the interpreter runs in and native code compiles in (lua_setfloatmode)
+-    bool floatchanged; // the outermost interpreter entry changed the thread's mode bits, which floatsaved holds
+     unsigned int floatsaved;
+     int floatdepth; // interpreter entries in progress (luau_execute)
+ 
+     uint32_t tiered_threshold; // calls before on-demand single-proto native compile (0: disabled)
+-    bool tiered_on_load;       // whether newly loaded Protos arm for tiered compilation
+     void (*tiered_compile)(lua_State* L, struct Proto* p); // compiles one hot Proto in place
++    uint64_t workdirty; // dirty bitmask of scalar/hostops work slots (uses padding reclaimed by packing floatmode/floatchanged/tiered_on_load after ptrencactive, keeping sizeof(global_State) identical)
+ } global_State;
+ // clang-format on
+ 
+@@ -449,9 +450,64 @@ LUAI_FUNC int luaE_cfunctionkind(Closure* cl);
+ #define luaE_engineframe(L, ci)     ((ci) > (L)->base_ci && ttisfunction((ci)->func) && clvalue((ci)->func)->isC && luaE_cfunctionkind(clvalue((ci)->func)) >= LUAE_ENGINECFUNCTION)
+ // whether frame `ci` is an engine function's that was charged as a script's C call: the host's own Luau it runs is part of that call
+ #define luaE_enginecallframe(L, ci) (((ci)->flags & LUA_CALLINFO_WORK_CCALL) && luaE_engineframe(L, ci))
++// Bit indices in global_State::workdirty, in strictly ascending lua_WorkCounters slot order so the stepping profiler
++// visits dirty slots in the exact order its scalar scan did (identical floating-point summation).
++enum
++{
++    LUA_WBIT_ALLOCATED = 0,
++    LUA_WBIT_CCALLS,
++    LUA_WBIT_TMCALLS,
++    LUA_WBIT_HOSTOPS_BASE, // LUA_WORK_FIRSTSLOT..255 in ascending order
++    LUA_WBIT_HOSTCALLS = LUA_WBIT_HOSTOPS_BASE + (256 - LUA_WORK_FIRSTSLOT),
++    LUA_WBIT_OBJECTS,
++    LUA_WBIT_STORED,
++    LUA_WBIT_REHASHED,
++    LUA_WBIT_HOSTNANOS,
++    LUA_WBIT_MUTED,
++    LUA_WBIT_VECTORMAGNITUDES,
++    LUA_WBIT_VECTORUNITS,
++    LUA_WBIT_VECTORMETHODS,
++    LUA_WBIT_SLOWIMPORTS,
++    LUA_WBIT_NUMTOSTR,
++    LUA_WBIT_SORTCOMPARES,
++    LUA_WBIT_SORTCALLS,
++    LUA_WBIT_CREATEITEMS,
++    LUA_WBIT_CLONEITEMS,
++    LUA_WBIT_CONCATITEMS,
++    LUA_WBIT_SPLITPARTS,
++    LUA_WBIT_FORMATS,
++    LUA_WBIT_FORMATSPECS,
++    LUA_WBIT_NEWSTRINGS,
++    LUA_WBIT_COLDTABLES,
++    LUA_WBIT_COLDCLOSURES,
++    LUA_WBIT_COLDPROTOS,
++    LUA_WBIT_COLDCODE,
++    LUA_WBIT_COUNT
++};
++static_assert(LUA_WBIT_COUNT <= 64, "workdirty bitmask must fit in uint64_t");
++
++#define luaE_workbit(bit) (uint64_t(1) << (bit))
++#define luaE_workhostopbit(slot) (uint64_t(1) << (LUA_WBIT_HOSTOPS_BASE + ((slot) - LUA_WORK_FIRSTSLOT)))
++#define luaE_workmark(g, mask) ((g)->workdirty |= (mask))
++#define luaE_workmarkbit(g, bit) ((g)->workdirty |= luaE_workbit(bit))
++#define luaE_workmarkhostop(g, slot) ((g)->workdirty |= luaE_workhostopbit(slot))
++
+ // a script's call of the C closure `ccl` (classified by luaE_hostcall first): a C call (work.ccalls), or for an engine function the
+ // host serves the host call the host's own Luau that stood for it was (work.hostcalls)
+-#define luaE_workccall(L, ccl)     do     {         if ((ccl)->preload == LUAE_SERVEDCFUNCTION)             (L)->global->work.hostcalls++;         else             (L)->global->work.ccalls++;     } while (0)
++#define luaE_workccall(L, ccl) \
++    do \
++    { \
++        if ((ccl)->preload == LUAE_SERVEDCFUNCTION) \
++        { \
++            (L)->global->work.hostcalls++; \
++            luaE_workmarkbit((L)->global, LUA_WBIT_HOSTCALLS); \
++        } \
++        else \
++        { \
++            (L)->global->work.ccalls++; \
++            luaE_workmarkbit((L)->global, LUA_WBIT_CCALLS); \
++        } \
++    } while (0)
+ 
+ // counts `n` units of a library or engine function's work in the work counters' hostops slot `slot` (lua.h LUA_WORK_SCANNED and the
+ // rest) when a script's work asked for it
+@@ -459,7 +515,10 @@ LUAI_FUNC int luaE_cfunctionkind(Closure* cl);
+     do \
+     { \
+         if (luaE_scriptwork(L) && !luaE_hostcall(L)) \
++        { \
+             (L)->global->work.hostops[(slot)] += uint64_t(n); \
++            luaE_workmarkhostop((L)->global, (slot)); \
++        } \
+     } while (0)
+ // a new buffer's bytes (lua.h LUA_WORK_BUFBYTES), and those past Luau's own pages again (LUA_WORK_BUFFRESH)
+ #define luaE_workbufnew(L, n) \
+diff --git a/luau/VM/src/lstring.cpp b/luau/VM/src/lstring.cpp
+index 31bc484..a537b1f 100644
+--- a/luau/VM/src/lstring.cpp
++++ b/luau/VM/src/lstring.cpp
+@@ -206,7 +206,10 @@ TString* luaS_buffinish(lua_State* L, TString* ts)
+     LUAU_ASSERT(ts->next == NULL);
+ 
+     if (luaE_scriptwork(L))
++    {
+         L->global->work.newstrings++;
++        luaE_workmarkbit(L->global, LUA_WBIT_NEWSTRINGS);
++    }
+ 
+     ts->hash = h;
+     ts->data[ts->len] = '\0'; // ending 0
+@@ -243,7 +246,10 @@ TString* luaS_newlstr(lua_State* L, const char* str, size_t l)
+         }
+ 
+         if (luaE_scriptwork(L))
++        {
+             L->global->work.newstrings++;
++            luaE_workmarkbit(L->global, LUA_WBIT_NEWSTRINGS);
++        }
+         return newlstr(L, str, l, h, saltedh); // not found
+     }
+     else
+@@ -260,7 +266,10 @@ TString* luaS_newlstr(lua_State* L, const char* str, size_t l)
+             }
+         }
+         if (luaE_scriptwork(L))
++        {
+             L->global->work.newstrings++;
++            luaE_workmarkbit(L->global, LUA_WBIT_NEWSTRINGS);
++        }
+         return newlstr(L, str, l, h, 0); // not found
+     }
+ }
+diff --git a/luau/VM/src/lstrlib.cpp b/luau/VM/src/lstrlib.cpp
+index d2f8932..bc7d934 100644
+--- a/luau/VM/src/lstrlib.cpp
++++ b/luau/VM/src/lstrlib.cpp
+@@ -1194,6 +1194,7 @@ static int str_format(lua_State* L)
+     {
+         L->global->work.formats++;
+         L->global->work.formatspecs += arg - 1;
++        luaE_workmark(L->global, luaE_workbit(LUA_WBIT_FORMATS) | luaE_workbit(LUA_WBIT_FORMATSPECS));
+     }
+     luaL_pushresult(&b);
+     return 1;
+@@ -1228,7 +1229,10 @@ static int str_split(lua_State* L)
+             }
+ 
+             if (luaE_scriptwork(L))
++            {
+                 L->global->work.splitparts += numMatches;
++                luaE_workmarkbit(L->global, LUA_WBIT_SPLITPARTS);
++            }
+             return 1;
+         }
+         else if (needleLen == 1)
+@@ -1283,7 +1287,10 @@ static int str_split(lua_State* L)
+         lua_rawseti(L, -2, ++numMatches);
+ 
+         if (luaE_scriptwork(L))
++        {
+             L->global->work.splitparts += numMatches;
++            luaE_workmarkbit(L->global, LUA_WBIT_SPLITPARTS);
++        }
+     }
+     else
+     {
+@@ -1326,7 +1333,10 @@ static int str_split(lua_State* L)
+         }
+ 
+         if (luaE_scriptwork(L))
++        {
+             L->global->work.splitparts += numMatches;
++            luaE_workmarkbit(L->global, LUA_WBIT_SPLITPARTS);
++        }
+     }
+ 
+     return 1;
+diff --git a/luau/VM/src/ltable.cpp b/luau/VM/src/ltable.cpp
+index 828e0b9..51500df 100644
+--- a/luau/VM/src/ltable.cpp
++++ b/luau/VM/src/ltable.cpp
+@@ -623,18 +623,28 @@ static int hashslotsused(const LuaTable* t)
+ // counts the table storage a script's own instruction allocates (lua_WorkCounters)
+ static void countstored(lua_State* L, size_t bytes)
+ {
++    uint64_t dirty = 0;
+     if (luaE_scriptinsn(L))
++    {
+         L->global->work.stored += bytes;
++        dirty |= luaE_workbit(LUA_WBIT_STORED);
++    }
+     else if (luaP_state)
+         luaP_callstorage(L, bytes);
+     // (a table part a library or engine call allocated for a script counts as its allocation too: table.create, a decoded table)
+     if (luaE_scriptwork(L) && !luaE_hostcall(L))
+     {
+         L->global->work.hostops[LUA_WORK_ALLOCBYTES] += bytes;
++        dirty |= luaE_workhostopbit(LUA_WORK_ALLOCBYTES);
+         // (a part too large for Luau's own pages is a block of the host's allocator: lmem.cpp kMaxSmallSizeUsed)
+         if (bytes > 1024)
++        {
+             L->global->work.hostops[LUA_WORK_LARGEBLOCKS]++;
++            dirty |= luaE_workhostopbit(LUA_WORK_LARGEBLOCKS);
++        }
+     }
++    if (dirty)
++        luaE_workmark(L->global, dirty);
+ }
+ 
+ static void setarrayvector(lua_State* L, LuaTable* t, int size)
+@@ -855,6 +865,7 @@ static void rehash(lua_State* L, LuaTable* t, int newintkey)
+         {
+             L->global->work.rehashed += nh;
+             L->global->work.hostops[LUA_WORK_HASHREHASHED] += nh;
++            luaE_workmark(L->global, luaE_workbit(LUA_WBIT_REHASHED) | luaE_workhostopbit(LUA_WORK_HASHREHASHED));
+         }
+         // (the hash part's size before, for a profile's rehash hook)
+         int oldnodes = t->node == dummynode ? 0 : sizenode(t);
+@@ -918,6 +929,7 @@ static void rehash(lua_State* L, LuaTable* t, int newintkey)
+         L->global->work.rehashed += totaluse;
+         // (the keys that do not go to the array part are reinserted into the hash part)
+         L->global->work.hostops[LUA_WORK_HASHREHASHED] += unsigned(nh);
++        luaE_workmark(L->global, luaE_workbit(LUA_WBIT_REHASHED) | luaE_workhostopbit(LUA_WORK_HASHREHASHED));
+     }
+ 
+     // (the sizes before, for a profile's rehash hook)
+diff --git a/luau/VM/src/ltablib.cpp b/luau/VM/src/ltablib.cpp
+index aca10c3..f57fbcd 100644
+--- a/luau/VM/src/ltablib.cpp
++++ b/luau/VM/src/ltablib.cpp
+@@ -332,7 +332,10 @@ static int tconcat(lua_State* L)
+ 
+     LuaTable* t = hvalue(L->base);
+     if (last >= i && luaE_scriptwork(L))
++    {
+         L->global->work.concatitems += unsigned(last - i + 1);
++        luaE_workmarkbit(L->global, LUA_WBIT_CONCATITEMS);
++    }
+ 
+     luaL_Strbuf b;
+     luaL_buffinit(L, &b);
+@@ -411,7 +414,10 @@ static int sort_func(lua_State* L, const TValue* l, const TValue* r)
+     setobj2s(L, L->top + 2, r);
+     L->top += 3; // safe because of LUA_MINSTACK guarantee
+     if (!L->global->workoff)
++    {
+         L->global->work.sortcalls++;
++        luaE_workmarkbit(L->global, LUA_WBIT_SORTCALLS);
++    }
+     luaD_call(L, L->top - 3, 1);
+     L->top -= 1; // maintain stack depth
+ 
+@@ -438,7 +444,10 @@ inline int sort_less(lua_State* L, LuaTable* t, int i, int j, SortPredicate pred
+     LUAU_ASSERT(unsigned(i) < unsigned(n) && unsigned(j) < unsigned(n)); // contract maintained in sort_less after predicate call
+ 
+     if (!L->global->workoff)
++    {
+         L->global->work.sortcompares++;
++        luaE_workmarkbit(L->global, LUA_WBIT_SORTCOMPARES);
++    }
+     int res = pred(L, &arr[i], &arr[j]);
+ 
+     // predicate call may resize the table, which is invalid
+@@ -591,6 +600,7 @@ static int tsort(lua_State* L)
+             {
+                 L->global->work.sortcompares = compares;
+                 L->global->work.sortcalls = calls;
++                luaE_workmark(L->global, luaE_workbit(LUA_WBIT_SORTCOMPARES) | luaE_workbit(LUA_WBIT_SORTCALLS));
+             }
+         }
+     }
+@@ -603,7 +613,10 @@ static int tcreate(lua_State* L)
+     if (size < 0)
+         luaL_argerror(L, 1, "size out of range");
+     if (luaE_scriptwork(L))
++    {
+         L->global->work.createitems += unsigned(size);
++        luaE_workmarkbit(L->global, LUA_WBIT_CREATEITEMS);
++    }
+ 
+     if (!lua_isnoneornil(L, 2))
+     {
+@@ -731,7 +744,10 @@ static int tclone(lua_State* L)
+ 
+     LuaTable* source = hvalue(L->base);
+     if (luaE_scriptwork(L))
++    {
+         L->global->work.cloneitems += unsigned(source->sizearray) + (source->node == &luaH_dummynode ? 0u : unsigned(sizenode(source)));
++        luaE_workmarkbit(L->global, LUA_WBIT_CLONEITEMS);
++    }
+     LuaTable* tt = luaH_clone(L, source);
+ 
+     TValue v;
+diff --git a/luau/VM/src/lvmexecute.cpp b/luau/VM/src/lvmexecute.cpp
+index 8d62809..3601b89 100644
+--- a/luau/VM/src/lvmexecute.cpp
++++ b/luau/VM/src/lvmexecute.cpp
+@@ -317,6 +317,7 @@ static bool luau_execute(lua_State* L)
+         !luaE_enginecallframe(L, L->ci - 1))
+     {
+         L->global->work.hostcalls++;
++        luaE_workmarkbit(L->global, LUA_WBIT_HOSTCALLS);
+         luaC_coldcall(L, clvalue(L->ci->func), 1, NULL, isLua(L->ci - 1) ? clvalue((L->ci - 1)->func)->l.p : NULL);
+     }
+ 
+@@ -561,7 +562,10 @@ reentry:
+ 
+                     // (a host's work counters: the lookup a resolved import saves)
+                     if (CountWork && !(cl->l.p->flags & LUAU_PROTO_WORK_EXEMPT))
++                    {
+                         L->global->work.slowimports++;
++                        luaE_workmarkbit(L->global, LUA_WBIT_SLOWIMPORTS);
++                    }
+                     VM_PROTECT(luaV_getimport(L, cl->env, k, ra, aux, /* propagatenil= */ false));
+                     VM_NEXT();
+                 }
+@@ -1043,7 +1047,10 @@ reentry:
+                     const TValue* tmi = 0;
+ 
+                     if (ttisvector(rb) && luaE_interpretedinsn(L))
++                    {
+                         L->global->work.vectormethods++;
++                        luaE_workmarkbit(L->global, LUA_WBIT_VECTORMETHODS);
++                    }
+ 
+                     // fast-path: metatable with __namecall
+                     if (const TValue* fn = fasttm(L, mt, TM_NAMECALL))
+@@ -1189,6 +1196,7 @@ reentry:
+                         if ((ccl->l.p->flags & LUAU_PROTO_WORK_EXEMPT) && !(cl->l.p->flags & LUAU_PROTO_WORK_EXEMPT))
+                         {
+                             L->global->work.hostcalls++;
++                            luaE_workmarkbit(L->global, LUA_WBIT_HOSTCALLS);
+                             luaC_coldcall(L, ccl, 1, NULL, cl->l.p);
+                         }
+                         workops = luaE_workops(L, ccl);
+@@ -1325,6 +1333,7 @@ reentry:
+                         if ((ccl->l.p->flags & LUAU_PROTO_WORK_EXEMPT) && !(cl->l.p->flags & LUAU_PROTO_WORK_EXEMPT))
+                         {
+                             L->global->work.hostcalls++;
++                            luaE_workmarkbit(L->global, LUA_WBIT_HOSTCALLS);
+                             luaC_coldcall(L, ccl, 1, NULL, cl->l.p);
+                         }
+                         workops = luaE_workops(L, ccl);
+@@ -3913,7 +3922,10 @@ reentry:
+                 // (the call of pcall / xpcall the skipped fallback makes, counted as the C call it is: a client's fast protected
+                 // call costs what that call did, 18 ns a pcall in a 0.747 client against 17.9 in a 0.744 one that made the call)
+                 if (CountWork && (cl->l.p->flags & LUAU_PROTO_WORK_EXEMPT) == 0)
++                {
+                     L->global->work.ccalls++;
++                    luaE_workmarkbit(L->global, LUA_WBIT_CCALLS);
++                }
+ 
+                 L->ci->savedpc = pc + skip + 1; // return skips the fallback path
+ 
+@@ -3942,6 +3954,7 @@ reentry:
+                         if ((fcl->l.p->flags & LUAU_PROTO_WORK_EXEMPT) && !(cl->l.p->flags & LUAU_PROTO_WORK_EXEMPT))
+                         {
+                             L->global->work.hostcalls++;
++                            luaE_workmarkbit(L->global, LUA_WBIT_HOSTCALLS);
+                             luaC_coldcall(L, fcl, 1, NULL, cl->l.p);
+                         }
+                         workops = luaE_workops(L, fcl);
+diff --git a/luau/VM/src/lvmutils.cpp b/luau/VM/src/lvmutils.cpp
+index 3f45b80..e4d0536 100644
+--- a/luau/VM/src/lvmutils.cpp
++++ b/luau/VM/src/lvmutils.cpp
+@@ -48,7 +48,10 @@ int luaV_tostring(lua_State* L, StkId obj)
+         LUAU_ASSERT(e < s + sizeof(s));
+         setsvalue(L, obj, luaS_newlstr(L, s, e - s));
+         if (luaE_scriptwork(L))
++        {
+             L->global->work.numtostr++;
++            luaE_workmarkbit(L->global, LUA_WBIT_NUMTOSTR);
++        }
+         return 1;
+     }
+ }
+@@ -195,7 +198,10 @@ static bool luaV_vectormember(lua_State* L, const float* v, const TString* name,
+     if (strcmp(s + 1, "agnitude") == 0 && (s[0] == 'M' || s[0] == 'm'))
+     {
+         if (luaE_interpretedinsn(L))
++        {
+             L->global->work.vectormagnitudes++;
++            luaE_workmarkbit(L->global, LUA_WBIT_VECTORMAGNITUDES);
++        }
+ #if LUA_VECTOR_SIZE == 4
+         setnvalue(res, sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2] + v[3] * v[3]));
+ #else
+@@ -206,7 +212,10 @@ static bool luaV_vectormember(lua_State* L, const float* v, const TString* name,
+     if (strcmp(s + 1, "nit") == 0 && (s[0] == 'U' || s[0] == 'u'))
+     {
+         if (luaE_interpretedinsn(L))
++        {
+             L->global->work.vectorunits++;
++            luaE_workmarkbit(L->global, LUA_WBIT_VECTORUNITS);
++        }
+ #if LUA_VECTOR_SIZE == 4
+         float invSqrt = 1.0f / sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2] + v[3] * v[3]);
+         setvvalue(L, res, v[0] * invSqrt, v[1] * invSqrt, v[2] * invSqrt, v[3] * invSqrt);
+@@ -831,6 +840,7 @@ LUAU_NOINLINE void luaV_callTM(lua_State* L, int nparams, int res)
+     if (luaE_scriptwork(L))
+     {
+         L->global->work.tmcalls++;
++        luaE_workmarkbit(L->global, LUA_WBIT_TMCALLS);
+         // (an engine function that is a metamethod is priced as the call it stands for, the host's own Luau that served it before
+         // included: lua_setenginecfunction)
+         Closure* ccl = clvalue(fun);

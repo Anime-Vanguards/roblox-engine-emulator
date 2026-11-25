@@ -1822,7 +1822,10 @@ static void coldrecent(global_State* g, GCObject* o, bool charge = true)
         return;
     uint32_t& last = (*c->protolast)[o];
     if (charge && (last == 0 || last + 1 < c->frame))
+    {
         g->work.hostops[LUA_WORK_RAREPROTOS]++;
+        luaE_workmarkhostop(g, LUA_WORK_RAREPROTOS);
+    }
     last = c->frame;
 }
 
@@ -1895,6 +1898,7 @@ void luaC_coldinstruction(lua_State* L, Closure* cl, const Instruction* pc)
         if (first)
             coldrecent(L->global, obj2gco(p), false);
         L->global->work.coldcode++;
+        luaE_workmarkbit(L->global, LUA_WBIT_COLDCODE);
         if (luaP_state)
             luaP_coldcode(L, p, at);
     }
@@ -1918,6 +1922,7 @@ void luaC_coldtouch(lua_State* L, GCObject* o)
     {
     case LUA_TTABLE:
         g->work.coldtables++;
+        luaE_workmarkbit(g, LUA_WBIT_COLDTABLES);
         if (luaP_state)
         {
             luaP_coldtouch(L, o);
@@ -1926,9 +1931,11 @@ void luaC_coldtouch(lua_State* L, GCObject* o)
         break;
     case LUA_TFUNCTION:
         g->work.coldclosures++;
+        luaE_workmarkbit(g, LUA_WBIT_COLDCLOSURES);
         break;
     case LUA_TPROTO:
         g->work.coldprotos++;
+        luaE_workmarkbit(g, LUA_WBIT_COLDPROTOS);
         coldrecent(g, o);
         luaC_coldprepare(L, gco2p(o));
         break;
@@ -1973,6 +1980,7 @@ void luaC_coldcall(lua_State* L, Closure* cl, int host, const TValue* self, cons
     bool served = !host && cl->isC && luaE_cfunctionkind(cl) == LUAE_SERVEDCFUNCTION;
     int slot = host || served ? LUA_WORK_COLDHOSTFUNCS : LUA_WORK_COLDCFUNCS;
     g->work.hostops[slot]++;
+    luaE_workmarkhostop(g, slot);
     if (luaP_state)
         luaP_cold(L, obj2gco(cl), host ? LUA_COLD_HOSTFUNCTION : LUA_COLD_CFUNCTION, int(offsetof(lua_WorkCounters, hostops) / sizeof(uint64_t)) + slot);
 }
