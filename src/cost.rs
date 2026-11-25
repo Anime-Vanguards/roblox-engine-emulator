@@ -1560,17 +1560,19 @@ pub const GLUE_LISTED: f64 = 0.37e-6;
 /// [`JOINT_LIST_LEFT`] and UNJOIN_NAMED pay 1.9 to 2.1, and UNJOIN_REMOVED the rest on average, its link change's flat prices among
 /// it (those Welds join anchored parts, whose links change no assembly and pay [`LINK_CHANGED`] alone: world/joints.rs
 /// charge_link). While the call takes joints out (Joints::unpriced), charge_link charges a removal that ends a single link no flat
-/// link-change price ([`LINK_CHANGED`], [`LINK_SPLIT_AGAIN`], [`LINK_REJOINED`]) and the rest as ever, [`LINK_FRAME`] for the frame's
-/// first change, [`link_assembly`] for each assembly's first and [`links_more`] (a client's call pays each split's assembly price as
-/// the same Welds' Parent = nil in a loop does: world/joints.rs charge_link), and a removal that ends several links at once (a joint
+/// link-change price ([`LINK_CHANGED`], [`LINK_SPLIT_FIRST`], [`LINK_SPLIT_AGAIN`], [`LINK_REJOINED`]) and the rest as ever,
+/// [`LINK_FRAME`] for the frame's first change, [`link_assembly`] for each assembly's first and [`links_more`] (a client's call
+/// pays each split's assembly price as the same Welds' Parent = nil in a loop does: world/joints.rs charge_link), and a removal
+/// that ends several links at once (a joint
 /// carrying others) every link price, as its Parent = nil pays; so taking one leaf off a hub costs the call what the leaf's Parent =
 /// nil costs, as a client's does
 /// (Studio 0.748, the same method, one leaf of an anchored hub welded to N unanchored parts, at a frame's start:
 /// UnjoinFromOutsiders({leaf}) 91 to 118 us at N = 1,000 and 975 to 1,154 at 10,000, the leaf's Weld's Parent = nil 99 to 129 and
-/// 1,026 to 1,201; ree reads 124 and 889 for the call, 133 and 898 for the write); the entries before one that raises are an ignore
-/// list's [`LIST_CAST_FAILED`] (0.19). ree's clock then reads 0.82 to 1.08 of the client's call at 10,000 entries in each case but
-/// the Welded pairs (0.63 to 0.64), the Welds taken out 0.86 to 0.97; and 0.74 to 1.29 at 1,000 but the nil holes (0.50 to 0.56)
-/// and a call that raises (0.64 to 0.70), the Welds taken out 1.07 to 1.25 (each case's whole call against both runs'). What a joint
+/// 1,026 to 1,201; ree reads 116 and 881 for the call, 125 and 890 for the write, 8 us less each since 2026-11-25's link prices);
+/// the entries before one that raises are an ignore list's [`LIST_CAST_FAILED`] (0.19). ree's clock then reads 0.82 to 1.08 of the
+/// client's call at 10,000 entries in each case but the Welded pairs (0.63 to 0.64), the Welds taken out 0.86 to 0.97; and 0.74 to
+/// 1.29 at 1,000 but the nil holes (0.50 to 0.56) and a call that raises (0.64 to 0.70), the Welds taken out 1.07 to 1.25 (each
+/// case's whole call against both runs'). What a joint
 /// taken off a part that keeps many others costs a client follows the parts of the part's assembly, not the joints it keeps
 /// (roblox-sim, Studio 0.747, two sessions; one leaf's Weld out at a frame's start, an anchored hub keeping N joints, less 51 to 72 us
 /// with none): 0.082 and 0.096 us a joint kept at N = 1,000 and 10,000 for Welds to unanchored parts (ree's LINK_PART 0.085 a part
@@ -1796,11 +1798,10 @@ pub fn joints_reanchored(changed: usize, links: usize) -> f64 {
 /// part that links others. A playing client (roblox-sim, Studio 0.747, headless; os.clock around
 /// single writes at a frame's start and in turn after it, the median of 9 to 11 samples, an anchored or unanchored part welded to N
 /// = 1 to 10,000 parts and chains of them; docs/engine.md "Rigid assemblies", 2026-11-24) spends 31 to 66 us on a frame's first
-/// link change ([`LINK_FRAME`] beyond the rest), 6 to 20 us on the first change of another assembly in that frame
-/// ([`LINK_ASSEMBLY`] beyond a change's own), each time 0.085 us a part of the assembly ([`LINK_PART`]: 871 to 921 us at 10,000
-/// welded to a hub, 69 to 131 at 1,000, a leaf's weld disabled or enabled or the leaf anchored or not), and 1.8 to 3.9 us on each
-/// later change of an assembly changed in the frame, whatever its size ([`LINK_CHANGED`] beyond the write's own price; two of them
-/// cost more: [`LINK_REJOINED`]). The other
+/// link change ([`LINK_FRAME`] beyond the rest), on the first change of each assembly in that frame its assembly's price
+/// ([`link_assembly`]: 0.085 us a part, [`LINK_PART`]: 871 to 921 us at 10,000 welded to a hub, 69 to 131 at 1,000, a leaf's weld
+/// disabled or enabled or the leaf anchored or not), and 1.8 to 3.9 us on each later change of an assembly changed in the frame,
+/// whatever its size ([`LINK_CHANGED`] beyond the write's own price; some of them cost more: [`LINK_REJOINED`]). The other
 /// kinds cost it alike (2026-11-24, a leaf of an anchored hub welded to 10,000 parts, at a frame's start: its weld's Part1
 /// re-pointed 874 us, set to nil 885, its Part0 re-pointed 926, the weld's Parent set to nil 864, the weld destroyed 883, the
 /// leaf's Parent set to nil 982, the leaf destroyed 929, beyond what such a write or destroy costs alone; 10 to 43 us later in the
@@ -1814,19 +1815,46 @@ pub const LINK_CHANGED: f64 = 1.7e-6;
 /// 2026-11-24): the frame's first that starts a link after one ended one ([`LINK_REJOINED`]: a weld enabled after one was disabled
 /// 7.6 to 14.4 us, 8.5 to 9.4 at 1,000, where the later ones cost 1.8 to 2.9), and its second that ends one before any starts one
 /// ([`LINK_SPLIT_AGAIN`]: 4.0 to 8.7 us, 4.4 to 4.6 at 1,000). Fitted: x0.63 to x1.18 of the first, x0.53 to x1.15 of the second.
+/// Where the frame's first change started a link, its first that ends one costs more instead ([`LINK_SPLIT_FIRST`]), and its first
+/// that starts one after one ended less ([`LINK_REJOINED_AFTER_JOIN`]) (2026-11-25, the same client, three sessions, the geometric
+/// mean of their medians, beyond the same writes of disabled welds: 12 pairs of an anchored part welded to an unanchored one, each
+/// weld taken out in turn and parented back after another pair's weld was enabled first in the frame: the first out 12.7 us, the
+/// later ones 5.1, the first back 3.9 and the later ones 1.9; anchored hubs of 1 to 1,000 leaves, a leaf's weld disabled after the
+/// same: the first 4.5 to 9 us more than the later ones, the first enable 1.5 to 3 more). Fitted: x0.86 to x1.04 of the first out,
+/// x0.97 to x1.10 of the first back and x0.58 to x1.39 of the hubs' and stars' first enables.
 pub const LINK_REJOINED: f64 = 7e-6;
+pub const LINK_REJOINED_AFTER_JOIN: f64 = 2e-6;
 pub const LINK_SPLIT_AGAIN: f64 = 2.6e-6;
+pub const LINK_SPLIT_FIRST: f64 = 8e-6;
 pub const LINK_FRAME: f64 = 34e-6;
-pub const LINK_ASSEMBLY: f64 = 5e-6;
+/// What the first link change of an assembly in a frame costs (2026-11-25, the same client, two or three sessions, the geometric mean
+/// of their medians): the assembly as a client keeps it, which a link between two anchored parts does not join (each anchored part
+/// the root of an assembly of its own) and a Glue does, each part of it [`LINK_PART`], more when none of them is anchored
+/// ([`LINK_FREE_PART`]), and each link from its anchored parts to other anchored parts [`LINK_ANCHORED`] (world/joints.rs
+/// mark_component). A split of a two-part assembly the frame had not changed, later in the frame, costs a client 5.1 us beyond a
+/// disabled weld's (12 pairs of an anchored part welded to an unanchored one, the third and later in turn; 4.0 to 6.7 in each
+/// session, an Enabled write alike), N such welds taken out in one loop at a frame's start 1.64 ms at 300 and 4.8 ms at 1,000,
+/// and UnjoinFromOutsiders of their N anchored parts 2.03 and 6.4 ms (where [`LINK_ASSEMBLY`] at 5 us read x2.1 to x3.1): each of
+/// the two pieces pays [`LINK_ASSEMBLY`] and its part. An anchored hub's leaf's weld disabled after another change in the frame, the
+/// hub keeping 1,000 more joints: to anchored parts 17.8 to 33.7 us where a hub with none costs 12.4 to 19.7 (0.002 to 0.011 us a
+/// weld: x2.4 to x10 when a component's anchored parts were priced as an assembly's), to unanchored parts by Glue 86 to 139 (as by
+/// Welds, 78 to 141: x0.04 to x0.5 when Glue joined nothing). Stars whose hub is unanchored and larger (the root), 1,000 leaves, a
+/// leaf's weld disabled: 119 to 154 us where an anchored hub's cost 83 to 92. Fitted: two-part splits x0.75 to x1.24, the loops x0.82
+/// to x1.23, the call x0.86 to x1.03, stars of 30 to 1,000 x0.64 to x1.17 (of 1 to 10, x0.53 to x0.72: a client's first few changes
+/// in a frame cost more), Glue hubs x0.91 to x1.48, anchored leaves x0.73 to x0.98.
+pub const LINK_ASSEMBLY: f64 = 1.0e-6;
 pub const LINK_PART: f64 = 0.085e-6;
-/// What the first link change of an assembly in a frame costs it ([`LINK_ASSEMBLY`]): `parts` parts.
-pub fn link_assembly(parts: usize) -> f64 {
-    LINK_ASSEMBLY + parts as f64 * LINK_PART
+pub const LINK_FREE_PART: f64 = 0.05e-6;
+pub const LINK_ANCHORED: f64 = 0.005e-6;
+/// What the first link change of an assembly in a frame costs it ([`LINK_ASSEMBLY`]): `parts` parts, `free` when none of them is
+/// anchored ([`LINK_FREE_PART`] more each), and `anchored` links from its anchored parts to other anchored parts ([`LINK_ANCHORED`]).
+pub fn link_assembly(parts: usize, free: bool, anchored: usize) -> f64 {
+    LINK_ASSEMBLY + parts as f64 * (LINK_PART + if free { LINK_FREE_PART } else { 0.0 }) + anchored as f64 * LINK_ANCHORED
 }
 /// A write that ends or starts several links at once (a Parent write or Destroy that takes a part, a joint or a Folder of them out
 /// of a world or into one; world/joints.rs charge_link), beyond its first link change's price: each further link that reaches a part
 /// in a world ([`LINK_MORE`]) and each further piece holding no anchored part that it splits off or joins ([`LINK_PIECE`]), whether
-/// or not the frame changed its assembly before (a piece split off that the frame did not pays [`link_assembly`] instead). A playing
+/// or not the frame changed its assembly before (a piece split off that the frame did not pays [`link_assembly`] too). A playing
 /// client (roblox-sim, Studio 0.747, headless; os.clock around single Parent writes at a frame's start, after another link change and
 /// right after the opposite write in the same frame, the median of 9 samples, 5 sessions; N = 1 to 10,000 links: an anchored part
 /// welded to N unanchored or anchored parts taken out and put back, the same welds in a Folder, N pairs' welds in a Folder, N welds
@@ -1843,14 +1871,28 @@ pub fn link_assembly(parts: usize) -> f64 {
 /// N = 100 and 1,000: an anchored hub's N unanchored leaves by their welds' Folder 2.0 ms out and 1.7 in at 1,000, by the hub 2.2
 /// and 1.8, N anchored leaves 0.51 and 0.36, N welds between two parts 0.29 and 2.1, N pairs' welds in 2.7, 18 rows; N pairs out
 /// left aside, quadratic on a client): rms of the log ratio 0.62 where the old prices read 0.97, the joins x0.86 to x1.10 (x2.5 to
-/// x3.6 before) and links between anchored parts x1.4 to x1.8 (x2.5 to x3.3). Not changed by these two: a split at a frame's start
-/// pays each fresh piece's [`link_assembly`], x1.6 to x3.0 of a client's there, and links joined between two parts read x0.26 to
-/// x0.32 (a client's 2.1 us a link).
+/// x3.6 before) and links between anchored parts x1.4 to x1.8 (x2.5 to x3.3). Since [`LINK_ASSEMBLY`] fell to 1 us (2026-11-25,
+/// the same client, three sessions, the geometric mean of their medians), a piece split off that the frame had not changed pays
+/// [`LINK_PIECE`] and its assembly's price, where it paid the 5 us price alone (an anchored hub's 100 and 1,000 leaves split off at a
+/// frame's start by their welds' Folder 300 us and 2.6 ms, by the hub 447 us and 3.5 ms: x1.12 to x1.17 and x0.75 to x0.86, where
+/// they read x1.4 to x2.3), and each link a write starts between two parts that another of its links joins pays [`LINK_PARALLEL`]
+/// more (N welds between two parts in a Folder parented back right after it was taken out, 3.6 us a weld at N = 10, 2.1 to 2.2 at
+/// 1,000 and 3,000, 235 us at 100: x0.79 to x1.01, where they read x0.29 to x0.42). A link that another joint between the same two
+/// parts keeps
+/// changes no assembly (an anchored hub's leaf's weld disabled while N more welds between the two are left, after another change in
+/// the frame: 3.0 to 4.8 us at N = 1,000 and 3,000 when they were made after it), but for the last made of them ending, which costs
+/// a client a split's price and [`LINK_KEPT_PARALLEL`] for each joint it keeps (36.5 to 43.3 us at 1,000, 86.5 to 99.8 at 3,000,
+/// where a hub with none cost 14 to 16): world/joints.rs charge_link prices the others as a link between anchored parts, the change
+/// alone. Fitted: x0.57 to x0.69 and x0.87 to x0.95. Not matched: such a kept change at a frame's start costs a client 13.6 to 26.8 us
+/// (x0.21), and the weld enabled again after it 3.8 to 6.5 (x0.34 to x0.53).
 pub const LINK_MORE: f64 = 0.06e-6;
 pub const LINK_PIECE: f64 = 1.05e-6;
-/// What a write's further links cost ([`LINK_MORE`]): `links` links beyond its first, `pieces` pieces.
-pub fn links_more(links: usize, pieces: usize) -> f64 {
-    links as f64 * LINK_MORE + pieces as f64 * LINK_PIECE
+pub const LINK_PARALLEL: f64 = 1.5e-6;
+pub const LINK_KEPT_PARALLEL: f64 = 0.025e-6;
+/// What a write's further links cost ([`LINK_MORE`]): `links` links beyond its first, `pieces` pieces, `parallel` of those links
+/// between two parts another of them links ([`LINK_PARALLEL`] more each).
+pub fn links_more(links: usize, pieces: usize, parallel: usize) -> f64 {
+    links as f64 * LINK_MORE + pieces as f64 * LINK_PIECE + parallel as f64 * LINK_PARALLEL
 }
 /// Each part of an assembly an AssemblyCenterOfMass read (an AssemblyMass read too, when none of its parts is anchored) works out
 /// after a link change in the same frame (world/joints.rs pay_body): the same client read the centre at 0.08 us a part of the hub's
