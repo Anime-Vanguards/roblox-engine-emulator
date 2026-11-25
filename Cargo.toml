@@ -87,8 +87,8 @@ base64 = "=0.13.1"
 resolver = "3"
 # profile-view: the profile viewer (`ree profile view|render` runs its binary), a crate of its own so the engine's has
 # no terminal UI; a plain `cargo build` or `cargo test` here covers both
-members = ["profile-view", "tests/host"]
-default-members = [".", "profile-view", "tests/host"]
+members = ["profile-view", "tests/host", "tests/planted"]
+default-members = [".", "profile-view", "tests/host", "tests/planted"]
 exclude = ["vendor"]
 
 # The patched Luau VM (vendor/luau0-src), and mlua-sys with the VM's type tags and bytecode version range (vendor/mlua-sys:

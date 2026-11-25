@@ -34,10 +34,3 @@ png = "=0.18.1"
 rustc-hash = "=2.1.3"
 serde = { version = "=1.0.228", features = ["derive"] }
 serde_json = { version = "=1.0.145", features = ["float_roundtrip"] }
-
-# tests/planted.rs (including planted/engine.rs): real profiles made by the engine in the test (the engine is not a
-# dependency of the viewer itself), and mimalloc, which the engine's service code calls (mi_collect) and ree's binary links;
-# the engine's own version
-[dev-dependencies]
-roblox-engine-emulator = { path = ".." }
-mimalloc = { version = "=0.1.52", default-features = false, features = ["v2"] }
