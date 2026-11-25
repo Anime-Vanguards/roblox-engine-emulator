@@ -608,6 +608,7 @@ struct FrameTotals {
 }
 
 struct State {
+    id: u64,
     config: Config,
     started: Instant,
     installed: Option<Installed>,
@@ -716,18 +717,84 @@ pub fn kinds() -> Kinds {
     with_state(|state| state.config.kinds).unwrap_or_default()
 }
 
+static NEXT_SESSION_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+#[cfg(test)]
+thread_local! {
+    static TEST_CACHES_LOCK: RefCell<Option<(usize, std::sync::RwLockReadGuard<'static, ()>)>> = const { RefCell::new(None) };
+}
+
+#[cfg(test)]
+struct TestCachesGuard;
+
+#[cfg(test)]
+impl TestCachesGuard {
+    fn acquire() -> Self {
+        TEST_CACHES_LOCK.with(|slot| {
+            let mut slot = slot.borrow_mut();
+            match slot.as_mut() {
+                Some((count, _)) => *count += 1,
+                None => {
+                    let guard = caches::TEST_SESSION_LOCK.read().unwrap_or_else(|poisoned| poisoned.into_inner());
+                    *slot = Some((1, guard));
+                }
+            }
+        });
+        TestCachesGuard
+    }
+}
+
+#[cfg(test)]
+impl Drop for TestCachesGuard {
+    fn drop(&mut self) {
+        let _ = TEST_CACHES_LOCK.try_with(|slot| {
+            let mut slot = slot.borrow_mut();
+            if let Some((count, _)) = slot.as_mut() {
+                *count -= 1;
+                if *count == 0 {
+                    *slot = None;
+                }
+            }
+        });
+    }
+}
+
 /// A profile of the suite on this thread: [`Session::begin`] before the engine starts, [`install`] once its VM runs
 /// (luau_profile::install calls it), [`collect`] before the VM goes, [`Session::finish`] to write it.
 pub struct Session {
+    id: u64,
     finished: bool,
     #[cfg(test)]
-    _caches_guard: Option<std::sync::RwLockReadGuard<'static, ()>>,
+    _caches_guard: Option<TestCachesGuard>,
+}
+
+fn cancel_state(state: State) {
+    if state.config.kinds.has(Kinds::CACHES) {
+        caches::cancel();
+    }
+    if state.config.kinds.has(Kinds::TIME) {
+        crate::luau_profile::stop_suite_ticker();
+    }
+    if state.config.kinds.has(Kinds::BOUNDARY) {
+        let _ = crate::boundary::finish();
+    }
+    if state.config.kinds.has(Kinds::PHASES) {
+        let _ = crate::timing::finish_tree();
+    }
+    let _ = attribution::finish(None);
+    let _ = RESUME_CALLBACKS.try_with(|cb| cb.set(None));
 }
 
 impl Session {
     /// Starts a profile on this thread (ree's own profilers the kinds name: the phases, the boundary profiler, ree's
-    /// caches; the VM's are added by [`install`]).
+    /// caches; the VM's are added by [`install`]). If another session is already active on this thread (for example,
+    /// `session = Some(Session::begin(...))` evaluating the replacement before the previous [`Session`] drops), its
+    /// state is cancelled first and the superseded handle's later drop leaves this session untouched.
     pub fn begin(config: Config) -> Session {
+        if let Some(previous) = STATE.with(|cell| cell.borrow_mut().take()) {
+            ON.with(|on| on.set(false));
+            cancel_state(*previous);
+        }
         if config.kinds.has(Kinds::PHASES) && !crate::timing::enabled() {
             crate::timing::begin(Instant::now());
         }
@@ -735,7 +802,7 @@ impl Session {
             crate::boundary::begin(crate::boundary::Config { out: config.out.join("boundary.json"), top: config.top, phase: config.phases.clone() });
         }
         #[cfg(test)]
-        let caches_guard = config.kinds.has(Kinds::CACHES).then(|| caches::TEST_SESSION_LOCK.read().unwrap_or_else(|poisoned| poisoned.into_inner()));
+        let caches_guard = config.kinds.has(Kinds::CACHES).then(TestCachesGuard::acquire);
         if config.kinds.has(Kinds::CACHES) {
             caches::begin();
         }
@@ -751,7 +818,9 @@ impl Session {
             }
             session
         });
+        let id = NEXT_SESSION_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let state = State {
+            id,
             config,
             started: Instant::now(),
             installed: None,
@@ -781,6 +850,7 @@ impl Session {
         STATE.with(|cell| *cell.borrow_mut() = Some(Box::new(state)));
         ON.with(|on| on.set(true));
         Session {
+            id,
             finished: false,
             #[cfg(test)]
             _caches_guard: caches_guard,
@@ -791,10 +861,19 @@ impl Session {
     /// the summary says) and ends it: the summary text.
     pub fn finish(mut self, run: Run) -> Result<String, String> {
         self.finished = true;
+        let Some(mut state) = STATE.with(|cell| {
+            let mut slot = cell.borrow_mut();
+            if slot.as_ref().is_some_and(|state| state.id == self.id) {
+                slot.take()
+            } else {
+                None
+            }
+        }) else {
+            return Err("no profile ran".into());
+        };
+        ON.with(|on| on.set(false));
         let boundary_text = crate::boundary::finish();
         let (phases_text, phase_tree) = crate::timing::finish_tree().unzip();
-        ON.with(|on| on.set(false));
-        let Some(mut state) = STATE.with(|cell| cell.borrow_mut().take()) else { return Err("no profile ran".into()) };
         if !state.collected && state.installed.is_some() {
             state.warnings.push("the VM's profile was not collected before the VM went (a host must call profiler::collect)".into());
         }
@@ -843,23 +922,20 @@ impl Drop for Session {
         if self.finished {
             return;
         }
-        let _ = ON.try_with(|on| on.set(false));
-        let state = STATE.try_with(|cell| cell.borrow_mut().take()).ok().flatten();
+        let state = STATE
+            .try_with(|cell| {
+                let mut slot = cell.borrow_mut();
+                if slot.as_ref().is_some_and(|state| state.id == self.id) {
+                    slot.take()
+                } else {
+                    None
+                }
+            })
+            .ok()
+            .flatten();
         if let Some(state) = state {
-            if state.config.kinds.has(Kinds::CACHES) {
-                caches::cancel();
-            }
-            if state.config.kinds.has(Kinds::TIME) {
-                crate::luau_profile::stop_suite_ticker();
-            }
-            if state.config.kinds.has(Kinds::BOUNDARY) {
-                let _ = crate::boundary::finish();
-            }
-            if state.config.kinds.has(Kinds::PHASES) {
-                let _ = crate::timing::finish_tree();
-            }
-            let _ = attribution::finish(None);
-            let _ = RESUME_CALLBACKS.try_with(|cb| cb.set(None));
+            let _ = ON.try_with(|on| on.set(false));
+            cancel_state(*state);
         }
     }
 }

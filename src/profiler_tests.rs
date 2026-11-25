@@ -2701,3 +2701,25 @@ fn a_test_script_is_checked_after_it_waits() {
     let (lua, engine) = start();
     run(&lua, &engine, "Test", "task.wait() assert(false, 'checked after the wait')");
 }
+
+/// Replacing an active `profiler::Session` in place (`session = Some(Session::begin(...))`, as a host retrying after
+/// fetching missing inputs does) evaluates the new `Session::begin` before dropping the old handle: the superseded handle's
+/// drop must leave the replacement session active and able to finish cleanly.
+#[test]
+fn overwriting_an_active_profile_session_keeps_the_replacement_active() {
+    let out = temp_dir("overwrite-session");
+    let config = Config { print: false, ..Config::new(Kinds::parse("work,caches").unwrap(), out.clone()) };
+    let mut session = Some(profiler::Session::begin(config.clone()));
+    assert!(session.is_some() && profiler::active());
+    session = Some(profiler::Session::begin(config));
+    assert!(profiler::active(), "dropping the superseded session must not deactivate the replacement");
+    let (lua, engine) = start();
+    profiler::install(&lua);
+    run(&lua, &engine, "Retry", "local s = 0 for i = 1, 50 do s += i end return s");
+    profiler::collect(&lua);
+    let run = profiler::Run { command: "test".into(), status: "ok".into(), ..Default::default() };
+    let summary = session.take().unwrap().finish(run).expect("replacement session finishes cleanly");
+    assert!(!summary.is_empty());
+    assert!(out.join("summary.txt").is_file());
+    let _ = std::fs::remove_dir_all(&out);
+}
