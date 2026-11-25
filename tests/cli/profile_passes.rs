@@ -151,14 +151,14 @@ fn a_modules_main_chunk_is_a_function_of_the_profile() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
-/// A recording's host time stays where it was spent: the recorder's walk of 3,000 parts and its samples each frame are the
+/// A recording's host time stays where it was spent: the recorder's walk of 12,000 parts and its samples each frame are the
 /// recorder's frame (`(ree engine step: recorder)`), not the first handler's loop line after them
 #[test]
 fn a_recorders_host_time_is_its_own() {
     let root = scratch("recorder");
     std::fs::write(
         root.join("Parts.luau"),
-        "return function(Context)\n\tlocal RunService = game:GetService(\"RunService\")\n\tlocal folder = Instance.new(\"Folder\")\n\tfor i = 1, 3000 do\n\t\tlocal part = Instance.new(\"Part\")\n\t\tpart.Anchored = true\n\t\tpart.Position = Vector3.new(i % 60, math.floor(i / 60), 0)\n\t\tpart.Parent = folder\n\tend\n\tfolder.Parent = workspace\n\tlocal M = {}\n\tfunction M.handler()\n\t\tlocal x = 0\n\t\tfor i = 1, 2000 do\n\t\t\tx += i % 3\n\t\tend\n\t\treturn x\n\tend\n\tRunService.Heartbeat:Connect(M.handler)\nend\n",
+        "return function(Context)\n\tlocal RunService = game:GetService(\"RunService\")\n\tlocal folder = Instance.new(\"Folder\")\n\tfor i = 1, 12000 do\n\t\tlocal part = Instance.new(\"Part\")\n\t\tpart.Anchored = true\n\t\tpart.Position = Vector3.new(i % 120, math.floor(i / 120), 0)\n\t\tpart.Parent = folder\n\tend\n\tfolder.Parent = workspace\n\tlocal M = {}\n\tfunction M.handler()\n\t\tlocal x = 0\n\t\tfor i = 1, 2000 do\n\t\t\tx += i % 3\n\t\tend\n\t\treturn x\n\tend\n\tRunService.Heartbeat:Connect(M.handler)\nend\n",
     )
     .unwrap();
     let out = root.join("recording");

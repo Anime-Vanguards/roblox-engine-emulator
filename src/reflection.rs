@@ -636,7 +636,7 @@ fn text<'a>(value: Option<&'a serde_json::Value>) -> Option<&'a str> {
     value.and_then(|v| v.as_str())
 }
 
-pub(self) struct DumpEnumItem {
+struct DumpEnumItem {
     name: String,
     value: f64,
 }

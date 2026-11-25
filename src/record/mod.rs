@@ -1231,7 +1231,7 @@ fn add_motion(record: &mut Record, frame: u32, cframe: Affine3A, warnings: &mut 
         return;
     }
     let last_frame = record.motion.last().map(|(f, _)| *f);
-    if frame >= record.appear + 1 && last_frame.is_none_or(|f| f + 1 < frame) {
+    if frame > record.appear && last_frame.is_none_or(|f| f + 1 < frame) {
         record.motion.push((frame - 1, previous));
     }
     record.motion.push((frame, cframe));
