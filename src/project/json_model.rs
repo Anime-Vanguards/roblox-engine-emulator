@@ -20,7 +20,7 @@
 //! that does not serialize is dropped (a part's Position: its CFrame holds it), a part's Color is kept
 //! as Color3uint8, and the result converts as any model file does ([`super::ModelPlan`]).
 
-use std::collections::BTreeMap;
+use rustc_hash::FxHashMap;
 
 use rbx_dom_weak::{
     InstanceBuilder, WeakDom,
@@ -41,9 +41,9 @@ struct JsonModel {
     #[serde(alias = "Children", default)]
     children: Vec<JsonModel>,
     #[serde(alias = "Properties", default)]
-    properties: BTreeMap<String, Unresolved>,
+    properties: FxHashMap<String, Unresolved>,
     #[serde(default)]
-    attributes: BTreeMap<String, Unresolved>,
+    attributes: FxHashMap<String, Unresolved>,
 }
 
 /// A value as written: explicit (rbx-dom's tagged form) or one whose type the property decides.
@@ -201,11 +201,15 @@ impl Unresolved {
 fn build(model: JsonModel, name: String) -> Result<InstanceBuilder, String> {
     let JsonModel { class_name, children, properties, attributes, .. } = model;
     let mut builder = InstanceBuilder::new(class_name.as_str()).with_name(name);
+    let mut properties: Vec<(String, Unresolved)> = properties.into_iter().collect();
+    crate::sort::by(&mut properties, |(a, _), (b, _)| a.cmp(b));
     for (property, value) in properties {
         let value = value.resolve(&class_name, &property)?;
         builder.add_property(property.as_str(), value);
     }
     if !attributes.is_empty() {
+        let mut attributes: Vec<(String, Unresolved)> = attributes.into_iter().collect();
+        crate::sort::by(&mut attributes, |(a, _), (b, _)| a.cmp(b));
         let mut list = Attributes::new();
         for (attribute, value) in attributes {
             let value = value.resolve_attribute(&attribute)?;

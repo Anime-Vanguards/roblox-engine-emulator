@@ -30,10 +30,11 @@ use std::{
     process::{Child, ChildStdin, Command, Stdio},
     sync::{
         Arc, Condvar, Mutex,
-        mpsc::{Receiver, RecvTimeoutError, channel},
+        mpsc::RecvTimeoutError,
     },
     time::Duration,
 };
+use crate::sort::channel::{Receiver, channel};
 
 /// Where manifest bundles come from.
 pub trait BundleSource {

@@ -1975,9 +1975,7 @@ pub fn register(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
-
-    use rustc_hash::FxHashSet;
+    use rustc_hash::{FxHashMap, FxHashSet};
 
     use super::*;
 
@@ -2113,7 +2111,7 @@ mod tests {
         }
     }
 
-    fn checked(entries: &Entries, numbers: &BTreeMap<u32, f64>, strings: &BTreeMap<Vec<u8>, f64>) {
+    fn checked(entries: &Entries, numbers: &FxHashMap<u32, f64>, strings: &FxHashMap<Vec<u8>, f64>) {
         assert_eq!((entries.numbers.len, entries.strings.len), (numbers.len(), strings.len()));
         for (n, value) in numbers {
             assert_eq!(number(entries.at(&Key::Number(*n))), Some(*value));
@@ -2124,7 +2122,9 @@ mod tests {
         let ordered = entries.ordered();
         let walked_numbers: Vec<u32> = ordered.iter().filter_map(|(key, _)| if let Key::Number(n) = key { Some(*n) } else { None }).collect();
         let walked_strings: Vec<&[u8]> = ordered.iter().filter_map(|(key, _)| if let Key::String(s) = key { Some(&**s) } else { None }).collect();
-        assert_eq!(walked_numbers, numbers.keys().copied().collect::<Vec<_>>());
+        let mut expected_numbers: Vec<u32> = numbers.keys().copied().collect();
+        crate::sort::ord(&mut expected_numbers);
+        assert_eq!(walked_numbers, expected_numbers);
         assert_eq!(walked_strings, string_order(strings.keys().map(Vec::as_slice).collect()));
     }
 
@@ -2140,7 +2140,7 @@ mod tests {
             seed
         };
         let mut entries = Entries::default();
-        let (mut numbers, mut strings) = (BTreeMap::new(), BTreeMap::new());
+        let (mut numbers, mut strings) = (FxHashMap::default(), FxHashMap::default());
         for step in 0..20_000u32 {
             let roll = next();
             let value = f64::from(step);
@@ -2754,7 +2754,7 @@ mod tests {
     #[test]
     fn a_loop_walks_a_snapshot_in_order_holding_only_a_path() {
         let mut entries = Entries::default();
-        let mut strings = BTreeMap::new();
+        let mut strings = FxHashMap::default();
         for n in 0..5000u32 {
             entries.put(Key::Number(n * 7919), Some(Stored::Number(f64::from(n))));
             let key = format!("k{n}").into_bytes();

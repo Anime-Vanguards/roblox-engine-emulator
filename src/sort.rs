@@ -71,6 +71,76 @@ unsafe fn apply_permutation_raw(base: *mut u8, elem_size: usize, mut order: Vec<
     }
 }
 
+/// Type-erased channels sharing one `mpsc::channel<Box<dyn Any + Send>>` monomorphization.
+pub(crate) mod channel {
+    use std::{
+        any::Any,
+        marker::PhantomData,
+        sync::mpsc::{self, RecvError, RecvTimeoutError, SendError, TryRecvError},
+        time::Duration,
+    };
+
+    pub(crate) struct Sender<T: Send + 'static> {
+        inner: mpsc::Sender<Box<dyn Any + Send>>,
+        _marker: PhantomData<fn(T)>,
+    }
+
+    pub(crate) struct Receiver<T: Send + 'static> {
+        inner: mpsc::Receiver<Box<dyn Any + Send>>,
+        _marker: PhantomData<T>,
+    }
+
+    pub(crate) fn channel<T: Send + 'static>() -> (Sender<T>, Receiver<T>) {
+        let (tx, rx) = raw_channel();
+        (Sender { inner: tx, _marker: PhantomData }, Receiver { inner: rx, _marker: PhantomData })
+    }
+
+    #[inline(never)]
+    fn raw_channel() -> (mpsc::Sender<Box<dyn Any + Send>>, mpsc::Receiver<Box<dyn Any + Send>>) {
+        mpsc::channel()
+    }
+
+    #[inline(never)]
+    fn raw_send(tx: &mpsc::Sender<Box<dyn Any + Send>>, value: Box<dyn Any + Send>) -> Result<(), Box<dyn Any + Send>> {
+        tx.send(value).map_err(|err| err.0)
+    }
+
+    #[inline(never)]
+    fn raw_recv(rx: &mpsc::Receiver<Box<dyn Any + Send>>) -> Result<Box<dyn Any + Send>, RecvError> {
+        rx.recv()
+    }
+
+    #[inline(never)]
+    fn raw_try_recv(rx: &mpsc::Receiver<Box<dyn Any + Send>>) -> Result<Box<dyn Any + Send>, TryRecvError> {
+        rx.try_recv()
+    }
+
+    #[inline(never)]
+    fn raw_recv_timeout(rx: &mpsc::Receiver<Box<dyn Any + Send>>, timeout: Duration) -> Result<Box<dyn Any + Send>, RecvTimeoutError> {
+        rx.recv_timeout(timeout)
+    }
+
+    impl<T: Send + 'static> Sender<T> {
+        pub(crate) fn send(&self, value: T) -> Result<(), SendError<T>> {
+            raw_send(&self.inner, Box::new(value)).map_err(|boxed| SendError(*boxed.downcast::<T>().expect("channel type")))
+        }
+    }
+
+    impl<T: Send + 'static> Receiver<T> {
+        pub(crate) fn recv(&self) -> Result<T, RecvError> {
+            raw_recv(&self.inner).map(|boxed| *boxed.downcast::<T>().expect("channel type"))
+        }
+
+        pub(crate) fn try_recv(&self) -> Result<T, TryRecvError> {
+            raw_try_recv(&self.inner).map(|boxed| *boxed.downcast::<T>().expect("channel type"))
+        }
+
+        pub(crate) fn recv_timeout(&self, timeout: Duration) -> Result<T, RecvTimeoutError> {
+            raw_recv_timeout(&self.inner, timeout).map(|boxed| *boxed.downcast::<T>().expect("channel type"))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

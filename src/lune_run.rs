@@ -33,11 +33,226 @@ use lune_roblox::{
     datatypes::types as rbx_types,
     document::{Document, DocumentFormat, DocumentKind},
     instance::{Instance as RbxInstance, registry::InstanceRegistry, reset_internal_dom},
-    reflection::Database as ReflectionDatabase,
+    reflection::{Database as ReflectionDatabase, DatabaseClass, DatabaseEnum, DatabaseProperty},
 };
 
 unsafe extern "C-unwind" {
     fn lua_setworkcounting(L: *mut ffi::lua_State, enabled: c_int);
+}
+
+/// Lightweight userdata wrapper for `@lune/roblox`'s reflection database.
+///
+/// Returning `lune_roblox::reflection::Database` directly instantiates `lune-roblox`'s
+/// `DomValueToLua` and `mlua::UserDataRegistry` for every Roblox datatype inside this crate.
+/// Delegating to `lune-roblox`'s compiled database methods and `crate::lua::convert::lune_userdata`
+/// preserves the exact Lua API while instantiating only this single userdata type.
+#[derive(Clone)]
+enum ReflHandle {
+    Db(ReflectionDatabase, LuaValue),
+    Class(DatabaseClass, LuaValue),
+    Enum(DatabaseEnum),
+    Prop(DatabaseProperty),
+}
+
+fn lune_enum_value(enums: &LuaValue, enum_name: &str, value: u32) -> Option<LuaValue> {
+    let db = rbx_reflection_database::get().ok()?;
+    let desc = db.enums.get(enum_name)?;
+    let (item_name, _) = desc.items.iter().find(|(_, v)| **v == value)?;
+    let enum_val: LuaValue = match enums {
+        LuaValue::UserData(ud) => ud.get(enum_name).ok()?,
+        LuaValue::Table(tbl) => tbl.get(enum_name).ok()?,
+        _ => return None,
+    };
+    match enum_val {
+        LuaValue::UserData(ud) => ud.get(item_name.as_ref()).ok(),
+        LuaValue::Table(tbl) => tbl.get(item_name.as_ref()).ok(),
+        _ => None,
+    }
+}
+
+fn lune_dom_variant_to_lua(lua: &Lua, enums: &LuaValue, variant: &rbx_dom_weak::types::Variant) -> Option<LuaValue> {
+    use crate::lua::convert::{LuneKind, lune_userdata};
+    use rbx_dom_weak::types::{self as dom, Variant as DomVariant};
+
+    let result: LuaResult<LuaValue> = match variant {
+        DomVariant::Vector3(v) => Ok(LuaValue::Vector(mlua::Vector::new(v.x, v.y, v.z))),
+        DomVariant::Bool(b) => Ok(LuaValue::Boolean(*b)),
+        DomVariant::Int64(i) => Ok(LuaValue::Number(*i as f64)),
+        DomVariant::Int32(i) => Ok(LuaValue::Number(*i as f64)),
+        DomVariant::Float64(n) => Ok(LuaValue::Number(*n)),
+        DomVariant::Float32(n) => Ok(LuaValue::Number(*n as f64)),
+        DomVariant::String(s) => lua.create_string(s).map(LuaValue::String),
+        DomVariant::BinaryString(s) => lua.create_string(s).map(LuaValue::String),
+        DomVariant::ContentId(s) => lua.create_string(AsRef::<str>::as_ref(s)).map(LuaValue::String),
+        DomVariant::Ref(value) => match RbxInstance::new_opt(*value) {
+            Some(inst) => inst.into_cached_lua(lua),
+            None => Ok(LuaValue::Nil),
+        },
+        DomVariant::OptionalCFrame(None) | DomVariant::PhysicalProperties(dom::PhysicalProperties::Default) => Ok(LuaValue::Nil),
+        DomVariant::Axes(v) => lune_userdata(lua, LuneKind::Axes, rbx_types::Axes::from(*v)).map(LuaValue::UserData),
+        DomVariant::BrickColor(v) => lune_userdata(lua, LuneKind::BrickColor, rbx_types::BrickColor::from(*v)).map(LuaValue::UserData),
+        DomVariant::CFrame(v) | DomVariant::OptionalCFrame(Some(v)) => {
+            lune_userdata(lua, LuneKind::CFrame, rbx_types::CFrame::from(*v)).map(LuaValue::UserData)
+        }
+        DomVariant::Color3(v) => lune_userdata(lua, LuneKind::Color3, rbx_types::Color3::from(*v)).map(LuaValue::UserData),
+        DomVariant::Color3uint8(v) => lune_userdata(lua, LuneKind::Color3, rbx_types::Color3::from(*v)).map(LuaValue::UserData),
+        DomVariant::ColorSequence(v) => {
+            lune_userdata(lua, LuneKind::ColorSequence, rbx_types::ColorSequence::from(v.clone())).map(LuaValue::UserData)
+        }
+        DomVariant::Content(v) => lune_userdata(lua, LuneKind::Content, rbx_types::Content::from(v.clone())).map(LuaValue::UserData),
+        DomVariant::EnumItem(v) => return lune_enum_value(enums, &v.ty, v.value),
+        DomVariant::Faces(v) => lune_userdata(lua, LuneKind::Faces, rbx_types::Faces::from(*v)).map(LuaValue::UserData),
+        DomVariant::Font(v) => lune_userdata(lua, LuneKind::Font, rbx_types::Font::from(v.clone())).map(LuaValue::UserData),
+        DomVariant::NumberRange(v) => lune_userdata(lua, LuneKind::NumberRange, rbx_types::NumberRange::from(*v)).map(LuaValue::UserData),
+        DomVariant::NumberSequence(v) => {
+            lune_userdata(lua, LuneKind::NumberSequence, rbx_types::NumberSequence::from(v.clone())).map(LuaValue::UserData)
+        }
+        DomVariant::PhysicalProperties(dom::PhysicalProperties::Custom(v)) => {
+            lune_userdata(lua, LuneKind::PhysicalProperties, rbx_types::PhysicalProperties::from(*v)).map(LuaValue::UserData)
+        }
+        DomVariant::Ray(v) => lune_userdata(lua, LuneKind::Ray, rbx_types::Ray::from(*v)).map(LuaValue::UserData),
+        DomVariant::Rect(v) => lune_userdata(lua, LuneKind::Rect, rbx_types::Rect::from(*v)).map(LuaValue::UserData),
+        DomVariant::Region3(v) => lune_userdata(lua, LuneKind::Region3, rbx_types::Region3::from(*v)).map(LuaValue::UserData),
+        DomVariant::Region3int16(v) => {
+            lune_userdata(lua, LuneKind::Region3int16, rbx_types::Region3int16::from(*v)).map(LuaValue::UserData)
+        }
+        DomVariant::UDim(v) => lune_userdata(lua, LuneKind::UDim, rbx_types::UDim::from(*v)).map(LuaValue::UserData),
+        DomVariant::UDim2(v) => lune_userdata(lua, LuneKind::UDim2, rbx_types::UDim2::from(*v)).map(LuaValue::UserData),
+        DomVariant::UniqueId(v) => lune_userdata(lua, LuneKind::UniqueId, rbx_types::UniqueId::from(*v)).map(LuaValue::UserData),
+        DomVariant::Vector2(v) => lune_userdata(lua, LuneKind::Vector2, rbx_types::Vector2::from(*v)).map(LuaValue::UserData),
+        DomVariant::Vector2int16(v) => {
+            lune_userdata(lua, LuneKind::Vector2int16, rbx_types::Vector2int16::from(*v)).map(LuaValue::UserData)
+        }
+        DomVariant::Vector3int16(v) => {
+            lune_userdata(lua, LuneKind::Vector3int16, rbx_types::Vector3int16::from(*v)).map(LuaValue::UserData)
+        }
+        _ => return None,
+    };
+    result.ok()
+}
+
+fn lune_default_properties(lua: &Lua, class: DatabaseClass, enums: &LuaValue) -> LuaResult<LuaTable> {
+    let class_name = class.get_name();
+    let rbx_db = rbx_reflection_database::get().ok();
+    let class_desc = rbx_db.and_then(|d| d.classes.get(class_name.as_str()));
+    let defaults = class.get_defaults();
+    let out = lua.create_table_with_capacity(0, defaults.len())?;
+    for (name, prop) in defaults {
+        let value = if let rbx_dom_weak::types::Variant::Enum(enum_value) = prop {
+            class_desc.and_then(|cd| {
+                let prop_desc = cd.properties.get(name.as_str())?;
+                if let rbx_reflection::DataType::Enum(enum_name) = &prop_desc.data_type {
+                    lune_enum_value(enums, enum_name.as_ref(), enum_value.to_u32())
+                } else {
+                    None
+                }
+            })
+        } else {
+            lune_dom_variant_to_lua(lua, enums, &prop)
+        };
+        if let Some(value) = value {
+            out.raw_set(name, value)?;
+        }
+    }
+    Ok(out)
+}
+
+impl LuaUserData for ReflHandle {
+    fn add_methods<M: LuaUserDataMethods<Self>>(methods: &mut M) {
+        methods.add_meta_method(LuaMetaMethod::Eq, |_, this, other: LuaAnyUserData| {
+            let Ok(other) = other.borrow::<ReflHandle>() else {
+                return Ok(false);
+            };
+            Ok(match (this, &*other) {
+                (ReflHandle::Db(_, _), ReflHandle::Db(_, _)) => true,
+                (ReflHandle::Class(a, _), ReflHandle::Class(b, _)) => a == b,
+                (ReflHandle::Enum(a), ReflHandle::Enum(b)) => a == b,
+                (ReflHandle::Prop(a), ReflHandle::Prop(b)) => a == b,
+                _ => false,
+            })
+        });
+        methods.add_meta_method(LuaMetaMethod::ToString, |_, this, ()| {
+            Ok(match this {
+                ReflHandle::Db(db, _) => db.to_string(),
+                ReflHandle::Class(c, _) => c.to_string(),
+                ReflHandle::Enum(e) => e.to_string(),
+                ReflHandle::Prop(p) => p.to_string(),
+            })
+        });
+        methods.add_meta_method(LuaMetaMethod::Index, |lua, this, key: String| match this {
+            ReflHandle::Db(db, enums) => {
+                let db = *db;
+                match key.as_str() {
+                    "Version" => db.get_version().into_lua(lua),
+                    "GetEnumNames" => crate::lua::lua_fn(lua, move |lua, _self: LuaValue| db.get_enum_names().into_lua(lua))
+                        .map(LuaValue::Function),
+                    "GetClassNames" => crate::lua::lua_fn(lua, move |lua, _self: LuaValue| db.get_class_names().into_lua(lua))
+                        .map(LuaValue::Function),
+                    "GetEnum" => crate::lua::lua_fn(lua, move |lua, (_self, name): (LuaValue, String)| match db.get_enum(name) {
+                        Some(e) => lua.create_userdata(ReflHandle::Enum(e)).map(LuaValue::UserData),
+                        None => Ok(LuaValue::Nil),
+                    })
+                    .map(LuaValue::Function),
+                    "GetClass" => {
+                        let enums = enums.clone();
+                        crate::lua::lua_fn(lua, move |lua, (_self, name): (LuaValue, String)| match db.get_class(name) {
+                            Some(c) => lua.create_userdata(ReflHandle::Class(c, enums.clone())).map(LuaValue::UserData),
+                            None => Ok(LuaValue::Nil),
+                        })
+                        .map(LuaValue::Function)
+                    }
+                    "FindEnum" => crate::lua::lua_fn(lua, move |lua, (_self, name): (LuaValue, String)| match db.find_enum(name) {
+                        Some(e) => lua.create_userdata(ReflHandle::Enum(e)).map(LuaValue::UserData),
+                        None => Ok(LuaValue::Nil),
+                    })
+                    .map(LuaValue::Function),
+                    "FindClass" => {
+                        let enums = enums.clone();
+                        crate::lua::lua_fn(lua, move |lua, (_self, name): (LuaValue, String)| match db.find_class(name) {
+                            Some(c) => lua.create_userdata(ReflHandle::Class(c, enums.clone())).map(LuaValue::UserData),
+                            None => Ok(LuaValue::Nil),
+                        })
+                        .map(LuaValue::Function)
+                    }
+                    _ => Ok(LuaValue::Nil),
+                }
+            }
+            ReflHandle::Enum(e) => match key.as_str() {
+                "Name" => e.get_name().into_lua(lua),
+                "Items" => {
+                    let items = e.get_items();
+                    let tbl = lua.create_table_with_capacity(0, items.len())?;
+                    for (name, val) in items {
+                        tbl.raw_set(name, val)?;
+                    }
+                    Ok(LuaValue::Table(tbl))
+                }
+                _ => Ok(LuaValue::Nil),
+            },
+            ReflHandle::Class(c, enums) => match key.as_str() {
+                "Name" => c.get_name().into_lua(lua),
+                "Superclass" => c.get_superclass().into_lua(lua),
+                "Tags" => c.get_tags_str().into_lua(lua),
+                "Properties" => {
+                    let props = c.get_properties();
+                    let tbl = lua.create_table_with_capacity(0, props.len())?;
+                    for (name, prop) in props {
+                        tbl.raw_set(name, lua.create_userdata(ReflHandle::Prop(prop))?)?;
+                    }
+                    Ok(LuaValue::Table(tbl))
+                }
+                "DefaultProperties" => lune_default_properties(lua, *c, enums).map(LuaValue::Table),
+                _ => Ok(LuaValue::Nil),
+            },
+            ReflHandle::Prop(p) => match key.as_str() {
+                "Name" => p.get_name().into_lua(lua),
+                "Datatype" => p.get_datatype_name().into_lua(lua),
+                "Scriptability" => p.get_scriptability_str().into_lua(lua),
+                "Tags" => p.get_tags_str().into_lua(lua),
+                _ => Ok(LuaValue::Nil),
+            },
+        });
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -928,9 +1143,12 @@ fn build_roblox_module(lua: &Lua) -> LuaResult<LuaTable> {
             lua.create_string(&bytes)
         })?,
     )?;
+    let raw_enums: LuaValue = base.raw_get("Enum")?;
     module.raw_set(
         "getReflectionDatabase",
-        crate::lua::lua_fn(lua, |_, ()| Ok(ReflectionDatabase::new()))?,
+        crate::lua::lua_fn(lua, move |lua, ()| {
+            lua.create_userdata(ReflHandle::Db(ReflectionDatabase::new(), raw_enums.clone())).map(LuaValue::UserData)
+        })?,
     )?;
     module.raw_set(
         "implementMethod",
@@ -2902,6 +3120,27 @@ assert(folder:QueryDescendants("Part")[1] == "override", "overridden QueryDescen
 
 -- Enum fallback (GradientType)
 assert(roblox.Enum.GradientType ~= nil, "Enum.GradientType")
+
+-- ReflectionDatabase wrapper matches @lune/roblox API
+local db = roblox.getReflectionDatabase()
+assert(type(db) == "userdata" and tostring(db) == "ReflectionDatabase", "db tostring")
+assert(db == roblox.getReflectionDatabase(), "db equality")
+assert(type(db.Version) == "string" and #db.Version > 0, "db.Version")
+assert(#db:GetClassNames() > 100 and #db:GetEnumNames() > 100, "db lists")
+local partCls = db:GetClass("Part")
+assert(partCls ~= nil and partCls == db:FindClass("  part ") and tostring(partCls) == "ReflectionDatabaseClass(Part)", "db class")
+assert(partCls.Name == "Part" and partCls.Superclass == "FormFactorPart", "db class fields")
+local shapeProp = partCls.Properties.Shape
+assert(shapeProp ~= nil and shapeProp.Name == "Shape" and shapeProp.Datatype == "Enum.PartType", "db prop")
+assert(tostring(shapeProp) == "ReflectionDatabaseProperty(Part > Shape)", "db prop tostring")
+local basePartCls = db:GetClass("BasePart")
+assert(basePartCls ~= nil and basePartCls.Properties.Material.Datatype == "Enum.Material", "db basepart prop")
+assert(partCls.DefaultProperties.Anchored == false, "db default bool")
+assert(partCls.DefaultProperties.Shape == roblox.Enum.PartType.Block, "db default enum")
+assert(partCls.DefaultProperties.CFrame ~= nil, "db default cframe")
+local matEnum = db:GetEnum("Material")
+assert(matEnum ~= nil and matEnum == db:FindEnum("material") and tostring(matEnum) == "ReflectionDatabaseEnum(Material)", "db enum")
+assert(matEnum.Name == "Material" and type(matEnum.Items.Plastic) == "number", "db enum items")
 
 -- Top-level coroutine.running() is non-nil
 assert(coroutine.running() ~= nil, "top-level coroutine.running")

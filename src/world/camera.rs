@@ -365,7 +365,7 @@ fn parts_obscuring(lua: &Lua, engine: &Rc<Engine>, camera: InstanceId, args: &Ar
         // (in a ray walk's order, then nearest first: the stable sort keeps that order among equals, as a client's casts take the
         // first of exact ties: measured, grid_order "ties")
         let state = engine.state.borrow();
-        hits.sort_by(|a, b| a.0.total_cmp(&b.0));
+        crate::sort::by(&mut hits, |a, b| a.0.total_cmp(&b.0));
         // (the parts this point's casts list: those neither ignored nor listed by an earlier point)
         let mut fresh = 0usize;
         for &(_, part) in &hits {

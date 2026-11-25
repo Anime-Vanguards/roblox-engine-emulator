@@ -129,7 +129,7 @@ fn environment_name(name: OsString) -> OsString {
 /// Every other value is passed unchanged: ree cannot tell a path from any other text, so a relative path in an unknown
 /// variable is read from the worker's working folder, the state dir, both directly and through a service.
 pub(crate) fn worker_environment() -> Vec<(OsString, OsString)> {
-    let mut variables: std::collections::BTreeMap<OsString, OsString> = std::env::vars_os().map(|(name, value)| (environment_name(name), value)).collect();
+    let mut variables: rustc_hash::FxHashMap<OsString, OsString> = std::env::vars_os().map(|(name, value)| (environment_name(name), value)).collect();
     for (name, value) in path_variables() {
         variables.insert(environment_name(name.into()), value);
     }
@@ -137,7 +137,9 @@ pub(crate) fn worker_environment() -> Vec<(OsString, OsString)> {
     // service and a client that sets the same variable agree.
     let state = crate::state_dir(&crate::default_repo());
     variables.insert("RUR_STATE_DIR".into(), state.into_os_string());
-    variables.into_iter().collect()
+    let mut list: Vec<(OsString, OsString)> = variables.into_iter().collect();
+    crate::sort::by(&mut list, |(a, _), (b, _)| a.cmp(b));
+    list
 }
 
 /// The engine options of a command line.

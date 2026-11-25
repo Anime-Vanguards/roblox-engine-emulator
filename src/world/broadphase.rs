@@ -1231,8 +1231,8 @@ pub(crate) fn check_world(engine: &Engine, root: InstanceId) -> Result<(), Strin
             format!("{id:?} {:?} {} {} {:?}", held.solid, held.can_query, held.can_collide, index.places[entry as usize])
         })
         .collect();
-    walked.sort();
-    kept.sort();
+    crate::sort::ord(&mut walked);
+    crate::sort::ord(&mut kept);
     let _ = reflection;
     if walked != kept {
         let missing: Vec<&String> = walked.iter().filter(|line| !kept.contains(line)).take(3).collect();
@@ -1543,7 +1543,7 @@ pub(crate) fn sort_by_order_lists<T>(dom: &Dom, root: InstanceId, items: &mut Ve
         &keys[start as usize..(start + len) as usize]
     };
     let mut order: Vec<usize> = (0..items.len()).collect();
-    order.sort_by(|&a, &b| key(a).cmp(key(b)));
+    crate::sort::by(&mut order, |&a, &b| key(a).cmp(key(b)));
     let mut taken: Vec<Option<T>> = std::mem::take(items).into_iter().map(Some).collect();
     items.extend(order.into_iter().map(|at| taken[at].take().expect("each once")));
 }

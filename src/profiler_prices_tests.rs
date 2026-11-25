@@ -273,7 +273,7 @@ fn calibrate_prices_once() {
 #[ignore = "a calibration: run by hand on a quiet machine, its output is profiler/prices.rs's table"]
 fn calibrate_prices() {
     let exe = std::env::current_exe().expect("the test binary");
-    let mut bases: std::collections::BTreeMap<String, Vec<f64>> = std::collections::BTreeMap::new();
+    let mut bases: rustc_hash::FxHashMap<String, Vec<f64>> = rustc_hash::FxHashMap::default();
     let mut cases: Vec<(String, Vec<f64>)> = Vec::new();
     for process in 0..PROCESSES {
         let output = std::process::Command::new(&exe)

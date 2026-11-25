@@ -27,13 +27,12 @@
 
 use std::{
     cell::{Cell, RefCell},
-    collections::BTreeSet,
     ffi::CStr,
     path::PathBuf,
 };
 
 use mlua::ffi;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use serde_json::{Value as Json, json};
 
 /// What a crossing is
@@ -169,7 +168,7 @@ struct Phase {
     /// the physical frames the phase ran in, and how many there are (a frame the phase was marked in the middle of counts
     /// once for each phase it ran in)
     frames: u64,
-    frame_ids: BTreeSet<u64>,
+    frame_ids: FxHashSet<u64>,
     stats: FxHashMap<(u32, u32), Stat>,
     members: FxHashMap<u32, MemberStat>,
     /// seconds the Instance API charged, and the part of it a crossing accounts for
@@ -298,7 +297,7 @@ struct OpenStep {
     /// the render count when the step began; the step has rendered once the count is higher
     frame_at_start: u64,
     /// the phases that were current at some moment of the step: the one it began in, and each one marked since
-    phases: BTreeSet<usize>,
+    phases: FxHashSet<usize>,
 }
 
 /// Held by a scheduler step from its start to its end, so that the phases marked during the step count in the
@@ -322,7 +321,9 @@ impl Frame {
             if recorder.open_step.is_some() {
                 return;
             }
-            recorder.open_step = Some(OpenStep { frame_at_start: recorder.frame, phases: BTreeSet::from([recorder.current]) });
+            let mut phases = FxHashSet::default();
+            phases.insert(recorder.current);
+            recorder.open_step = Some(OpenStep { frame_at_start: recorder.frame, phases });
             opened_step = true;
         });
         Self { opened_step }
@@ -1169,6 +1170,6 @@ mod tests {
         phase.ran_in_frame(2);
 
         assert_eq!(phase.frames, 2);
-        assert_eq!(phase.frame_ids, BTreeSet::from([1, 2]));
+        assert_eq!(phase.frame_ids, FxHashSet::from_iter([1, 2]));
     }
 }

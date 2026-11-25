@@ -45,7 +45,7 @@ pub mod run;
 #[cfg(test)]
 mod tests;
 
-use std::{cell::RefCell, collections::BTreeSet, path::Path, rc::Rc};
+use std::{cell::RefCell, path::Path, rc::Rc};
 
 use glam::Affine3A;
 use rbx_dom_weak::{InstanceBuilder, WeakDom, types as dom, types::Variant};
@@ -304,7 +304,7 @@ struct Inner {
     sounds: Vec<(WorldEvent, f64)>,
     sound_log: Vec<SoundEvent>,
     /// Attachment records sampled every frame
-    sampled: BTreeSet<usize>,
+    sampled: FxHashSet<usize>,
     camera: Vec<(u32, Affine3A, f64)>,
     /// Lighting's own properties (target "Lighting")
     lighting: Option<Record>,
@@ -312,7 +312,7 @@ struct Inner {
     clouds: Option<Record>,
     terrain_clouds: Option<TerrainClouds>,
     warnings: Vec<String>,
-    unsupported: BTreeSet<String>,
+    unsupported: FxHashSet<String>,
     /// Sibling names already used in the scene, by parent record (None: the file's roots)
     names: FxHashMap<Option<usize>, FxHashSet<String>>,
     tracked: FxHashMap<ClassId, Rc<[(NameId, Track)]>>,
@@ -2123,7 +2123,9 @@ fn summary(inner: &Inner, (errors, warns): (usize, usize), playback: &Playback, 
     extra.insert("errors".into(), json!(errors));
     extra.insert("warnings".into(), json!(warns));
     extra.insert("recorderWarnings".into(), json!(inner.warnings));
-    extra.insert("unsupported".into(), json!(inner.unsupported.iter().collect::<Vec<_>>()));
+    let mut unsupported: Vec<&String> = inner.unsupported.iter().collect();
+    crate::sort::ord(&mut unsupported);
+    extra.insert("unsupported".into(), json!(unsupported));
     extra.insert("activity".into(), Json::Array(activity.into_iter().map(|(frame, count)| json!({ "at": time_of(inner, frame), "count": count })).collect()));
     Json::Object(extra)
 }

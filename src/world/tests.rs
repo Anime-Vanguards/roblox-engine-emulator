@@ -5264,7 +5264,7 @@ fn centre_reads_after_a_move_work_nothing_out() {
         call(&lua, &engine, &read_big, ());
     }
     let [big, lone] = times.map(|mut list| {
-        list.sort_by(f64::total_cmp);
+        crate::sort::by(&mut list, f64::total_cmp);
         list[list.len() / 2]
     });
     assert!(big < 2.0 * lone + 50e-6, "a centre read after a move took {:.1} us of host time (the median of 100) for an assembly of 5,001 parts, {:.1} us for a lone part after the same move", big * 1e6, lone * 1e6);

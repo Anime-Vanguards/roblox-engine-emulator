@@ -98,9 +98,9 @@ fn c_function<'a>(json: &'a Json, name: &str) -> &'a Json {
 
 /// The cache sites of a function's line, summed: (opcodes as run, outcomes by name)
 #[inline(never)]
-fn sites_at(json: &Json, function: &Json, line: i64) -> (Vec<String>, std::collections::BTreeMap<String, u64>) {
+fn sites_at(json: &Json, function: &Json, line: i64) -> (Vec<String>, rustc_hash::FxHashMap<String, u64>) {
     let mut ops = Vec::new();
-    let mut outcomes = std::collections::BTreeMap::new();
+    let mut outcomes = rustc_hash::FxHashMap::default();
     for site in json["luau_caches"]["sites"].as_array().unwrap().iter().filter(|site| site["function"] == function["id"] && site["line"] == line) {
         ops.push(site["op"].as_str().unwrap().to_string());
         for (outcome, count) in site["outcomes"].as_object().unwrap() {
@@ -114,7 +114,7 @@ fn sites_at(json: &Json, function: &Json, line: i64) -> (Vec<String>, std::colle
 }
 
 #[inline(never)]
-fn counts(pairs: &[(&str, u64)]) -> std::collections::BTreeMap<String, u64> {
+fn counts(pairs: &[(&str, u64)]) -> rustc_hash::FxHashMap<String, u64> {
     pairs.iter().map(|(name, count)| (name.to_string(), *count)).collect()
 }
 
@@ -981,10 +981,10 @@ fn a_comparators_declines_split_between_the_sort_and_the_loop() {
         || frame_charge_profile_two("comparator", &source("v"), FRAMES),
     );
     // the math.abs sites in M.less: per node, by the function of the node's parent, decline charged less the fast path's (ms)
-    let per_node = |json: &Json| -> std::collections::BTreeMap<i64, f64> {
+    let per_node = |json: &Json| -> rustc_hash::FxHashMap<i64, f64> {
         let less = function(json, "comparator", "less")["id"].clone();
         let tree = json["tree"].as_array().unwrap();
-        let mut out = std::collections::BTreeMap::new();
+        let mut out = rustc_hash::FxHashMap::default();
         for row in json["builtins"].as_array().unwrap().iter().filter(|row| row["name"] == "math.abs") {
             for site in row["sites"].as_array().unwrap().iter().filter(|site| site["function"] == less) {
                 let Some(nodes) = site["nodes"].as_array() else { continue };

@@ -20,7 +20,7 @@ use crate::{
 
 /// Lune datatypes created through `create_any_userdata` after ensuring `lune-roblox` has
 /// registered the type's metatable in this Lua VM (avoiding re-monomorphizing `mlua`'s
-/// `UserDataRegistry` for all 19 `lune-roblox` types inside `roblox-engine-emulator`).
+/// `UserDataRegistry` for `lune-roblox` types inside `roblox-engine-emulator`).
 #[derive(Clone, Copy)]
 #[repr(u8)]
 pub(crate) enum LuneKind {
@@ -43,6 +43,10 @@ pub(crate) enum LuneKind {
     PhysicalProperties = 16,
     ColorSequenceKeypoint = 17,
     NumberSequenceKeypoint = 18,
+    Axes = 19,
+    Faces = 20,
+    Font = 21,
+    Content = 22,
 }
 
 impl LuneKind {
@@ -71,6 +75,10 @@ impl LuneKind {
             LuneKind::PhysicalProperties => "PhysicalProperties",
             LuneKind::ColorSequenceKeypoint => "ColorSequenceKeypoint",
             LuneKind::NumberSequenceKeypoint => "NumberSequenceKeypoint",
+            LuneKind::Axes => "Axes",
+            LuneKind::Faces => "Faces",
+            LuneKind::Font => "Font",
+            LuneKind::Content => "Content",
         }
     }
 }
@@ -113,7 +121,8 @@ fn mark_lune_metatable(lua: &Lua, kind: LuneKind) {
 /// C call and returning the newly allocated userdata so the caller overwrites its payload in place.
 #[inline(never)]
 fn register_lune_sample(lua: &Lua, kind: LuneKind) -> LuaResult<LuaAnyUserData> {
-    let datatypes: LuaTable = if let Some(engine) = lua.app_data_ref::<Rc<Engine>>().map(|e| e.clone())
+    let datatypes: LuaTable = if !matches!(kind, LuneKind::Font | LuneKind::Content)
+        && let Some(engine) = lua.app_data_ref::<Rc<Engine>>().map(|e| e.clone())
         && let Some(prelude) = engine.lua.borrow().prelude.clone()
     {
         prelude.exports.get("Datatypes")?
@@ -128,7 +137,8 @@ fn register_lune_sample(lua: &Lua, kind: LuneKind) -> LuaResult<LuaAnyUserData> 
     } else {
         table
     };
-    let new_fn: LuaFunction = raw_table.get("new")?;
+    let ctor_name = if matches!(kind, LuneKind::Content) { "fromUri" } else { "new" };
+    let new_fn: LuaFunction = raw_table.get(ctor_name)?;
     let args: LuaMultiValue = match kind {
         LuneKind::NumberRange | LuneKind::NumberSequence => LuaMultiValue::from_vec(vec![LuaValue::Number(0.0)]),
         LuneKind::NumberSequenceKeypoint => LuaMultiValue::from_vec(vec![LuaValue::Number(0.0), LuaValue::Number(0.0)]),
@@ -147,6 +157,7 @@ fn register_lune_sample(lua: &Lua, kind: LuneKind) -> LuaResult<LuaAnyUserData> 
             let zero = LuaValue::Vector(mlua::Vector::new(0.0, 0.0, 0.0));
             LuaMultiValue::from_vec(vec![zero.clone(), zero])
         }
+        LuneKind::Font | LuneKind::Content => LuaMultiValue::from_vec(vec![LuaValue::String(lua.create_string("")?)]),
         _ => LuaMultiValue::new(),
     };
     // Save work-counter fields affected by the one-time C constructor call so lazy registration
@@ -251,10 +262,10 @@ pub fn to_lua(lua: &Lua, engine: &Engine, value: &Value) -> LuaResult<LuaValue> 
 /// Other rbx-dom datatypes as Lune userdata.
 pub fn dom_to_lua(lua: &Lua, variant: &Variant) -> LuaResult<LuaValue> {
     Ok(match variant {
-        Variant::Axes(v) => LuaValue::UserData(lua.create_userdata(lune::Axes::from(*v))?),
+        Variant::Axes(v) => LuaValue::UserData(lune_userdata(lua, LuneKind::Axes, lune::Axes::from(*v))?),
         Variant::BrickColor(v) => LuaValue::UserData(lune_userdata(lua, LuneKind::BrickColor, lune::BrickColor::from(*v))?),
         Variant::CFrame(v) => LuaValue::UserData(lune_userdata(lua, LuneKind::CFrame, lune::CFrame::from(*v))?),
-        Variant::Faces(v) => LuaValue::UserData(lua.create_userdata(lune::Faces::from(*v))?),
+        Variant::Faces(v) => LuaValue::UserData(lune_userdata(lua, LuneKind::Faces, lune::Faces::from(*v))?),
         Variant::Ray(v) => LuaValue::UserData(lune_userdata(lua, LuneKind::Ray, lune::Ray::from(*v))?),
         Variant::Region3(v) => LuaValue::UserData(lune_userdata(lua, LuneKind::Region3, lune::Region3::from(*v))?),
         Variant::Region3int16(v) => LuaValue::UserData(lune_userdata(lua, LuneKind::Region3int16, lune::Region3int16::from(*v))?),

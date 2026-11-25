@@ -528,7 +528,7 @@ impl Grid {
             }
         }
         self.stack = stack;
-        found.sort_by(|a, b| a.level.cmp(&b.level).then(a.enter.total_cmp(&b.enter)).then(a.key.cmp(&b.key)));
+        found.sort_by(compare_passed);
         for (index, cell) in found.iter().enumerate() {
             let node = &self.levels[cell.level as usize][&cell.key];
             for list in [ANCHORED, UNANCHORED] {
@@ -670,7 +670,7 @@ impl Grid {
                 }
             }
         }
-        found.sort_by(|a, b| a.level.cmp(&b.level).then(a.enter.total_cmp(&b.enter)).then(a.key.cmp(&b.key)));
+        found.sort_by(compare_passed);
         let mut out = Vec::new();
         for (index, cell) in found.iter().enumerate() {
             let node = &self.levels[cell.level as usize][&cell.key];
@@ -685,6 +685,10 @@ impl Grid {
         }
         (found, out)
     }
+}
+
+fn compare_passed(a: &Passed, b: &Passed) -> std::cmp::Ordering {
+    a.level.cmp(&b.level).then(a.enter.total_cmp(&b.enter)).then(a.key.cmp(&b.key))
 }
 
 /// Where the segment from `o` along `d` enters the cell `key` of `level` (a fraction of the segment, 0 when it starts inside),

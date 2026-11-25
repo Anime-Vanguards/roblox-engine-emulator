@@ -2032,9 +2032,9 @@ fn mount_scanned_layout_root(engine: &Engine, scanned: Vec<(String, ScanNode)>) 
 /// Engine.Start, which needs no files): [`Prescan::mount`] mounts each as [`mount_layout_root`] would.
 /// A pool of the caller's thread alone lists them when the caller waits ([`listing`]).
 pub struct Prescan {
-    roots: Vec<(String, std::sync::mpsc::Receiver<Vec<(String, ScanNode)>>)>,
+    roots: Vec<(String, crate::sort::channel::Receiver<Vec<(String, ScanNode)>>)>,
     /// The data roots ([`data_roots`]) and their subtrees listed: (relative path, listing) in order
-    data: Option<std::sync::mpsc::Receiver<Vec<(String, ScanNode)>>>,
+    data: Option<crate::sort::channel::Receiver<Vec<(String, ScanNode)>>>,
 }
 
 impl Prescan {
@@ -2054,13 +2054,13 @@ impl Prescan {
         let layout: Vec<_> = roots
             .iter()
             .map(|root| {
-                let (send, receive) = std::sync::mpsc::channel();
+                let (send, receive) = crate::sort::channel::channel();
                 let (path, reflection) = (root.clone(), reflection.clone());
                 rayon::spawn(move || drop(send.send(scan_layout_root(&path, &reflection))));
                 (root.clone(), receive)
             })
             .collect();
-        let (send, receive) = std::sync::mpsc::channel();
+        let (send, receive) = crate::sort::channel::channel();
         rayon::spawn(move || {
             let listed: Vec<(String, ScanNode)> = data_roots(&given).into_iter().flat_map(|(root, paths)| paths.into_iter().map(move |path| (root.clone(), path))).map(|(root, path)| { let node = listed(format!("{root}/{path}")); (path, node) }).collect();
             drop(send.send(listed));
@@ -2092,7 +2092,7 @@ impl Prescan {
 /// to runs the jobs it queued there while it waits: a pool built on its caller's thread
 /// (`use_current_thread`, rur's browser module, whose page has no other thread) runs a job that
 /// thread spawned only when the thread yields to rayon, so blocking on the channel there waited forever.
-fn listing<T>(receive: std::sync::mpsc::Receiver<T>) -> Option<T> {
+fn listing<T: Send + 'static>(receive: crate::sort::channel::Receiver<T>) -> Option<T> {
     loop {
         match receive.try_recv() {
             Ok(listed) => return Some(listed),

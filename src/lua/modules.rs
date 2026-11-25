@@ -47,7 +47,7 @@ pub struct ModuleRecords {
     /// The parallel phases running (actors.rs)
     pub parallel: super::actors::Parallel,
     /// Source files of the modules required so far (`--dependencies`: what a run read)
-    files: std::collections::BTreeSet<String>,
+    files: rustc_hash::FxHashSet<String>,
     /// Every source file read so far (required modules', JSON modules', Source reads)
     read: rustc_hash::FxHashSet<String>,
     /// Sources (and bytecode) read ahead on other threads ([`Prefetch`])
@@ -631,7 +631,9 @@ fn note_read(engine: &Engine, path: &str) {
 /// modules to the persistent cross-process store (one-shot CLI runs call this before exit).
 pub fn required_files(engine: &Engine) -> Vec<String> {
     store::flush_all();
-    engine.modules.borrow().files.iter().cloned().collect()
+    let mut files: Vec<String> = engine.modules.borrow().files.iter().cloned().collect();
+    crate::sort::ord(&mut files);
+    files
 }
 
 /// Roblox compiles scripts at optimization level 2 (a UI library detects O2 through debug.info).

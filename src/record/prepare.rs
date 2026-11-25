@@ -180,7 +180,7 @@ impl Prepared {
         let listings = engine.state.borrow_mut().project.listings.take().unwrap_or_default();
         crate::timing::tally("prepared: files noted", noted.len() as u64);
         crate::timing::tally("prepared: listings", listings.len() as u64);
-        let (sender, receiver) = std::sync::mpsc::channel();
+        let (sender, receiver) = crate::sort::channel::channel();
         rayon::spawn(move || {
             use rayon::prelude::*;
             // Read source files are checked in `noted` via direct metadata stamps in parallel;

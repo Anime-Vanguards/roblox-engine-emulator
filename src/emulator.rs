@@ -206,7 +206,7 @@ mod tests {
         std::fs::create_dir_all(root.join("ReplicatedStorage/Shared")).unwrap();
         std::fs::write(root.join("ReplicatedStorage/Shared/Value.luau"), "return 4").unwrap();
         let spec = ProjectSpec { roots: vec![root.to_string_lossy().into_owned()], ..Default::default() };
-        let (send, receive) = std::sync::mpsc::channel();
+        let (send, receive) = crate::sort::channel::channel();
         std::thread::spawn(move || {
             let _pool = rayon::ThreadPoolBuilder::new().num_threads(1).use_current_thread().build().unwrap();
             let emulator = Emulator::start(Engine::new(Options::default()).unwrap(), &spec).unwrap();

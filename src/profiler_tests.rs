@@ -486,8 +486,8 @@ fn the_heap_headline_is_the_reachable_heap_and_leaves_garbage_out() {
 
 /// Walks of the heap a snapshot can be checked against: (type -> (count, bytes)) of every object, reachable and not
 #[inline(never)]
-fn objects_by_type(snapshot: &memory::Snapshot) -> std::collections::BTreeMap<String, (u64, u64)> {
-    let mut types = std::collections::BTreeMap::new();
+fn objects_by_type(snapshot: &memory::Snapshot) -> rustc_hash::FxHashMap<String, (u64, u64)> {
+    let mut types = rustc_hash::FxHashMap::default();
     for (name, count, bytes) in snapshot.by_type.iter().chain(&snapshot.unswept_by_type) {
         let entry: &mut (u64, u64) = types.entry(name.clone()).or_default();
         entry.0 += count;
@@ -530,7 +530,7 @@ fn a_heap_snapshots_reachable_heap_is_what_a_full_collection_keeps() {
     let json: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(config.out.join("profile.json")).unwrap()).unwrap();
     let _ = std::fs::remove_dir_all(&config.out);
     let end = json["heap"]["snapshots"].as_array().unwrap().last().unwrap().clone();
-    let reachable: std::collections::BTreeMap<String, (u64, u64)> =
+    let reachable: rustc_hash::FxHashMap<String, (u64, u64)> =
         end["by_type"].as_array().unwrap().iter().map(|row| (row["type"].as_str().unwrap().to_string(), (row["count"].as_u64().unwrap(), row["bytes"].as_u64().unwrap()))).collect();
     let total_before = unsafe { vm::total_bytes(state) };
     // the collector itself
@@ -545,7 +545,11 @@ fn a_heap_snapshots_reachable_heap_is_what_a_full_collection_keeps() {
             assert_eq!(kept_bytes, *bytes, "{name}");
         }
     }
-    assert_eq!(kept.keys().collect::<Vec<_>>(), reachable.keys().collect::<Vec<_>>(), "the collection kept no type the snapshot had as garbage only");
+    let mut kept_keys: Vec<&String> = kept.keys().collect();
+    let mut reachable_keys: Vec<&String> = reachable.keys().collect();
+    crate::sort::ord(&mut kept_keys);
+    crate::sort::ord(&mut reachable_keys);
+    assert_eq!(kept_keys, reachable_keys, "the collection kept no type the snapshot had as garbage only");
     assert_eq!(end["objects"].as_u64().unwrap() - end["unswept"]["count"].as_u64().unwrap(), collected.objects, "the collection freed what the snapshot had as garbage");
     assert!(end["unswept"]["count"].as_u64().unwrap() >= 6000, "the loop's 3,000 tables and strings: {}", end["unswept"]);
     // the VM's own count: the collection freed at least that garbage (and the string table it no longer needs)

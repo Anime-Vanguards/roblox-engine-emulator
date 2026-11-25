@@ -14,14 +14,15 @@ use crate::{ClassId, Reflection};
 
 use std::{
     cell::RefCell,
-    collections::BTreeMap,
     sync::atomic::{AtomicBool, Ordering},
 };
+
+use rustc_hash::FxHashMap;
 
 static TALLY_ON: AtomicBool = AtomicBool::new(false);
 
 thread_local! {
-    static TALLY: RefCell<BTreeMap<String, (u64, f64)>> = const { RefCell::new(BTreeMap::new()) };
+    static TALLY: RefCell<FxHashMap<String, (u64, f64)>> = RefCell::new(FxHashMap::default());
 }
 
 /// `RUR_CHARGE_TALLY=1` counts every engine charge of the run (how many times, how many seconds), by the amount
@@ -64,7 +65,10 @@ pub fn dump_tally() {
         return;
     }
     TALLY.with(|table| {
-        for (key, (count, seconds)) in table.borrow().iter() {
+        let table = table.borrow();
+        let mut entries: Vec<(&String, &(u64, f64))> = table.iter().collect();
+        crate::sort::by(&mut entries, |(a, _), (b, _)| a.cmp(b));
+        for (key, (count, seconds)) in entries {
             eprintln!("TALLY\t{key}\t{count}\t{:.3}", seconds * 1e6);
         }
     });

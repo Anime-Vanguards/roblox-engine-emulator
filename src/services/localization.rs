@@ -1378,6 +1378,12 @@ fn string(lua: &Lua, text: &[u8]) -> LuaResult<LuaValue> {
 /// A table method that changes its entries: `edit` works on a copy, which is stored when it returns Ok (and when it fails
 /// part way, as `Err((message, true))` says: a client's SetEntryKey to no key and no Source loses the entry, measured)
 fn edit_entries(engine: &Engine, names: &Names, id: InstanceId, edit: impl FnOnce(&mut Entries) -> Result<(), (String, bool)>) -> Ret {
+    let mut edit = Some(edit);
+    edit_entries_dyn(engine, names, id, &mut |entries| (edit.take().expect("called once"))(entries))
+}
+
+#[inline(never)]
+fn edit_entries_dyn(engine: &Engine, names: &Names, id: InstanceId, edit: &mut dyn FnMut(&mut Entries) -> Result<(), (String, bool)>) -> Ret {
     let mut state = engine.state.borrow_mut();
     let mut entries = Localization::table(&mut state, names, id).entries.clone();
     let outcome = edit(&mut entries);
@@ -1409,6 +1415,11 @@ fn find_or_make(entries: &mut Entries, key: &[u8], source: &[u8], context: &[u8]
 /// unless another entry has the identity it would take ("The modified entry would conflict with an existing entry."); an
 /// entry left with no key and no Source is lost ("Failed to add entry to index after modifying.", measured)
 fn modify(entries: &mut Entries, key: &[u8], source: &[u8], context: &[u8], edit: impl Fn(&mut Entry)) -> Result<(), (String, bool)> {
+    modify_dyn(entries, key, source, context, &edit)
+}
+
+#[inline(never)]
+fn modify_dyn(entries: &mut Entries, key: &[u8], source: &[u8], context: &[u8], edit: &dyn Fn(&mut Entry)) -> Result<(), (String, bool)> {
     let at = find_or_make(entries, key, source, context)?;
     let mut changed = entries.at(at).clone();
     edit(&mut changed);

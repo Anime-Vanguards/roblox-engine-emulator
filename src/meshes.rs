@@ -317,7 +317,7 @@ impl Mesh {
                 }
             }
         }
-        found.sort_unstable_by_key(|entry| std::cmp::Reverse(entry.0));
+        crate::sort::by_key(&mut found, |entry| std::cmp::Reverse(entry.0));
         found.into_iter().map(|(_, f, corner)| (f, corner)).collect()
     }
 
@@ -334,7 +334,7 @@ impl Mesh {
         found
             .into_iter()
             .map(|(v, mut list)| {
-                list.sort_unstable_by_key(|entry| std::cmp::Reverse(entry.0));
+                crate::sort::by_key(&mut list, |entry| std::cmp::Reverse(entry.0));
                 (v, list.into_iter().map(|(_, f, corner)| (f, corner)).collect())
             })
             .collect()
@@ -438,7 +438,7 @@ impl Mesh {
     /// slot freed and its place taken by the last listed face.
     fn remove_faces(&mut self, faces: &[u32]) {
         let mut order: Vec<u32> = faces.to_vec();
-        order.sort_unstable_by_key(|&f| std::cmp::Reverse(self.faces.place(f)));
+        crate::sort::by_key(&mut order, |&f| std::cmp::Reverse(self.faces.place(f)));
         order.dedup();
         for f in order {
             self.faces.remove(f);
@@ -918,6 +918,17 @@ fn mesh_attribute(engine: &Engine, value: &LuaValue) -> Result<u32, Flow> {
 /// Runs `f` on the mesh `id`; `changed` marks it for a new snapshot, also when `f` raises (a batch that raised part way
 /// keeps what it set before).
 fn with_mesh<T>(engine: &Engine, id: InstanceId, changed: bool, f: impl FnOnce(&mut Mesh) -> Result<T, Flow>) -> Result<T, Flow> {
+    let mut f = Some(f);
+    let mut out: Option<T> = None;
+    with_mesh_dyn(engine, id, changed, &mut |mesh| {
+        out = Some((f.take().expect("called once"))(mesh)?);
+        Ok(())
+    })?;
+    Ok(out.expect("set on Ok"))
+}
+
+#[inline(never)]
+fn with_mesh_dyn(engine: &Engine, id: InstanceId, changed: bool, f: &mut dyn FnMut(&mut Mesh) -> Result<(), Flow>) -> Result<(), Flow> {
     let ext = extension(engine);
     let result = {
         let mut meshes = ext.meshes.borrow_mut();

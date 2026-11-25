@@ -351,7 +351,7 @@ pub fn batch_cli(args: &[String], host: &Host) -> i32 {
                         let (done, emulator) = execute_with(&parsed, &host, false, false)?;
                         let deps = if job.dependencies {
                             let mut list: Vec<String> = modules::read_files(&emulator.engine).into_iter().collect();
-                            list.sort();
+                            crate::sort::ord(&mut list);
                             Some(list)
                         } else {
                             None
@@ -911,7 +911,7 @@ pub fn warm(args: &[String], host: &Host) -> Result<Json, String> {
 }
 
 /// The files in the [`History`] lists of `roots`' project, for a warm-up; lists of removed checkouts are deleted
-fn project_module_lists(directory: &std::path::Path, roots: &[String]) -> std::collections::BTreeSet<String> {
+fn project_module_lists(directory: &std::path::Path, roots: &[String]) -> Vec<String> {
     use std::io::BufRead;
     // (compared as the lists write them, with forward slashes; Windows paths ignore case)
     let key = |path: &str| {
@@ -925,8 +925,8 @@ fn project_module_lists(directory: &std::path::Path, roots: &[String]) -> std::c
         let line = key(line);
         prefixes.iter().any(|prefix| line.starts_with(prefix.as_str()))
     };
-    let mut files = std::collections::BTreeSet::new();
-    let Ok(entries) = std::fs::read_dir(directory) else { return files };
+    let mut files = rustc_hash::FxHashSet::default();
+    let Ok(entries) = std::fs::read_dir(directory) else { return Vec::new() };
     for entry in entries.flatten().filter(|entry| entry.path().extension().is_some_and(|extension| extension == "txt")) {
         let Ok(file) = std::fs::File::open(entry.path()) else { continue };
         let mut lines = std::io::BufReader::new(file).lines().map_while(Result::ok).filter(|line| !line.is_empty());
@@ -938,7 +938,9 @@ fn project_module_lists(directory: &std::path::Path, roots: &[String]) -> std::c
             let _ = std::fs::remove_file(entry.path());
         }
     }
-    files
+    let mut list: Vec<String> = files.into_iter().collect();
+    crate::sort::ord(&mut list);
+    list
 }
 
 /// What the last run of a harness against a project read, kept in the state dir
@@ -967,7 +969,7 @@ impl History {
         // (a loopback run's server requires most of what both sides do)
         if let Some((_, server)) = engine.peer_server() {
             files.extend(modules::required_files(&server));
-            files.sort();
+            crate::sort::ord(&mut files);
             files.dedup();
         }
         if self.modules.as_ref() == Some(&files) || files.is_empty() {
@@ -1820,7 +1822,7 @@ mod warm_tests {
         std::fs::write(lists.join("empty.txt"), "").unwrap();
         let roots = [project.join("shared"), project.join("src")].map(|dir| dir.to_string_lossy().into_owned());
         let files = super::project_module_lists(&lists, &roots);
-        assert_eq!(files.into_iter().collect::<Vec<_>>(), { let mut sorted = ours.to_vec(); sorted.sort(); sorted });
+        assert_eq!(files, { let mut sorted = ours.to_vec(); crate::sort::ord(&mut sorted); sorted });
         assert!(lists.join("theirs.txt").exists(), "another live checkout's list stays");
         assert!(!lists.join("gone.txt").exists(), "a removed checkout's list goes");
         assert!(lists.join("ours.txt").exists() && lists.join("empty.txt").exists());

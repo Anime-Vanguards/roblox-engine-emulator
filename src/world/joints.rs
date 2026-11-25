@@ -2525,7 +2525,7 @@ fn assemblies_of(state: &mut State, reflection: &Reflection, setup: &Setup, foun
     let is_anchored = |state: &State, part: InstanceId| anchored(state, setup, part) != (flipped == Some(part));
     let parts = found.parts();
     let mut roots: Vec<InstanceId> = parts.iter().copied().filter(|&part| is_anchored(state, part)).collect();
-    roots.sort_by_key(|&part| serial(state, part));
+    crate::sort::by_key(&mut roots, |&part| serial(state, part));
     let mut ranked = None;
     if roots.is_empty() {
         // (of ranks that compare, the best is the same in any order; a NaN score is looked at in the walk's order from `start`)
@@ -4170,7 +4170,7 @@ fn last_named_first(joints: &Joints, part: InstanceId, of: impl Iterator<Item = 
         joints.indexed.get(&joint).map_or(0, |entry| if entry.parts[0] == Some(part) { entry.named[0] } else { entry.named[1] })
     };
     let mut found: Vec<(u64, InstanceId)> = of.map(|joint| (named(joint), joint)).collect();
-    found.sort_unstable_by(|a, b| b.cmp(a));
+    crate::sort::by(&mut found, |a, b| b.cmp(a));
     found.into_iter().map(|(_, joint)| joint).collect()
 }
 
