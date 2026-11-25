@@ -13,6 +13,8 @@ src/
                        (end-to-end tests in rojo_tests.rs)
   dom.rs               Instance arena/DOM
   reflection.rs        Studio reflection database lookup & property metadata
+  reflection/          members.rs: metadata for tools (methods, events, callbacks, permits, display, rbx-dom's tags), the
+                       dump's load-time reader
   value.rs             Roblox property Value representation
   signal.rs            Deferred signal queues and connections
   instance.rs          Instance methods and lifecycle

@@ -666,7 +666,8 @@ impl Defaults {
     }
 }
 
-fn compute_default(reflection: &Reflection, class: ClassId, name: NameId) -> Option<Value> {
+/// Reflection.Default(Class, Name): what a new instance of `class` reads for `name` (`Reflection::default_value`).
+pub(crate) fn compute_default(reflection: &Reflection, class: ClassId, name: NameId) -> Option<Value> {
     let info = reflection.class(class);
     let mut value = info
         .raw_defaults

@@ -5,12 +5,53 @@
 //! Member names are interned once per process into [`NameId`]s; the names every engine subsystem
 //! reads natively (layout, export, behaviours) are pre-interned at fixed ids ([`K`]) so hot paths
 //! compare integers, never strings.
+//!
+//! # Metadata for tools
+//!
+//! Everything the database knows about classes, members and enums can be read, for an editor, a documentation generator
+//! or a linter: each class's and property's display data (the Properties panel's category, deprecation), the permits a
+//! game script has (what it may do with a member, and with which security capabilities), each method's, event's and
+//! callback's parameters, types and defaults, where each member comes from ([`MemberOrigin`]), rbx-dom's tags and
+//! serialization ([`ClassTags`], [`DomProperty`]), and enums with their items and legacy names. Members are listed in a
+//! stable order (the root class's first, each class's in the dump's order: [`Reflection::members`]).
+//!
+//! ```no_run
+//! use roblox_engine_emulator::reflection::{Reflection, ReflectedMember};
+//!
+//! let reflection = Reflection::shared().unwrap();
+//! let part = reflection.class_id("Part").unwrap();
+//! // a property's group in the Properties panel, and deprecation
+//! let anchored = reflection.class_property(part, reflection.name_id("Anchored").unwrap()).unwrap();
+//! assert_eq!(anchored.category(), Some("Part"));
+//! let brick_color = reflection.member_by_name("Part", "brickColor").unwrap();
+//! assert_eq!(brick_color.deprecation_message(), Some("Use `BrickColor` instead."));
+//! // a method's parameters, defaults and permits
+//! let find = reflection.class_method(part, reflection.name_id("FindFirstChild").unwrap()).unwrap();
+//! let recursive = &find.parameters[1];
+//! assert_eq!((&*recursive.name, &*recursive.type_info.script, recursive.default_text().as_deref()), ("recursive", "boolean", Some("false")));
+//! assert!(find.permits.allows("Call") && find.callable_in_parallel());
+//! // every member, own and inherited: Instance's first
+//! for member in reflection.members(part) {
+//!     match member {
+//!         ReflectedMember::Property(property) => println!("{} {}", reflection.name(property.name), property.script_type_name),
+//!         ReflectedMember::Method(method) => println!("{}({} parameters)", reflection.name(method.name), method.parameters.len()),
+//!         other => println!("{:?} {}", other.kind(), reflection.name(other.name())),
+//!     }
+//! }
+//! ```
 
 use std::sync::{Arc, OnceLock};
 
 use rbx_dom_weak::types::Variant;
 use rustc_hash::{FxHashMap, FxHashSet};
 use serde::Deserialize;
+
+mod members;
+
+pub use members::{
+    CallbackInfo, ClassTags, DisplayData, DomProperty, EventInfo, MemberKind, MemberOrigin, MethodInfo, ParameterInfo, Permits, PropertyTags,
+    ReflectedMember, Scriptability, Serialization, TypeInfo, display_text,
+};
 
 pub type ClassId = u32;
 pub type NameId = u32;
@@ -158,7 +199,9 @@ pub enum EngineType {
     Other,
 }
 
+/// A property of a class (ReflectedProperty), merged from the dump, rbx-dom and the engine's own list ([`MemberOrigin`]).
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct PropertyInfo {
     pub name: NameId,
     pub script_type: ScriptType,
@@ -174,7 +217,17 @@ pub struct PropertyInfo {
     /// and Model.WorldPivotData permit nothing, so `part.Origin` finds a child named Origin)
     pub scriptable: bool,
     pub serialized: bool,
+    /// The class that declares it
     pub owner: ClassId,
+    /// The class an Instance-typed property names (`InstanceType`: Model.PrimaryPart's is BasePart, Instance.Parent's
+    /// Instance)
+    pub instance_type: Option<Box<str>>,
+    /// The dump's display data, as [`ClassInfo::display`] ([`DisplayData`]): every property of the dump has a Category, and a
+    /// deprecated one a DeprecationMessage ([`Self::category`], [`Self::deprecation_message`]); none for the others
+    pub display: DisplayData,
+    /// `Read`, `Write` and `ReadParallel`, with their capabilities ([`Permits`]); none for a property the dump does not list
+    pub permits: Permits,
+    pub origin: MemberOrigin,
 }
 
 /// A default as recorded: the dump's JSON encoding or an rbx-dom value (Lune supplement).
@@ -217,7 +270,9 @@ pub const INSTANCE_LOCKED_SERVICES: &[&str] = &[
 /// "Cannot change Parent of type Terrain"); a player's Backpack and StarterGear, the Camera and the Player have no lock.
 pub const CLASS_LOCKED: &[&str] = &["PlayerGui", "PlayerScripts", "StarterCharacterScripts", "StarterPlayerScripts", "Terrain", "Translator"];
 
+/// A class: the dump's (ReflectedClass) merged over rbx-dom's ([`ClassInfo::reflected`] tells them apart).
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct ClassInfo {
     pub id: ClassId,
     pub name: Box<str>,
@@ -239,8 +294,11 @@ pub struct ClassInfo {
     pub reflected: bool,
     /// The dump's `serialized` (ReflectedClass.Serialized)
     pub serialized: bool,
-    /// The dump's `display` as (key, text) pairs (ReflectedClass.Display: Category, and DeprecationMessage where the class has one)
-    pub display: Box<[(Box<str>, Box<str>)]>,
+    /// The dump's `display` as (key, text) pairs (ReflectedClass.Display: Category, and DeprecationMessage where the class has one;
+    /// [`Self::category`], [`Self::deprecation_message`])
+    pub display: DisplayData,
+    /// The dump's `permits` (ReflectedClass.Permits: `New`, `GetService`; [`Permits`]); none for a class only rbx-dom describes
+    pub permits: Permits,
     /// Every class whose superclass this is, rbx-dom's included, in name order (ReflectedClass.Subclasses)
     pub subclasses: Box<[ClassId]>,
     /// The dump's own deprecated lower-case members (inherited) and the member each stands for, by kind
@@ -263,24 +321,32 @@ impl ClassInfo {
     }
 }
 
+/// An enum (`Enum.<Name>`).
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct EnumInfo {
     pub id: EnumId,
     pub name: Box<str>,
-    /// Enumerated items (GetEnumItems order; aliases excluded)
+    /// Enumerated items (GetEnumItems order; aliases excluded: [`Reflection::enum_items_of`], [`Reflection::legacy_names`])
     pub items: Vec<EnumItemId>,
+    /// Items by name, legacy names included
     pub by_name: FxHashMap<Box<str>, EnumItemId>,
     pub by_value: FxHashMap<i64, EnumItemId>,
 }
 
+/// An enum item (`Enum.<Enum>.<Name>`).
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct EnumItemInfo {
+    pub id: EnumItemId,
     pub name: Box<str>,
     pub value: f64,
     pub enum_type: EnumId,
 }
 
+/// The class, member and enum database (module documentation).
 #[derive(Debug, Default)]
+#[non_exhaustive]
 pub struct Reflection {
     pub version: String,
     pub classes: Vec<ClassInfo>,
@@ -297,6 +363,10 @@ pub struct Reflection {
     /// `instance.childAdded`, `IntValue.changed`): signals of their own the engine fires beside the others
     pub child_added_alias: Option<NameId>,
     pub changed_alias: Option<NameId>,
+    /// The methods, events and callbacks with all the dump says of them, built on first use (members.rs)
+    members: OnceLock<members::Members>,
+    /// The dump they are built from (the compiled-in one; [`Self::from_dump`] builds them at once)
+    member_source: Option<&'static [u8]>,
 }
 
 /// Members services.luau / query.luau give behaviours that the Studio dump does not list (Player
@@ -645,7 +715,9 @@ impl Reflection {
 
     /// The compiled-in database: Studio's dump and the Enum.Font faces of `data/`.
     pub fn load() -> Result<Reflection, String> {
-        let mut reflection = Self::from_dump(crate::data::REFLECTION, Some(crate::data::FONT_ENUMS))?;
+        let mut reflection = Self::read_dump(crate::data::REFLECTION, Some(crate::data::FONT_ENUMS))?;
+        // (its methods', events' and callbacks' info is built from the dump on first use: the engine reads none of it)
+        reflection.member_source = Some(crate::data::REFLECTION);
         // Names the engine stores that no script reaches (interned last, so every other id stays)
         for &name in ENGINE_ONLY {
             if reflection.name_id(name).is_none() {
@@ -656,9 +728,16 @@ impl Reflection {
     }
 
     /// A database from a ReflectionService dump (the JSON tools/dump-reflection.luau writes) and an
-    /// optional `font-enums.json`.
+    /// optional `font-enums.json`. Its methods', events' and callbacks' info ([`MethodInfo`]) is built at once, where the
+    /// compiled-in database ([`Self::load`]) builds it on first use.
     pub fn from_dump(bytes: &[u8], font_enums: Option<&[u8]>) -> Result<Reflection, String> {
-        let dump: serde_json::Value = serde_json::from_slice(&bytes)
+        let reflection = Self::read_dump(bytes, font_enums)?;
+        let _ = reflection.members.set(members::Members::build(&reflection, bytes));
+        Ok(reflection)
+    }
+
+    fn read_dump(bytes: &[u8], font_enums: Option<&[u8]>) -> Result<Reflection, String> {
+        let dump: members::Dump = serde_json::from_slice(bytes)
             .map_err(|error| format!("parsing reflection.json: {error}"))?;
         let mut reflection = Reflection::default();
         for name in KNOWN_NAMES {
@@ -669,10 +748,10 @@ impl Reflection {
         for name in BEHAVIOR_ONLY_NAMES {
             reflection.intern(name);
         }
-        reflection.version = text(dump.get("version")).unwrap_or_default().to_string();
+        reflection.version = text(dump.version.as_ref()).unwrap_or_default().to_string();
 
         // Enums (enums.luau Define + LoadFromReflection)
-        for entry in list(dump.get("enums")) {
+        for entry in list(dump.enums.as_ref()) {
             let items: Vec<DumpEnumItem> = list(entry.get("items"))
                 .iter()
                 .filter_map(|item| {
@@ -698,13 +777,13 @@ impl Reflection {
 
         // Studio dump classes
         let mut superclass_names: Vec<Option<String>> = Vec::new();
-        for entry in list(dump.get("classes")) {
-            let Some(class_name) = text(entry.get("name")) else { continue };
+        for entry in dump.classes {
+            let Some(class_name) = text(entry.name.as_ref()) else { continue };
             let id = reflection.new_class(class_name);
-            superclass_names.push(text(entry.get("superclass")).filter(|name| !name.is_empty()).map(str::to_string));
-            let permits = entry.get("permits");
+            superclass_names.push(text(entry.superclass.as_ref()).filter(|name| !name.is_empty()).map(str::to_string));
+            let permits = entry.permits.as_ref();
             let mut own_properties = Vec::new();
-            for property in list(entry.get("properties")) {
+            for property in list(entry.properties.as_ref()) {
                 let Some(name) = text(property.get("name")) else { continue };
                 let kind = property.get("type");
                 let script_name = text(kind.and_then(|k| k.get("script"))).unwrap_or("any").to_string();
@@ -722,35 +801,33 @@ impl Reflection {
                     scriptable,
                     serialized,
                     id,
+                    MemberOrigin::Dump,
                 );
+                let info = &mut reflection.properties[index as usize];
+                info.instance_type = text(kind.and_then(|k| k.get("instance"))).map(Into::into);
+                info.display = members::display_from_json(property.get("display"));
+                info.permits = Permits::from_json(property.get("permits"));
                 own_properties.push(index);
             }
-            let names = |reflection: &mut Reflection, key: &str| -> Vec<NameId> {
-                list(entry.get(key)).iter().filter_map(|e| text(e.get("name"))).map(|n| reflection.intern(n)).collect()
-            };
-            let own_events = names(&mut reflection, "events");
-            let own_methods = names(&mut reflection, "methods");
-            let own_callbacks = names(&mut reflection, "callbacks");
-            let raw_defaults = match entry.get("defaults") {
+            let own_events: Vec<NameId> = entry.events.iter().map(|name| reflection.intern(name)).collect();
+            let own_methods: Vec<NameId> = entry.methods.iter().map(|name| reflection.intern(name)).collect();
+            let own_callbacks: Vec<NameId> = entry.callbacks.iter().map(|name| reflection.intern(name)).collect();
+            let raw_defaults = match entry.defaults {
                 Some(serde_json::Value::Object(defaults)) => Some(
                     defaults
-                        .iter()
-                        .map(|(name, value)| (reflection.intern(name), RawDefault::Json(value.clone())))
+                        .into_iter()
+                        .map(|(name, value)| (reflection.intern(&name), RawDefault::Json(value)))
                         .collect(),
                 ),
                 Some(serde_json::Value::Array(_)) => Some(FxHashMap::default()),
                 _ => None,
             };
-            let display: Box<[(Box<str>, Box<str>)]> = match entry.get("display") {
-                Some(serde_json::Value::Object(display)) => {
-                    display.iter().filter_map(|(key, value)| Some((key.as_str().into(), value.as_str()?.into()))).collect()
-                }
-                _ => Box::new([]),
-            };
+            let display = members::display_from_json(entry.display.as_ref());
             let class = &mut reflection.classes[id as usize];
             class.reflected = true;
-            class.serialized = entry.get("serialized").and_then(|value| value.as_bool()) == Some(true);
+            class.serialized = entry.serialized.as_ref().and_then(|value| value.as_bool()) == Some(true);
             class.display = display;
+            class.permits = Permits::from_json(permits);
             class.creatable = has_key(permits, "New");
             class.service = has_key(permits, "GetService");
             class.own_properties = own_properties;
@@ -769,7 +846,7 @@ impl Reflection {
                 if !known {
                     // an enum property names its enum where the others name their engine type
                     let (engine_type, enum_name) = if *script_type == "EnumItem" { ("Enum", Some(*engine_type)) } else { (*engine_type, None) };
-                    let index = reflection.add_property(name, script_type, engine_type, enum_name, false, *scriptable, *serialized, id);
+                    let index = reflection.add_property(name, script_type, engine_type, enum_name, false, *scriptable, *serialized, id, MemberOrigin::Engine);
                     reflection.classes[id as usize].own_properties.push(index);
                 }
             }
@@ -883,6 +960,7 @@ impl Reflection {
             }
             let item_id = self.enum_items.len() as EnumItemId;
             self.enum_items.push(EnumItemInfo {
+                id: item_id,
                 name: item.name.as_str().into(),
                 value: item.value,
                 enum_type: id,
@@ -914,6 +992,7 @@ impl Reflection {
             reflected: false,
             serialized: false,
             display: Box::new([]),
+            permits: Permits::default(),
             subclasses: Box::new([]),
             property_aliases: FxHashMap::default(),
             method_aliases: FxHashMap::default(),
@@ -1015,6 +1094,7 @@ impl Reflection {
         scriptable: bool,
         serialized: bool,
         owner: ClassId,
+        origin: MemberOrigin,
     ) -> u32 {
         let name = self.intern(name);
         let index = self.properties.len() as u32;
@@ -1030,6 +1110,10 @@ impl Reflection {
             scriptable,
             serialized,
             owner,
+            instance_type: None,
+            display: Box::new([]),
+            permits: Permits::default(),
+            origin,
         });
         index
     }
@@ -1081,6 +1165,7 @@ impl Reflection {
                         scriptable,
                         true,
                         id,
+                        MemberOrigin::RbxDom,
                     );
                     self.classes[id as usize].own_properties.push(index);
                 }

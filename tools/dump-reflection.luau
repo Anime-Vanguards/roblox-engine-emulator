@@ -67,6 +67,13 @@ function Encode(Value)
 		return { ["$t"] = "Ref" }
 	elseif Kind == "PhysicalProperties" then
 		return { ["$t"] = Kind, s = tostring(Value) }
+	elseif Kind == "table" then
+		-- (a parameter's DefaultValue: AnalyticsService:LogCustomEvent's customFields is {}) its items, encoded
+		local Items = {}
+		for Key, Item in Value do
+			Items[tostring(Key)] = Encode(Item)
+		end
+		return { ["$t"] = Kind, v = Items }
 	end
 	return { ["$t"] = Kind, s = tostring(Value) }
 end
@@ -82,18 +89,26 @@ local function CopyTable(Value)
 	return Result
 end
 
+-- A ReflectedType: `instance` is the class an Instance-typed member names (Model.PrimaryPart: BasePart)
 local function TypeOf(TypeInfo)
 	return {
 		script = TypeInfo.ScriptType,
 		engine = TypeInfo.EngineType,
 		enum = TypeInfo.EnumType,
+		instance = TypeInfo.InstanceType,
 	}
 end
 
+-- A parameter's `default` is its DefaultValue, encoded as the defaults are (absent when it has none)
 local function Parameters(List)
 	local Result = {}
 	for _, Parameter in List or {} do
-		table.insert(Result, { name = Parameter.Name, type = TypeOf(Parameter.Type) })
+		local Default = nil
+		if Parameter.DefaultValue ~= nil then
+			local EncodedOk, Encoded = pcall(Encode, Parameter.DefaultValue)
+			Default = if EncodedOk then Encoded else nil
+		end
+		table.insert(Result, { name = Parameter.Name, type = TypeOf(Parameter.Type), default = Default })
 	end
 	return Result
 end
@@ -129,7 +144,12 @@ for _, Class in ReflectionService:GetClasses() do
 	end)
 	for _, Event in if EventsOk then Events else {} do
 		if Event.Owner == Class.Name then
-			table.insert(Entry.events, { name = Event.Name, parameters = Parameters(Event.Parameters) })
+			table.insert(Entry.events, {
+				name = Event.Name,
+				parameters = Parameters(Event.Parameters),
+				permits = CopyTable(Event.Permits),
+				display = CopyTable(Event.Display),
+			})
 		end
 	end
 
@@ -143,6 +163,7 @@ for _, Class in ReflectionService:GetClasses() do
 				returns = TypeOf(Method.ReturnType or {}),
 				parameters = Parameters(Method.Parameters),
 				permits = CopyTable(Method.Permits),
+				display = CopyTable(Method.Display),
 			})
 		end
 	end
@@ -152,7 +173,13 @@ for _, Class in ReflectionService:GetClasses() do
 	end)
 	for _, Callback in if CallbacksOk then Callbacks else {} do
 		if Callback.Owner == Class.Name then
-			table.insert(Entry.callbacks, { name = Callback.Name, parameters = Parameters(Callback.Parameters) })
+			table.insert(Entry.callbacks, {
+				name = Callback.Name,
+				returns = TypeOf(Callback.ReturnType or {}),
+				parameters = Parameters(Callback.Parameters),
+				permits = CopyTable(Callback.Permits),
+				display = CopyTable(Callback.Display),
+			})
 		end
 	end
 

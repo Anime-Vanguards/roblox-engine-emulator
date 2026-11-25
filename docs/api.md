@@ -34,6 +34,42 @@ for line in emulator.output() {
 - **Profiling (`src/profiler/`):** Build a `profiler::Config` (`from_args` or `new`) and call `profiler::Session::begin(config)` before engine startup, hook the VM with `luau_profile::install(&lua)`, mark phases with `luau_profile::set_phase`, collect before VM drop via `profiler::collect(&lua)`, and finish with `session.finish(Run { ... })`. Hosts can register custom caches via `profiler::caches::named` + `named_hit` / `named_miss` / `named_evicted`.
 - **Reusing `ree` CLI commands:** Supply a `launch::Host` (name, checkout, engine factory) to `record::run::cli(argv, &host, true)`—this is how `rur-native record` invokes `ree`'s recorder with `rur`'s GUI layer.
 
+## Class, member and enum metadata
+
+`reflection::Reflection` is Studio's API as the engine knows it, readable on its own (no `Engine` needed) by an editor, a documentation generator or a linter. `Reflection::shared()` gives the compiled-in database (`data/reflection.json`, Studio 0.747's ReflectionService, merged over rbx-dom's database), loaded once per process.
+
+```rust
+use roblox_engine_emulator::reflection::{Reflection, ReflectedMember};
+
+let reflection = Reflection::shared()?;
+let part = reflection.class_id("Part").unwrap();
+for member in reflection.members(part) {
+    let name = reflection.name(member.name());
+    match member {
+        ReflectedMember::Property(property) => println!("{name}: {} [{}]", property.script_type_name, property.category().unwrap_or("")),
+        ReflectedMember::Method(method) => {
+            let parameters: Vec<String> = method.parameters.iter().map(|p| format!("{}: {}", p.name, p.type_info.script)).collect();
+            println!("{name}({})", parameters.join(", "));
+        }
+        other => println!("{name} ({:?})", other.kind()),
+    }
+    if let Some(message) = member.deprecation_message() {
+        println!("  deprecated: {message}");
+    }
+}
+```
+
+- **Classes and enums:** `all_classes()` (the dump's classes in its order, then those only rbx-dom describes; `ClassInfo::reflected` tells them apart), `class_id` / `class_by_name`, `class_chain(class)` (root first), `all_enums()`, `enum_by_name`, `enum_items_of(enum)` (`GetEnumItems` order) and `legacy_names(item)` (`Enum.Font.Montserrat` reads as Gotham). `ClassInfo` has `category()`, `deprecation_message()`, `permits` (`New`, `GetService`), `creatable`, `service`, `superclass` and `subclasses`.
+- **Members:** `members(class)` lists every member, own and inherited, in a stable order: class by class from the root of the chain (Object, Instance, ...) to the class itself, each class's properties, methods, events and callbacks in the dump's order; a member a class declares again (a value object's `Changed`) is listed once, where that class lists it. `own_members(class)`, `own_properties`, `own_methods`, `own_events` and `own_callbacks` give one class's own. `member(class, name)` / `member_by_name("Part", "Anchored")` find a member as an instance's member read does (a property, then a method, an event, a callback; inherited ones included), and `class_property`, `class_method`, `class_event` and `class_callback` one of a kind. A `ReflectedMember` is one of `PropertyInfo`, `MethodInfo`, `EventInfo` and `CallbackInfo`, with `kind()`, `name()`, `owner()` (the declaring class), `category()`, `deprecation_message()`, `permits()`, `parameters()` and `origin()`.
+- **Properties (`PropertyInfo`):** the script type (`script_type`, `script_type_name`), the engine type, the enum (`enum_name`, `enum_type`), the class an Instance property names (`instance_type`: `Model.PrimaryPart` is a `BasePart`), `read_only`, `scriptable`, `serialized`, `display` (Studio's `Display`: `category()` is the group the Properties panel files it under, `deprecation_message()` is set when it is deprecated) and `permits`. `default_value(class, name)` is the value a new instance reads.
+- **Methods, events and callbacks:** `parameters` (each a `ParameterInfo`: `name`, `type_info` and `default`, the encoded `DefaultValue`, with `default_text()` for a signature and `Reflection::parameter_default` for an engine value), `returns` (a `TypeInfo`: the script and engine type, the enum, the class an Instance type names), `permits` and `display`. The engine reads none of this: it is built from the dump on the first call that asks (some milliseconds) and kept for the process.
+- **Permits:** what a game script may do and which security capabilities a sandboxed script needs for it (ReflectionService's `Permits`): `get("Call")` is the capabilities text (`""` for none, `"Players"`, `"Basic | UI"`) or `None` where a game script may not, `allows`, `capabilities` (the names), `iter`. A method has `CallParallel` when a parallel (desynchronized) thread may call it, as Roblox's API reference marks it thread safe (`MethodInfo::callable_in_parallel`); `ReadParallel` is on 38 controller properties only, so a property's absence of it says nothing.
+- **Where a member comes from (`MemberOrigin`):** `Dump` (Studio's ReflectionService: every field above), `RbxDom` (rbx-dom's database, for the classes the dump does not list, such as `Player`: types but no display data or permits) or `Engine` (a member the engine has that neither lists, such as `BindableFunction.OnInvoke`: no parameters, types, permits or display data are known).
+- **rbx-dom's view:** `dom_class_tags(class)` (`ClassTags`: `not_browsable`, `not_replicated`, `settings`, ...), `dom_property(&property)` (`DomProperty`: `PropertyTags` such as `hidden` and `not_replicated`, `Scriptability`, and `Serialization`: how place and model files store it, `SerializesAs("size")` for `BasePart.Size`) and `dom_properties(class)` (every property rbx-dom lists for a class, file-only ones included). rbx-dom's database is an older Roblox release's (`dom_version()`), so a newer member has none.
+- **Not in the data:** which parameters are optional (only those with a `DefaultValue` say so), which methods yield, whether a property is safe to read from a parallel thread, callbacks' signatures (Studio's ReflectionService lists no callbacks), and enum or enum item deprecation.
+
+The public structs are `#[non_exhaustive]`: read their fields, but get them from the database rather than building them, so fields can be added without breaking your code.
+
 ## Depending on the crate from Cargo
 
 ```toml

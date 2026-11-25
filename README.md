@@ -24,6 +24,7 @@ Additional demo: [second cutscene from the same game](docs/media/cutscene-2.mp4)
 - **UI renderer foundation:** [roblox-ui-renderer](https://github.com/Anime-Vanguards/roblox-ui-renderer) (`rur`) builds on `ree`, layering GUI layout, text shaping, input, and scene export on top via the engine's extension hooks ([docs/engine.md](docs/engine.md)). (`ree` was extracted from `rur` on 2026-10-10.)
 - **Headless 3D recording (`ree record`):** Runs a Luau harness against a project and writes a deterministic scene + timeline recording that `ror` renders as stills or video.
 - **Paired client + server (`ree run --run-context loopback`):** Runs a server and its client in a single process with live instance replication and remotes between them ([docs/engine.md](docs/engine.md#loopback-run-context---run-context-loopback-srcloopback)).
+- **Roblox API metadata for tools:** The crate's `reflection` module reads Studio's classes, members and enums on their own: each property's Properties-panel category, deprecation messages, permits and security capabilities, parameters with their types and defaults, return types, and rbx-dom's tags and serialization, with members listed in a stable order, for editors, documentation generators and linters ([docs/api.md](docs/api.md#class-member-and-enum-metadata)).
 
 Every script-visible behavior is calibrated against Roblox Studio (or follows official Roblox documentation where not yet measured); [docs/engine.md](docs/engine.md) serves as the engine contract.
 
@@ -133,7 +134,7 @@ See [docs/cli.md](docs/cli.md#the-profile-viewer) for all views, keybindings, an
 
 - [Building](docs/building.md) — Release binaries, build requirements, Cargo features, mimalloc, and updating Luau.
 - [Command line](docs/cli.md) — `run`, `record`, `serve`, harnesses and `Context`, engine flags, guards, animations, profiling, what-if comparisons, and environment variables.
-- [Rust API](docs/api.md) — Embedding `roblox_engine_emulator`, writing custom layers/extensions, and Cargo git dependencies.
+- [Rust API](docs/api.md) — Embedding `roblox_engine_emulator`, writing custom layers/extensions, reading class and member metadata, and Cargo git dependencies.
 - [Engine contract](docs/engine.md) — Internal architecture, Studio-measured rules, recording formats, and known limitations.
 - [Verification](docs/verification.md) & [Source layout](docs/layout.md) — Test suites, parity probes, and repository structure.
 
