@@ -321,8 +321,8 @@ fn object(lua: &Lua, engine: &Engine, wire: &Wire) -> LuaResult<LuaValue> {
             delay_time: LuaValue::Number(*delay),
         })?),
         Wire::DateTime(millis) => LuaValue::UserData(lua.create_any_userdata(LDateTime(*millis))?),
-        Wire::ColorKeypoint(keypoint) => LuaValue::UserData(lua.create_userdata(*keypoint)?),
-        Wire::NumberKeypoint(keypoint) => LuaValue::UserData(lua.create_userdata(*keypoint)?),
+        Wire::ColorKeypoint(keypoint) => LuaValue::UserData(crate::lua::convert::lune_userdata(lua, crate::lua::convert::LuneKind::ColorSequenceKeypoint, *keypoint)?),
+        Wire::NumberKeypoint(keypoint) => LuaValue::UserData(crate::lua::convert::lune_userdata(lua, crate::lua::convert::LuneKind::NumberSequenceKeypoint, *keypoint)?),
         Wire::Proxy { kind, fields } => {
             let list = lua.create_table_with_capacity(fields.len(), 0)?;
             for (index, field) in fields.iter().enumerate() {

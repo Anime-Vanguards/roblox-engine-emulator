@@ -376,7 +376,7 @@ fn enum_item(lua: &Lua, engine: &Engine, enum_name: &str, item: &str) -> LuaResu
 
 fn vector2(lua: &Lua, x: f64, y: f64) -> LuaResult<LuaValue> {
     let vector = lune_roblox::datatypes::types::Vector2::from(dom::Vector2::new(x as f32, y as f32));
-    Ok(LuaValue::UserData(lua.create_userdata(vector)?))
+    Ok(LuaValue::UserData(convert::lune_userdata(lua, convert::LuneKind::Vector2, vector)?))
 }
 
 /// Services Roblox keeps for its own scripts: a script's `game:GetService` answers nil for them, with no error (Studio 0.747,

@@ -174,7 +174,7 @@ fn point(at: Vec3, visible: bool) -> LuaResult<LuaMultiValue> {
 
 fn ray(lua: &Lua, (origin, direction): (Vec3, Vec3)) -> LuaResult<LuaMultiValue> {
     let ray = lune::Ray::from(dom::Ray::new(dom::Vector3::new(origin.x, origin.y, origin.z), dom::Vector3::new(direction.x, direction.y, direction.z)));
-    LuaValue::UserData(lua.create_userdata(ray)?).into_lua_multi(lua)
+    LuaValue::UserData(crate::lua::convert::lune_userdata(lua, crate::lua::convert::LuneKind::Ray, ray)?).into_lua_multi(lua)
 }
 
 /// What a value is called in a cast error, as a client names it: a number "double", a boolean "bool", a table "Array" (empty or

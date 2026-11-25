@@ -1233,15 +1233,24 @@ fn load(lua: &Lua, engine: &Engine, store: &Store, stored: &Stored, read: bool) 
 fn fresh(lua: &Lua, engine: &Engine, store: &Store, value: LuaValue) -> LuaResult<LuaValue> {
     let LuaValue::UserData(ud) = &value else { return Ok(value) };
     macro_rules! copied {
-        ($($kind:ty),*) => {$(
+        ($(($kind:ty, $tag:ident)),*) => {$(
             if let Ok(held) = ud.borrow::<$kind>() {
                 let copy = *held;
                 drop(held);
-                return Ok(LuaValue::UserData(lua.create_userdata(copy)?));
+                return Ok(LuaValue::UserData(convert::lune_userdata(lua, convert::LuneKind::$tag, copy)?));
             }
         )*};
     }
-    copied!(lune::Ray, lune::Region3, lune::PhysicalProperties, lune::NumberSequenceKeypoint, lune::ColorSequenceKeypoint, lune::Region3int16, lune::Vector2int16, lune::Vector3int16);
+    copied!(
+        (lune::Ray, Ray),
+        (lune::Region3, Region3),
+        (lune::PhysicalProperties, PhysicalProperties),
+        (lune::NumberSequenceKeypoint, NumberSequenceKeypoint),
+        (lune::ColorSequenceKeypoint, ColorSequenceKeypoint),
+        (lune::Region3int16, Region3int16),
+        (lune::Vector2int16, Vector2int16),
+        (lune::Vector3int16, Vector3int16)
+    );
     if ud.is::<super::types::LInstanceHandle>() {
         return super::types::copy_instance_handle(lua, ud);
     }

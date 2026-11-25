@@ -439,6 +439,7 @@ fn load_prelude(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     let prelude = modules::load_engine_luau(lua, PRELUDE, "=rur.prelude", None)?;
     let exports: LuaTable = crate::cost::engine_luau(lua, prelude)?.call((r, roblox))?;
     name_datatype_methods(lua, &exports)?;
+    super::convert::mark_startup_lune_metatables(lua);
     let prelude = Prelude {
         wrap: exports.get("Wrap")?,
         // typeof as a C function over the same registry (lua/raw.rs)

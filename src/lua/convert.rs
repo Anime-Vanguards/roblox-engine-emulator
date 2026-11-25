@@ -2,7 +2,7 @@
 //! instance.luau Coerce). Lune's datatype userdata are the script representation of rbx-dom
 //! datatypes, as in the Luau runtime.
 
-use std::rc::Rc;
+use std::{cell::Cell, rc::Rc};
 
 use lune_roblox::datatypes::types as lune;
 use mlua::prelude::*;
@@ -17,6 +17,182 @@ use crate::{
     reflection::{EngineType, PropertyInfo, ScriptType},
     value::{ContentValue, Str, Value},
 };
+
+/// Lune datatypes created through `create_any_userdata` after ensuring `lune-roblox` has
+/// registered the type's metatable in this Lua VM (avoiding re-monomorphizing `mlua`'s
+/// `UserDataRegistry` for all 19 `lune-roblox` types inside `roblox-engine-emulator`).
+#[derive(Clone, Copy)]
+#[repr(u8)]
+pub(crate) enum LuneKind {
+    CFrame = 0,
+    Color3 = 1,
+    UDim2 = 2,
+    Vector2 = 3,
+    Ray = 4,
+    Region3 = 5,
+    UniqueId = 6,
+    UDim = 7,
+    Rect = 8,
+    NumberRange = 9,
+    NumberSequence = 10,
+    ColorSequence = 11,
+    BrickColor = 12,
+    Region3int16 = 13,
+    Vector2int16 = 14,
+    Vector3int16 = 15,
+    PhysicalProperties = 16,
+    ColorSequenceKeypoint = 17,
+    NumberSequenceKeypoint = 18,
+}
+
+impl LuneKind {
+    const fn bit(self) -> u32 {
+        1u32 << (self as u8)
+    }
+
+    const fn name(self) -> &'static str {
+        match self {
+            LuneKind::CFrame => "CFrame",
+            LuneKind::Color3 => "Color3",
+            LuneKind::UDim2 => "UDim2",
+            LuneKind::Vector2 => "Vector2",
+            LuneKind::Ray => "Ray",
+            LuneKind::Region3 => "Region3",
+            LuneKind::UniqueId => "UniqueId",
+            LuneKind::UDim => "UDim",
+            LuneKind::Rect => "Rect",
+            LuneKind::NumberRange => "NumberRange",
+            LuneKind::NumberSequence => "NumberSequence",
+            LuneKind::ColorSequence => "ColorSequence",
+            LuneKind::BrickColor => "BrickColor",
+            LuneKind::Region3int16 => "Region3int16",
+            LuneKind::Vector2int16 => "Vector2int16",
+            LuneKind::Vector3int16 => "Vector3int16",
+            LuneKind::PhysicalProperties => "PhysicalProperties",
+            LuneKind::ColorSequenceKeypoint => "ColorSequenceKeypoint",
+            LuneKind::NumberSequenceKeypoint => "NumberSequenceKeypoint",
+        }
+    }
+}
+
+/// Bitmask of `lune-roblox` datatypes whose metatables are already registered in this `Lua` VM.
+/// Holds no Lua registry references, so startup heap size and GC pacing stay unchanged.
+struct LuneMetatables(Cell<u32>);
+
+/// Marks the 7 `lune-roblox` datatypes whose metatables `lune_roblox::module` + `name_datatype_methods`
+/// have already registered during `Engine::start`.
+pub(crate) fn mark_startup_lune_metatables(lua: &Lua) {
+    let mask = LuneKind::CFrame.bit()
+        | LuneKind::Color3.bit()
+        | LuneKind::UDim2.bit()
+        | LuneKind::Vector2.bit()
+        | LuneKind::Ray.bit()
+        | LuneKind::Region3.bit()
+        | LuneKind::UniqueId.bit();
+    if let Some(state) = lua.app_data_ref::<LuneMetatables>() {
+        state.0.set(state.0.get() | mask);
+    } else {
+        lua.set_app_data(LuneMetatables(Cell::new(mask)));
+    }
+}
+
+fn lune_metatable_registered(lua: &Lua, kind: LuneKind) -> bool {
+    lua.app_data_ref::<LuneMetatables>().is_some_and(|state| state.0.get() & kind.bit() != 0)
+}
+
+fn mark_lune_metatable(lua: &Lua, kind: LuneKind) {
+    if let Some(state) = lua.app_data_ref::<LuneMetatables>() {
+        state.0.set(state.0.get() | kind.bit());
+    } else {
+        lua.set_app_data(LuneMetatables(Cell::new(kind.bit())));
+    }
+}
+
+/// Invokes `lune-roblox`'s own `.new(...)` constructor once for `kind` so `lune-roblox` registers
+/// its `LuaUserData` metatable in `lua`, restoring VM work-counter side effects from the one-time
+/// C call and returning the newly allocated userdata so the caller overwrites its payload in place.
+#[inline(never)]
+fn register_lune_sample(lua: &Lua, kind: LuneKind) -> LuaResult<LuaAnyUserData> {
+    let datatypes: LuaTable = if let Some(engine) = lua.app_data_ref::<Rc<Engine>>().map(|e| e.clone())
+        && let Some(prelude) = engine.lua.borrow().prelude.clone()
+    {
+        prelude.exports.get("Datatypes")?
+    } else {
+        lune_roblox::module(lua.clone())?
+    };
+    let table: LuaTable = datatypes.get(kind.name())?;
+    // Prelude wraps `ColorSequence` and `NumberSequence` in a thin table with `__index = raw`.
+    // Calling the raw `lune-roblox` constructor directly avoids allocating temporary Luau tables.
+    let raw_table = if matches!(kind, LuneKind::ColorSequence | LuneKind::NumberSequence) {
+        table.metatable().and_then(|mt| mt.get::<LuaTable>("__index").ok()).unwrap_or(table)
+    } else {
+        table
+    };
+    let new_fn: LuaFunction = raw_table.get("new")?;
+    let args: LuaMultiValue = match kind {
+        LuneKind::NumberRange | LuneKind::NumberSequence => LuaMultiValue::from_vec(vec![LuaValue::Number(0.0)]),
+        LuneKind::NumberSequenceKeypoint => LuaMultiValue::from_vec(vec![LuaValue::Number(0.0), LuaValue::Number(0.0)]),
+        LuneKind::ColorSequence => {
+            let color = lune_userdata(lua, LuneKind::Color3, lune::Color3::default())?;
+            LuaMultiValue::from_vec(vec![LuaValue::UserData(color)])
+        }
+        LuneKind::ColorSequenceKeypoint => {
+            let color = lune_userdata(lua, LuneKind::Color3, lune::Color3::default())?;
+            LuaMultiValue::from_vec(vec![LuaValue::Number(0.0), LuaValue::UserData(color)])
+        }
+        LuneKind::PhysicalProperties => {
+            LuaMultiValue::from_vec(vec![LuaValue::Number(1.0), LuaValue::Number(0.5), LuaValue::Number(0.5)])
+        }
+        LuneKind::Ray | LuneKind::Region3 => {
+            let zero = LuaValue::Vector(mlua::Vector::new(0.0, 0.0, 0.0));
+            LuaMultiValue::from_vec(vec![zero.clone(), zero])
+        }
+        _ => LuaMultiValue::new(),
+    };
+    // Save work-counter fields affected by the one-time C constructor call so lazy registration
+    // has the same work-clock footprint as direct `lua.create_userdata`.
+    let counters_ptr = unsafe {
+        let main = mlua::ffi::lua_mainthread(lua.current_thread().state());
+        crate::cost::lua_workcounters(main) as *mut crate::cost::VmCounters
+    };
+    let saved = unsafe {
+        (!counters_ptr.is_null()).then(|| {
+            let c = &*counters_ptr;
+            (
+                c.hostnanos,
+                c.hostcalls,
+                c.ccalls,
+                c.hostops[crate::cost::COLD_CFUNCS_SLOT],
+                c.hostops[crate::cost::COLD_HOSTFUNCS_SLOT],
+            )
+        })
+    };
+    let sample = new_fn.call::<LuaAnyUserData>(args);
+    if let Some((hostnanos, hostcalls, ccalls, cold_c, cold_host)) = saved {
+        unsafe {
+            let c = &mut *counters_ptr;
+            c.hostnanos = hostnanos;
+            c.hostcalls = hostcalls;
+            c.ccalls = ccalls;
+            c.hostops[crate::cost::COLD_CFUNCS_SLOT] = cold_c;
+            c.hostops[crate::cost::COLD_HOSTFUNCS_SLOT] = cold_host;
+        }
+    }
+    let sample = sample?;
+    mark_lune_metatable(lua, kind);
+    Ok(sample)
+}
+
+/// Creates a `lune-roblox` userdata using its metatable registered by `lune-roblox` itself,
+/// without instantiating `mlua::UserDataRegistry<T>` inside this crate.
+pub(crate) fn lune_userdata<T: 'static>(lua: &Lua, kind: LuneKind, value: T) -> LuaResult<LuaAnyUserData> {
+    if lune_metatable_registered(lua, kind) {
+        return lua.create_any_userdata(value);
+    }
+    let sample = register_lune_sample(lua, kind)?;
+    *sample.borrow_mut::<T>()? = value;
+    Ok(sample)
+}
 
 /// An engine value as scripts see it (instances and enum items keep their identity; Font values
 /// are fresh copies, as CopyIfMutable returns).
@@ -36,19 +212,19 @@ pub fn to_lua(lua: &Lua, engine: &Engine, value: &Value) -> LuaResult<LuaValue> 
         }
         // (only an attribute holds one: a handle of none)
         Value::NoInstance => super::types::instance_handle(lua, engine, None)?,
-        Value::UDim(v) => LuaValue::UserData(lua.create_userdata(lune::UDim::from(*v))?),
-        Value::UDim2(v) => LuaValue::UserData(lua.create_userdata(lune::UDim2::from(*v))?),
-        Value::Vector2(v) => LuaValue::UserData(lua.create_userdata(lune::Vector2::from(*v))?),
+        Value::UDim(v) => LuaValue::UserData(lune_userdata(lua, LuneKind::UDim, lune::UDim::from(*v))?),
+        Value::UDim2(v) => LuaValue::UserData(lune_userdata(lua, LuneKind::UDim2, lune::UDim2::from(*v))?),
+        Value::Vector2(v) => LuaValue::UserData(lune_userdata(lua, LuneKind::Vector2, lune::Vector2::from(*v))?),
         // (the native vector type, as in Roblox: prelude.luau "Vector3")
         Value::Vector3(v) => LuaValue::Vector(mlua::Vector::new(v.x, v.y, v.z)),
-        Value::Color3(v) => LuaValue::UserData(lua.create_userdata(lune::Color3::from(*v))?),
-        Value::Rect(v) => LuaValue::UserData(lua.create_userdata(lune::Rect::from(*v))?),
-        Value::NumberRange(v) => LuaValue::UserData(lua.create_userdata(lune::NumberRange::from(*v))?),
+        Value::Color3(v) => LuaValue::UserData(lune_userdata(lua, LuneKind::Color3, lune::Color3::from(*v))?),
+        Value::Rect(v) => LuaValue::UserData(lune_userdata(lua, LuneKind::Rect, lune::Rect::from(*v))?),
+        Value::NumberRange(v) => LuaValue::UserData(lune_userdata(lua, LuneKind::NumberRange, lune::NumberRange::from(*v))?),
         Value::NumberSequence(v) => {
-            LuaValue::UserData(lua.create_userdata(lune::NumberSequence::from((**v).clone()))?)
+            LuaValue::UserData(lune_userdata(lua, LuneKind::NumberSequence, lune::NumberSequence::from((**v).clone()))?)
         }
         Value::ColorSequence(v) => {
-            LuaValue::UserData(lua.create_userdata(lune::ColorSequence::from((**v).clone()))?)
+            LuaValue::UserData(lune_userdata(lua, LuneKind::ColorSequence, lune::ColorSequence::from((**v).clone()))?)
         }
         Value::Font(font) => LuaValue::UserData(lua.create_any_userdata(LFont(std::cell::RefCell::new((**font).clone())))?),
         Value::Content(content) => LuaValue::UserData(lua.create_any_userdata(LContent::new(lua, (**content).clone()))?),
@@ -74,24 +250,19 @@ pub fn to_lua(lua: &Lua, engine: &Engine, value: &Value) -> LuaResult<LuaValue> 
 
 /// Other rbx-dom datatypes as Lune userdata.
 pub fn dom_to_lua(lua: &Lua, variant: &Variant) -> LuaResult<LuaValue> {
-    macro_rules! ud {
-        ($value:expr) => {
-            LuaValue::UserData(lua.create_userdata($value)?)
-        };
-    }
     Ok(match variant {
-        Variant::Axes(v) => ud!(lune::Axes::from(*v)),
-        Variant::BrickColor(v) => ud!(lune::BrickColor::from(*v)),
-        Variant::CFrame(v) => ud!(lune::CFrame::from(*v)),
-        Variant::Faces(v) => ud!(lune::Faces::from(*v)),
-        Variant::Ray(v) => ud!(lune::Ray::from(*v)),
-        Variant::Region3(v) => ud!(lune::Region3::from(*v)),
-        Variant::Region3int16(v) => ud!(lune::Region3int16::from(*v)),
-        Variant::UniqueId(v) => ud!(lune::UniqueId::from(*v)),
-        Variant::Vector2int16(v) => ud!(lune::Vector2int16::from(*v)),
-        Variant::Vector3int16(v) => ud!(lune::Vector3int16::from(*v)),
+        Variant::Axes(v) => LuaValue::UserData(lua.create_userdata(lune::Axes::from(*v))?),
+        Variant::BrickColor(v) => LuaValue::UserData(lune_userdata(lua, LuneKind::BrickColor, lune::BrickColor::from(*v))?),
+        Variant::CFrame(v) => LuaValue::UserData(lune_userdata(lua, LuneKind::CFrame, lune::CFrame::from(*v))?),
+        Variant::Faces(v) => LuaValue::UserData(lua.create_userdata(lune::Faces::from(*v))?),
+        Variant::Ray(v) => LuaValue::UserData(lune_userdata(lua, LuneKind::Ray, lune::Ray::from(*v))?),
+        Variant::Region3(v) => LuaValue::UserData(lune_userdata(lua, LuneKind::Region3, lune::Region3::from(*v))?),
+        Variant::Region3int16(v) => LuaValue::UserData(lune_userdata(lua, LuneKind::Region3int16, lune::Region3int16::from(*v))?),
+        Variant::UniqueId(v) => LuaValue::UserData(lune_userdata(lua, LuneKind::UniqueId, lune::UniqueId::from(*v))?),
+        Variant::Vector2int16(v) => LuaValue::UserData(lune_userdata(lua, LuneKind::Vector2int16, lune::Vector2int16::from(*v))?),
+        Variant::Vector3int16(v) => LuaValue::UserData(lune_userdata(lua, LuneKind::Vector3int16, lune::Vector3int16::from(*v))?),
         Variant::PhysicalProperties(dom::PhysicalProperties::Custom(v)) => {
-            ud!(lune::PhysicalProperties::from(*v))
+            LuaValue::UserData(lune_userdata(lua, LuneKind::PhysicalProperties, lune::PhysicalProperties::from(*v))?)
         }
         _ => LuaValue::Nil,
     })
