@@ -1,0 +1,5 @@
+{
+	"$schema": "../client-profile.schema.json",
+	"identity": { "membershipType": "Premium", "accountAge": 2000, "hasVerifiedBadge": true, "verified": true },
+	"ownership": { "gamePasses": "all", "assets": "all", "bundles": "all", "badges": "all", "subscriptions": "all" }
+}

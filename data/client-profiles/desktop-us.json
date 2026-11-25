@@ -1,0 +1,5 @@
+{
+	"$schema": "../client-profile.schema.json",
+	"device": { "kind": "desktop" },
+	"localization": { "localeId": "en-us", "robloxLocaleId": "en-us", "systemLocaleId": "en-us", "countryRegion": "US" }
+}

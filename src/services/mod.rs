@@ -641,19 +641,26 @@ fn install_data_model(behaviors: &mut Behaviors, reflection: &Reflection, option
         // (its function runs when the server shuts down, which no run reaches: Roblox's DataModel documentation)
         behaviors.add_method(data_model, K::BindToClose as NameId, method(|_, _, _, _| Ok(none())));
         behaviors.add_method(data_model, K::GetJobsInfo as NameId, constant(|lua| Ok(LuaValue::Table(lua.create_table()?))));
-        let place_id = options.place_id;
+        // (the game the client joined: the client profile's, else what a Studio session of an unpublished place reads)
+        let game = options.profile.game.clone();
+        let place_id = game.place_id();
         behaviors.add_getter(data_model, K::PlaceId as NameId, getter(move |_, _, _| Ok(LuaValue::Number(place_id))));
-        let game_id = options.game_id;
+        let game_id = game.game_id();
         behaviors.add_getter(data_model, K::GameId as NameId, getter(move |_, _, _| Ok(LuaValue::Number(game_id))));
-        behaviors.add_getter(data_model, K::JobId as NameId, getter(|lua, _, _| Ok(string_value(lua, "")?)));
-        let creator_id = options.creator_id;
+        let job_id: Rc<str> = game.job_id.as_deref().unwrap_or("").into();
+        behaviors.add_getter(data_model, K::JobId as NameId, getter(move |lua, _, _| Ok(string_value(lua, &job_id)?)));
+        let creator_id = game.creator_id.unwrap_or(0.0);
         behaviors.add_getter(data_model, K::CreatorId as NameId, getter(move |_, _, _| Ok(LuaValue::Number(creator_id))));
-        behaviors.add_getter(data_model, K::CreatorType as NameId, getter(|lua, engine, _| {
-            Ok(enum_item(lua, engine, "CreatorType", "Group")?)
+        let creator_type: Rc<str> = game.creator_type.as_deref().unwrap_or("Group").into();
+        behaviors.add_getter(data_model, K::CreatorType as NameId, getter(move |lua, engine, _| {
+            Ok(enum_item(lua, engine, "CreatorType", &creator_type)?)
         }));
-        behaviors.add_getter(data_model, K::PlaceVersion as NameId, getter(|_, _, _| Ok(LuaValue::Number(0.0))));
-        behaviors.add_getter(data_model, K::PrivateServerId as NameId, getter(|lua, _, _| Ok(string_value(lua, "")?)));
-        behaviors.add_getter(data_model, K::PrivateServerOwnerId as NameId, getter(|_, _, _| Ok(LuaValue::Number(0.0))));
+        let place_version = game.place_version.unwrap_or(0.0);
+        behaviors.add_getter(data_model, K::PlaceVersion as NameId, getter(move |_, _, _| Ok(LuaValue::Number(place_version))));
+        let private_server_id: Rc<str> = game.private_server_id.as_deref().unwrap_or("").into();
+        behaviors.add_getter(data_model, K::PrivateServerId as NameId, getter(move |lua, _, _| Ok(string_value(lua, &private_server_id)?)));
+        let private_server_owner_id = game.private_server_owner_id.unwrap_or(0.0);
+        behaviors.add_getter(data_model, K::PrivateServerOwnerId as NameId, getter(move |_, _, _| Ok(LuaValue::Number(private_server_owner_id))));
     }
 }
 
@@ -740,8 +747,21 @@ fn install_players(engine: &Rc<Engine>, behaviors: &mut Behaviors, reflection: &
                 Ok(values([LuaValue::Nil]))
             }));
         }
+        // (the client profile's player and friends by name; any other name reads 1, a stand-in: an account's id is the web's)
         if let Some(n) = name(reflection, "GetUserIdFromNameAsync") {
-            behaviors.add_method(players, n, strings(QUIET_FIRST, constant(|_| Ok(LuaValue::Number(1.0)))));
+            behaviors.add_method(players, n, strings(QUIET_FIRST, method(|_, engine, _, args| {
+                let profile = engine.profile();
+                let wanted = args.string(1).map(|name| name.to_string_lossy());
+                let id = wanted.and_then(|wanted| {
+                    let identity = &profile.identity;
+                    if identity.name.as_deref() == Some(wanted.as_str()) {
+                        return Some(identity.user_id());
+                    }
+                    let friends = profile.social.as_ref()?.get("friends")?.as_array()?;
+                    friends.iter().find(|friend| friend["name"].as_str() == Some(wanted.as_str()))?["userId"].as_f64()
+                });
+                Ok(values([LuaValue::Number(id.unwrap_or(1.0))]))
+            })));
         }
         // Players a harness adds after the run started: PlayerAdded when a Player is parented to Players,
         // PlayerRemoving when it leaves, and Player.CharacterAdded when its Character is set to a model
@@ -1017,15 +1037,33 @@ fn install_collection_service(behaviors: &mut Behaviors, reflection: &Reflection
 #[inline(never)]
 fn install_gui_and_input(behaviors: &mut Behaviors, reflection: &Reflection, options: &crate::Options) {
     // GuiService / UserInputService
+    // (the device and the player's settings are the client profile's: client_profile.rs)
+    let device = options.profile.device.clone();
+    let settings = options.profile.settings.clone();
     if let Some(gui) = class(reflection, "GuiService") {
-        let inset = options.topbar_inset;
+        let inset = device.topbar_inset();
         if let Some(n) = name(reflection, "GetGuiInset") {
             behaviors.add_method(gui, n, method(move |lua, _, _, _| Ok(values([vector2(lua, 0.0, inset)?, vector2(lua, 0.0, 0.0)?]))));
         }
-        for member in ["IsTenFootInterface", "GetEmotesMenuOpen", "GetInspectMenuEnabled", "GetGameplayPausedNotificationEnabled"] {
+        // (a console's client is a ten-foot interface: Roblox's GuiService documentation, not measured)
+        let ten_foot = device.ten_foot_interface.unwrap_or(false);
+        if let Some(n) = name(reflection, "IsTenFootInterface") {
+            behaviors.add_method(gui, n, constant(move |_| Ok(LuaValue::Boolean(ten_foot))));
+        }
+        for member in ["GetEmotesMenuOpen", "GetInspectMenuEnabled", "GetGameplayPausedNotificationEnabled"] {
             if let Some(n) = name(reflection, member) {
                 behaviors.add_method(gui, n, constant(|_| Ok(LuaValue::Boolean(false))));
             }
+        }
+        // the player's accessibility settings, where the profile sets them (else the properties' defaults)
+        if let (Some(item), Some(n)) = (settings.preferred_text_size.clone(), name(reflection, "PreferredTextSize")) {
+            behaviors.add_getter(gui, n, getter(move |lua, engine, _| Ok(enum_item(lua, engine, "PreferredTextSize", &item)?)));
+        }
+        if let (Some(value), Some(n)) = (settings.preferred_transparency, name(reflection, "PreferredTransparency")) {
+            behaviors.add_getter(gui, n, getter(move |_, _, _| Ok(LuaValue::Number(value))));
+        }
+        if let (Some(flag), Some(n)) = (settings.reduced_motion, name(reflection, "ReducedMotionEnabled")) {
+            behaviors.add_getter(gui, n, getter(move |_, _, _| Ok(LuaValue::Boolean(flag))));
         }
         // (no inspect menu opens without a GUI layer, so there is none to close, and no selection group to remove but one
         // AddSelectionParent made, which reports itself)
@@ -1042,38 +1080,37 @@ fn install_gui_and_input(behaviors: &mut Behaviors, reflection: &Reflection, opt
         }
     }
     if let Some(input) = class(reflection, "UserInputService") {
-        let device = options.device.clone();
         // (a phone is a touch device: cost.rs device_scale gives it its prices too)
-        let touch = device == "touch" || device == "phone";
-        let pad = device == "gamepad";
         for (member, value) in [
-            ("TouchEnabled", touch),
-            ("KeyboardEnabled", !touch && !pad),
-            ("MouseEnabled", !touch && !pad),
-            ("GamepadEnabled", pad),
+            ("TouchEnabled", device.touch_enabled()),
+            ("KeyboardEnabled", device.keyboard_enabled()),
+            ("MouseEnabled", device.mouse_enabled()),
+            ("GamepadEnabled", device.gamepad_enabled()),
         ] {
             if let Some(n) = name(reflection, member) {
                 behaviors.add_getter(input, n, getter(move |_, _, _| Ok(LuaValue::Boolean(value))));
             }
         }
+        // (inputs the profile sets that the device's kind does not decide: else the properties' defaults)
+        for (member, value) in [("AccelerometerEnabled", device.inputs.accelerometer), ("GyroscopeEnabled", device.inputs.gyroscope), ("VREnabled", device.inputs.vr)] {
+            if let (Some(value), Some(n)) = (value, name(reflection, member)) {
+                behaviors.add_getter(input, n, getter(move |_, _, _| Ok(LuaValue::Boolean(value))));
+            }
+        }
+        // (a touch device prefers Touch and a gamepad Gamepad: Roblox's PreferredInput documentation, and what roblox-sim's
+        // device emulation writes; a desktop keeps the property's KeyboardAndMouse)
+        if let (Some(item), Some(n)) = (device.preferred_input().map(str::to_string), name(reflection, "PreferredInput")) {
+            behaviors.add_getter(input, n, getter(move |lua, engine, _| Ok(enum_item(lua, engine, "PreferredInput", &item)?)));
+        }
         if let Some(n) = name(reflection, "GetMouseLocation") {
             behaviors.add_method(input, n, method(|lua, _, _, _| Ok(values([vector2(lua, -1000.0, -1000.0)?]))));
         }
-        let edit = options.edit_mode();
+        if let (Some(item), Some(settings_class), Some(n)) = (settings.saved_quality_level.clone(), class(reflection, "UserGameSettings"), name(reflection, "SavedQualityLevel")) {
+            behaviors.add_getter(settings_class, n, getter(move |lua, engine, _| Ok(enum_item(lua, engine, "SavedQualitySetting", &item)?)));
+        }
+        let last_input: Rc<str> = device.last_input_type(options.edit_mode()).into();
         if let Some(n) = name(reflection, "GetLastInputType") {
-            behaviors.add_method(input, n, method(move |lua, engine, _, _| {
-                let item = if touch {
-                    "Touch"
-                } else if pad {
-                    "Gamepad1"
-                } else if edit {
-                    // Measured: Studio in edit mode reports Focus (the window focus event)
-                    "Focus"
-                } else {
-                    "MouseMovement"
-                };
-                Ok(values([enum_item(lua, engine, "UserInputType", item)?]))
-            }));
+            behaviors.add_method(input, n, method(move |lua, engine, _, _| Ok(values([enum_item(lua, engine, "UserInputType", &last_input)?]))));
         }
         for member in ["IsKeyDown", "IsMouseButtonPressed", "IsGamepadButtonDown", "GetGamepadConnected", "GamepadSupports"] {
             if let Some(n) = name(reflection, member) {
@@ -1119,8 +1156,19 @@ fn install_starter_actions_debris_sound(behaviors: &mut Behaviors, reflection: &
         }
         // (GetCore yields on a server until the core scripts register the name: a client casts its name without the warning)
         if let Some(n) = name(reflection, "GetCore") {
-            behaviors.add_method(starter, n, strings(QUIET_FIRST, method(|_, _, _, args| {
+            behaviors.add_method(starter, n, strings(QUIET_FIRST, method(|lua, engine, _, args| {
                 let name = args.string(1).map(|s| s.to_string_lossy()).unwrap_or_default();
+                // (the user ids the player blocked: the client profile's social.blocked, where it gives them)
+                if name == "GetBlockedUserIds" {
+                    let profile = engine.profile();
+                    if let Some(blocked) = profile.social.as_ref().and_then(|social| social.get("blocked")).and_then(serde_json::Value::as_array) {
+                        let list = lua.create_table_with_capacity(blocked.len(), 0)?;
+                        for id in blocked {
+                            list.raw_push(id.as_f64().unwrap_or(0.0))?;
+                        }
+                        return Ok(values([LuaValue::Table(list)]));
+                    }
+                }
                 let active = matches!(name.as_str(), "ChatActive" | "PointsNotificationsActive" | "BadgesNotificationsActive");
                 Ok(values([if active { LuaValue::Boolean(true) } else { LuaValue::Nil }]))
             })));

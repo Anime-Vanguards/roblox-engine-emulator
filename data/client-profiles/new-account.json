@@ -1,0 +1,6 @@
+{
+	"$schema": "../client-profile.schema.json",
+	"identity": { "name": "NewPlayer", "userId": 9000000001, "accountAge": 0, "membershipType": "None", "hasVerifiedBadge": false, "verified": false },
+	"social": { "groups": [], "friends": [], "blocked": [] },
+	"ownership": { "gamePasses": [], "assets": [], "bundles": [], "badges": [], "subscriptions": [] }
+}

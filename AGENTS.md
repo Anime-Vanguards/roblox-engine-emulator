@@ -42,7 +42,7 @@ nearly every file.
 - `src/dom.rs`, `reflection.rs`, `value.rs`, `signal.rs`, `instance.rs`, `derived.rs`: the instance model.
 - `src/scheduler.rs` (virtual clock, task library, frame phases) and `src/cost.rs` (the work clock's Studio prices).
 - `src/services/`, `src/lua/` (the Luau-facing API: Instance userdata in raw.rs, datatypes, globals, require, Luau
-  stubs in services.luau / server.luau / prelude.luau), `src/project*` (Rojo mounting, models, bundles, model plans).
+  stubs in services.luau / server.luau / profile.luau / prelude.luau), `src/project*` (Rojo mounting, models, bundles, model plans).
 - `src/world/` and `src/record/` (the 3D world and the recorder), `src/animation/`, `src/meshes.rs`, `src/images.rs`.
 - `src/serve/` (`ree serve`), `src/watchdog.rs` (script timeout and process guards), the profilers (`src/profiler/`, `src/luau_profile.rs`,
   `src/boundary.rs`; the hardware counters' Windows service in `tools/hw-counters/`, a crate of its own); the profile
@@ -83,6 +83,10 @@ nearly every file.
   build) before every commit that touches vendor/ or patches/: CI fails a push where they disagree.
 - **Hot paths** read properties by interned id (`K::...`, `reflection.name_id` once), never by string, and allocate
   nothing per frame; the Instance API's fast paths stay in C metamethods (lua/raw.rs).
+- **Client identity is the client profile's.** Who the player is, the device and screen, settings, locale and country, policy,
+  ownership, groups and friends, the game's ids and the stores' starting data come only from `Options::profile`
+  (`src/client_profile.rs`, docs/engine.md "Client profile"): read them through it (`engine.profile()`, its accessors), add a
+  field there for anything new a client reads about itself, and never add a constant, an Options field or a flag of its own.
 - **Names other tools set stay as they are**: environment variables (`RUR_*`, `REE_*`), chunk names (`=rur.prelude`,
   `=rur.record`, ...) and the `RURFixtures` folder keep their names, because rur's tools set them and its golden output
   records them.

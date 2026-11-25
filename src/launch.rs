@@ -7,8 +7,9 @@
 //!   [--rojo <file.project.json> [--rojo-at Service/Name]]
 //!   [--snapshot <Service.rbxm|.rbxmx|.rbx>]... [--snapshot-dir <dir>] [--no-snapshots] [--viewport WxH]
 //!   [--scale S] [--camera WxH] [--rotation-clipping enabled|disabled] [--mode edit|play]
-//!   [--run-context client|server|loopback] [--player Name] [--place-id N] [--streaming R] [--offline]
-//!   [--native] [--verbose] [--repo <dir>]
+//!   [--run-context client|server|loopback] [--client-profile <preset|file.json|{json}>]... [--player Name]
+//!   [--device desktop|touch|gamepad|phone] [--place-id N] [--streaming R] [--offline] [--native] [--verbose]
+//!   [--repo <dir>]
 //!
 //! The project's Rojo roots are `--roots`; without them there is no project (a run of the
 //! harness and its mounts alone), and `--project` only names the project's folder.
@@ -21,10 +22,12 @@
 //! looked up by a root ([`crate::mount::ProjectSpec::place_roots`]). Content naming a relative local path
 //! (`output/x.mesh`) is read from the project's folder: `--project`, else the folder holding the `--rojo`
 //! file, else the folder holding the first root, else the current directory ([`Options::project`]).
-//! Environment: RUR_CAMERA / RUR_PLACE_ID /
-//! RUR_PLAYER / RUR_PLAYER_ID / RUR_PLAYER_DISPLAY / RUR_ROTATION_CLIPPING / RUR_VERBOSE stand in
-//! for the flags, and REE_LOCALIZED_PLACES / REE_MATCH_PLACES add places to the work clock's place
-//! prices ([`crate::cost::PlacePrices::with`]).
+//! Everything about the emulated client and player is the client profile ([`client_profile`]): `--client-profile`
+//! layers over REE_CLIENT_PROFILE's, and `--player`, `--device`, `--viewport`, `--camera`, `--place-id` and `--streaming`
+//! write fields of it. Environment: RUR_CAMERA / RUR_PLACE_ID / RUR_PLAYER / RUR_PLAYER_ID / RUR_PLAYER_DISPLAY /
+//! REE_DEVICE write fields of the profile below the command line's; RUR_ROTATION_CLIPPING / RUR_VERBOSE stand in for the
+//! flags, and REE_LOCALIZED_PLACES / REE_MATCH_PLACES add places to the work clock's place prices
+//! ([`crate::cost::PlacePrices::with`]).
 
 use std::{
     ffi::{OsStr, OsString},
@@ -92,6 +95,10 @@ pub(crate) fn path_variables() -> Vec<(&'static str, OsString)> {
     let mut variables: Vec<(&'static str, OsString)> = Vec::new();
     for (name, path) in relative_state_variables() {
         variables.push((name, path.into_os_string()));
+    }
+    // the default client profile's files, from the client's folder (its presets and inline JSON as they are)
+    if let Some(spec) = std::env::var(crate::client_profile::ENV).ok().filter(|spec| !spec.trim().is_empty()) {
+        variables.push((crate::client_profile::ENV, crate::client_profile::absolute_spec(&spec).into()));
     }
     if crate::is_standalone_binary() {
         for name in CLIENT_PATH_VARIABLES.into_iter().chain(USER_FOLDER_VARIABLES) {
@@ -173,6 +180,9 @@ pub struct Args {
     pub rojo: Option<String>,
     /// `--rojo-at Service/Name`: where a `--rojo` tree that is not a DataModel mounts
     pub rojo_at: Option<String>,
+    /// `--client-profile <preset|file.json|{json}>`, repeatable: the client profile's layers, later over earlier
+    /// ([`client_profile`])
+    pub client_profiles: Vec<String>,
 }
 
 fn size(key: &str, text: &str) -> Result<(f64, f64), String> {
@@ -221,6 +231,7 @@ impl Args {
             "--instance" => self.mounts.push(project::Mount::parse(&need()?, true)?),
             "--rojo" => self.rojo = Some(need()?),
             "--rojo-at" => self.rojo_at = Some(need()?),
+            "--client-profile" => self.client_profiles.push(need()?),
             _ => return Ok(None),
         }
         Ok(Some(if matches!(key, "--offline" | "--verbose" | "--no-snapshots" | "--load-module" | "--load-string" | "--native") { 1 } else { 2 }))
@@ -300,20 +311,6 @@ pub fn prepare(args: &Args, default_repo: &Path) -> Result<Prepared, String> {
     // (a Rojo project's folder stands for the place's root where a place is looked up)
     let place_roots = crate::mount::place_roots(&roots, rojo.as_ref());
 
-    let (width, height) = args.viewport.unwrap_or((1920.0, 1080.0));
-    let place_id = args
-        .place_id
-        .or_else(|| std::env::var("RUR_PLACE_ID").ok().and_then(|v| v.parse().ok()))
-        .or_else(|| project::project_setting(&place_roots, "placeIds").and_then(|v| v.as_f64()))
-        .or_else(|| project::declared_place_id(&place_roots))
-        .unwrap_or(0.0);
-    // Camera.ViewportSize (--camera WxH / RUR_CAMERA): the screen the run sits in, which can exceed
-    // the rendered area. Defaults to the viewport.
-    let camera = args.camera.or_else(|| {
-        let spec = std::env::var("RUR_CAMERA").ok()?;
-        let (w, h) = spec.split_once(['x', 'X'])?;
-        Some((w.parse().ok()?, h.parse().ok()?))
-    });
     let rotation_clipping = args
         .rotation_clipping
         .clone()
@@ -323,11 +320,6 @@ pub fn prepare(args: &Args, default_repo: &Path) -> Result<Prepared, String> {
         return Err("rotation-clipping must be enabled or disabled".into());
     }
     let mode = args.mode.clone().unwrap_or_else(|| "edit".into());
-    // the device the client emulates (UserInputService's inputs), and for a phone its prices too (cost.rs device_scale)
-    let device = args.device.clone().or_else(|| std::env::var("REE_DEVICE").ok().filter(|v| !v.is_empty())).unwrap_or_else(|| "desktop".into());
-    if !["desktop", "touch", "gamepad", "phone"].contains(&device.as_str()) {
-        return Err(format!("--device must be desktop, touch, gamepad or phone, not {device}"));
-    }
     let run_context = args.run_context.as_deref().map(RunContext::parse).transpose()?.unwrap_or_default();
     let place_prices = crate::cost::PlacePrices::default().with(std::env::var("REE_LOCALIZED_PLACES").ok().as_deref(), std::env::var("REE_MATCH_PLACES").ok().as_deref())?;
     // A Studio Play-mode server: no local player, and no edit-mode server (Studio's edit DataModel is
@@ -347,19 +339,17 @@ pub fn prepare(args: &Args, default_repo: &Path) -> Result<Prepared, String> {
             return Err("--player names the local player; a server has none (a harness adds its players)".into());
         }
     }
-    let local_player_name = match run_context {
-        RunContext::Server => None,
+    let (profile, names_player) = client_profile(args, &place_roots)?;
+    let local_player = match run_context {
+        RunContext::Server => false,
         // Studio's edit DataModel has no player (Players is empty and LocalPlayer nil for a plugin or the command bar
-        // outside Team Create; not measured: a headless session has no edit DataModel); `--player` gives the run one all the same
-        RunContext::Edit => args.player.clone(),
-        RunContext::Client | RunContext::Loopback => Some(args.player.clone().or_else(|| std::env::var("RUR_PLAYER").ok()).unwrap_or_else(|| "Player".into())),
+        // outside Team Create; not measured: a headless session has no edit DataModel); a command line that names one
+        // (`--player`, or a `--client-profile` with identity.name) gives the run one all the same
+        RunContext::Edit => names_player,
+        RunContext::Client | RunContext::Loopback => true,
     };
     let options = Options {
         offline: args.offline,
-        viewport_width: width,
-        viewport_height: height,
-        camera_width: camera.map(|c| c.0),
-        camera_height: camera.map(|c| c.1),
         clips_descendants_supports_rotation: rotation_clipping == "enabled",
         pixel_scale: args.scale.unwrap_or(1.5),
         mode,
@@ -369,18 +359,14 @@ pub fn prepare(args: &Args, default_repo: &Path) -> Result<Prepared, String> {
         load_string: args.load_string,
         native: args.native,
         verbose: args.verbose || std::env::var("RUR_VERBOSE").as_deref() == Ok("1"),
-        local_player_name,
-        local_player_user_id: std::env::var("RUR_PLAYER_ID").ok().and_then(|v| v.parse().ok()).unwrap_or(1.0),
-        local_player_display_name: std::env::var("RUR_PLAYER_DISPLAY").ok(),
-        place_id,
+        local_player,
+        profile,
         // main.luau: PlaceName = --place (the CLI passes roots, so --place only names the place then)
         place_name: if args.roots.is_empty() { "Place".into() } else { args.place.clone().unwrap_or_else(|| "Place".into()) },
         repo: repo.clone(),
         project: project_dir,
-        streaming_target_radius: args.streaming.or_else(|| project::project_setting(&place_roots, "streamingTargetRadius").and_then(|v| v.as_f64())),
         place_prices,
         clock_probe: None,
-        device,
         ..Options::default()
     };
     let mounts = args
@@ -392,6 +378,130 @@ pub fn prepare(args: &Args, default_repo: &Path) -> Result<Prepared, String> {
         })
         .collect();
     Ok(Prepared { options, roots, snapshot_dir, mounts, rojo })
+}
+
+/// The flags that write a field of the client profile, and the field: `--player` and the rest are shorthands for it.
+pub const PROFILE_FLAGS: [(&str, &str); 6] = [
+    ("--player", "identity.name"),
+    ("--device", "device.kind"),
+    ("--viewport", "device.viewport"),
+    ("--camera", "device.camera"),
+    ("--place-id", "game.placeId"),
+    ("--streaming", "game.streamingTargetRadius"),
+];
+
+/// The environment variables that write a field of the client profile, and the field (below every command-line layer).
+pub const PROFILE_VARIABLES: [(&str, &str); 6] = [
+    ("RUR_PLAYER", "identity.name"),
+    ("RUR_PLAYER_ID", "identity.userId"),
+    ("RUR_PLAYER_DISPLAY", "identity.displayName"),
+    ("RUR_PLACE_ID", "game.placeId"),
+    ("RUR_CAMERA", "device.camera"),
+    ("REE_DEVICE", "device.kind"),
+];
+
+/// `value` at the dotted `path` of a new JSON object
+fn at_path(path: &str, value: serde_json::Value) -> serde_json::Value {
+    path.rsplit('.').fold(value, |inner, key| serde_json::json!({ key: inner }))
+}
+
+/// The run's client profile ([`crate::client_profile`]) from `args` and the environment, and whether the command line
+/// names the player (`--player`, or identity.name in a `--client-profile`). Its layers, each over the ones before it:
+///
+/// 1. `REE_CLIENT_PROFILE`'s layers;
+/// 2. the environment's shorthands ([`PROFILE_VARIABLES`]: RUR_PLAYER, RUR_PLAYER_ID, RUR_PLAYER_DISPLAY, RUR_PLACE_ID,
+///    RUR_CAMERA, REE_DEVICE);
+/// 3. the command line's `--client-profile` layers, in their order;
+/// 4. the command line's flags ([`PROFILE_FLAGS`]: --player, --device, --viewport, --camera, --place-id, --streaming).
+///
+/// The command line wins over the environment. A flag that sets a field a `--client-profile` layer sets to another value is
+/// refused, naming both: one command line saying two things of one field is a mistake. Fields still unset then take the
+/// project's: the place id (rur.json `placeIds`, a declared place id) and the streaming radius (rur.json
+/// `streamingTargetRadius`).
+pub fn client_profile(args: &Args, place_roots: &[String]) -> Result<(crate::client_profile::ClientProfile, bool), String> {
+    use crate::client_profile::{DeviceKind, ENV, Layers, get, merge_patch};
+    use serde_json::{Value as Json, json};
+    let variable = |name: &str| std::env::var(name).ok().filter(|value| !value.is_empty());
+    let mut layers = Layers::default();
+    if let Some(spec) = variable(ENV) {
+        layers.add_spec(&spec).map_err(|error| format!("{ENV}: {error}"))?;
+    }
+    // (the profile's sources are its profile layers, the environment's and the command line's: not the shorthands)
+    let mut sources = layers.sources().to_vec();
+    let device_kind = |device: &str| {
+        DeviceKind::parse(device).map(DeviceKind::name).ok_or_else(|| format!("--device must be desktop, touch, gamepad or phone, not {device}"))
+    };
+    // (as before: a number or size these variables cannot be read as is left out)
+    let mut shorthands = Json::Object(Default::default());
+    let mut named = Vec::new();
+    for (name, path) in PROFILE_VARIABLES {
+        let Some(value) = variable(name) else { continue };
+        let value = match name {
+            "RUR_PLAYER" | "RUR_PLAYER_DISPLAY" => json!(value),
+            "RUR_PLAYER_ID" | "RUR_PLACE_ID" => match value.trim().parse::<f64>() {
+                Ok(number) => json!(number),
+                Err(_) => continue,
+            },
+            "RUR_CAMERA" => match size(name, &value) {
+                Ok((w, h)) => json!([w, h]),
+                Err(_) => continue,
+            },
+            _ => json!(device_kind(&value)?),
+        };
+        merge_patch(&mut shorthands, &at_path(path, value));
+        named.push(name);
+    }
+    if !named.is_empty() {
+        layers.add(shorthands, &named.join(", "))?;
+    }
+    // (the command line's layers on their own too, to find what a flag disagrees with)
+    let mut command_line = Layers::default();
+    for spec in &args.client_profiles {
+        for (value, source) in crate::client_profile::read_spec(spec)? {
+            command_line.add(value.clone(), &source)?;
+            layers.add(value, &source)?;
+        }
+    }
+    sources.extend(command_line.sources().iter().cloned());
+    let profiled = command_line.json();
+    let mut flags = Json::Object(Default::default());
+    let mut set = Vec::new();
+    for (flag, path) in PROFILE_FLAGS {
+        // (the field's value, and the flag's own spelling of it for a refusal)
+        let value = match flag {
+            "--player" => args.player.as_ref().map(|name| (json!(name), name.clone())),
+            "--device" => args.device.as_deref().map(device_kind).transpose()?.map(|kind| (json!(kind), kind.to_string())),
+            "--viewport" => args.viewport.map(|(w, h)| (json!([w, h]), format!("{w}x{h}"))),
+            "--camera" => args.camera.map(|(w, h)| (json!([w, h]), format!("{w}x{h}"))),
+            "--place-id" => args.place_id.map(|id| (json!(id), id.to_string())),
+            _ => args.streaming.map(|radius| (json!(radius), radius.to_string())),
+        };
+        let Some((value, spelled)) = value else { continue };
+        if let Some(given) = get(&profiled, path) {
+            let same = match (given.as_f64(), value.as_f64()) {
+                (Some(a), Some(b)) => a == b,
+                _ => crate::client_profile::ClientProfile::from_json(&at_path(path, given.clone())).ok() == crate::client_profile::ClientProfile::from_json(&at_path(path, value.clone())).ok(),
+            };
+            if !same {
+                return Err(format!("{flag} {spelled} and --client-profile (which sets {path} to {given}) both set {path}: pass one"));
+            }
+        }
+        merge_patch(&mut flags, &at_path(path, value));
+        set.push(flag);
+    }
+    if !set.is_empty() {
+        layers.add(flags, &set.join(", "))?;
+    }
+    let mut profile = layers.profile()?;
+    profile.sources = sources;
+    if profile.game.place_id.is_none() {
+        profile.game.place_id = project::project_setting(place_roots, "placeIds").and_then(|v| v.as_f64()).or_else(|| project::declared_place_id(place_roots));
+    }
+    if profile.game.streaming_target_radius.is_none() {
+        profile.game.streaming_target_radius = project::project_setting(place_roots, "streamingTargetRadius").and_then(|v| v.as_f64());
+    }
+    let names_player = args.player.is_some() || get(&profiled, "identity.name").is_some();
+    Ok((profile, names_player))
 }
 
 /// What a program running engine commands brings to the engines they start: its name (the prefix
@@ -450,7 +560,7 @@ mod tests {
         assert_eq!(args.mounts.len(), 1);
         assert!(parse(&["--scale".to_string()]).unwrap_err().contains("needs a value"));
         let prepared = prepare(&args, Path::new("C:/somewhere")).unwrap();
-        assert_eq!((prepared.options.viewport_width, prepared.options.viewport_height), (800.0, 600.0));
+        assert_eq!(prepared.options.profile.device.viewport(), (800.0, 600.0));
         assert!(prepared.roots.is_empty(), "mounts without roots: no implicit project");
         assert!(matches!(&prepared.mounts[0].target, project::MountTarget::Path(path) if Path::new(path).is_absolute()));
     }
@@ -459,9 +569,9 @@ mod tests {
     fn a_server_run_context_has_no_local_player_and_plays() {
         let args = |words: &[&str]| parse(&words.iter().map(|s| s.to_string()).collect::<Vec<_>>()).unwrap();
         let client = prepare(&args(&["--mount", "ReplicatedStorage/Lib=lib", "--mode", "play"]), Path::new("C:/somewhere")).unwrap();
-        assert_eq!((client.options.run_context, client.options.local_player_name.is_some()), (RunContext::Client, true));
+        assert_eq!((client.options.run_context, client.options.local_player), (RunContext::Client, true));
         let server = prepare(&args(&["--mount", "ReplicatedStorage/Lib=lib", "--mode", "play", "--run-context", "server"]), Path::new("C:/somewhere")).unwrap();
-        assert!(server.options.server() && server.options.local_player_name.is_none() && server.options.studio);
+        assert!(server.options.server() && !server.options.local_player && server.options.studio);
         let live = prepare(&args(&["--mode", "play", "--run-context", "server", "--studio", "false"]), Path::new("C:/somewhere")).unwrap();
         assert!(live.options.server() && !live.options.studio);
         assert!(parse(&["--studio".to_string(), "no".to_string()]).unwrap_err().contains("true or false"));
@@ -472,11 +582,11 @@ mod tests {
         assert!(refused(&["--run-context", "loopback"]).contains("needs --mode play"));
         let pair = prepare(&args(&["--mode", "play", "--run-context", "loopback", "--player", "Someone"]), Path::new("C:/somewhere")).unwrap();
         assert!(pair.options.run_context == RunContext::Loopback && !pair.options.server());
-        assert_eq!(pair.options.local_player_name.as_deref(), Some("Someone"));
+        assert!(pair.options.local_player && pair.options.profile.identity.name() == "Someone");
         let edit = prepare(&args(&["--mount", "ReplicatedStorage/Lib=lib", "--run-context", "edit"]), Path::new("C:/somewhere")).unwrap();
-        assert!(edit.options.run_context == RunContext::Edit && !edit.options.server() && edit.options.local_player_name.is_none());
+        assert!(edit.options.run_context == RunContext::Edit && !edit.options.server() && !edit.options.local_player);
         let edit_player = prepare(&args(&["--run-context", "edit", "--player", "Someone"]), Path::new("C:/somewhere")).unwrap();
-        assert_eq!(edit_player.options.local_player_name.as_deref(), Some("Someone"));
+        assert!(edit_player.options.local_player && edit_player.options.profile.identity.name() == "Someone");
         assert!(refused(&["--run-context", "edit", "--mode", "play"]).contains("needs --mode edit"));
     }
 
@@ -520,7 +630,7 @@ mod tests {
             assert_eq!(prepared.options.project.as_deref(), Some(game.as_path()), "the project file's folder");
             assert_eq!(prepared.place_roots(), [tree.folder()]);
             if std::env::var_os("RUR_PLACE_ID").is_none() {
-                assert_eq!(prepared.options.place_id, 42.0, "the place's root is the project file's folder");
+                assert_eq!(prepared.options.profile.game.place_id(), 42.0, "the place's root is the project file's folder");
             }
         }
         let named = prepare_words(&["--rojo", &file, "--project", &base.to_string_lossy()]).unwrap();
@@ -541,6 +651,53 @@ mod tests {
         let args = parse(&split_equals(&argv)).unwrap();
         assert_eq!(args.place_id, Some(-5.0));
         assert_eq!(args.mounts[0].segments, ["ReplicatedStorage", "Lib"]);
+    }
+
+    /// REE_CLIENT_PROFILE reaches a service and its key with its files absolute from the client's folder (a service runs in
+    /// its state dir), its presets and inline JSON as they are; two clients whose relative file names name other files get
+    /// other services
+    #[test]
+    fn the_default_client_profile_reaches_a_service_with_its_files_absolute() {
+        if std::env::var_os("REE_LAUNCH_PROFILE_CHILD").is_none() {
+            let mut child = std::process::Command::new(std::env::current_exe().unwrap());
+            child.args(["--exact", "launch::tests::the_default_client_profile_reaches_a_service_with_its_files_absolute", "--nocapture"]);
+            child.env("REE_LAUNCH_PROFILE_CHILD", "1").env(crate::client_profile::ENV, "phone;mine.json");
+            let output = child.output().unwrap();
+            assert!(output.status.success(), "{}\n{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+            return;
+        }
+        let expected = format!("phone;{}", absolute("mine.json"));
+        let forwarded = path_variables().into_iter().find(|(name, _)| *name == crate::client_profile::ENV).map(|(_, value)| value.to_string_lossy().into_owned());
+        assert_eq!(forwarded.as_deref(), Some(expected.as_str()));
+        let environment = worker_environment();
+        let keyed = environment.iter().find(|(name, _)| environment_name(name.clone()) == environment_name(crate::client_profile::ENV.into()));
+        assert_eq!(keyed.map(|(_, value)| value.to_string_lossy().into_owned()), Some(expected));
+    }
+
+    /// The command line's layers go over the environment's, its flags over its layers, and a flag that disagrees with a
+    /// --client-profile layer is refused; the project fills only what stays unset
+    #[test]
+    fn profile_layers_and_flags_come_in_one_order() {
+        let args = |words: &[&str]| parse(&words.iter().map(|s| s.to_string()).collect::<Vec<_>>()).unwrap();
+        let profile = |words: &[&str]| client_profile(&args(words), &[]).map(|(profile, names)| (profile.to_json(), names));
+        let (json, names) = profile(&["--client-profile", "phone", "--client-profile", r#"{"device":{"viewport":[100,50]},"identity":{"userId":4}}"#, "--camera", "10x20"]).unwrap();
+        // (the environment's shorthands may sit below: this test checks what the command line sets)
+        assert_eq!(json["device"]["kind"], "phone");
+        assert_eq!(json["device"]["viewport"], serde_json::json!([100.0, 50.0]));
+        assert_eq!(json["device"]["camera"], serde_json::json!([10.0, 20.0]));
+        assert_eq!(json["identity"]["userId"], 4);
+        assert!(!names || std::env::var_os("RUR_PLAYER").is_some());
+        assert!(profile(&["--client-profile", r#"{"identity":{"name":"A"}}"#]).unwrap().1, "a profile with a name names the player");
+        assert_eq!(
+            profile(&["--client-profile", r#"{"game":{"placeId":5}}"#, "--place-id", "6"]).unwrap_err(),
+            "--place-id 6 and --client-profile (which sets game.placeId to 5) both set game.placeId: pass one"
+        );
+        assert_eq!(
+            profile(&["--client-profile", r#"{"device":{"viewport":"100x50"}}"#, "--viewport", "200x50"]).unwrap_err(),
+            "--viewport 200x50 and --client-profile (which sets device.viewport to \"100x50\") both set device.viewport: pass one"
+        );
+        assert!(profile(&["--client-profile", r#"{"device":{"viewport":"100x50"}}"#, "--viewport", "100x50"]).is_ok(), "the same size in two spellings agrees");
+        assert_eq!(profile(&["--device", "tablet"]).unwrap_err(), "--device must be desktop, touch, gamepad or phone, not tablet");
     }
 
     /// A library host never calls `init_binary`, so even an empty repo is not standalone and its cache is relative

@@ -24,7 +24,7 @@ use std::rc::Rc;
 
 use mlua::prelude::*;
 
-use crate::{Emulator, Engine, InstanceId, K, NameId, Options, RunContext, instance as core, value::Value};
+use crate::{Emulator, Engine, InstanceId, Options, RunContext, instance as core};
 
 pub use bridge::Bridge;
 
@@ -89,19 +89,18 @@ impl Default for Spec {
 }
 
 /// The options of one side of a loopback run made from `options` (whose run context is [`RunContext::Loopback`]): the
-/// server's without a local player, the client's with the player `--player` named.
+/// server's without a local player, the client's with its player. Both keep the run's client profile: the client is the
+/// profile's player, and the server answers for that player (its Player, policy, ownership, groups, data) by it.
 pub fn side_options(options: &Options, side: Side) -> Options {
     let mut options = options.clone();
     match side {
         Side::Server => {
             options.run_context = RunContext::Server;
-            options.local_player_name = None;
+            options.local_player = false;
         }
         Side::Client => {
             options.run_context = RunContext::Client;
-            if options.local_player_name.is_none() {
-                options.local_player_name = Some("Player".into());
-            }
+            options.local_player = true;
         }
     }
     options
@@ -177,23 +176,17 @@ pub fn link(server: Emulator, client_lua: &Lua, client: &Rc<Engine>, spec: Spec)
     server.engine.state.borrow_mut().output.forward = Some(crate::output::Forward(Rc::downgrade(client)));
     // (the order the join's copy lists each list in is the order its children came into the containers from now on)
     replicate::install_ranks(&server.engine, &bridge);
-    // the server's player: made now (a harness's Context.SetJoinData may give it its join data), joined at the join
+    // the server's player: made now (a harness's Context.SetJoinData may give it its join data), joined at the join; who it
+    // is is the client profile's, as the client's own player
     let client_player = client.world().local_player.ok_or("the client has no local player")?;
     let server_player = {
         let engine = &server.engine;
         let reflection = &engine.reflection;
-        let (name, display, user_id) = {
-            let state = client.state.borrow();
-            let player = state.dom.at(client_player);
-            let display = state.dom.raw_get(client_player, K::DisplayName as NameId).cloned().unwrap_or(Value::Nil);
-            let user_id = state.dom.raw_get(client_player, K::UserId as NameId).cloned().unwrap_or(Value::Number(1.0));
-            (player.name.clone(), display, user_id)
-        };
+        let name = client.state.borrow().dom.at(client_player).name.clone();
         let mut state = engine.state.borrow_mut();
         let class = reflection.class_id("Player").ok_or("no Player class")?;
         let player = core::create_named_str(&mut state, reflection, class, name);
-        core::raw_set_silent(&mut state, reflection, player, K::DisplayName as NameId, display);
-        core::raw_set_silent(&mut state, reflection, player, K::UserId as NameId, user_id);
+        crate::lua::globals::set_identity(&mut state, reflection, player, &engine.options.profile);
         // (the loopback player is no harness's fake one: it does not leave with the run's state)
         state.dom.pin(player);
         player

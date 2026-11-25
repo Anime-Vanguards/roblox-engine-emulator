@@ -144,6 +144,8 @@ pub fn absolute_paths(args: &[String]) -> Vec<String> {
             // a host keeps forwarding it unchanged
             "--frame-times" if crate::is_standalone_binary() => Some(absolute(value)),
             "--context" if !value.trim_start().starts_with('{') => Some(absolute(value)),
+            // (a client profile's files: its presets and inline JSON as they are)
+            "--client-profile" => Some(crate::client_profile::absolute_spec(value)),
             "--roots" | "--animations" => Some(value.split(';').filter(|dir| !dir.is_empty()).map(absolute).collect::<Vec<_>>().join(";")),
             "--mount" => Some(match value.split_once('=') {
                 Some((at, path)) => format!("{at}={}", absolute(path)),
@@ -426,7 +428,7 @@ mod tests {
 
     #[test]
     fn paths_are_made_absolute_and_other_arguments_kept() {
-        let args: Vec<String> = ["--harness", "h.luau", "--seconds", "2", "--context", "{\"A\":1}", "--roots", "a;b", "--mount", "ReplicatedStorage/X=dir", "--verbose", "--animations", "anims", "--out", "o", "--rojo", "game.project.json", "--rojo-at", "ServerStorage/Game"]
+        let args: Vec<String> = ["--harness", "h.luau", "--seconds", "2", "--context", "{\"A\":1}", "--roots", "a;b", "--mount", "ReplicatedStorage/X=dir", "--verbose", "--animations", "anims", "--out", "o", "--rojo", "game.project.json", "--rojo-at", "ServerStorage/Game", "--client-profile", "phone;me.json", "--client-profile", "{\"device\":{\"kind\":\"touch\"}}"]
             .iter()
             .map(|s| s.to_string())
             .collect();
@@ -441,6 +443,11 @@ mod tests {
         assert!(at("--mount").starts_with("ReplicatedStorage/X=") && Path::new(at("--mount").split_once('=').unwrap().1).is_absolute());
         assert!(Path::new(&at("--rojo")).is_absolute());
         assert_eq!(at("--rojo-at"), "ServerStorage/Game");
+        // (a client profile's file absolute, its presets and inline JSON kept)
+        let profiles: Vec<&String> = converted.iter().enumerate().filter(|(_, a)| *a == "--client-profile").map(|(i, _)| &converted[i + 1]).collect();
+        let (preset, file) = profiles[0].split_once(';').unwrap();
+        assert!(preset == "phone" && Path::new(file).is_absolute(), "{}", profiles[0]);
+        assert_eq!(profiles[1], "{\"device\":{\"kind\":\"touch\"}}");
         assert!(converted.contains(&"--verbose".to_string()));
         assert_eq!(converted.len(), args.len());
     }

@@ -91,8 +91,9 @@ pub fn has_screen(engine: &Engine, camera: InstanceId) -> bool {
 /// other camera.
 pub fn viewport_size(engine: &Engine, camera: InstanceId) -> (f32, f32) {
     if has_screen(engine, camera) {
-        let width = engine.options.camera_width.unwrap_or(engine.options.viewport_width).max(1.0);
-        let height = engine.options.camera_height.unwrap_or(engine.options.viewport_height).max(1.0);
+        let device = &engine.options.profile.device;
+        let (width, height) = device.camera.unwrap_or(device.viewport());
+        let (width, height) = (width.max(1.0), height.max(1.0));
         (width as f32, height as f32)
     } else {
         (1.0, 1.0)
@@ -104,10 +105,10 @@ pub fn near_plane(engine: &Engine, camera: InstanceId) -> f32 {
     if has_screen(engine, camera) { 0.1 } else { 0.5 }
 }
 
-/// The top inset the camera's screen forms measure from: GuiService's (`Options::topbar_inset`) for the camera with the screen's
+/// The top inset the camera's screen forms measure from: GuiService's (the client profile's device.topbarInset) for the camera with the screen's
 /// viewport, none for a camera in its 1 x 1 viewport, whose screen forms are its viewport forms.
 fn screen_inset(engine: &Engine, camera: InstanceId) -> Option<f32> {
-    has_screen(engine, camera).then_some(engine.options.topbar_inset as f32)
+    has_screen(engine, camera).then_some(engine.options.profile.device.topbar_inset() as f32)
 }
 
 /// `tan(degrees / 2)` with the client's roundings: `degrees * pi / 180 / 2` in float32.

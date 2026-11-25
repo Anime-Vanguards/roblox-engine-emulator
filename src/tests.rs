@@ -7906,7 +7906,7 @@ fn priced_places() -> crate::cost::PlacePrices {
 /// letters with AutoLocalize on, AutoLocalize off, digits only, forty characters
 #[inline(never)]
 fn text_write_prices(place_id: f64, prices: crate::cost::PlacePrices, mode: &str) -> Vec<f64> {
-    let engine = Engine::new(Options { place_id, place_prices: prices, mode: mode.into(), ..Options::default() }).expect("engine");
+    let engine = Engine::new(Options { profile: crate::client_profile::ClientProfile { game: crate::client_profile::Game { place_id: Some(place_id), ..Default::default() }, ..Default::default() }, place_prices: prices, mode: mode.into(), ..Options::default() }).expect("engine");
     let lua = Lua::new();
     engine_lua::start(&lua, &engine).expect("start");
     engine_lua::modules::interpret_all(&lua, &engine);
@@ -10105,7 +10105,7 @@ fn players_group_methods_answer_as_a_client_does_for_the_offline_player() {
 /// in the workspace, in us a write
 #[inline(never)]
 fn place_write_prices(place_id: f64, parts: usize, prices: crate::cost::PlacePrices) -> Vec<f64> {
-    let engine = Engine::new(Options { place_id, place_prices: prices, mode: "play".into(), ..Options::default() }).expect("engine");
+    let engine = Engine::new(Options { profile: crate::client_profile::ClientProfile { game: crate::client_profile::Game { place_id: Some(place_id), ..Default::default() }, ..Default::default() }, place_prices: prices, mode: "play".into(), ..Options::default() }).expect("engine");
     let lua = Lua::new();
     engine_lua::start(&lua, &engine).expect("start");
     engine_lua::modules::interpret_all(&lua, &engine);
@@ -11824,7 +11824,7 @@ fn a_cast_pays_for_the_parts_up_to_its_hit() {
 #[test]
 fn a_phone_run_pays_the_calibrated_factor_on_its_script_work() {
     let per = |device: &str| -> (f64, String) {
-        let (lua, engine) = start_with(Options { device: device.into(), ..Options::default() });
+        let (lua, engine) = start_with(Options { profile: crate::client_profile::ClientProfile::parse(&format!(r#"{{"device":{{"kind":"{device}"}}}}"#)).unwrap(), ..Options::default() });
         engine_lua::modules::interpret_all(&lua, &engine);
         crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
         let output = run(

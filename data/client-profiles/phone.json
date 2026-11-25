@@ -1,0 +1,4 @@
+{
+	"$schema": "../client-profile.schema.json",
+	"device": { "kind": "phone", "viewport": [844, 390] }
+}

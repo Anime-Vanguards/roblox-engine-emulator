@@ -715,7 +715,7 @@ pub fn start(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     };
     engine.set_world(World { game, workspace, camera, local_player: None });
     // The place file's streaming (scripts cannot set it): Workspace.StreamingEnabled and its radius
-    if let Some(radius) = options.streaming_target_radius {
+    if let Some(radius) = options.profile.game.streaming_target_radius {
         let mut state = engine.state.borrow_mut();
         for (name, value) in [("StreamingEnabled", Value::Bool(true)), ("StreamingTargetRadius", Value::Number(radius))] {
             if let Some(name) = reflection.name_id(name) {
@@ -726,13 +726,11 @@ pub fn start(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
 
     let players = services::get_service(engine, game, "Players").map_err(flow_error)?;
     let mut local_player = None;
-    if let Some(player_name) = &options.local_player_name {
+    if options.local_player {
         let hooks = engine.hooks.borrow();
         let mut state = engine.state.borrow_mut();
-        let player = core::create_named(&mut state, &reflection, class("Player"), player_name);
-        let display = options.local_player_display_name.clone().unwrap_or_else(|| player_name.clone());
-        core::raw_set_silent(&mut state, &reflection, player, K::DisplayName as NameId, Value::String(Str::from(display)));
-        core::raw_set_silent(&mut state, &reflection, player, K::UserId as NameId, Value::Number(options.local_player_user_id));
+        let player = core::create_named(&mut state, &reflection, class("Player"), options.profile.identity.name());
+        set_identity(&mut state, &reflection, player, &options.profile);
         // Measured: in edit mode the local player has PlayerScripts and Backpack but no PlayerGui
         let mut containers = vec!["PlayerScripts", "Backpack"];
         if !options.edit_mode() {
@@ -812,6 +810,35 @@ pub fn randomseed(engine: &Engine) -> LuaResult<()> {
         function.call::<()>(seed)?;
     }
     Ok(())
+}
+
+/// Gives `player` the profile's identity (client_profile.rs): its DisplayName and UserId, and the properties the profile
+/// sets (AccountAge, MembershipType, HasVerifiedBadge, FollowUserId, LocaleId). The local player's, and in a loopback run
+/// the server's Player for it.
+pub fn set_identity(state: &mut crate::State, reflection: &crate::Reflection, player: InstanceId, profile: &crate::client_profile::ClientProfile) {
+    let identity = &profile.identity;
+    core::raw_set_silent(state, reflection, player, K::DisplayName as NameId, Value::String(Str::from(identity.display_name())));
+    core::raw_set_silent(state, reflection, player, K::UserId as NameId, Value::Number(identity.user_id()));
+    let mut set = |name: &str, value: Value| {
+        if let Some(name) = reflection.name_id(name) {
+            core::raw_set_silent(state, reflection, player, name, value);
+        }
+    };
+    if let Some(days) = identity.account_age {
+        set("AccountAge", Value::Number(days));
+    }
+    if let Some(item) = identity.membership_type.as_deref().and_then(|item| reflection.enum_item("MembershipType", item)) {
+        set("MembershipType", Value::EnumItem(item));
+    }
+    if let Some(flag) = identity.has_verified_badge {
+        set("HasVerifiedBadge", Value::Bool(flag));
+    }
+    if let Some(id) = identity.follow_user_id {
+        set("FollowUserId", Value::Number(id));
+    }
+    if let Some(locale) = &profile.localization.locale_id {
+        set("LocaleId", Value::String(Str::from(locale.as_str())));
+    }
 }
 
 /// Engine.JoinLocalPlayer: a joining player takes these from StarterPlayer (after the project,
@@ -1342,7 +1369,7 @@ mod tests {
             let options = Options {
                 mode: "play".into(),
                 run_context: if server { RunContext::Server } else { RunContext::Client },
-                local_player_name: if server { None } else { Some("Player".into()) },
+                local_player: !server,
                 native,
                 ..Options::default()
             };
@@ -1386,7 +1413,6 @@ mod tests {
             let options = Options {
                 mode: "play".into(),
                 run_context: RunContext::Client,
-                local_player_name: Some("Player".into()),
                 native,
                 ..Options::default()
             };

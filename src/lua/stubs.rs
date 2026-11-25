@@ -13,10 +13,66 @@ use crate::{Engine, instance as core};
 
 pub(crate) static SERVICES: &str = include_str!("services.luau");
 pub(crate) static SERVER: &str = include_str!("server.luau");
+pub(crate) static PROFILE: &str = include_str!("profile.luau");
 
 /// The named registry value holding server.luau's R.SetJoinData (a server run's only): what
 /// Context.SetJoinData calls to give a player the join data Player:GetJoinData returns
 pub const SET_JOIN_DATA: &str = "ree.setjoindata";
+
+/// The named registry value holding the stubs' primitives (R): [`set_profile`] gives them a new client profile
+const STUBS: &str = "ree.stubs";
+
+/// R.Profile: the client profile's set fields as Luau tables, with its player's `UserId`, when it sets a field the service
+/// stubs read ([`crate::client_profile::ClientProfile::read_by_luau`]); else nil, and the stubs answer as without a profile.
+fn profile_table(lua: &Lua, profile: &crate::client_profile::ClientProfile) -> LuaResult<LuaValue> {
+    if !profile.read_by_luau() {
+        return Ok(LuaValue::Nil);
+    }
+    let options = LuaSerializeOptions::new().set_array_metatable(false).serialize_none_to_null(false).serialize_unit_to_null(false);
+    let value = lua.to_value_with(&profile.to_json(), options)?;
+    if let LuaValue::Table(table) = &value {
+        table.raw_set("UserId", profile.identity.user_id())?;
+    }
+    Ok(value)
+}
+
+/// The client profile's answers in the stubs (profile.luau), loaded once into `r` (R): each member it replaces is wrapped,
+/// found through `Original(Class, Name)`
+fn load_profile(lua: &Lua, engine: &Rc<Engine>, r: &LuaTable) -> LuaResult<()> {
+    let shared = engine.lua.borrow().shared.clone().ok_or_else(|| LuaError::runtime("shared globals"))?;
+    let chunk = modules::load_engine_luau(lua, PROFILE, "=rur.profile", Some(shared))?;
+    let e = engine.clone();
+    let original = super::lua_fn(lua, move |_, (class_name, name): (String, String)| {
+        let (Some(class), Some(name)) = (e.reflection.class_id(&class_name), e.reflection.name_id(&name)) else { return Ok(LuaValue::Nil) };
+        let behaviors = e.behaviors.borrow();
+        Ok(match behaviors.find_method(&e.reflection, class, name) {
+            Some((_, crate::services::Method::Lua(function))) => LuaValue::Function(function.clone()),
+            _ => LuaValue::Nil,
+        })
+    })?;
+    crate::cost::engine_luau(lua, chunk)?.call::<()>((r.clone(), original))?;
+    engine.clear_member_cache();
+    Ok(())
+}
+
+/// The engine's client profile from now on ([`Engine::set_profile`]), and the service stubs' (R.Profile): the profile's
+/// answers loaded the first time it sets what they read (profile.luau), and the members it lets answer added
+/// (R.ProfileMethods)
+pub fn set_profile(lua: &Lua, engine: &Rc<Engine>, profile: crate::client_profile::ClientProfile) -> LuaResult<()> {
+    let table = profile_table(lua, &profile)?;
+    engine.set_profile(profile);
+    if let Ok(r) = lua.named_registry_value::<LuaTable>(STUBS) {
+        let read = !table.is_nil();
+        r.raw_set("Profile", table)?;
+        match r.raw_get::<LuaValue>("ProfileMethods")? {
+            LuaValue::Function(methods) => methods.call::<()>(())?,
+            _ if read => load_profile(lua, engine, &r)?,
+            _ => {}
+        }
+    }
+    engine.clear_member_cache();
+    Ok(())
+}
 
 /// LogService error tables turned into text (their `__tostring`, services.luau ErrorText): how many so far, and the last
 /// one's (thread that asked, text). A thread that ends on such a table has mlua convert it into text on its resumer's
@@ -545,10 +601,17 @@ pub fn load(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
         })?,
     )?;
     let options = lua.create_table()?;
-    options.set("TopbarInset", engine.options.topbar_inset)?;
-    options.set("ViewportWidth", engine.options.viewport_width)?;
-    options.set("ViewportHeight", engine.options.viewport_height)?;
+    let device = &engine.options.profile.device;
+    options.set("TopbarInset", device.topbar_inset())?;
+    options.set("ViewportWidth", device.viewport().0)?;
+    options.set("ViewportHeight", device.viewport().1)?;
     r.set("Options", options)?;
+    // R.Profile: the client profile's JSON where it sets a field the service stubs read (client_profile.rs), else nil
+    let profile = profile_table(lua, &engine.profile())?;
+    if !profile.is_nil() {
+        r.set("Profile", profile)?;
+    }
+    lua.set_named_registry_value(STUBS, r.clone())?;
     // Player:GetMouse()'s PlayerMouse, made on the first call (world/mouse.rs)
     let e = engine.clone();
     r.set("PlayerMouse", super::lua_fn(lua, move |lua, ()| crate::world::mouse::create(lua, &e))?)?;
@@ -563,6 +626,10 @@ pub fn load(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
         if let LuaValue::Function(set_join_data) = r.get::<LuaValue>("SetJoinData")? {
             lua.set_named_registry_value(SET_JOIN_DATA, set_join_data)?;
         }
+    }
+    // The client profile's answers, where it sets what the stubs read (else the stubs stay as they are)
+    if r.raw_get::<LuaValue>("Profile")?.is_table() {
+        load_profile(lua, engine, &r)?;
     }
     engine.clear_member_cache();
     Ok(())

@@ -15,7 +15,7 @@ use super::{
 #[inline(never)]
 fn start(run_context: RunContext) -> (Lua, Rc<Engine>) {
     let options = match run_context {
-        RunContext::Server => Options { mode: "play".into(), run_context, local_player_name: None, ..Options::default() },
+        RunContext::Server => Options { mode: "play".into(), run_context, local_player: false, ..Options::default() },
         RunContext::Client | RunContext::Loopback => Options { mode: "play".into(), ..Options::default() },
         RunContext::Edit => Options { run_context, ..Options::default() },
     };
@@ -742,7 +742,7 @@ fn a_server_makes_r6_rigs_raises_on_load_asset_and_loads_no_character() {
 
 #[test]
 fn a_live_server_is_not_studio_and_its_players_carry_join_data() {
-    let options = Options { mode: "play".into(), run_context: RunContext::Server, local_player_name: None, studio: false, ..Options::default() };
+    let options = Options { mode: "play".into(), run_context: RunContext::Server, local_player: false, studio: false, ..Options::default() };
     let engine = Engine::new(options).expect("engine");
     let lua = Lua::new();
     engine_lua::start(&lua, &engine).expect("start");

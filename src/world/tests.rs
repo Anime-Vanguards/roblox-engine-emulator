@@ -707,7 +707,7 @@ fn camera_projections() {
 /// WorldToViewportPoint less the inset, and ScreenPointToRay(x, y) is ViewportPointToRay(x, y + inset).
 #[test]
 fn camera_screen_points_are_measured_from_below_the_top_inset() {
-    let engine = Engine::new(Options { topbar_inset: 58.0, ..Options::default() }).expect("engine");
+    let engine = Engine::new(Options { profile: crate::client_profile::ClientProfile::parse(r#"{"device":{"topbarInset":58}}"#).unwrap(), ..Options::default() }).expect("engine");
     let lua = Lua::new();
     engine_lua::start(&lua, &engine).expect("start");
     run(
@@ -828,7 +828,7 @@ fn camera_casts_name_values_as_a_client_does() {
 /// A client engine with Studio's measuring window (908.8 x 895.2) and its 58-pixel top inset.
 #[inline(never)]
 fn start_studio_window() -> (Lua, Rc<Engine>) {
-    let engine = Engine::new(Options { camera_width: Some(908.8), camera_height: Some(895.2), topbar_inset: 58.0, ..Options::default() }).expect("engine");
+    let engine = Engine::new(Options { profile: crate::client_profile::ClientProfile::parse(r#"{"device":{"camera":[908.8,895.2],"topbarInset":58}}"#).unwrap(), ..Options::default() }).expect("engine");
     let lua = Lua::new();
     engine_lua::start(&lua, &engine).expect("start");
     (lua, engine)
@@ -6957,7 +6957,7 @@ fn cframe_and_vector3_properties_keep_their_floats() {
 #[test]
 fn a_streaming_place_simulates_near_its_foci() {
     check_with(
-        Options { mode: "play".into(), streaming_target_radius: Some(400.0), ..Options::default() },
+        Options { mode: "play".into(), profile: crate::client_profile::ClientProfile::parse(r#"{"game":{"streamingTargetRadius":400}}"#).unwrap(), ..Options::default() },
         r#"
         assert(workspace.StreamingEnabled, "the place does not stream")
         local function part(at)
@@ -6998,7 +6998,7 @@ fn a_streaming_place_simulates_near_its_foci() {
 #[test]
 fn a_streaming_place_holds_an_assembly_to_its_focus_reach() {
     check_with(
-        Options { mode: "play".into(), streaming_target_radius: Some(400.0), ..Options::default() },
+        Options { mode: "play".into(), profile: crate::client_profile::ClientProfile::parse(r#"{"game":{"streamingTargetRadius":400}}"#).unwrap(), ..Options::default() },
         r#"
         local function part(size, at)
             local P = Instance.new("Part")

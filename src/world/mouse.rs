@@ -118,7 +118,7 @@ fn current_camera(engine: &Engine) -> InstanceId {
 /// UnitRay: the CurrentCamera's ViewportPointToRay at the mouse location (the record's X, and its Y plus the inset back).
 fn unit_ray(engine: &Engine) -> (Vec3, Vec3) {
     let x = recorded(engine, "X", -1000.0) as f32;
-    let y = (recorded(engine, "Y", -1000.0) + engine.options.topbar_inset) as f32;
+    let y = (recorded(engine, "Y", -1000.0) + engine.options.profile.device.topbar_inset()) as f32;
     camera::viewport_ray(engine, current_camera(engine), x, y, 0.0)
 }
 

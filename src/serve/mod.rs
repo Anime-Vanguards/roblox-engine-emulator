@@ -96,6 +96,8 @@ pub fn env_digest() -> String {
             ["RUR_", "REE_", "ROR_"].iter().any(|prefix| upper.starts_with(prefix)) || upper == "LOCALAPPDATA"
         })
         .map(|(name, value)| (name.to_ascii_uppercase(), value))
+        // (the default client profile's files as the service reads them, from the client's folder: launch::path_variables)
+        .map(|(name, value)| if name == crate::client_profile::ENV { (name, crate::client_profile::absolute_spec(&value)) } else { (name, value) })
         .collect();
     crate::sort::ord(&mut variables);
     let mut hasher = rustc_hash::FxHasher::default();
@@ -1214,6 +1216,45 @@ mod tests {
         drop(emulator);
         assert_eq!(reply["code"], 0, "{reply}");
         assert!(std::fs::read_to_string(root.join("sorted").join("events.json")).unwrap().contains("sorted 1,2,3"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A prepared run serves only the jobs with its client profile (`--client-profile` is in its key), and a job whose
+    /// profile file changed since it was prepared starts over (the file is noted as read): each job reads its own profile.
+    #[test]
+    fn a_prepared_run_serves_only_its_client_profile() {
+        modules::reuse_compiled_modules();
+        let root = std::env::temp_dir().join(format!("ree-serve-profile-{}-{}", std::process::id(), SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()));
+        std::fs::create_dir_all(root.join("empty")).unwrap();
+        let harness = root.join("Who.luau");
+        std::fs::write(&harness, "return function(Context) local P = game:GetService('Players').LocalPlayer Context.Checkpoint() print('who', P.UserId, P.Name) end").unwrap();
+        let profile = root.join("p.json");
+        std::fs::write(&profile, r#"{ "identity": { "userId": 5 } }"#).unwrap();
+        let arguments = |spec: &str| -> Vec<String> {
+            ["--harness", &harness.to_string_lossy(), "--roots", &root.join("empty").to_string_lossy(), "--mode", "play", "--seconds", "0.1", "--client-profile", spec].iter().map(|s| s.to_string()).collect()
+        };
+        let counts = PreparedCounts::default();
+        let run = |spec: &str, parked: &mut Option<prepare::Prepared>| {
+            let (reply, emulator, _) = run_job("run", &arguments(spec), parked, &counts);
+            drop(emulator);
+            assert_eq!(reply["code"], 0, "{reply}");
+            let summary: serde_json::Value = serde_json::from_str(reply["stdout"].as_str().unwrap().trim()).unwrap();
+            summary["output"][0]["message"].as_str().unwrap().to_string()
+        };
+        let file = profile.to_string_lossy().into_owned();
+        let prepared = || Some(prepare::prepare(&arguments(&file), &launch::Host::default(), false).unwrap());
+        let used = |counts: &PreparedCounts| (counts.used.load(Ordering::SeqCst), counts.stale.load(Ordering::SeqCst));
+        assert_eq!(run(&file, &mut prepared()), "who 5 Player");
+        assert_eq!(used(&counts), (1, 0));
+        // (another profile is another job: the run prepared for this one does not serve it, and the job runs its own)
+        let mut parked = prepared();
+        assert_eq!(run(r#"{"identity":{"userId":6,"name":"Six"}}"#, &mut parked), "who 6 Six");
+        assert_eq!(used(&counts), (1, 0));
+        // (the profile file changed: the prepared run is stale, and the job reads the file as it is now)
+        let mut parked = prepared();
+        std::fs::write(&profile, r#"{ "identity": { "userId": 70 } }"#).unwrap();
+        assert_eq!(run(&file, &mut parked), "who 70 Player");
+        assert_eq!(used(&counts), (1, 1));
         let _ = std::fs::remove_dir_all(&root);
     }
 

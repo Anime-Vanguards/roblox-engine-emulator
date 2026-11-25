@@ -48,7 +48,7 @@ fn script(lua: &Lua, engine: &Rc<Engine>, source: &str) -> Vec<String> {
 
 #[inline(never)]
 fn server(load_string: bool) -> Options {
-    Options { mode: "play".into(), run_context: RunContext::Server, local_player_name: None, load_string, ..Options::default() }
+    Options { mode: "play".into(), run_context: RunContext::Server, local_player: false, load_string, ..Options::default() }
 }
 
 #[inline(never)]
@@ -356,7 +356,7 @@ fn loadmodule_gives_a_json_module_a_function_that_decodes_it() {
 fn an_edit_run_context_is_both_sides() {
     let source = r##"local RunService = game:GetService("RunService") print(RunService:IsClient(), RunService:IsServer(), RunService:IsRunning(), game:GetService("Players").LocalPlayer, #game:GetService("Players"):GetPlayers())"##;
     // (the command line's edit run context has no local player, as Studio's edit DataModel has none)
-    check(&run(Options { run_context: RunContext::Edit, local_player_name: None, ..Options::default() }, source), &["true true false nil 0"]);
+    check(&run(Options { run_context: RunContext::Edit, local_player: false, ..Options::default() }, source), &["true true false nil 0"]);
     check(&run(Options::default(), source), &["true false false Player 1"]);
 }
 

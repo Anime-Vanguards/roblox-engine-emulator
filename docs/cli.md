@@ -60,6 +60,8 @@ A harness is a `ModuleScript` mounted at `ReplicatedStorage.RURFixtures.<name>` 
 | `Context.ReseedRandoms(Seed)` | Reseeds all live `Random` objects deterministically from `Seed` + creation order; returns the count reseeded. |
 | `Context.SetRandomSeed(Seed)` | Reseeds `math.random` and subsequent unseeded `Random.new()` calls. |
 | `Context.FireEvent(Instance, Event, ...)` | Raises an unemulated engine event (e.g., `Humanoid.Running` or `RemoteEvent.OnServerEvent`) with `nil`, boolean, number, string, copied `buffer`, or `Instance` args. |
+| `Context.ClientProfile()` | The run's client profile as it is now: its set fields as tables in the profile's JSON format (see "Client profile"). |
+| `Context.SetClientProfile(Patch)` | Merges `Patch` (a table or JSON text) over the profile for what is read at call time (`policy`, `ownership`, `social`, `localization.countryRegion`) on this side; other fields raise, named. |
 | `Context.SetJoinData(Player, JoinData)` | (Server runs) Attaches teleport/join data (`TeleportData`, `Members`, ...) to a `Player` before parenting it to `Players`, returned as a fresh copy by `Player:GetJoinData()`. |
 | `Context.TraceWrites(Properties?, Depth?, Root?)` | Returns `Drain()`, listing Luau call stacks (`Chunk:line`, innermost `Depth` frames) for `Parent` writes and watched properties (`"*"` includes all properties and `SetAttribute` with `Kind = "attribute"`). |
 | `Context.Census(Depth?)` | Returns `Take(Collect?)` producing a JSON snapshot of live threads (creation line, suspension point, wake source), connections, handler/thread churn since last call, pending timers/deferred tasks, and live instances by class/parent (`src/census.rs`). |
@@ -72,12 +74,74 @@ A harness is a `ModuleScript` mounted at `ReplicatedStorage.RURFixtures.<name>` 
 | `--run-context client` *(default)* | Play-mode client with a `LocalPlayer`. |
 | `--run-context server` | Play-mode server (requires `--mode play`): `IsServer() == true`, `IsClient() == false`, empty `Players` (harness parents `Instance.new("Player")`), in-memory `DataStoreService` / `MemoryStoreService` / `MessagingService`, `EncodingService` (Zstd/Base64). `FireClient`/`FireAllClients` are no-ops; `InvokeClient` waits until the player leaves. |
 | `--run-context loopback` | Paired server + client in one process (requires `--mode play`; [engine.md](engine.md#loopback-run-context---run-context-loopback-srcloopback)). The server mounts the project, `--player` joins before frame 1, replicated containers sync to the client, and remotes work both ways. Harnesses return `{ Server = ..., Client = ... }` (function or `{ Prepare, Run }`, either side optional; omit `--harness` to boot the place's own scripts). Both sides get `Context.Side` (`"server"` / `"client"`); server also gets `Context.Player`, `HoldJoin()`, `Join()`, and `Leave()`. Use `--latency <frames>` (default `1`) for delivery delay and `--record-side server` to record the server world instead of the client's. Output lines include `side`. Runs cold under `ree serve`. |
-| `--run-context edit` | Studio edit DataModel (with `--mode edit`): both `IsClient()` and `IsServer()` return `true`, `EncodingService` enabled, `Players.LocalPlayer == nil` unless `--player` is passed. |
+| `--run-context edit` | Studio edit DataModel (with `--mode edit`): both `IsClient()` and `IsServer()` return `true`, `EncodingService` enabled, `Players.LocalPlayer == nil` unless the command line names a player (`--player`, or `identity.name` in a `--client-profile`). |
 | `--load-module` | Enables `debug.loadmodule` (`FFlagEnableLoadModule`; off raises `debug.loadmodule is not enabled.`). Pair with `--mode edit --run-context edit` to run Jest-Lua 3 suites offline. |
 | `--load-string` | Enables `loadstring` on server scripts regardless of `ServerScriptService.LoadStringEnabled`. |
 | `--native` | Runs scripts with Luau native code generation, safe environments, and VM work counters off (fast test execution without work-clock instruction pricing). |
 | `--studio false` | Sets `RunService:IsStudio() == false` (default `true`) so live-server/client branches execute. Part of prepared-run cache key. |
-| `--device desktop\|touch\|gamepad\|phone` | Sets emulated `UserInputService` device (also `REE_DEVICE`, default `desktop`). `phone` emulates touch input and scales work-clock prices by **2.77x** (sim-to-phone script-time calibration). |
+| `--device desktop\|touch\|gamepad\|phone` | The client profile's `device.kind` (also `REE_DEVICE`, default `desktop`; see "Client profile"): `UserInputService`'s inputs, `PreferredInput` and `GetLastInputType()`. `phone` emulates touch input and scales work-clock prices by **2.77x** (sim-to-phone script-time calibration). |
+
+## Client profile
+
+Everything about the emulated client and its player (identity, device and screen, settings, locale and country, policy, ownership, groups and friends, the game's ids, the stores' starting data) is one client profile ([engine.md](engine.md#client-profile-srcclient_profilers) lists what reads each field). Every field is optional: an unset field keeps the engine's own answer, so a run without a profile answers as it always did. Set client identity only this way.
+
+- `--client-profile <preset|file.json|{json}>` (repeatable; `--client-profile=...` too): a built-in preset's name, a JSON file (relative to the current folder), or inline JSON. Several in one value are separated by `;` (`phone;me.json`), unless the value is one inline JSON object.
+- `REE_CLIENT_PROFILE`: the default profile, in the same spelling, under the command line's.
+- The format: `data/client-profile.schema.json` (each field described). A bad field stops the run before it starts, named with its layer: `client profile me.json: identity.userId: expected a number, got "x"`.
+
+```json
+{
+	"$schema": "data/client-profile.schema.json",
+	"identity": { "name": "Tester", "userId": 123, "accountAge": 400, "membershipType": "Premium" },
+	"device": { "kind": "phone", "viewport": [844, 390], "topbarInset": 58 },
+	"settings": { "preferredTextSize": "Large", "reducedMotion": true },
+	"localization": { "localeId": "ja-jp", "robloxLocaleId": "ja-jp", "systemLocaleId": "ja-jp", "countryRegion": "JP" },
+	"policy": { "AreAdsAllowed": false },
+	"ownership": { "gamePasses": [1001, 1002], "badges": "all", "subscriptions": ["EXP-1"] },
+	"social": {
+		"groups": [{ "id": 5, "rank": 254, "role": "Admin", "name": "Studio" }],
+		"friends": [{ "userId": 2, "name": "Friend", "online": true, "presence": { "PlaceId": 3 } }],
+		"blocked": [99]
+	},
+	"game": { "placeId": 4242, "gameId": 77, "jobId": "test-job" },
+	"data": {
+		"dataStores": { "PlayerData": { "global": { "Player_123": { "Coins": 500 } } } },
+		"orderedDataStores": { "Wins": { "global": { "123": 12 } } },
+		"memoryStores": { "hashMaps": { "Lobby": { "open": true } }, "sortedMaps": { "Ranks": { "123": { "value": 1, "sortKey": 5 } } }, "queues": { "Jobs": ["a"] } }
+	}
+}
+```
+
+```sh
+ree run --harness Probe.luau --client-profile phone --client-profile me.json
+ree run --harness Shop.luau --client-profile premium-owner --client-profile '{"identity":{"userId":42}}'
+ree run --harness Server.luau --run-context server --mode play --client-profile saved-player.json
+```
+
+**Presets** (`data/client-profiles/`; configuration, not measurements):
+
+| Preset | What it sets |
+|---|---|
+| `default` | Nothing: the engine's own answers. |
+| `desktop-us` | A desktop, `en-us` locales and the player's `LocaleId`, country `US`. |
+| `phone` | A phone (touch input, the phone's work-clock prices) with an 844 x 390 screen. |
+| `console` | A gamepad console: gamepad input only, `IsTenFootInterface()` true, a 1920 x 1080 screen. |
+| `locale-de` | `de-de` locales and the player's `LocaleId`, country `DE`. |
+| `china-policy` | `zh-cn` locales, country `CN`, a policy with `IsSubjectToChinaPolicies`, paid random items restricted and no external links. |
+| `premium-owner` | A Premium member of 2,000 days with the verified badge, who owns every game pass, asset, bundle, badge and subscription. |
+| `new-account` | A new account (`NewPlayer`, a high user id, 0 days, no membership) with no groups, friends or ownership. |
+
+**Layering:** layers merge as a JSON Merge Patch (RFC 7396), each over the ones before it: objects merge key by key, a list (or any other value) replaces the one before whole, and `null` removes a field (back to the engine's own answer). The order is one rule: the environment (`REE_CLIENT_PROFILE`, then the shorthand variables `RUR_PLAYER`, `RUR_PLAYER_ID`, `RUR_PLAYER_DISPLAY`, `RUR_PLACE_ID`, `RUR_CAMERA`, `REE_DEVICE`), then the command line (its `--client-profile` layers in order, then its flags). Fields still unset take the project's place id and streaming radius.
+
+**Flags are shorthands** that write one field each: `--player` (`identity.name`), `--device` (`device.kind`), `--viewport` (`device.viewport`), `--camera` (`device.camera`), `--place-id` (`game.placeId`), `--streaming` (`game.streamingTargetRadius`). A flag and a `--client-profile` on the same command line that set one field to different values are refused (`--device desktop and --client-profile (which sets device.kind to "phone") both set device.kind: pass one`); the same value is fine.
+
+**Whose answers:** ownership, policy, groups, friends and the country are the profile's player's, the `Player` whose `UserId` is the profile's (`identity.userId`, else 1): a client's local player, or on a server the player a harness adds with that id; another player gets the engine's answers. A server run (`--run-context server`) and a loopback pair's server start their data stores and memory stores with `data`; a loopback pair's client is the profile's player and the server's `Player` for it has the same identity.
+
+**In a harness:** `Context.ClientProfile()` returns the profile's set fields as tables (a new copy each call); `Context.SetClientProfile(patch)` (a table or JSON text) merges a patch for what is read at call time (`policy`, `ownership`, `social`, `localization.countryRegion`) on the side it runs on; any other field raises `Context.SetClientProfile: identity is set when the run starts (pass it with --client-profile); ...`.
+
+**Traced:** a run started with a profile layer (`--client-profile` or `REE_CLIENT_PROFILE`) has `clientProfile` in its summary: `sources` (each layer: a preset's name, a file's path, `inline`), `digest` (16 hex digits over the set fields) and `profile` (the set fields, flags included). A run with flags alone has none.
+
+**Services, batches and pairs:** the profile works through `--service` (a profile file is sent as an absolute path), `ree run --batch` (each job its own) and loopback runs. `--client-profile` is part of a prepared run's key, a profile file a prepared run read makes it stale when it changes, and `REE_CLIENT_PROFILE` (its files absolute) is part of the service key: two runs with different profiles never share warm state.
 
 ## Engine options
 
@@ -126,7 +190,7 @@ Options accept `--key value` or `--key=value` (required for negative numbers).
   - `--mount Service/Name=<dir|file>` and `--instance Service/Name=<ClassName>` (repeatable).
   - `--snapshot-dir <dir>` / `--snapshot <Service.rbxm>` (`.rbxmx` and `.rbx` too; in checkouts, `data/place-content/<Place>/<parent>/*.rbxm`, `.rbxmx` or `.rbx` auto-replaces matching placeholders).
   - **Roblox archives (`.rbx`):** read wherever a model file is (`--mount Service/Name=<file.rbx>`, `--snapshot`, `--snapshot-dir`, place content, `--animations`, `Context.Mount`, manifest bundles, and `roblox.deserializeModel` / `deserializePlace` in `ree lune`), as the `.rbxl` / `.rbxm` they hold with the values kept outside the scene (script sources) put back. A file is read by its bytes, so an archive saved under a model file's name reads too. Inside a `--roots` folder or a `--rojo` tree only the files Rojo reads mount, so a `.rbx` there (or a `$path` to one) makes nothing. An archive that does not read is a warning that names the file and the reason, and so is what the reader read past or could not restore (content kept as objects with no documented layout reads as empty). The format and the reader: roblox-object-renderer's `docs/archives.md`.
-- **World & client settings:** `--player <name>`, `--place-id <n>`, `--streaming <radius>` (sets `Workspace.StreamingEnabled` and `StreamingTargetRadius`), `--viewport WxH`, `--offline`, `--verbose`.
+- **World & client settings:** `--client-profile <preset|file|json>` (see "Client profile"), and the shorthands that write its fields: `--player <name>`, `--place-id <n>`, `--streaming <radius>` (sets `Workspace.StreamingEnabled` and `StreamingTargetRadius`), `--viewport WxH`, `--camera WxH`, `--device <kind>`; `--offline`, `--verbose`.
 - **Relative content paths:** Local paths (`file://<path>` or relative paths like `output/x.mesh` passed to `CreateMeshPartAsync`, `CreateEditableMeshAsync`, `CreateEditableImageAsync`) resolve against `--project`, else the `--rojo` file's folder, else the first root's parent, else the current directory.
 - **Asset bundles:** `--assets-at <Service.Path>` and `--assets <prefix>,...` (or `*` for all) configure manifest bundle mounting, overriding `rur.json`'s `modelAssets` ([engine.md](engine.md#asset-bundles-srcprojectmodel_assetsrs-feature-bundles)).
   Bundles are fetched by the external worker named by `REE_ASSET_WORKER` ([engine.md](engine.md#asset-bundles-srcprojectmodel_assetsrs-feature-bundles)).
@@ -136,6 +200,7 @@ Options accept `--key value` or `--key=value` (required for negative numbers).
 `ree run` prints its summary as JSON on stdout (`ree record` too, and writes it as `summary.json`), and a one-line `ree: run ...` / `ree: record ...` status on stderr. Through `--service` the summary is the same.
 
 - `status` (`ok`, `yielded`, `error`), `failure` (how it failed), `harness`, `mode`, `frames`, `fps`, `duration`, and `errors`: the output lines of kind `error`.
+- `clientProfile` (a run started with a `--client-profile` or `REE_CLIENT_PROFILE` layer): `sources`, `digest` and `profile`, the set fields of the client profile it started with.
 - `output` (`ree run`; a recording's lines are in `events.json`): every line in the order written, `{kind, message, time[, trace][, side]}`. Kinds: `print`, `info`, `warn`, `error`, and `missing`.
 - **Unemulated members:** a member a script uses that `ree` does not emulate (a method nothing implements, such as `Humanoid:TakeDamage`; a stub that would otherwise do nothing; what a client does beside a write, such as the `Humanoid.Died` a `Health` write of 0 fires) still returns what it did, usually nothing, and reports itself ([engine.md](engine.md#design-principles)). Its first use writes an output line of kind `missing` (`Humanoid.TakeDamage is not emulated`, its `trace` the script position), which LogService never sees and `errors` doesn't count. The summary's `unemulated` lists every member used, most used first, then by name:
 
@@ -436,10 +501,12 @@ Many variables retain `RUR_*` names for compatibility with `rur` tooling (full l
 | `RUR_ENGINE_DUMP=<file>` | Dump full instance tree after mounting |
 | `RUR_EPOCH` | Pin initial wall-clock timestamp |
 | `RUR_CLOCK` | Replay a recorded Studio clock |
-| `RUR_CAMERA`, `RUR_PLACE_ID`, `RUR_PLAYER`, `RUR_PLAYER_ID`, `RUR_PLAYER_DISPLAY`, `RUR_ROTATION_CLIPPING`, `RUR_PROFILE_CALLBACKS` | Client/environment overrides |
+| `REE_CLIENT_PROFILE` | The default client profile (presets, files or inline JSON, as `--client-profile` takes them) |
+| `RUR_CAMERA`, `RUR_PLACE_ID`, `RUR_PLAYER`, `RUR_PLAYER_ID`, `RUR_PLAYER_DISPLAY` | Write fields of the client profile, below the command line's layers and flags |
+| `RUR_ROTATION_CLIPPING`, `RUR_PROFILE_CALLBACKS` | Client/environment overrides |
 | `RUR_LUAU_PROFILE=<file>` | Folded Luau stack samples (`RUR_LUAU_PROFILE_CLOCK=work`, `RUR_LUAU_PROFILE_UNIT=us`) |
 | `RUR_LUAU_ALLOC_PROFILE=<file>` | Folded allocation bytes (+ `<file>.counts`; `RUR_LUAU_ALLOC_STEP=<bytes>`, default `1024`) |
 | `REE_PROFILE`, `REE_PROFILE_OUT`, `REE_PROFILE_COUNTERS`, `REE_HW_COUNTERS`, `REE_HW_PIN` | Profiling & hardware counter controls |
 | `REE_SCRIPT_TIMEOUT`, `REE_MAX_SCRIPT_TIMEOUTS`, `REE_MAX_WALL_SECONDS`, `REE_PARENT_WATCH` | Watchdog & limit controls |
-| `REE_DEVICE`, `REE_TIMING_CHECK`, `REE_TIMING_PROBES`, `REE_FROZEN_CLOCK`, `REE_SERVE_WORKERS`, `REE_ASSET_WORKER`, `REE_ASSET_WORKER_ARGS`, `REE_VIEW_COLOR` | Runtime, service, and viewer controls |
+| `REE_DEVICE` (the client profile's `device.kind`), `REE_TIMING_CHECK`, `REE_TIMING_PROBES`, `REE_FROZEN_CLOCK`, `REE_SERVE_WORKERS`, `REE_ASSET_WORKER`, `REE_ASSET_WORKER_ARGS`, `REE_VIEW_COLOR` | Runtime, service, and viewer controls |
 | `REE_LOCALIZED_PLACES`, `REE_MATCH_PLACES` | Place IDs with extra client localization/geometry write costs ([engine.md](engine.md)) |

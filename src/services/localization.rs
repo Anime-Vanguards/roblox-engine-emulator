@@ -44,7 +44,7 @@ use rustc_hash::FxHashMap;
 
 use super::{Behaviors, StringParam, method, strings, values};
 use crate::{
-    ClassId, Engine, InstanceId, NameId, Reflection, State,
+    ClassId, Engine, InstanceId, K, NameId, Reflection, State,
     instance as core,
     lua::{Args, Flow, Ret, bindable::Refused, instance_value, none, raise, typeof_value},
     value::{Str, Value},
@@ -1187,8 +1187,8 @@ const ROBLOX_ONLY: &[(&str, &str)] = &[
 ];
 
 /// The locale a playing client's LocalizationService reports (RobloxLocaleId, SystemLocaleId: measured, a 0.747 client and
-/// server alike)
-pub const ROBLOX_LOCALE: &str = "en-us";
+/// server alike), where the client profile sets none
+pub use crate::client_profile::ROBLOX_LOCALE;
 
 const ONE: &[StringParam] = &[StringParam::at(1)];
 const TWO: &[StringParam] = &[StringParam::at(1), StringParam::at(2)];
@@ -1714,11 +1714,14 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
 
     // LocalizationService
     let service = names.service;
+    // (the client profile's locales: client_profile.rs)
     for name in ["RobloxLocaleId", "SystemLocaleId"] {
         if let Some(id) = member(name) {
-            behaviors.add_getter(service, id, super::getter(|lua, engine, _| {
+            behaviors.add_getter(service, id, super::getter(move |lua, engine, _| {
                 charge(engine, crate::cost::LOCALIZATION_SERVICE_LOCALE_READ);
-                string(lua, ROBLOX_LOCALE.as_bytes()).map_err(Flow::from)
+                let localization = &engine.options.profile.localization;
+                let locale = if name == "RobloxLocaleId" { localization.roblox_locale_id() } else { localization.system_locale_id() };
+                string(lua, locale.as_bytes()).map_err(Flow::from)
             }));
         }
     }
@@ -1736,7 +1739,7 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
     if let Some(id) = member("GetTranslatorForPlayerAsync") {
         behaviors.add_method(service, id, method(move |lua, engine, _, args| {
             let Some(player) = object_arg(engine, args)? else { return raise("Argument 1 missing or nil") };
-            if engine.options.game_id == 0.0 {
+            if engine.options.profile.game.game_id() == 0.0 {
                 return raise("Publishing the game is required to use GetTranslatorForPlayerAsync API.");
             }
             if !is_player(engine, &names, player) {
@@ -1780,14 +1783,18 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
     if let Some(id) = member("GetCorescriptLocalizations") {
         behaviors.add_method(service, id, method(|lua, _, _, _| Ok(values([LuaValue::Table(lua.create_table()?)]))));
     }
-    // (a client's answer is its player's country, which no offline run has: "US" stands in, as before)
+    // (a client's answer is its player's country: the client profile's for its player, else "US", which stands in where no
+    // offline run has one)
     if let Some(id) = member("GetCountryRegionForPlayerAsync") {
         behaviors.add_method(service, id, method(move |lua, engine, _, args| {
             let Some(player) = object_arg(engine, args)? else { return raise("Argument 1 missing or nil") };
             if !is_player(engine, &names, player) {
                 return raise("Instance was not a player");
             }
-            Ok(values([string(lua, b"US")?]))
+            let profile = engine.profile();
+            let user_id = engine.state.borrow().dom.number(player, K::UserId as NameId);
+            let country = if user_id == Some(profile.identity.user_id()) { profile.localization.country_region() } else { "US" };
+            Ok(values([string(lua, country.as_bytes())?]))
         }));
     }
 

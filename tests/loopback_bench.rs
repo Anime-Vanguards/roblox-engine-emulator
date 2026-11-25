@@ -14,7 +14,7 @@ fn options(context: RunContext) -> Options {
     Options {
         mode: "play".into(),
         run_context: context,
-        local_player_name: if context == RunContext::Server { None } else { Some("Player".into()) },
+        local_player: context != RunContext::Server,
         ..Options::default()
     }
 }

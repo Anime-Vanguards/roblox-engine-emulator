@@ -2331,7 +2331,7 @@ fn a_phone_profile_reads_in_its_clocks_units() {
     "#);
     let ((desktop_summary, desktop), (phone_summary, phone)) = run_pair(
         || stepped_profile("desktop", source, 6, Options::default(), false),
-        || stepped_profile("phone", source, 6, Options { device: "phone".into(), ..Options::default() }, false),
+        || stepped_profile("phone", source, 6, Options { profile: crate::client_profile::ClientProfile::parse(r#"{"device":{"kind":"phone"}}"#).unwrap(), ..Options::default() }, false),
     );
     let work = |json: &serde_json::Value| json["work"]["total_ms"].as_f64().unwrap();
     assert!((work(&phone) / work(&desktop) - crate::cost::PHONE_SCRIPTS).abs() < 1e-6, "{} against {}", work(&phone), work(&desktop));
@@ -2365,7 +2365,7 @@ fn cache_and_builtin_prices_use_the_same_device_units_as_the_clock() {
     let kinds = Kinds::parse("work,caches").unwrap();
     let ((_, desktop), (_, phone)) = run_pair(
         || stepped_profile_kinds("device-sites", source, 4, Options::default(), false, kinds),
-        || stepped_profile_kinds("device-sites", source, 4, Options { device: "phone".into(), ..Options::default() }, false, kinds),
+        || stepped_profile_kinds("device-sites", source, 4, Options { profile: crate::client_profile::ClientProfile::parse(r#"{"device":{"kind":"phone"}}"#).unwrap(), ..Options::default() }, false, kinds),
     );
     assert_eq!(phone["luau_caches"]["prices"]["scale"], crate::cost::PHONE_SCRIPTS);
     for field in ["charged_work_us", "extra_work_us"] {

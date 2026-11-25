@@ -359,7 +359,7 @@ local function GetStore(Kind, Class, Name, Scope)
 		RawSet(Instance_, "Name", Name, true)
 		Store = { Kind = Kind, Name = Name, Scope = Scope, Keys = {}, Instance = Instance_ }
 		Stores[Id] = Store
-		Handles[Instance_] = Store
+		Handles[Instance_] = Store if R.SeedStore then R.SeedStore(Store) end -- (the client profile's data: SeedStore, at the end)
 	end
 	return Store.Instance
 end
@@ -859,7 +859,7 @@ local function Memory(Kind, Class, Name, At, Extra)
 	local Structure = MemoryStores[Kind][Name]
 	if not Structure then
 		Structure = { Name = Name, Items = {}, Serial = 0, Reads = {} }
-		MemoryStores[Kind][Name] = Structure
+		MemoryStores[Kind][Name] = Structure if R.SeedMemory then R.SeedMemory(Kind, Name, Structure) end -- (and here: SeedMemory)
 	end
 	local Instance_ = Create(Class)
 	RawSet(Instance_, "Name", Name, true)
@@ -1378,5 +1378,56 @@ Method("RemoteFunction", "InvokeClient", function(Self, Player)
 	end
 	error(`InvokeClient: {Player.Name} left the game before {Self:GetFullName()} returned`, 0)
 end)
+
+-- The client profile's data (client_profile.rs, R.Profile.data): what a data store or a memory store structure holds when
+-- the run starts, as if written before it: a version each with no user ids or metadata; memory items at the longest
+-- expiration, a queue's at priority 0 in their order. Only a run whose profile has data sets these (GetStore and Memory
+-- call them where they make a store), so every other run's stores start empty as before.
+local ProfileData = R.Profile and R.Profile.data
+if ProfileData then
+	-- (a seed's keys in order: the versions they get are numbered in it)
+	local function SortedKeys(Map)
+		local Keys = {}
+		for Key in Map do
+			table.insert(Keys, Key)
+		end
+		table.sort(Keys)
+		return Keys
+	end
+	R.SeedStore = function(Store)
+		local Seeded
+		if Store.Kind == "Global" then
+			Seeded = ProfileData.globalDataStore
+		else
+			local Named = if Store.Kind == "Ordered" then ProfileData.orderedDataStores else ProfileData.dataStores
+			local Scopes = Named and Named[Store.Name]
+			Seeded = Scopes and Scopes[Store.Scope]
+		end
+		for _, Key in if Seeded then SortedKeys(Seeded) else {} do
+			Write(Store, Key, Clone(Seeded[Key]))
+		end
+	end
+	local Kinds = { HashMap = "hashMaps", SortedMap = "sortedMaps", Queue = "queues" }
+	R.SeedMemory = function(Kind, Name, Structure)
+		local Memory = ProfileData.memoryStores
+		local Named = Memory and Memory[Kinds[Kind]]
+		local Seeded = Named and Named[Name]
+		if not Seeded then
+			return
+		end
+		local Expires = Now() + MAX_EXPIRATION
+		if Kind == "Queue" then
+			for _, Value in Seeded do
+				Structure.Serial += 1
+				table.insert(Structure.Items, { Value = Clone(Value), Expires = Expires, Priority = 0, Serial = Structure.Serial, Hidden = 0 })
+			end
+		else
+			for _, Key in SortedKeys(Seeded) do
+				local Entry = Seeded[Key]
+				Structure.Items[Key] = if Kind == "SortedMap" then { Value = Clone(Entry.value), Sort = Entry.sortKey, Expires = Expires } else { Value = Clone(Entry), Expires = Expires }
+			end
+		end
+	end
+end
 
 return true

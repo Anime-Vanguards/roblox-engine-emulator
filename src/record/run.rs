@@ -760,6 +760,10 @@ pub(crate) fn record_done(emulator: &Emulator, args: &RecordArgs, host: &Host, r
     }
     extra.insert("harness".into(), json!(ran.harness.to_string_lossy()));
     extra.insert("mode".into(), json!(engine.options.mode));
+    // (the client profile the run started with, where a profile layer gave one: client_profile.rs)
+    if !engine.options.profile.sources.is_empty() {
+        extra.insert("clientProfile".into(), engine.options.profile.summary());
+    }
     if ran.done {
         extra.insert("done".into(), json!(true));
     }
@@ -837,6 +841,10 @@ pub(crate) fn run_done(emulator: &Emulator, args: &RecordArgs, host: &Host, ran:
     });
     if let Some(failure) = ran.failure {
         summary["failure"] = json!(failure);
+    }
+    // (the client profile the run started with, where a profile layer gave one: client_profile.rs)
+    if !engine.options.profile.sources.is_empty() {
+        summary["clientProfile"] = engine.options.profile.summary();
     }
     if let Some(list) = unemulated {
         summary["unemulated"] = list;
@@ -1678,6 +1686,38 @@ fn context_table(lua: &Lua, engine: &Rc<Engine>, checkpoint: &Rc<Checkpoint>, sp
     // a frame did that is the same however fast the host is
     let e = engine.clone();
     context.set("WorkSeconds", crate::lua::lua_fn(lua, move |_, ()| Ok(e.state.borrow().sched.work_total()))?)?;
+    // Context.ClientProfile(): the run's client profile as it is now (client_profile.rs), its set fields as tables in the
+    // profile's JSON format, a new copy each call. Context.SetClientProfile(Patch): Patch (a table, or JSON text) merged over
+    // it as a JSON Merge Patch for what this side's engine reads at call time from then on: policy, ownership, social and
+    // localization.countryRegion. What the run set up from the profile when it started (the player, the device, the game,
+    // the stores' contents) is refused, naming the field.
+    let e = engine.clone();
+    context.set(
+        "ClientProfile",
+        crate::lua::lua_fn(lua, move |lua, ()| {
+            let options = LuaSerializeOptions::new().set_array_metatable(false).serialize_none_to_null(false).serialize_unit_to_null(false);
+            lua.to_value_with(&e.profile().to_json(), options)
+        })?,
+    )?;
+    // (the change in Rust, which answers what went wrong; the engine Luau around it raises that as a plain error)
+    let e = engine.clone();
+    let set_profile = crate::lua::lua_fn(lua, move |lua, patch: LuaValue| {
+        let patch: Result<Json, String> = match &patch {
+            LuaValue::String(text) => serde_json::from_slice(&text.as_bytes()).map_err(|error| error.to_string()),
+            LuaValue::Table(_) => lua.from_value_with(patch, LuaDeserializeOptions::new().encode_empty_tables_as_array(true)).map_err(|error| error.to_string()),
+            _ => Err("a table or JSON text expected".into()),
+        };
+        let profile = patch.and_then(|patch| crate::client_profile::live_patch(&patch)).and_then(|patch| e.profile().patched(&patch));
+        match profile {
+            Ok(profile) => crate::lua::stubs::set_profile(lua, &e, profile).map(|()| None),
+            Err(problem) => Ok(Some(format!("Context.SetClientProfile: {problem}"))),
+        }
+    })?;
+    let chunk = lua
+        .load("local Set = ... return function(Patch) local Problem = Set(Patch) if Problem then error(Problem, 0) end end")
+        .set_name("=ree.setclientprofile")
+        .into_function()?;
+    context.set("SetClientProfile", crate::cost::engine_luau(lua, chunk)?.call::<LuaFunction>(set_profile)?)?;
     // Context.FireEvent(Instance, Event, ...): fires an engine event the emulator does not raise itself, to the
     // connections made to it (Humanoid.Running while a harness walks a character, which nothing simulates here);
     // nil, booleans, numbers, strings, instances and buffers, as a remote carries them (a buffer arrives as a copy, as a
@@ -1866,8 +1906,8 @@ pub(crate) fn timing_probes(device: &str) -> Vec<(f64, String)> {
 /// status line says under which clocks the recording hinges and from when; the probes' files are removed.
 fn check_timing(args: &RecordArgs, host: &Host, mut done: Done) -> Done {
     let Some(out) = args.out.clone() else { return done };
-    // (the device as launch.rs resolves it: --device, else REE_DEVICE, else desktop)
-    let device = args.engine.device.clone().or_else(|| std::env::var("REE_DEVICE").ok().filter(|value| !value.is_empty())).unwrap_or_else(|| "desktop".into());
+    // (the device of the run's client profile, as launch.rs resolves it: the run itself read it alike)
+    let device = crate::launch::client_profile(&args.engine, &[]).map_or("desktop", |(profile, _)| profile.device.kind().name()).to_string();
     let mut probes = Vec::new();
     for (index, (factor, client)) in timing_probes(&device).into_iter().enumerate() {
         let probe_out = out.join(format!("timing-check-{index}"));

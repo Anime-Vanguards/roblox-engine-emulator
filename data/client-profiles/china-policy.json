@@ -1,0 +1,5 @@
+{
+	"$schema": "../client-profile.schema.json",
+	"localization": { "localeId": "zh-cn", "robloxLocaleId": "zh-cn", "systemLocaleId": "zh-cn", "countryRegion": "CN" },
+	"policy": { "IsSubjectToChinaPolicies": true, "ArePaidRandomItemsRestricted": true, "AllowedExternalLinkReferences": [] }
+}

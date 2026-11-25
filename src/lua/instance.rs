@@ -588,7 +588,7 @@ pub fn script_set_property(engine: &Engine, id: InstanceId, name: NameId, value:
     // (a client looks a Text write up for translation: AutoLocalize on and a letter in it)
     let client = !engine.options.edit_mode() && !engine.options.server();
     let looked_up = match &value {
-        Value::String(text) if crate::cost::text_localization_in(&engine.options.place_prices, engine.options.place_id, 1, client).is_some() && engine.reflection.name(name) == "Text" => {
+        Value::String(text) if crate::cost::text_localization_in(&engine.options.place_prices, engine.options.profile.game.place_id(), 1, client).is_some() && engine.reflection.name(name) == "Text" => {
             let text = String::from_utf8_lossy(text.as_bytes());
             text.chars().any(char::is_alphabetic).then(|| text.chars().count())
         }
@@ -599,7 +599,7 @@ pub fn script_set_property(engine: &Engine, id: InstanceId, name: NameId, value:
     let class = state.dom.at(id).class;
     let (placed, levels) = if changed { part_placement(engine, &state, class, id) } else { (false, 0) };
     let price = crate::cost::write(&engine.reflection, class, engine.reflection.name(name), changed, placed)
-        * crate::cost::place_write_scale(&engine.options.place_prices, engine.options.place_id, engine.reflection.name(name), placed);
+        * crate::cost::place_write_scale(&engine.options.place_prices, engine.options.profile.game.place_id(), engine.reflection.name(name), placed);
     let mut paid = price + write_touch(&state, id, name, engine.reflection.name(name), changed);
     if changed {
         paid += changed_levels(&state, id, engine.reflection.name(name), false, levels);
@@ -635,7 +635,7 @@ pub fn script_set_property(engine: &Engine, id: InstanceId, name: NameId, value:
     crate::cost::tally_write(&engine.reflection.class(class).name, engine.reflection.name(name), changed, placed, price);
     if let (true, Some(characters)) = (changed, looked_up) {
         let auto_localize = engine.reflection.name_id("AutoLocalize").and_then(|auto| state.dom.boolean(id, auto)).unwrap_or(true);
-        if let (true, Some(lookup)) = (auto_localize, crate::cost::text_localization_in(&engine.options.place_prices, engine.options.place_id, characters, client)) {
+        if let (true, Some(lookup)) = (auto_localize, crate::cost::text_localization_in(&engine.options.place_prices, engine.options.profile.game.place_id(), characters, client)) {
             state.sched.charge(lookup);
             crate::boundary::add_cost(lookup);
         }

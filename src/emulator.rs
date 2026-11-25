@@ -152,7 +152,7 @@ mod tests {
         let options = Options {
             mode: "play".into(),
             run_context: if server { crate::RunContext::Server } else { crate::RunContext::Client },
-            local_player_name: if server { None } else { Some("Player".into()) },
+            local_player: !server,
             ..Options::default()
         };
         let emulator = Emulator::start(Engine::new(options).unwrap(), &ProjectSpec::default()).unwrap();
@@ -189,7 +189,7 @@ mod tests {
                     let options = Options {
                         mode: "play".into(),
                         run_context: if server { crate::RunContext::Server } else { crate::RunContext::Client },
-                        local_player_name: if server { None } else { Some("Player".into()) },
+                        local_player: !server,
                         ..Options::default()
                     };
                     let started = Instant::now();

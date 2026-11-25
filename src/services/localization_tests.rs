@@ -513,7 +513,7 @@ fn a_players_translator_has_its_locale() {
         local T = LS:GetTranslatorForPlayer(Player)
         print(T.LocaleId == Player.LocaleId, Try(T.FormatByKey, T, "k"), LS:GetTranslatorForPlayerAsync(Player).ClassName, LS:GetCountryRegionForPlayerAsync(Player))
     "#;
-    assert_eq!(printed_with(Options { game_id: 1.0, ..Options::default() }, source), ["true !Key k not found for locale  Translator US"]);
+    assert_eq!(printed_with(Options { profile: crate::client_profile::ClientProfile::parse(r#"{"game":{"gameId":1}}"#).unwrap(), ..Options::default() }, source), ["true !Key k not found for locale  Translator US"]);
 }
 
 /// GetEntries, SetEntries and SetContents write no Changed; SourceLocaleId does

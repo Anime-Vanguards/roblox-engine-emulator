@@ -18,6 +18,7 @@ pub mod alloc;
 pub mod animation;
 pub mod boundary;
 pub mod census;
+pub mod client_profile;
 pub mod content_id;
 pub mod cost;
 pub mod derived;
@@ -66,6 +67,8 @@ mod scheduler_tests;
 #[cfg(test)]
 mod server_tests;
 #[cfg(test)]
+mod client_profile_script_tests;
+#[cfg(test)]
 mod loopback_tests;
 #[cfg(test)]
 mod teams_tests;
@@ -111,10 +114,7 @@ pub mod data {
 /// Engine.Start options (runtime/engine/init.luau DefaultOptions).
 #[derive(Clone, Debug)]
 pub struct Options {
-    pub viewport_width: f64,
-    pub viewport_height: f64,
-    pub camera_width: Option<f64>,
-    pub camera_height: Option<f64>,
+    /// The rendered area's pixels per point (a host's export and layout read it; scripts never do)
     pub pixel_scale: f64,
     pub clips_descendants_supports_rotation: bool,
     /// "edit" (UI Labs previews) or a running game
@@ -133,20 +133,16 @@ pub struct Options {
     /// Native script execution (`--native`): scripts compile to native code with safe environments and the VM's work counters
     /// off (for fast test runs that do not need the work clock's per-instruction pricing)
     pub native: bool,
-    pub topbar_inset: f64,
-    pub device: String,
-    pub place_id: f64,
-    pub game_id: f64,
-    pub creator_id: f64,
     pub place_name: String,
-    pub local_player_name: Option<String>,
-    pub local_player_user_id: f64,
-    pub local_player_display_name: Option<String>,
+    /// The run has a local player (a client's; an edit run's when its command line names one; never a server's). Who it
+    /// is, like everything else about the client, is the profile's
+    pub local_player: bool,
+    /// Everything about the emulated client and its player ([`client_profile`]): the one source of the player's identity,
+    /// the device and screen, settings, locale and country, policy, ownership, groups and friends, the game's ids and the
+    /// stores' starting contents. Its unset fields keep the engine's own answers.
+    pub profile: client_profile::ClientProfile,
     pub verbose: bool,
     pub offline: bool,
-    /// The place's Workspace.StreamingTargetRadius when it streams (StreamingEnabled), as its place
-    /// file holds it (the project's rur.json `streamingTargetRadius`, or --streaming)
-    pub streaming_target_radius: Option<f64>,
     /// The host's checkout: its state dir ([`state_dir`]) holds the caches (manifest bundles, Studio
     /// snapshots), and the default project sits beside it (launch.rs). Hosts set their own. After
     /// [`init_binary`], a standalone binary uses this only for explicitly named input data.
@@ -168,10 +164,6 @@ pub struct Options {
 impl Default for Options {
     fn default() -> Self {
         Self {
-            viewport_width: 1920.0,
-            viewport_height: 1080.0,
-            camera_width: None,
-            camera_height: None,
             pixel_scale: 1.0,
             clips_descendants_supports_rotation: true,
             mode: "edit".into(),
@@ -180,18 +172,11 @@ impl Default for Options {
             load_module: false,
             load_string: false,
             native: false,
-            topbar_inset: 0.0,
-            device: "desktop".into(),
-            place_id: 0.0,
-            game_id: 0.0,
-            creator_id: 0.0,
             place_name: "Place".into(),
-            local_player_name: Some("Player".into()),
-            local_player_user_id: 1.0,
-            local_player_display_name: None,
+            local_player: true,
+            profile: client_profile::ClientProfile::default(),
             verbose: false,
             offline: false,
-            streaming_target_radius: None,
             repo: default_repo(),
             project: None,
             place_prices: cost::PlacePrices::default(),
@@ -945,6 +930,9 @@ pub struct Engine {
     pub(crate) peer: RefCell<Option<Box<loopback::Link>>>,
     /// PhysicsService's collision-group registry (replicated in loopback runs)
     pub(crate) physics: OnceCell<Rc<services::physics::Groups>>,
+    /// The client profile as the run has it now: [`Options::profile`], with what a harness changed since
+    /// (Context.SetClientProfile, which changes only what is read at call time)
+    profile: RefCell<Rc<client_profile::ClientProfile>>,
 }
 
 impl Engine {
@@ -961,7 +949,9 @@ impl Engine {
         let mut output = output::Output::default();
         output.verbose = options.verbose;
         let sched = scheduler::Scheduler::new(&options);
+        let profile = RefCell::new(Rc::new(options.profile.clone()));
         Ok(Rc::new(Engine {
+            profile,
             reflection,
             state: RefCell::new(State {
                 dom: Dom::new(),
@@ -999,6 +989,18 @@ impl Engine {
 
     pub fn world(&self) -> World {
         self.world.get().expect("engine not started")
+    }
+
+    /// The client profile as the run has it now (the start's, [`Options::profile`], unless a harness changed what is read
+    /// at call time: [`Engine::set_profile`])
+    pub fn profile(&self) -> Rc<client_profile::ClientProfile> {
+        self.profile.borrow().clone()
+    }
+
+    /// Replaces the profile the run's later answers read. Only what is read at call time changes (policy, ownership,
+    /// social, the country): the player, the device and the game were set up from the start's profile.
+    pub fn set_profile(&self, profile: client_profile::ClientProfile) {
+        *self.profile.borrow_mut() = Rc::new(profile);
     }
 
     /// The host's layers, in installation order.

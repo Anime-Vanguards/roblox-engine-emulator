@@ -971,7 +971,7 @@ pub fn install(lua: &Lua) {
             threads_made: 0,
         });
         s.price_scale = engine.state.borrow().sched.price_scale();
-        s.device = engine.options.device.clone();
+        s.device = engine.options.profile.device.kind().name().to_string();
         let (host, cycles) = (s.started.elapsed().as_secs_f64(), cpu::thread_cycles());
         let counts = s.totals();
         s.marks.push(Mark { phase: s.phases[0].clone(), frame, seconds, work: totals.work, host, cycles, totals: counts, engine: Some(ops) });

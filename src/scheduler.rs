@@ -468,7 +468,7 @@ impl Scheduler {
             display_interval_index: None,
             display_beat_clock: None,
             // (a timing check's probe: os.clock within each frame runs on the probe's multiple of the modelled work, record/run.rs)
-            price_scale: crate::cost::device_scale(&options.device) * options.clock_probe.unwrap_or(1.0),
+            price_scale: crate::cost::device_scale(options.profile.device.kind().name()) * options.clock_probe.unwrap_or(1.0),
         };
         scheduler.edit_mode = options.edit_mode();
         // Scheduler.Configure: RUR_EPOCH=<Unix seconds or ms> pins the wall clock's start

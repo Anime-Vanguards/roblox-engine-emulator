@@ -1,0 +1,4 @@
+{
+	"$schema": "../client-profile.schema.json",
+	"localization": { "localeId": "de-de", "robloxLocaleId": "de-de", "systemLocaleId": "de-de", "countryRegion": "DE" }
+}

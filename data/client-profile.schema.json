@@ -1,0 +1,237 @@
+{
+	"$schema": "https://json-schema.org/draft/2020-12/schema",
+	"title": "ree client profile",
+	"description": "Everything about the emulated client and its player (docs/engine.md, \"Client profile\"). Every field is optional: a field left out keeps the engine's own answer. Layers merge as a JSON Merge Patch (RFC 7396): objects key by key, lists and other values replaced whole, null removes a field.",
+	"type": "object",
+	"additionalProperties": false,
+	"$defs": {
+		"id": { "type": "integer" },
+		"ids": {
+			"description": "A list of ids, or \"all\" (every id)",
+			"oneOf": [{ "type": "array", "items": { "type": "integer" } }, { "const": "all" }]
+		},
+		"size": {
+			"description": "[width, height] in pixels, or \"WxH\"",
+			"oneOf": [
+				{ "type": "array", "items": { "type": "number", "exclusiveMinimum": 0 }, "minItems": 2, "maxItems": 2 },
+				{ "type": "string", "pattern": "^[0-9.]+[xX][0-9.]+$" }
+			]
+		},
+		"locale": { "type": "string", "pattern": "^[A-Za-z0-9_-]{2,35}$" },
+		"storable": {
+			"description": "What a data store holds: JSON-like data without null",
+			"type": ["boolean", "number", "string", "array", "object"]
+		},
+		"storeName": { "type": "string", "minLength": 1, "maxLength": 50 }
+	},
+	"properties": {
+		"$schema": { "type": "string" },
+		"identity": {
+			"description": "The player: the local player's properties (and the server's Player for it in a loopback run)",
+			"type": "object",
+			"additionalProperties": false,
+			"properties": {
+				"name": { "description": "Player.Name (--player, RUR_PLAYER). Unset: Player", "type": "string", "minLength": 1 },
+				"displayName": { "description": "Player.DisplayName (RUR_PLAYER_DISPLAY). Unset: the name", "type": "string" },
+				"userId": { "description": "Player.UserId (RUR_PLAYER_ID). Unset: 1", "$ref": "#/$defs/id" },
+				"accountAge": { "description": "Player.AccountAge in days. Unset: 0", "type": "integer", "minimum": 0 },
+				"membershipType": { "description": "Player.MembershipType: an Enum.MembershipType item's name (None, Premium). Unset: None", "type": "string" },
+				"hasVerifiedBadge": { "description": "Player.HasVerifiedBadge, and UserService's HasVerifiedBadge for the player. Unset: false", "type": "boolean" },
+				"verified": { "description": "Player:IsVerified(). Unset: false", "type": "boolean" },
+				"followUserId": { "description": "Player.FollowUserId. Unset: 0", "$ref": "#/$defs/id" }
+			}
+		},
+		"device": {
+			"description": "What the client runs on",
+			"type": "object",
+			"additionalProperties": false,
+			"properties": {
+				"kind": { "description": "--device, REE_DEVICE: the inputs' defaults, and a phone's work-clock prices. Unset: desktop", "enum": ["desktop", "touch", "gamepad", "phone"] },
+				"inputs": {
+					"description": "UserInputService's *Enabled inputs; each unset one follows the kind",
+					"type": "object",
+					"additionalProperties": false,
+					"properties": {
+						"keyboard": { "description": "KeyboardEnabled. Unset: true on a desktop", "type": "boolean" },
+						"mouse": { "description": "MouseEnabled. Unset: true on a desktop", "type": "boolean" },
+						"touch": { "description": "TouchEnabled. Unset: true on a touch device or a phone", "type": "boolean" },
+						"gamepad": { "description": "GamepadEnabled. Unset: true on a gamepad", "type": "boolean" },
+						"accelerometer": { "description": "AccelerometerEnabled. Unset: false", "type": "boolean" },
+						"gyroscope": { "description": "GyroscopeEnabled. Unset: false", "type": "boolean" },
+						"vr": { "description": "UserInputService.VREnabled and VRService.VREnabled. Unset: false", "type": "boolean" }
+					}
+				},
+				"preferredInput": { "description": "UserInputService.PreferredInput: an Enum.PreferredInput item's name. Unset: Touch on a touch device, Gamepad on a gamepad, else KeyboardAndMouse", "type": "string" },
+				"lastInputType": { "description": "UserInputService:GetLastInputType(): an Enum.UserInputType item's name. Unset: Touch, Gamepad1, Focus in edit mode, else MouseMovement", "type": "string" },
+				"tenFootInterface": { "description": "GuiService:IsTenFootInterface() (a console). Unset: false", "type": "boolean" },
+				"viewport": { "description": "The screen (--viewport). Unset: 1920 x 1080", "$ref": "#/$defs/size" },
+				"camera": { "description": "The start camera's ViewportSize when it differs from the screen (--camera, RUR_CAMERA). Unset: the viewport", "$ref": "#/$defs/size" },
+				"topbarInset": { "description": "GuiService's topbar inset in pixels (GetGuiInset, TopbarInset, GetInsetArea, the camera's screen forms). Unset: 0", "type": "number", "minimum": 0 },
+				"networkPing": { "description": "Player:GetNetworkPing() in seconds. Unset: 0.05", "type": "number", "minimum": 0 }
+			}
+		},
+		"settings": {
+			"description": "The player's own settings",
+			"type": "object",
+			"additionalProperties": false,
+			"properties": {
+				"preferredTextSize": { "description": "GuiService.PreferredTextSize: an Enum.PreferredTextSize item's name. Unset: Medium", "type": "string" },
+				"preferredTransparency": { "description": "GuiService.PreferredTransparency. Unset: the property's default", "type": "number", "minimum": 0, "maximum": 1 },
+				"reducedMotion": { "description": "GuiService.ReducedMotionEnabled. Unset: false", "type": "boolean" },
+				"savedQualityLevel": { "description": "UserGameSettings.SavedQualityLevel: an Enum.SavedQualitySetting item's name. Unset: Automatic", "type": "string" },
+				"cameraYInverted": { "description": "UserGameSettings:GetCameraYInvertValue() reads -1. Unset: false (1)", "type": "boolean" }
+			}
+		},
+		"localization": {
+			"description": "Locale and country",
+			"type": "object",
+			"additionalProperties": false,
+			"properties": {
+				"localeId": { "description": "Player.LocaleId, which translators for the player use. Unset: empty", "$ref": "#/$defs/locale" },
+				"robloxLocaleId": { "description": "LocalizationService.RobloxLocaleId. Unset: en-us", "$ref": "#/$defs/locale" },
+				"systemLocaleId": { "description": "LocalizationService.SystemLocaleId. Unset: en-us", "$ref": "#/$defs/locale" },
+				"countryRegion": { "description": "LocalizationService:GetCountryRegionForPlayerAsync for the player. Unset: US", "type": "string", "pattern": "^[A-Z]{2}$" }
+			}
+		},
+		"policy": {
+			"description": "PolicyService:GetPolicyInfoForPlayerAsync for the player: these keys (Roblox's: AreAdsAllowed, ArePaidRandomItemsRestricted, AllowedExternalLinkReferences, IsContentSharingAllowed, IsEligibleToPurchaseSubscription, IsPaidItemTradingAllowed, IsSubjectToChinaPolicies, ...) go over the engine's answer",
+			"type": "object",
+			"propertyNames": { "pattern": "^[A-Z]" },
+			"additionalProperties": { "type": ["boolean", "number", "string", "array"], "items": { "type": "string" } }
+		},
+		"ownership": {
+			"description": "What the player owns. Each unset list keeps the engine's answer (owns nothing)",
+			"type": "object",
+			"additionalProperties": false,
+			"properties": {
+				"gamePasses": { "description": "MarketplaceService:UserOwnsGamePassAsync", "$ref": "#/$defs/ids" },
+				"assets": { "description": "MarketplaceService:PlayerOwnsAsset, PlayerOwnsAssetAsync", "$ref": "#/$defs/ids" },
+				"bundles": { "description": "MarketplaceService:PlayerOwnsBundle", "$ref": "#/$defs/ids" },
+				"badges": { "description": "BadgeService:UserHasBadgeAsync, CheckUserBadgesAsync", "$ref": "#/$defs/ids" },
+				"subscriptions": {
+					"description": "MarketplaceService:GetUserSubscriptionStatusAsync: subscription ids (EXP-...), or \"all\"",
+					"oneOf": [{ "type": "array", "items": { "type": "string", "minLength": 1 } }, { "const": "all" }]
+				}
+			}
+		},
+		"social": {
+			"description": "The player's groups, friends and blocked users",
+			"type": "object",
+			"additionalProperties": false,
+			"properties": {
+				"groups": {
+					"description": "Player:IsInGroup, GetRankInGroup, GetRoleInGroup (and their Async forms), GroupService:GetGroupsAsync",
+					"type": "array",
+					"items": {
+						"type": "object",
+						"additionalProperties": false,
+						"required": ["id", "rank", "role"],
+						"properties": {
+							"id": { "$ref": "#/$defs/id" },
+							"rank": { "type": "integer", "minimum": 1, "maximum": 255 },
+							"role": { "type": "string" },
+							"name": { "type": "string" },
+							"isPrimary": { "type": "boolean" }
+						}
+					}
+				},
+				"friends": {
+					"description": "Player:IsFriendsWith, GetFriendsOnline, Players:GetFriendsAsync, the name lookups, UserService:GetUserInfosByUserIdsAsync",
+					"type": "array",
+					"items": {
+						"type": "object",
+						"additionalProperties": false,
+						"required": ["userId", "name"],
+						"properties": {
+							"userId": { "$ref": "#/$defs/id" },
+							"name": { "type": "string", "minLength": 1 },
+							"displayName": { "type": "string" },
+							"online": { "type": "boolean" },
+							"presence": { "description": "Keys added to the friend's GetFriendsOnline entry as they are (Roblox's: LastLocation, PlaceId, GameId, LocationType, LastOnline)", "type": "object" }
+						}
+					}
+				},
+				"blocked": { "description": "StarterGui:GetCore(\"GetBlockedUserIds\")", "type": "array", "items": { "$ref": "#/$defs/id" } }
+			}
+		},
+		"game": {
+			"description": "The game the client joined",
+			"type": "object",
+			"additionalProperties": false,
+			"properties": {
+				"placeId": { "description": "game.PlaceId (--place-id, RUR_PLACE_ID). Unset: the project's, else 0", "$ref": "#/$defs/id" },
+				"gameId": { "description": "game.GameId. Unset: 0", "$ref": "#/$defs/id" },
+				"creatorId": { "description": "game.CreatorId. Unset: 0", "$ref": "#/$defs/id" },
+				"creatorType": { "description": "game.CreatorType: an Enum.CreatorType item's name. Unset: Group", "type": "string" },
+				"jobId": { "description": "game.JobId. Unset: empty", "type": "string" },
+				"placeVersion": { "description": "game.PlaceVersion. Unset: 0", "type": "integer", "minimum": 0 },
+				"privateServerId": { "description": "game.PrivateServerId. Unset: empty", "type": "string" },
+				"privateServerOwnerId": { "description": "game.PrivateServerOwnerId. Unset: 0", "$ref": "#/$defs/id" },
+				"streamingTargetRadius": { "description": "The place streams with this Workspace.StreamingTargetRadius (--streaming). Unset: the project's, else no streaming", "type": "number", "minimum": 0 }
+			}
+		},
+		"data": {
+			"description": "What a server's stores hold when the run starts",
+			"type": "object",
+			"additionalProperties": false,
+			"properties": {
+				"dataStores": {
+					"description": "DataStoreService:GetDataStore(name, scope): name -> scope -> key -> value",
+					"type": "object",
+					"propertyNames": { "$ref": "#/$defs/storeName" },
+					"additionalProperties": {
+						"type": "object",
+						"propertyNames": { "$ref": "#/$defs/storeName" },
+						"additionalProperties": { "type": "object", "propertyNames": { "$ref": "#/$defs/storeName" }, "additionalProperties": { "$ref": "#/$defs/storable" } }
+					}
+				},
+				"orderedDataStores": {
+					"description": "DataStoreService:GetOrderedDataStore(name, scope): name -> scope -> key -> whole number",
+					"type": "object",
+					"propertyNames": { "$ref": "#/$defs/storeName" },
+					"additionalProperties": {
+						"type": "object",
+						"propertyNames": { "$ref": "#/$defs/storeName" },
+						"additionalProperties": { "type": "object", "propertyNames": { "$ref": "#/$defs/storeName" }, "additionalProperties": { "type": "integer" } }
+					}
+				},
+				"globalDataStore": {
+					"description": "DataStoreService:GetGlobalDataStore(): key -> value",
+					"type": "object",
+					"propertyNames": { "$ref": "#/$defs/storeName" },
+					"additionalProperties": { "$ref": "#/$defs/storable" }
+				},
+				"memoryStores": {
+					"description": "MemoryStoreService's structures by name",
+					"type": "object",
+					"additionalProperties": false,
+					"properties": {
+						"hashMaps": {
+							"type": "object",
+							"propertyNames": { "$ref": "#/$defs/storeName" },
+							"additionalProperties": { "type": "object", "additionalProperties": { "$ref": "#/$defs/storable" } }
+						},
+						"sortedMaps": {
+							"type": "object",
+							"propertyNames": { "$ref": "#/$defs/storeName" },
+							"additionalProperties": {
+								"type": "object",
+								"additionalProperties": {
+									"type": "object",
+									"additionalProperties": false,
+									"required": ["value"],
+									"properties": { "value": { "$ref": "#/$defs/storable" }, "sortKey": { "type": ["string", "number"] } }
+								}
+							}
+						},
+						"queues": {
+							"type": "object",
+							"propertyNames": { "$ref": "#/$defs/storeName" },
+							"additionalProperties": { "type": "array", "items": { "$ref": "#/$defs/storable" } }
+						}
+					}
+				}
+			}
+		}
+	}
+}
