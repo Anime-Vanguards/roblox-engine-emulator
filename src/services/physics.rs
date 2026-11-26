@@ -788,6 +788,27 @@ fn unregister(groups: Rc<Groups>, side_first: bool) -> MethodFn {
     })
 }
 
+/// What a spatial query of the WorldRoot `root` reads of the group `name` its params give (world/query.rs Filter): which groups
+/// it collides with, as bits by id, in the registry the parts of that world take their ids from (a WorldModel's own while it uses
+/// them, else the DataModel's); None when it collides with every group: a name that is not registered there (measured, Studio
+/// 0.747, a server and a loopback client alike: tools/parity/probes/query_collision_groups.luau), or a run that never touched
+/// collision groups (Default alone, colliding with itself).
+/// Also whether the name is a registered group other than Default (a query with such params costs a client more: cost.rs
+/// QUERY_PARAMS_GROUP), and the parts' CollisionGroupId (whose value is a part's group id).
+pub(crate) fn query_mask(engine: &Engine, root: InstanceId, name: &[u8]) -> (Option<(u32, NameId)>, bool) {
+    let Some(groups) = engine.physics.get() else { return (None, false) };
+    if !groups.tracking.get() {
+        return (None, false);
+    }
+    let world = {
+        let state = engine.state.borrow();
+        let model = state.dom.get(root).is_some_and(|instance| engine.reflection.class(instance.class).is_a(groups.world_model));
+        groups.used(&state, if model { Owner::Model(root) } else { Owner::Shared })
+    };
+    let id = groups.read(world, |registry| registry.id(name).map(|id| (id, registry.masks[id])));
+    (id.map(|(_, mask)| mask).filter(|&mask| mask != u32::MAX).map(|mask| (mask, groups.group_id)), id.is_some_and(|(id, _)| id != 0))
+}
+
 /// Clone gives each WorldModel's copy the original's groups.
 pub(crate) fn cloned(engine: &Engine, pairs: &[(InstanceId, InstanceId)]) {
     let Some(groups) = engine.physics.get() else { return };

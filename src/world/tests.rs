@@ -611,6 +611,68 @@ fn a_part_with_can_query_off_is_queried_while_can_collide_is_on() {
     run(&lua, &engine, &format!("assert(math.abs(shared.Unqueryable - {listed:e}) < 1e-9, `{{shared.Unqueryable}} s more for ten listed than left out, not {listed:e}`)"));
 }
 
+/// A spatial query leaves out a part whose collision group does not collide with its params' CollisionGroup (Default when none are
+/// given), whatever the part's CanCollide; a name that is not registered collides with every group, a change of the registry
+/// counts at the next query, FindPartOnRay takes Default's, the Region3 queries take none, and the caster's own group does not
+/// matter (Studio 0.747, a server and a loopback client alike: tools/parity/probes/query_collision_groups.luau).
+#[test]
+fn queries_leave_out_parts_their_params_group_does_not_collide_with() {
+    check(
+        r#"
+        local PhysicsService = game:GetService("PhysicsService")
+        for _, Name in { "QA", "QB", "QC" } do
+            PhysicsService:RegisterCollisionGroup(Name)
+        end
+        PhysicsService:CollisionGroupSetCollidable("QA", "QB", false)
+        PhysicsService:CollisionGroupSetCollidable("Default", "QC", false)
+        local Parts = {}
+        for Index, Group in { "Default", "QA", "QB", "QC" } do
+            local P = Instance.new("Part")
+            P.Anchored, P.Size, P.Position, P.CollisionGroup = true, Vector3.new(10, 1, 10), Vector3.new(300 + 40 * Index, 90, 300), Group
+            P.Parent = workspace
+            Parts[Group] = P
+        end
+        Parts.QB.CanCollide = false
+        local Probe = Instance.new("Part")
+        Probe.Anchored, Probe.Size, Probe.CanQuery, Probe.CanCollide, Probe.CollisionGroup = true, Vector3.new(2, 2, 2), false, false, "QC"
+        local function Seen(Group, P)
+            local R, O = RaycastParams.new(), OverlapParams.new()
+            if Group then
+                R.CollisionGroup, O.CollisionGroup = Group, Group
+            end
+            local Top, Down = P.Position + Vector3.new(0, 10, 0), Vector3.new(0, -20, 0)
+            Probe.CFrame = P.CFrame
+            local Hits = {
+                workspace:Raycast(Top, Down, R), workspace:Blockcast(CFrame.new(Top), Vector3.one, Down, R), workspace:Spherecast(Top, 0.5, Down, R),
+                workspace:GetPartBoundsInBox(P.CFrame, Vector3.one, O)[1], workspace:GetPartBoundsInRadius(P.Position, 1, O)[1], workspace:GetPartsInPart(Probe, O)[1],
+            }
+            local Count = 0
+            for Index = 1, 6 do
+                if Hits[Index] then
+                    Count += 1
+                end
+            end
+            return Count
+        end
+        local function Row(Group)
+            return `{Seen(Group, Parts.Default)} {Seen(Group, Parts.QA)} {Seen(Group, Parts.QB)} {Seen(Group, Parts.QC)}`
+        end
+        assert(Row(nil) == "6 6 6 0", Row(nil))
+        assert(Row("QA") == "6 6 0 6", Row("QA"))
+        assert(Row("QB") == "6 0 6 6", Row("QB"))
+        assert(Row("Nope") == "6 6 6 6", Row("Nope"))
+        PhysicsService:CollisionGroupSetCollidable("QA", "QB", true)
+        assert(Row("QA") == "6 6 6 6", "a change counts at once: " .. Row("QA"))
+        local C = Parts.QC
+        local Top = C.Position + Vector3.new(0, 10, 0)
+        assert(workspace:FindPartOnRay(Ray.new(Top, Vector3.new(0, -20, 0))) == nil, "FindPartOnRay takes Default's group")
+        assert(#workspace:FindPartsInRegion3(Region3.new(C.Position - Vector3.one, C.Position + Vector3.one)) == 1, "Region3 takes none")
+        PhysicsService:UnregisterCollisionGroup("QC")
+        assert(Row(nil) == "6 6 6 6", "a part in a group no longer registered collides with all: " .. Row(nil))
+        "#,
+    );
+}
+
 /// Cast edges as a playing client meets them (Studio 0.747, client and server: tools/parity/probes/query_edges.luau): a cast
 /// touching a part only at its path's end or only at its start misses it; a Spherecast meets a box's edges and corners rounded;
 /// a Blockcast's Position divides the two centres by the boxes' half extents along the hit face, at the face's edge where both

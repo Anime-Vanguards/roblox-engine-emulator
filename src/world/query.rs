@@ -8,7 +8,8 @@
 //! (wedges, corner wedges, MeshParts, unions, trusses: no mesh geometry is loaded). Terrain holds
 //! no voxels and is never hit. Casts follow Roblox's documented rules: nothing a ray starts inside
 //! or a shape starts overlapping is hit, parts with CanQuery and CanCollide both off are skipped (CanQuery off alone hides
-//! nothing: measured), RespectCanCollide skips parts with CanCollide off, collision groups are not modelled (everything collides). A
+//! nothing: measured), RespectCanCollide skips parts with CanCollide off, and a part whose collision group does not collide with
+//! the params' CollisionGroup is skipped ([`Filter::groups_pass`]). A
 //! Blockcast against a ball or cylinder uses its bounding box; a Spherecast against a box meets the box grown by the radius
 //! with rounded edges and corners ([`sweep_sphere_box`]); a cast touching a part only at its start or its end misses it; a
 //! Blockcast's hit Position is where a client puts it ([`box_contact`]). Overlap queries
@@ -99,6 +100,9 @@ pub struct Filter {
     /// Parts with CanQuery and CanCollide both off are seen too (the PlayerMouse's view of the Workspace: world/mouse.rs); never set
     /// from a query's params
     pub unqueryable: bool,
+    /// The groups the params' CollisionGroup collides with, as bits by id, and the parts' CollisionGroupId (physics.rs
+    /// query_mask); None: every group
+    pub group_mask: Option<(u32, NameId)>,
 }
 
 /// An instance list that may be nil (`{Instance}?`): `given` false for nil; the instances sorted,
@@ -196,7 +200,7 @@ impl Filter {
     /// Whether a query with this filter sees the indexed part `part` (world/broadphase.rs): CanQuery and CanCollide off left out (unless the
     /// view takes such parts), CanCollide off left out with RespectCanCollide, and what [`Filter::admits`] says.
     pub(crate) fn sees(&self, state: &State, part: InstanceId, entry: &Entry) -> bool {
-        self.flags_pass(entry) && self.admits(state, part)
+        self.flags_pass(entry) && self.groups_pass(state, part) && self.admits(state, part)
     }
 
     /// Whether the indexed part's flags let a query with this filter see it, before its lists are asked: CanQuery or CanCollide (unless the view
@@ -205,9 +209,19 @@ impl Filter {
         (self.unqueryable || entry.can_query) && (!self.respect_can_collide || entry.can_collide)
     }
 
+    /// Whether the part's collision group (its CollisionGroupId, read when the params' group does not collide with every group)
+    /// collides with the params' (a part in a group that is not registered collides with all)
+    fn groups_pass(&self, state: &State, part: InstanceId) -> bool {
+        let Some((mask, name)) = self.group_mask else { return true };
+        match state.dom.raw_get(part, name) {
+            Some(Value::Number(id)) if (0.0..32.0).contains(id) => mask & (1u32 << (*id as u32)) != 0,
+            _ => true,
+        }
+    }
+
     /// RaycastParams / OverlapParams (a prelude proxy of the type `kind`; nil for the default params) read into this filter, its
     /// lists' storage kept: a query reading its params allocates nothing.
-    fn read(&mut self, engine: &Engine, kind: Params, params: &LuaValue) {
+    fn read(&mut self, engine: &Engine, world: InstanceId, kind: Params, params: &LuaValue) {
         let data = params_data(engine, kind, params);
         // (a proxy's stored fields are a plain table: raw reads, without mlua's protected call)
         let get = |key: &str| match &data {
@@ -232,7 +246,13 @@ impl Filter {
         let excluded = self.exclude_instances.read(&get("ExcludeInstances"));
         let included = self.include_instances.read(&get("IncludeInstances"));
         self.respect_can_collide = matches!(get("RespectCanCollide"), LuaValue::Boolean(true));
-        charge_query(engine, list_reads([descendants, excluded, included]));
+        // (the group the params name, Default when none are given, in the queried world's groups)
+        let (group_mask, named) = match get("CollisionGroup") {
+            LuaValue::String(name) => super::super::services::physics::query_mask(engine, world, &name.as_bytes()),
+            _ => super::super::services::physics::query_mask(engine, world, b"Default"),
+        };
+        self.group_mask = group_mask;
+        charge_query(engine, list_reads([descendants, excluded, included]) + if named { crate::cost::QUERY_PARAMS_GROUP } else { 0.0 });
     }
 
     /// FilterDescendantsInstances (or a legacy list) into `instances` and `positions`; how many entries it read.
@@ -271,7 +291,9 @@ impl Filter {
     }
 
     /// A legacy FindPartOnRay filter: `list` (an ignore list, or with `include` a whitelist) alone.
-    fn read_list(&mut self, list: &LuaValue, include: bool) {
+    fn read_list(&mut self, engine: &Engine, world: InstanceId, list: &LuaValue, include: bool) {
+        // (the Default group's: measured, FindPartOnRay misses a part in a group Default does not collide with)
+        self.group_mask = super::super::services::physics::query_mask(engine, world, b"Default").0;
         self.include = include;
         self.read_scanned(list);
         self.exclude_instances.read(&LuaValue::Nil);
@@ -329,9 +351,9 @@ fn query_cache(engine: &Engine) -> &QueryCache {
 
 /// A query's filter, read from its params into the spare filter's storage; [`keep_filter`] hands it
 /// back for the next query.
-fn take_filter(engine: &Engine, kind: Params, params: &LuaValue) -> Filter {
+fn take_filter(engine: &Engine, world: InstanceId, kind: Params, params: &LuaValue) -> Filter {
     let mut filter = query_cache(engine).spare.take();
-    filter.read(engine, kind, params);
+    filter.read(engine, world, kind, params);
     filter
 }
 
@@ -1162,7 +1184,7 @@ fn find_part_on_ray(lua: &Lua, engine: &Rc<Engine>, world: InstanceId, args: &Ar
     };
     let (origin, direction) = ray_argument(engine, args, 1)?;
     let mut filter = query_cache(engine).spare.take();
-    filter.read_list(&list, include);
+    filter.read_list(engine, world, &list, include);
     let index = take_in_of(engine, world);
     // (a ray that is not finite finds nothing and tests no part: its end is still origin + direction, an infinity kept)
     let hit = match index {
@@ -1238,7 +1260,7 @@ fn cast_counts<'a>(state: &State, near: impl IntoIterator<Item = (InstanceId, &'
             continue;
         }
         met += 1;
-        let collides = !filter.respect_can_collide || entry.can_collide;
+        let collides = (!filter.respect_can_collide || entry.can_collide) && filter.groups_pass(state, part);
         // (a client's cast asks its filter of each part it meets, at what a client spends on it: Filter::check)
         let (admits, walk) = if collides { filter.check(state, part, true) } else { (false, 0.0) };
         walks += walk;
@@ -1390,8 +1412,10 @@ fn overlapping(engine: &Engine, world: InstanceId, filter: Filter, center: Vec3,
                 missed += 1;
                 continue;
             }
-            if !filter.flags_pass(entry) {
-                if !(filter.unqueryable || entry.can_query) {
+            if !filter.flags_pass(entry) || !filter.groups_pass(&state, *part) {
+                // (a part CanQuery and CanCollide leave out, or the params' group: each 0.45 to 0.53 of a listed part's cost on a
+                // client and a server, measured)
+                if !(filter.unqueryable || entry.can_query) || filter.flags_pass(entry) {
                     seconds += crate::cost::QUERY_UNQUERYABLE;
                 }
                 continue;
@@ -1440,7 +1464,7 @@ pub fn install(engine: &Rc<Engine>) {
         let params = params_argument(engine, args, 3, Params::Raycast)?;
         let direction = vector3(engine, args, 2)?;
         let origin = vector3(engine, args, 1)?;
-        let filter = take_filter(engine, Params::Raycast, &params);
+        let filter = take_filter(engine, world, Params::Raycast, &params);
         if !finite_path(origin, direction) {
             return missed(lua, engine, world, filter);
         }
@@ -1465,7 +1489,7 @@ pub fn install(engine: &Rc<Engine>) {
         if !center.is_finite() {
             return raise("Invalid position. Must contain finite values.");
         }
-        let filter = take_filter(engine, Params::Raycast, &params);
+        let filter = take_filter(engine, world, Params::Raycast, &params);
         if !finite_path(center, direction) {
             return missed(lua, engine, world, filter);
         }
@@ -1485,7 +1509,7 @@ pub fn install(engine: &Rc<Engine>) {
         shapecast_size(size)?;
         shapecast_direction(direction)?;
         shapecast_frame(&frame)?;
-        let filter = take_filter(engine, Params::Raycast, &params);
+        let filter = take_filter(engine, world, Params::Raycast, &params);
         // (a negative side past the largest finds nothing, where a positive one raises: measured, size (-600, 1, 1) found nothing and
         // sides of -1 to -20 hit; the bound is taken to be the positive one's, inferred)
         if !finite_path(frame::translation(&frame), direction) || size.min_element() < -SHAPECAST_SIDE {
@@ -1530,7 +1554,7 @@ pub fn install(engine: &Rc<Engine>) {
         shapecast_size(size)?;
         shapecast_direction(direction)?;
         shapecast_frame(&frame)?;
-        let filter = take_filter(engine, Params::Raycast, &params);
+        let filter = take_filter(engine, world, Params::Raycast, &params);
         if !finite_path(frame::translation(&frame), direction) {
             return missed(lua, engine, world, filter);
         }
@@ -1564,7 +1588,7 @@ pub fn install(engine: &Rc<Engine>) {
         let frame = frame_argument(engine, args, 1)?;
         let size = vector3(engine, args, 2)?;
         let params = params_argument(engine, args, 3, Params::Overlap)?;
-        let filter = take_filter(engine, Params::Overlap, &params);
+        let filter = take_filter(engine, world, Params::Overlap, &params);
         // (a frame that is not finite finds nothing, rotation or position: measured; it and a side that is not finite cost a
         // client what it spends on them, cost.rs QUERY_NOT_FINITE, QUERY_SIDE_NOT_FINITE)
         if !finite_frame(&frame) {
@@ -1584,7 +1608,7 @@ pub fn install(engine: &Rc<Engine>) {
         let center = vector3(engine, args, 1)?;
         let radius = f64::from(super::camera::float_argument(lua, engine, args, 2)?);
         let params = params_argument(engine, args, 3, Params::Overlap)?;
-        let filter = take_filter(engine, Params::Overlap, &params);
+        let filter = take_filter(engine, world, Params::Overlap, &params);
         // (a NaN radius or a position that is not finite finds nothing: measured, at what a client spends on it; an infinite
         // radius every part)
         if radius.is_nan() || !center.is_finite() {
@@ -1600,7 +1624,7 @@ pub fn install(engine: &Rc<Engine>) {
         let part = object_argument(args, 1)?;
         let part = base_part(engine, part, "Part parameter must be BasePart")?;
         let params = params_argument(engine, args, 2, Params::Overlap)?;
-        let filter = take_filter(engine, Params::Overlap, &params);
+        let filter = take_filter(engine, world, Params::Overlap, &params);
         let query = solid(&engine.state.borrow(), engine, part);
         // (its walk over the part's world box grown a little: PART_QUERY_GROWTH)
         let (center, extent) = match query.shape {

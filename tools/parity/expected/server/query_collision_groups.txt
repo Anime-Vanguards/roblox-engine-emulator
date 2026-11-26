@@ -1,0 +1,55 @@
+# engine: Roblox Studio 0.747.0.7471481, the server of a headless play session (a Script in ServerScriptService, script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-26
+set Default ok  ok  Default
+Default in_Default ray hit | block hit | sphere hit | shape hit | box found | radius found | inpart found
+Default in_QA_A ray hit | block hit | sphere hit | shape hit | box found | radius found | inpart found
+Default in_QA_B ray hit | block hit | sphere hit | shape hit | box found | radius found | inpart found
+Default in_QA_C ray miss | block miss | sphere miss | shape miss | box none | radius none | inpart none
+Default in_QA_B_CanCollideOff ray hit | block hit | sphere hit | shape hit | box found | radius found | inpart found
+set QA_A ok  ok  QA_A
+QA_A in_Default ray hit | block hit | sphere hit | shape hit | box found | radius found | inpart found
+QA_A in_QA_A ray hit | block hit | sphere hit | shape hit | box found | radius found | inpart found
+QA_A in_QA_B ray miss | block miss | sphere miss | shape miss | box none | radius none | inpart none
+QA_A in_QA_C ray hit | block hit | sphere hit | shape hit | box found | radius found | inpart found
+QA_A in_QA_B_CanCollideOff ray miss | block miss | sphere miss | shape miss | box none | radius none | inpart none
+set QA_B ok  ok  QA_B
+QA_B in_Default ray hit | block hit | sphere hit | shape hit | box found | radius found | inpart found
+QA_B in_QA_A ray miss | block miss | sphere miss | shape miss | box none | radius none | inpart none
+QA_B in_QA_B ray hit | block hit | sphere hit | shape hit | box found | radius found | inpart found
+QA_B in_QA_C ray hit | block hit | sphere hit | shape hit | box found | radius found | inpart found
+QA_B in_QA_B_CanCollideOff ray hit | block hit | sphere hit | shape hit | box found | radius found | inpart found
+set QA_C ok  ok  QA_C
+QA_C in_Default ray miss | block miss | sphere miss | shape miss | box none | radius none | inpart none
+QA_C in_QA_A ray hit | block hit | sphere hit | shape hit | box found | radius found | inpart found
+QA_C in_QA_B ray hit | block hit | sphere hit | shape hit | box found | radius found | inpart found
+QA_C in_QA_C ray miss | block miss | sphere miss | shape miss | box none | radius none | inpart none
+QA_C in_QA_B_CanCollideOff ray hit | block hit | sphere hit | shape hit | box found | radius found | inpart found
+set Nope ok  ok  Nope
+Nope in_Default ray hit | block hit | sphere hit | shape hit | box found | radius found | inpart found
+Nope in_QA_A ray hit | block hit | sphere hit | shape hit | box found | radius found | inpart found
+Nope in_QA_B ray hit | block hit | sphere hit | shape hit | box found | radius found | inpart found
+Nope in_QA_C ray hit | block hit | sphere hit | shape hit | box found | radius found | inpart found
+Nope in_QA_B_CanCollideOff ray hit | block hit | sphere hit | shape hit | box found | radius found | inpart found
+own Default in_Default shape hit inpart found
+own Default in_QA_A shape hit inpart found
+own Default in_QA_B shape hit inpart found
+own Default in_QA_C shape miss inpart none
+own Default in_QA_B_CanCollideOff shape hit inpart found
+own QA_A in_Default shape hit inpart found
+own QA_A in_QA_A shape hit inpart found
+own QA_A in_QA_B shape hit inpart found
+own QA_A in_QA_C shape miss inpart none
+own QA_A in_QA_B_CanCollideOff shape hit inpart found
+own QA_C in_Default shape hit inpart found
+own QA_C in_QA_A shape hit inpart found
+own QA_C in_QA_B shape hit inpart found
+own QA_C in_QA_C shape miss inpart none
+own QA_C in_QA_B_CanCollideOff shape hit inpart found
+legacy in_Default fpor hit region found empty false
+legacy in_QA_A fpor hit region found empty false
+legacy in_QA_B fpor hit region found empty false
+legacy in_QA_C fpor miss region found empty false
+legacy in_QA_B_CanCollideOff fpor hit region found empty false
+after set collidable hit
+after unregister ok hit QA_A
+after unregister C part ok hit

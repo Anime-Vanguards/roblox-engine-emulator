@@ -1166,6 +1166,10 @@ pub const QUERY_ROOT_CELL: f64 = 1.05e-9;
 pub const QUERY_CELL: f64 = 25e-9;
 pub const QUERY_MISSED_PART: f64 = 7.6e-9;
 pub const QUERY_UNQUERYABLE: f64 = 0.055e-6;
+/// What a spatial query whose params name a registered collision group other than Default costs a client past the same query with
+/// Default (a 0.747 server, three sessions of a box query that found nothing: 0.18 to 0.31 us; 2026-11-26). A part the params'
+/// group does not collide with costs a box query [`QUERY_UNQUERYABLE`] (0.46 to 0.52 of a listed part's cost there).
+pub const QUERY_PARAMS_GROUP: f64 = 0.25e-6;
 /// What a Raycast's walk of the spatial grid costs a client on its way, beyond the parts it meets ([`RAY_MET`], [`RAY_CROSSED`];
 /// world/query.rs charge_ray_walk), measured as [`QUERY_BOX_PART`]: its length up to its hit, the whole cut path on a miss
 /// ([`RAY_LENGTH`] each 1,000 studs: an empty region's ray of 1 to 1,000 studs 0.21 us, 10,000 0.34, 15,000 or longer 0.41), each
