@@ -24,12 +24,14 @@ pub struct NumberSequence {
 /// Roblox's keypoint limit for NumberSequence and ColorSequence ("a maximum of 20 keypoints").
 pub(crate) const MAX_SEQUENCE_KEYPOINTS: usize = 20;
 
-/// How far the first and last times may be from 0 and 1 (not measured in Studio; rbxmk's tolerance).
+/// How far the first and last times may be from 0 and 1, in float32 (Studio 0.747: 0.0001 and 0.99995 pass, 0.9999
+/// fails; ree's tools/parity/probes/datatype_edges.luau).
 const SEQUENCE_END_TOLERANCE: f32 = 1e-4;
 
 /// The keypoints of a sequence constructor's table, read as Roblox reads them: at most 20, each a
-/// `T` (the messages are Studio's: "ColorSequence.new(): table is too long.",
-/// "NumberSequence.new(): table of NumberSequenceKeypoints expected.").
+/// `T` (the messages are Studio's: "ColorSequence.new(): table is too long.", and for an entry that is no keypoint
+/// "NumberSequence.new(): expected 'NumberSequenceKeypoint' at index 2" / "ColorSequence.new(): expected
+/// 'ColorSequenceKeypoint' at index 2." with its full stop; Studio 0.747, datatype_edges.luau).
 pub(crate) fn sequence_keypoints<T: LuaUserData + Copy + 'static>(
     lua: &Lua,
     table: &LuaTable,
@@ -47,8 +49,9 @@ pub(crate) fn sequence_keypoints<T: LuaUserData + Copy + 'static>(
         match LuaUserDataRef::<T>::from_lua(value, lua) {
             Ok(keypoint) => keypoints.push(*keypoint),
             Err(_) => {
+                let stop = if kind == "ColorSequence" { "." } else { "" };
                 return Err(LuaError::RuntimeError(format!(
-                    "{kind}.new(): table of {kind}Keypoints expected."
+                    "{kind}.new(): expected '{kind}Keypoint' at index {index}{stop}"
                 )));
             }
         }
@@ -58,8 +61,8 @@ pub(crate) fn sequence_keypoints<T: LuaUserData + Copy + 'static>(
 
 /// The rules a sequence's keypoint times follow: at least two, in non-descending order, the last at
 /// time 1 and the first at time 0. Studio's messages ("NumberSequence: requires at least 2
-/// keypoints", "...: all keypoints must be ordered by time", "ColorSequence must end at time=1.0");
-/// the start message and the order of the two end checks are not measured.
+/// keypoints", "...: all keypoints must be ordered by time", "ColorSequence must start at time=0.0", "... must end at
+/// time=1.0"); with both ends wrong the start is named (Studio 0.747, datatype_edges.luau).
 pub(crate) fn check_sequence_times(kind: &str, times: &[f32]) -> LuaResult<()> {
     let fail = |message: String| Err(LuaError::RuntimeError(message));
     if times.len() < 2 {
@@ -68,11 +71,11 @@ pub(crate) fn check_sequence_times(kind: &str, times: &[f32]) -> LuaResult<()> {
     if times.windows(2).any(|pair| pair[1] < pair[0]) {
         return fail(format!("{kind}: all keypoints must be ordered by time"));
     }
-    if (times[times.len() - 1] - 1.0).abs() > SEQUENCE_END_TOLERANCE {
-        return fail(format!("{kind} must end at time=1.0"));
-    }
     if times[0].abs() > SEQUENCE_END_TOLERANCE {
         return fail(format!("{kind} must start at time=0.0"));
+    }
+    if (times[times.len() - 1] - 1.0).abs() > SEQUENCE_END_TOLERANCE {
+        return fail(format!("{kind} must end at time=1.0"));
     }
     Ok(())
 }

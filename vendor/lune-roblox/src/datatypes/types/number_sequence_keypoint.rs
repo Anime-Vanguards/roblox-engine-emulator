@@ -34,14 +34,9 @@ impl LuaExportsTable for NumberSequenceKeypoint {
                 let value = ctor_number(lua, &args, 2, "new")? as f32;
                 let envelope = args.get(2).and_then(|value| luau_number(lua, value)).map(|envelope| envelope as f32);
                 super::charge_host_nanos(lua, super::datatype_price::KEYPOINT_NEW);
-                // Roblox's documentation: "The envelope parameter must be a non-negative number"
-                // (the message is not measured in Studio)
+                // (a negative envelope is kept, though Roblox's documentation says it "must be a non-negative number":
+                // -1 reads -1 in Studio 0.747, ree's datatype_edges.luau)
                 let envelope = envelope.unwrap_or_default();
-                if envelope < 0.0 {
-                    return Err(LuaError::RuntimeError(
-                        "NumberSequenceKeypoint: envelope must be non-negative".to_string(),
-                    ));
-                }
                 Ok(NumberSequenceKeypoint {
                     time,
                     value,

@@ -199,34 +199,6 @@
 	],
 	"datatype_edges": [
 		{
-			"line": "numbersequence both-ends",
-			"why": "NumberSequence / ColorSequence with both ends wrong: a client names the start first (`must start at time=0.0`); ree names the end"
-		},
-		{
-			"line": "colorsequence both-ends",
-			"why": "NumberSequence / ColorSequence with both ends wrong: a client names the start first (`must start at time=0.0`); ree names the end"
-		},
-		{
-			"line": "numbersequence ends-off",
-			"why": "NumberSequence / ColorSequence with both ends wrong: a client names the start first (`must start at time=0.0`); ree names the end"
-		},
-		{
-			"line": "colorsequence ends-off",
-			"why": "NumberSequence / ColorSequence with both ends wrong: a client names the start first (`must start at time=0.0`); ree names the end"
-		},
-		{
-			"line": "numbersequence-element",
-			"why": "a sequence's entry that is no keypoint: a client says `<Type>.new(): expected '<Type>Keypoint' at index <n>` (ColorSequence's with a full stop); ree says `table of <Type>Keypoints expected.`"
-		},
-		{
-			"line": "colorsequence-element",
-			"why": "a sequence's entry that is no keypoint: a client says `<Type>.new(): expected '<Type>Keypoint' at index <n>` (ColorSequence's with a full stop); ree says `table of <Type>Keypoints expected.`"
-		},
-		{
-			"line": "keypoint-envelope -",
-			"why": "NumberSequenceKeypoint.new takes a negative envelope in a client and keeps it; ree raises `envelope must be non-negative`"
-		},
-		{
 			"line": "brickcolor-",
 			"why": "BrickColor.new(Color3) and a part's Color read as BrickColor pick the colour with the least sum of absolute channel differences computed in float32 (each difference, then |r| + |g|, then + |b|), over every BrickColor by number, the lowest on a tie (all 8,128 palette midpoints); ree's sum and order pick another colour for some"
 		},

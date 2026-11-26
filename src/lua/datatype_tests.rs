@@ -343,7 +343,12 @@ Fails("NumberSequence: all keypoints must be ordered by time", NumberSequence.ne
 Fails("NumberSequence must start at time=0.0", NumberSequence.new, { NK(0.1, 1), NK(1, 1) })
 Fails("NumberSequence must end at time=1.0", NumberSequence.new, { NK(0, 1), NK(0.9, 1) })
 Fails("NumberSequence.new(): table of NumberSequenceKeypoints expected.", NumberSequence.new, NK(0, 1))
-Fails("NumberSequence.new(): table of NumberSequenceKeypoints expected.", NumberSequence.new, { 0, 1 })
+Fails("NumberSequence.new(): expected 'NumberSequenceKeypoint' at index 1", NumberSequence.new, { 0, 1 })
+Fails("NumberSequence.new(): expected 'NumberSequenceKeypoint' at index 2", NumberSequence.new, { NK(0, 1), ColorSequenceKeypoint.new(0.5, Color3.new()), NK(1, 1) })
+-- both ends wrong: the start is named (Studio 0.747)
+Fails("NumberSequence must start at time=0.0", NumberSequence.new, { NK(0.1, 1), NK(0.9, 1) })
+Fails("NumberSequence must start at time=0.0", NumberSequence.new, { NK(0.0002, 1), NK(0.9998, 1) })
+Fails("NumberSequence must end at time=1.0", NumberSequence.new, { NK(0.0001, 1), NK(0.9999, 1) })
 assert(#NumberSequence.new({ NK(0, 1), NK(0.5, 2), NK(0.5, 3), NK(1, 4) }).Keypoints == 4, "equal times are in order")
 local Snapped = NumberSequence.new({ NK(0.00005, 1), NK(0.99995, 2) }).Keypoints
 assert(Snapped[1].Time == 0 and Snapped[2].Time == 1, "ends within the tolerance snap to 0 and 1")
@@ -361,10 +366,11 @@ Fails("ColorSequence: all keypoints must be ordered by time", ColorSequence.new,
 Fails("ColorSequence must end at time=1.0", ColorSequence.new, { CK(0), CK(1), CK(2), CK(7) })
 Fails("ColorSequence must start at time=0.0", ColorSequence.new, { CK(0.5), CK(1) })
 Fails("ColorSequence.new(): table expected.", ColorSequence.new)
-Fails("ColorSequence.new(): table of ColorSequenceKeypoints expected.", ColorSequence.new, { CK(0), 1 })
+Fails("ColorSequence.new(): expected 'ColorSequenceKeypoint' at index 2.", ColorSequence.new, { CK(0), 1 })
+Fails("ColorSequence must start at time=0.0", ColorSequence.new, { CK(0.1), CK(0.9) })
 assert(ColorSequence.new(Red, Color3.new(0, 0, 1)).Keypoints[2].Value == Color3.new(0, 0, 1))
 
-Fails("NumberSequenceKeypoint: envelope must be non-negative", NumberSequenceKeypoint.new, 0, 1, -0.5)
+assert(NK(0, 1, -0.5).Envelope == -0.5, "a negative envelope is kept (Studio 0.747)")
 assert(NK(0.5, 1, 0).Envelope == 0 and NK(0.5, 1).Envelope == 0 and Near(NK(0.5, 1, 0.25).Envelope, 0.25))
 assert(NK(2, 1).Time == 2, "a keypoint's time is checked by the sequence, not the keypoint")
 
