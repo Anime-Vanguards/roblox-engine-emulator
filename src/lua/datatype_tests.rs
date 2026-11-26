@@ -111,7 +111,7 @@ end)
 -- (a Random has no properties: any key is no member, as a 0.747 playing client says, tools/parity/probes/datatype_errors.luau)
 assert(not Ok and Error == "Anything is not a valid member of Random", tostring(Error))
 assert(getmetatable(A) == "The metatable is locked")
-assert(getmetatable(B) == getmetatable(A) and A.NextNumber == B.NextNumber)
+assert(getmetatable(B) == getmetatable(A) and A.NextNumber ~= B.NextNumber) -- (a method read as a value is a new function at every read, as a 0.747 client's: method_values.luau)
 local UnknownOk, UnknownError = pcall(function() return A.UnknownMember end)
 assert(not UnknownOk and string.find(tostring(UnknownError), "UnknownMember is not a valid member of Random", 1, true))
 
@@ -589,7 +589,7 @@ fn vector3_members_methods_and_errors_follow_studio() {
         end
         assert(V.Magnitude == 13 and V.magnitude == 13 and V["Magnitude"] == 13 and V[("Magn" .. "itude")] == 13)
         assert(math.abs(V.Unit.Y - 4 / 13) < 1e-6)
-        assert(V:Dot(W) == 3 + 8 + 36 and V.Dot == W.Dot)
+        assert(V:Dot(W) == 3 + 8 + 36 and V.Dot ~= W.Dot) -- (a new function at every read, as a 0.747 client's: method_values.luau)
         assert(V:Cross(W) == Vector3.new(-12, 3, 2))
         assert(V:Max(W) == Vector3.new(3, 4, 12) and V:Min(W) == W and V:Lerp(W, 0.5) == Vector3.new(2, 3, 7.5))
         assert(V:FuzzyEq(V + Vector3.new(1e-6, 0, 0)) and not V:FuzzyEq(W))

@@ -111,6 +111,46 @@ fn is_trampoline(function: Option<ffi::lua_CFunction>) -> bool {
     [rust_library as ffi::lua_CFunction, rust_served, luau_library, luau_served, raw_library, raw_served].iter().any(|&candidate| std::ptr::fn_addr_eq(candidate, function))
 }
 
+/// A new closure of the C function `function`: the same C function, name, upvalues and continuation (a Luau function is
+/// answered as it is). A client's method of a signal, a connection, a vector, an EnumItem or a Random read as a value is a new
+/// function at every read (not rawequal to another read; measured in a 0.747 playing client and a server:
+/// tools/parity/probes/method_values.luau); a call through it is the same call.
+pub fn copy(lua: &Lua, function: &LuaFunction) -> LuaResult<LuaFunction> {
+    // SAFETY: the function is pushed as the argument; its upvalues are pushed above it and taken by the new closure, which
+    // replaces it as the one result
+    unsafe {
+        lua.exec_raw::<LuaFunction>(function, |state| {
+            let Some(body) = ffi::lua_tocfunction(state, -1) else { return };
+            let mut debug: ffi::lua_Debug = std::mem::zeroed();
+            if ffi::lua_getinfo(state, -1, c"nu".as_ptr(), &mut debug) == 0 {
+                return;
+            }
+            let at = ffi::lua_gettop(state);
+            let count = debug.nupvals as c_int;
+            ffi::lua_rawcheckstack(state, count + 1);
+            for index in 1..=count {
+                ffi::lua_getupvalue(state, at, index);
+            }
+            ffi::lua_pushcclosurek(state, body, debug.name, count, continuation_of(body));
+            ffi::lua_remove(state, at);
+        })
+    }
+}
+
+/// The continuation of a C function this module makes (none for any other)
+fn continuation_of(function: ffi::lua_CFunction) -> Option<ffi::lua_Continuation> {
+    let is = |candidate: ffi::lua_CFunction| std::ptr::fn_addr_eq(candidate, function);
+    if is(rust_library) || is(rust_served) {
+        Some(rust_continue)
+    } else if is(luau_library) || is(luau_served) {
+        Some(luau_continue)
+    } else if is(raw_library) || is(raw_served) {
+        Some(raw_continue)
+    } else {
+        None
+    }
+}
+
 /// An engine function named `name` doing its work in `body`, an mlua function answering the call protocol (lua/mod.rs `encode`).
 pub fn over_rust(lua: &Lua, name: &str, kind: Kind, body: LuaFunction) -> LuaResult<LuaFunction> {
     let trampoline = match kind {

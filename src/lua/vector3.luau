@@ -183,7 +183,7 @@ local LerpDot, LerpColon = MakeLerp(true), MakeLerp(false)
 
 -- Abs, Ceil, Floor, Sign, Dot, Cross, Max and Min are the `vector` library's functions behind C functions of their own
 -- names that check the arguments first (lua/vector_methods.rs)
-local Native = R.VectorMethods
+local Native, CopyFunction = R.VectorMethods, R.CopyFunction
 
 local VectorMethods = {
 	Dot = Native.Dot,
@@ -210,16 +210,16 @@ local ColonExtras = {
 -- Studio's 10-12 ns, where a function here cost a 15 ns host call). Methods are a table lookup, as in Studio
 -- (a:Dot(b) 9-10 ns); the table's own metatable raises Studio's error for any other member, from the script's line.
 R.SetVectorMetatable({
-	__index = setmetatable(VectorMethods, {
-		__index = function(_, Key)
-			-- (a key that is no string is the client's Luau check, from the calling line: `Vector3.one[1]` raises "invalid
-			-- argument #2 (string expected, got number)" in Studio 0.747, tools/parity/probes/datatype_errors.luau)
-			if type(Key) ~= "string" then
-				error(`invalid argument #2 (string expected, got {TypeName(Key)})`, 2)
-			end
-			error(`{Key} is not a valid member of Vector3`, 0)
-		end,
-	}),
+	-- (a method read as a value is a new function at every read, as a client's: Studio 0.747, method_values.luau. A Luau
+	-- function, so the VM answers Magnitude and Unit before it is called; a C one it would call for them)
+	__index = function(_, Key)
+		local Method = VectorMethods[Key]
+		if Method then return CopyFunction(Method) end
+		-- (a key that is no string is the client's Luau check, from the calling line: `Vector3.one[1]` raises "invalid
+		-- argument #2 (string expected, got number)" in Studio 0.747, tools/parity/probes/datatype_errors.luau)
+		if type(Key) ~= "string" then error(`invalid argument #2 (string expected, got {TypeName(Key)})`, 2) end
+		error(`{Key} is not a valid member of Vector3`, 0)
+	end,
 	__namecall = R.MakeVectorNamecall(ColonExtras),
 	-- an assignment raises Studio's "X cannot be assigned to" for any string or number key (a vector is a value), any other
 	-- key the client's Luau check from the calling line (Studio 0.747, tools/parity/probes/datatype_errors.luau)

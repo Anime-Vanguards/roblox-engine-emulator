@@ -534,6 +534,9 @@ fn load_prelude(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     // through their own metatables reached here (they are locked for scripts)
     // (Vector3's native methods with a client's argument errors: lua/vector_methods.rs)
     r.set("VectorMethods", super::vector_methods::methods(lua)?)?;
+    // a method read as a value: a new function of it at every read (cfunction::copy, as a client's: measured,
+    // tools/parity/probes/method_values.luau; vector3.luau's __index)
+    r.set("CopyFunction", super::lua_fn(lua, |lua, function: LuaFunction| cfunction::copy(lua, &function))?)?;
     r.set(
         "MakeVectorNamecall",
         super::lua_fn(lua, |lua, extras: LuaTable| super::vector_methods::namecall(lua, extras))?,

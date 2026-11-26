@@ -173,14 +173,6 @@
 	],
 	"engine_functions": [
 		{
-			"line": "same signal.Connect false",
-			"why": "a signal's method read as a value is a new function at every read in a client (not rawequal to another read); ree's is one function a method, read after read"
-		},
-		{
-			"line": "same v3.Lerp false",
-			"why": "a vector's method read as a value is a new function at every read in a client; ree's is one function a method"
-		},
-		{
 			"line": "levels invoke @ 401 ",
 			"why": "a client runs a BindableFunction's OnInvoke on a thread of its own (no level above the handler); ree calls it from Invoke's engine Luau on the invoking thread"
 		},
@@ -895,6 +887,24 @@
 		{
 			"line": "model destroyed primary",
 			"why": "Model.PrimaryPart reads nil on a client once the part is no longer under the model (taken out or destroyed); ree keeps answering the part (SetPrimaryPartCFrame and GetPrimaryPartCFrame refuse it as a client does)"
+		}
+	],
+	"method_values": [
+		{
+			"line": "same v2.",
+			"why": "a method of CFrame, Color3, UDim2 or Vector2 read as a value is a new function at every read on a client; Lune's datatypes (vendor/lune-roblox) give one function a method (a signal's, a connection's, a Vector3's, a Random's and an EnumItem's IsA follow the client)"
+		},
+		{
+			"line": "same cf.",
+			"why": "a method of CFrame, Color3, UDim2 or Vector2 read as a value is a new function at every read on a client; Lune's datatypes (vendor/lune-roblox) give one function a method (a signal's, a connection's, a Vector3's, a Random's and an EnumItem's IsA follow the client)"
+		},
+		{
+			"line": "same c3.",
+			"why": "a method of CFrame, Color3, UDim2 or Vector2 read as a value is a new function at every read on a client; Lune's datatypes (vendor/lune-roblox) give one function a method (a signal's, a connection's, a Vector3's, a Random's and an EnumItem's IsA follow the client)"
+		},
+		{
+			"line": "same u2.",
+			"why": "a method of CFrame, Color3, UDim2 or Vector2 read as a value is a new function at every read on a client; Lune's datatypes (vendor/lune-roblox) give one function a method (a signal's, a connection's, a Vector3's, a Random's and an EnumItem's IsA follow the client)"
 		}
 	]
 }

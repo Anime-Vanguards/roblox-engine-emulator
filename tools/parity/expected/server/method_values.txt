@@ -1,0 +1,33 @@
+# engine: Roblox Studio 0.747.0.7471481, the server of a headless play session (a Script in ServerScriptService, script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-26
+same signal.Connect self false false function
+same signal.Connect again false false function
+same signal.Connect other false false function
+same signal.Once self false false function
+same signal.Wait self false false function
+same signal.ConnectParallel self false false function
+same signal.connect self false false function
+same connection.Disconnect self false false function
+same connection.disconnect self false false function
+same v3.Lerp self false false function
+same v3.Lerp other false false function
+same v3.Dot self false false function
+same v3.Unit true true vector
+same v2.Lerp self false false function
+same v2.Lerp other false false function
+same cf.Lerp self false false function
+same cf.Lerp other false false function
+same cf.Inverse self false false function
+same c3.Lerp self false false function
+same c3.Lerp other false false function
+same u2.Lerp self false false function
+same rng.NextNumber self false false function
+same enumitem.IsA self false false function
+same enumitem.IsA other false false function
+same enum.GetEnumItems self true true function
+same enums.GetEnums self true true function
+same part.Destroy self true true function
+signal.Connect other-signal 1 RBXScriptConnection
+v3.Lerp value 0.5, 0.5, 0.5
+debug.info signal.Connect [C] Connect
+debug.info v3.Lerp [C] Lerp

@@ -247,6 +247,37 @@ fn memory_categories_are_a_threads_own() {
     assert!(lines.iter().any(|line| line == "print: done") && errors(&lines).is_empty(), "{lines:?}");
 }
 
+/// A signal's, a connection's, a vector's, a Random's and an EnumItem's method read as a value is a new function at every read,
+/// which still works; an Instance's and an Enum's are one function.
+#[test]
+fn method_values_are_new_functions_where_a_clients_are() {
+    let lines = run(
+        RunContext::Client,
+        r##"
+        local Event = Instance.new("BindableEvent")
+        local Connection = Event.Event:Connect(function() end)
+        local V = Vector3.new(1, 2, 3)
+        local Rng = Random.new(1)
+        assert(not rawequal(Event.Event.Connect, Event.Event.Connect) and not rawequal(Connection.Disconnect, Connection.Disconnect))
+        assert(not rawequal(V.Lerp, V.Lerp) and not rawequal(V.Dot, V.Dot) and not rawequal(Rng.NextNumber, Rng.NextNumber))
+        assert(not rawequal(Enum.Material.Plastic.IsA, Enum.Material.Plastic.IsA))
+        assert(rawequal(workspace.FindFirstChild, workspace.FindFirstChild) and rawequal(Enum.Material.GetEnumItems, Enum.Material.GetEnumItems))
+        assert(V.Unit == V.Unit and V.Magnitude > 0 and V.Lerp(Vector3.zero, Vector3.one, 0.5) == Vector3.one / 2)
+        local Fired = 0
+        Event.Event.Connect(Event.Event, function() Fired += 1 end)
+        Event:Fire()
+        task.wait()
+        assert(Fired == 1)
+        assert(select(2, pcall(function() return V.Nope end)) == "Nope is not a valid member of Vector3")
+        local _, Problem = pcall(function() return V[1] end)
+        assert(string.find(Problem, ":%d+: invalid argument #2 %(string expected, got number%)$"), Problem)
+        print("done")
+        "##,
+        0.1,
+    );
+    assert!(lines.iter().any(|line| line == "print: done") && errors(&lines).is_empty(), "{lines:?}");
+}
+
 /// Model:SetPrimaryPartCFrame puts the primary part at the CFrame exactly (its PivotOffset and the WorldPivot play no part), the
 /// model's other parts moved with it; with no PrimaryPart, or one taken out of the model, both methods raise.
 #[test]

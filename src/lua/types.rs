@@ -474,7 +474,7 @@ fn register_enums(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
                 b"Name" => return Ok(values([LuaValue::String(lua.create_string(&*info.name)?)])),
                 b"Value" => return Ok(values([LuaValue::Number(info.value)])),
                 b"EnumType" => return Ok(values([enum_value(lua, &e, info.enum_type)?])),
-                b"IsA" => return Ok(values([LuaValue::Function(is_a.clone())])),
+                b"IsA" => return Ok(values([LuaValue::Function(super::cfunction::copy(lua, &is_a)?)])),
                 _ => {}
             }
         }
@@ -776,16 +776,18 @@ fn register_signals(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     members.set("wait", wait_fn)?;
     members.set("connectParallel", connect_parallel_fn)?;
     engine.lua.borrow_mut().signal_members = Some(members.clone());
-    let index = wrapped(lua, engine, "__index", move |_, args| {
+    // (a method read as a value is a new function at every read, as a client's: cfunction::copy)
+    let index = wrapped(lua, engine, "__index", move |lua, args| {
         let args = Args::new(args);
         let member: LuaValue = match args.get(1) {
             LuaValue::String(key) => members.raw_get(key.clone())?,
             _ => LuaValue::Nil,
         };
-        if member.is_nil() {
-            return raise(format!("{} is not a valid member of RBXScriptSignal", key_text(args.get(1))));
+        match member {
+            LuaValue::Function(method) => Ok(values([LuaValue::Function(super::cfunction::copy(lua, &method)?)])),
+            LuaValue::Nil => raise(format!("{} is not a valid member of RBXScriptSignal", key_text(args.get(1)))),
+            member => Ok(values([member])),
         }
-        Ok(values([member]))
     })?;
     let tostring = super::lua_fn(lua, |lua, this: LuaAnyUserData| {
         let engine = engine_of(lua);
@@ -824,7 +826,7 @@ fn register_signals(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     connection_members.set("disconnect", disconnect)?;
     engine.lua.borrow_mut().connection_members = Some(connection_members.clone());
     let e = engine.clone();
-    let connection_index = wrapped(lua, engine, "__index", move |_, args| {
+    let connection_index = wrapped(lua, engine, "__index", move |lua, args| {
         let args = Args::new(args);
         let LuaValue::UserData(ud) = args.get(0) else { return raise("invalid connection") };
         let connection = ud.borrow::<LConnection>()?.0;
@@ -834,9 +836,8 @@ fn register_signals(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
                 let connected = e.state.borrow().signals.is_connected(connection);
                 return Ok(values([LuaValue::Boolean(connected)]));
             }
-            let member: LuaValue = connection_members.raw_get(key.clone())?;
-            if !member.is_nil() {
-                return Ok(values([member]));
+            if let LuaValue::Function(method) = connection_members.raw_get::<LuaValue>(key.clone())? {
+                return Ok(values([LuaValue::Function(super::cfunction::copy(lua, &method)?)]));
             }
         }
         raise(format!("{} is not a valid member of RBXScriptConnection", key_text(args.get(1))))
@@ -1721,16 +1722,18 @@ fn register_random(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
         Ok(values([LuaValue::UserData(copy)]))
     })?;
     let e = engine.clone();
-    let index = wrapped(lua, engine, "__index", move |_, args| {
+    // (a method read as a value is a new function at every read, as a client's: cfunction::copy)
+    let index = wrapped(lua, engine, "__index", move |lua, args| {
         let args = Args::new(args);
         let member: LuaValue = match args.get(1) {
             LuaValue::String(key) => methods.raw_get(key.clone())?,
             _ => LuaValue::Nil,
         };
-        if member.is_nil() {
-            return unknown_member(&e, args.get(1), "Random", false);
+        match member {
+            LuaValue::Function(method) => Ok(values([LuaValue::Function(super::cfunction::copy(lua, &method)?)])),
+            LuaValue::Nil => unknown_member(&e, args.get(1), "Random", false),
+            member => Ok(values([member])),
         }
-        Ok(values([member]))
     })?;
     let newindex = read_only_members(lua, engine, "Random", &[])?;
     let tostring = super::create_boxed_unit(lua, Box::new(|lua| Ok(LuaValue::String(lua.create_string("Random")?))))?;
