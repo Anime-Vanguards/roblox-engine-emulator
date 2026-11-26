@@ -1,4 +1,54 @@
 {
+	"arg_checks": [
+		{
+			"line": "analytics ",
+			"why": "AnalyticsService's Log methods check their arguments in a client and a server (`Argument <n> missing or nil`, `Unable to cast ...`) and a client warns that they run on the server only (a server warns `AnalyticsService: Invalid status.` offline); ree's stubs take anything silently"
+		},
+		{
+			"line": "chat ",
+			"why": "Chat:Chat checks its arguments in a client and a server (`partOrCharacter must be non-nil`, `... must be in the Workspace`, `message must be non-empty`, the casts); ree reports it as not emulated"
+		},
+		{
+			"line": "subscription ",
+			"why": "MarketplaceService:PromptSubscriptionPurchase checks its arguments (`Argument 2 missing or nil`, `First argument to PromptSubscriptionPurchase must be a player`, `Invalid SubscriptionId`); ree reports it as not emulated"
+		},
+		{
+			"line": "translator-for-locale ",
+			"why": "LocalizationService:GetTranslatorForLocaleAsync casts a non-string locale and waits for the web in a client and a server (and refuses where the thread cannot yield); ree answers a translator at once"
+		},
+		{
+			"line": "refused CreateEditableMeshAsync",
+			"why": "AssetService:CreateEditableMeshAsync casts its argument before it refuses to wait (`Argument 1 missing or nil`, `Unable to cast double to Content`, `Unable to cast Array to Content`) and raises `UnpublishedPlaceNotInStudio` for an asset offline; ree's message and order differ"
+		},
+		{
+			"line": "refused GetKeyframeSequenceAsync",
+			"why": "KeyframeSequenceProvider / AnimationClipProvider cast a number id (`Unable to cast double to ContentId`) before refusing to wait, and a server rejects an rbxassetid id offline (`Invalid animation id ... Unrecognized scheme`); ree refuses first"
+		},
+		{
+			"line": "refused GetTranslatorForLocaleAsync",
+			"why": "LocalizationService:GetTranslatorForLocaleAsync casts a non-string locale and waits for the web in a client and a server (and refuses where the thread cannot yield); ree answers a translator at once"
+		},
+		{
+			"line": "refused Invoke",
+			"why": "a remote call with a table inside itself raises `tables cannot be cyclic` before the refusal to wait, the player check and the side checks (a server's InvokeServer says it is for clients); ree checks the cycle after them or not at all"
+		},
+		{
+			"line": "loaders-logged ",
+			"why": "a client logs `ContentId: rbxassetid://1 failed due to: Request asset was not found` for a refused loader's load that still goes on; ree logs nothing"
+		},
+		{
+			"line": "Fire",
+			"why": "a remote call with a table inside itself raises `tables cannot be cyclic` before the refusal to wait, the player check and the side checks (a server's InvokeServer says it is for clients); ree checks the cycle after them or not at all"
+		},
+		{
+			"line": "attribute-name ",
+			"why": "an attribute name with the RBX prefix is refused for it first (`Attempt to assign attribute <name>. CoreScript permission required`), before an illegal character or the length; ree checks those first"
+		},
+		{
+			"line": "legacy-spawn-thread ",
+			"why": "the legacy spawn given a coroutine logs `attempt to call a thread value` in a client; ree runs the coroutine"
+		}
+	],
 	"assembly_mass": [
 		{
 			"line": "velocity-two-anchored a-unanchored A root=B mass=inf text=inf get=5.5999999046325684 own=5.5999999046325684 centre=861.965515 60.3448257 40 centretext=861.9655151367188, 60.344825744628906, 40 linear=0 0 2.06896567 angular=0 2 0 velocity=0 0 6 rotvelocity=0 2 0",

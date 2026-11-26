@@ -1,0 +1,129 @@
+# engine: Roblox Studio 0.747.0.7471481, the server of a headless play session (a Script in ServerScriptService, script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-26
+player true
+analytics LogCustomEvent 1 error Argument 2 missing or nil 
+analytics LogCustomEvent 2 error Argument 2 missing or nil 
+analytics LogCustomEvent 3 ok  [AnalyticsService: Invalid status.]
+analytics LogCustomEvent 4 ok  [AnalyticsService: Invalid status.]
+analytics LogCustomEvent 5 error Unable to cast string to double 
+analytics LogCustomEvent 6 ok  [AnalyticsService: Invalid status.]
+analytics LogCustomEvent 7 error Unable to cast string to Dictionary 
+analytics LogCustomEvent 8 ok  [AnalyticsService: Invalid status.]
+analytics LogCustomEvent 9 ok  [AnalyticsService: Invalid status.]
+analytics LogCustomEvent 10 error Unable to cast value to Object 
+analytics LogCustomEvent 11 ok  [AnalyticsService: Invalid status.]
+analytics LogCustomEvent 12 ok  [AnalyticsService: Invalid status.]
+analytics LogCustomEvent 13 ok  [AnalyticsService: Invalid status.]
+analytics LogEconomyEvent 1 error Argument 6 missing or nil 
+analytics LogEconomyEvent 2 ok  [AnalyticsService: Invalid status.]
+analytics LogEconomyEvent 3 ok  [AnalyticsService: Invalid status.]
+analytics LogEconomyEvent 4 error Unable to cast string to float 
+analytics LogEconomyEvent 5 error Argument 6 missing or nil 
+analytics LogEconomyEvent 6 error Unable to cast double to AnalyticsEconomyFlowType 
+analytics LogEconomyEvent 7 ok  [AnalyticsService: Invalid status.]
+analytics LogEconomyEvent 8 ok  [AnalyticsService: Invalid status.]
+analytics LogProgressionEvent 1 error Argument 4 missing or nil 
+analytics LogProgressionEvent 2 error Unable to cast AnalyticsProgressionStatus to AnalyticsProgressionType 
+analytics LogProgressionEvent 3 error Unable to cast string to AnalyticsProgressionType 
+analytics LogProgressionEvent 4 error Unable to cast string to int 
+analytics LogProgressionEvent 5 error Argument 4 missing or nil 
+analytics LogProgressionEvent 6 error Unable to cast double to AnalyticsProgressionType 
+analytics LogFunnelStepEvent 1 error Argument 2 missing or nil 
+analytics LogFunnelStepEvent 2 ok  [AnalyticsService: Invalid status.]
+analytics LogFunnelStepEvent 3 ok  [AnalyticsService: Invalid status.]
+analytics LogFunnelStepEvent 4 error Unable to cast string to int 
+analytics LogFunnelStepEvent 5 ok  [AnalyticsService: Invalid status.]
+analytics LogOnboardingFunnelStepEvent 1 error Argument 2 missing or nil 
+analytics LogOnboardingFunnelStepEvent 2 ok  [AnalyticsService: Invalid status.]
+analytics LogOnboardingFunnelStepEvent 3 ok  [AnalyticsService: Invalid status.]
+analytics LogOnboardingFunnelStepEvent 4 error Unable to cast string to int 
+analytics LogOnboardingFunnelStepEvent 5 ok  [AnalyticsService: Invalid status.]
+analytics LogOnboardingFunnelStepEvent 6 ok  [AnalyticsService: Invalid status.]
+chat 1 error Argument 2 missing or nil 
+chat 2 ok  
+chat 3 ok  
+chat 4 ok  
+chat 5 error Unable to cast double to ChatColor 
+chat 6 error Argument 2 missing or nil 
+chat 7 ok  
+chat 8 error partOrCharacter must be non-nil 
+chat 9 error Unable to cast value to Object 
+chat 10 error partOrCharacter must be in the Workspace 
+chat 11 error message must be non-empty 
+subscription 1 error Argument 2 missing or nil 
+subscription 2 error Argument 2 missing or nil 
+subscription 3 ok  
+subscription 4 error Invalid SubscriptionId 
+subscription 5 error First argument to PromptSubscriptionPurchase must be a player 
+subscription 6 error Unable to cast value to Object 
+subscription 7 error First argument to PromptSubscriptionPurchase must be a player 
+subscription 8 error Invalid SubscriptionId [argument #2 expects a string, but table was passed / Stack Begin / Script '<probe>', Line @107 / Script '<probe>', Line @44 / Stack End]
+translator-for-locale 1 error Argument 1 missing or nil 
+translator-for-locale 2 error Argument 1 missing or nil 
+translator-for-locale 3 pending 
+translator-for-locale 4 pending 
+translator-for-locale 5 pending 
+format-by-key 1 error Argument 1 missing or nil 
+format-by-key 2 error Found parameter token, but had no parameters 
+format-by-key 3 ok Bonjour x 
+format-by-key 4 error Found parameter token but parameters was not a table 
+format-by-key 5 error Found parameter token but parameters was not a table 
+format-by-key 6 error Key 5 not found for locale fr-fr 
+format-by-key 7 error Argument 1 missing or nil 
+format-by-key 8 error Key missing not found for locale fr-fr 
+format-by-key 9 error Key {} not found for locale fr-fr [argument #1 expects a string, but table was passed / Stack Begin / Script '<probe>', Line @123 / Script '<probe>', Line @44 / Stack End]
+translate 1 error Argument 2 missing or nil 
+translate 2 ok Bonjour {1} 
+translate 3 error Argument 2 missing or nil 
+translate 4 error Context must be an Instance. 
+translate 5 error Unable to cast value to Object 
+translate 6 ok 5 
+translate 7 ok {} [argument #2 expects a string, but table was passed / Stack Begin / Script '<probe>', Line @128 / Script '<probe>', Line @44 / Stack End]
+refused CreateEditableMeshAsync-none error Argument 1 missing or nil
+refused CreateEditableMeshAsync-number error Unable to cast double to Content
+refused CreateEditableMeshAsync-table error Unable to cast Array to Content
+refused CreateEditableMeshAsync-content error UnpublishedPlaceNotInStudio
+refused IsInGroup-none error Argument 1 missing or nil
+refused IsInGroup-text error Unable to cast string to int64
+refused IsInGroup-number error thread is not yieldable
+refused GetRankInGroup-table error Unable to cast Array to int64
+refused GetKeyframeSequenceAsync-none error Argument 1 missing or nil
+refused GetKeyframeSequenceAsync-number error Unable to cast double to ContentId
+refused GetKeyframeSequenceAsync-id error Invalid animation id 'rbxassetid://1': Unrecognized scheme
+refused GetAnimationClipAsync-none error Argument 1 missing or nil
+refused GetAnimationClipAsync-id error Invalid animation id 'rbxassetid://1': Unrecognized scheme
+refused GetTranslatorForLocaleAsync-none error Argument 1 missing or nil
+refused GetTranslatorForLocaleAsync-table error thread is not yieldable
+refused GetTranslatorForLocaleAsync-locale error thread is not yieldable
+refused InvokeServer-cyclic error tables cannot be cyclic
+refused InvokeServer-function error InvokeServer can only be called from the client
+refused InvokeClient-cyclic error tables cannot be cyclic
+refused InvokeClient-nil-cyclic error tables cannot be cyclic
+loaders-logged 
+FireServer-cyclic error tables cannot be cyclic 
+FireClient-cyclic error tables cannot be cyclic 
+FireClient-nil-cyclic error tables cannot be cyclic 
+FireAllClients-cyclic error tables cannot be cyclic 
+bulk 1 error Unable to cast value to Object 
+bulk 2 error Unable to cast value to Object 
+bulk 3 error Unable to cast value to Object 
+bulk 4 error Can only call BulkMoveTo on BaseParts, partList[1] is a Workspace. 
+bulk 5 error CFrame list must only contain CFrames, cframeList[1] is a string. 
+bulk 6 error Unable to cast value to Object 
+bulk 7 error Length of part list (2) and length of CFrame list (1) do not match. 
+bulk 8 error Length of part list (1) and length of CFrame list (2) do not match. 
+bulk 9 error Unable to cast value to Object 
+attribute-name 4 RBX$ error Attempt to assign attribute RBX$. CoreScript permission required 
+attribute-name 104 RBX aa error Attempt to assign attribute RBX aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa. CoreScript permission required 
+attribute-name 101 aaaaaa error Attribute name exceeds 100 character limit ("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa$$") 
+attribute-name 101 $aaaaa error Attribute name exceeds 100 character limit ("$aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa") 
+attribute-name 101 RBXaaa error Attempt to assign attribute RBXaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa. CoreScript permission required 
+attribute-name 4 rbx$ error Attribute name contains illegal character '$' ("rbx$") 
+attribute-name 3 RBX error Attempt to assign attribute RBX. CoreScript permission required 
+attribute-name 0  error Attribute name cannot be empty ("") 
+legacy-spawn-error ok  [@268: spawned / Stack Begin / Script '<probe>', Line @268 / Stack End]
+legacy-delay-error ok  [Error occurred, no output from Luau. / Stack Begin / Script '<probe>', Line @274 / Stack End]
+legacy-spawn-thread ok  [attempt to call a thread value / ]
+renderstepped-wait error RenderStepped event can only be used from local scripts 
+renderstepped-connectparallel error Event.ConnectParallel: The calling script must be rooted under an Actor. 
+heartbeat-connectparallel error Event.ConnectParallel: The calling script must be rooted under an Actor. 
