@@ -1,0 +1,45 @@
+# engine: Roblox Studio 0.747.0.7471481, the server of a headless play session (a Script in ServerScriptService, script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-26
+joint Weld now true root A
+joint Weld frame true
+joint Weld follow true
+joint Weld position-write c0 true c1 false holds true
+joint Snap now true root A
+joint Snap frame true
+joint Snap follow true
+joint Snap position-write c0 true c1 false holds true
+joint ManualWeld now true root A
+joint ManualWeld frame true
+joint ManualWeld follow true
+joint ManualWeld position-write c0 true c1 false holds true
+joint Motor now true root A
+joint Motor angle 0.5 plain false z true
+joint Motor follow false
+joint Motor position-write c0 true c1 false holds false
+joint Motor6D now true root A
+joint Motor6D transform-now true
+joint Motor6D transform-frame true false
+joint Motor6D follow true
+joint Motor6D position-write c0 true c1 false holds true
+reverse now true root B
+weldconstraint follow true root A
+weldconstraint re-enabled true false
+weldconstraint position-write true
+inactive disabled moved false root B joined false
+inactive part1-nil moved false root B joined false
+inactive same-part moved false root B joined false
+inactive weld-loose moved false root B joined false
+inactive weld-in-storage moved false root B joined false
+inactive weld-in-jointsservice moved true root A joined true
+inactive weld-in-worldmodel moved false root B joined false
+inactive part-in-worldmodel moved false root B joined false
+inactive both-anchored moved false root B joined false
+inactive weld-in-part1 moved true root A joined true
+model-in roots m1>m2,m2>m2,m3>m3,m4>m2,m5>m3,m6>m2
+model-in listed m1,m2,m4,m6,m3,m5
+model-in listed-frame m1,m2,m4,m6,m3,m5
+weld-ends roots m2,m4 listed m1,m2,m6,m3,m5,m4
+weld-ends listed-frame m1,m2,m6,m3,m5,m4
+anchored-write roots m1,m1,m1 listed m1,m2,m6,m3,m5,m4
+unanchored-write roots m2,m2,m2 listed m1,m2,m6,m3,m5,m4
+unanchored-write listed-frame m1,m2,m6,m3,m5,m4

@@ -47,6 +47,16 @@
 			"why": "a fractional number cast to an enum takes the item it truncates to (0.5, 1.99 and -0.99 cast; 2.5 to CameraPanMode does not); the engine's enum casts take whole numbers only"
 		}
 	],
+	"cframe_writes": [
+		{
+			"line": "write ",
+			"why": "Attachment.CFrame is orthonormalised on every write in a client (a scaled Z column keeps its last component); ree stores it as written; a JointInstance's C0 is orthonormalised when written with an error of 1e-6 or more in a client (Weld.C0); ree stores it as written below 1e-5; Model:PivotTo puts the primary part exactly where it is asked in a client; ree's part carries float noise from the pivot arithmetic"
+		},
+		{
+			"line": "events attachment-",
+			"why": "an Attachment write fires Changed for each derived property and its World* twins in a client (Axis, WorldAxis, SecondaryAxis, WorldSecondaryAxis, Orientation, WorldOrientation, Position, WorldPosition, CFrame, WorldCFrame; no Rotation), and only CFrame's own signal; ree fires CFrame's, then Position / Orientation / Rotation / Axis / SecondaryAxis with their signals"
+		}
+	],
 	"chunknames": [
 		{
 			"line": "odd-names info ReplicatedStorage.ParityProbes.Chunk",
@@ -931,6 +941,28 @@
 		{
 			"line": "shared-clone ReplicatedStorage.ParityRequireLog.Second",
 			"why": "chunk names: modules with identical source share the first compiled one's chunk name in a client; ree names each module by its own path"
+		}
+	],
+	"rigid_joints": [
+		{
+			"line": "joint Motor ",
+			"why": "a legacy Motor places Part1 at Part0 * C0 * CFrame.Angles(0, 0, CurrentAngle) * C1:Inverse() in a client; ree ignores CurrentAngle"
+		},
+		{
+			"line": "model-in listed",
+			"why": "the order a spatial query lists a model's parts when it comes in with its welds, after a weld ends and after an Anchored write: a client files each assembly's parts together (m1,m2,m4,m6 then m3,m5); ree lists them in the order they were made"
+		},
+		{
+			"line": "weld-ends",
+			"why": "the order a spatial query lists a model's parts when it comes in with its welds, after a weld ends and after an Anchored write: a client files each assembly's parts together (m1,m2,m4,m6 then m3,m5); ree lists them in the order they were made"
+		},
+		{
+			"line": "anchored-write",
+			"why": "the order a spatial query lists a model's parts when it comes in with its welds, after a weld ends and after an Anchored write: a client files each assembly's parts together (m1,m2,m4,m6 then m3,m5); ree lists them in the order they were made"
+		},
+		{
+			"line": "unanchored-write",
+			"why": "the order a spatial query lists a model's parts when it comes in with its welds, after a weld ends and after an Anchored write: a client files each assembly's parts together (m1,m2,m4,m6 then m3,m5); ree lists them in the order they were made"
 		}
 	],
 	"string_parameter_methods": [
