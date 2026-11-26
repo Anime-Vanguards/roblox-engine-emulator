@@ -249,10 +249,6 @@
 		{
 			"line": "content-",
 			"why": "Content.fromAssetId in a client: 0 is rbxassetid://0, a fraction rounds (1.5 is rbxassetid://2), a non-finite id raises `Invalid id. Expected a finite value.`; fromObject(nil) raises `Expected Object, got nil.` and a number `invalid argument #1 to 'fromObject' (Object expected, got number)` with a position; ree answers and words them otherwise"
-		},
-		{
-			"line": "clone-attribute ",
-			"why": "an attribute holding an instance inside the cloned tree points at the copy's instance in a clone (a client); ree keeps the original"
 		}
 	],
 	"engine_functions": [
@@ -887,28 +883,12 @@
 	],
 	"readonly_properties": [
 		{
-			"line": "readonly AdPortal.",
-			"why": "read-only property: a client refuses to parent AdPortal outside a Part (`AdPortal must be parented to a Part.`), Animator outside a Humanoid or AnimationController, Bone outside a BasePart or Bone and a WrapLayer / WrapTarget outside a MeshPart (`BaseWrap must be parented to a MeshPart.`); ree parents them anywhere"
-		},
-		{
-			"line": "readonly Animator.",
-			"why": "read-only property: parent rules as for AdPortal (`Animator has to be placed under Humanoid or AnimationController!`)"
-		},
-		{
 			"line": "readonly BasePart.CurrentPhysicalProperties",
 			"why": "read-only property: a part's CurrentPhysicalProperties is its material's (0.7, 0.3, 0.5, 1, 1, 0.3 for Plastic) in a client; ree reads nil"
 		},
 		{
 			"line": "readonly BasePart.ResizeableFaces",
 			"why": "read-only property: a part's ResizeableFaces lists all six faces in a client; ree reads nil"
-		},
-		{
-			"line": "readonly BaseWrap.",
-			"why": "read-only property: parent rules as for AdPortal (`BaseWrap must be parented to a MeshPart.`)"
-		},
-		{
-			"line": "readonly Bone.",
-			"why": "read-only property: parent rules as for AdPortal (`Bones must be parented to a BasePart or another Bone.`)"
 		},
 		{
 			"line": "readonly ImageButton.IsLoaded",
@@ -941,14 +921,6 @@
 		{
 			"line": "readonly UIGridLayout.AbsoluteCellCount",
 			"why": "read-only property: a layout's cell count comes from a GUI layer's layout (a host's), which plain ree has not"
-		},
-		{
-			"line": "readonly WrapLayer.",
-			"why": "read-only property: parent rules as for AdPortal (`BaseWrap must be parented to a MeshPart.`)"
-		},
-		{
-			"line": "readonly WrapTarget.",
-			"why": "read-only property: parent rules as for AdPortal (`BaseWrap must be parented to a MeshPart.`)"
 		},
 		{
 			"line": "service Players.",

@@ -1613,6 +1613,16 @@ fn install_base(behaviors: &mut Behaviors, reflection: &crate::Reflection) {
         if archivable && engine.reflection.is_a(class, "Mouse") {
             return raise(format!("{name} cannot be cloned"));
         }
+        // nor what the engine keeps of its own: Terrain raises "Cannot Clone() Terrain", StarterPlayer's script folders
+        // "StarterPlayer.StarterPlayerScripts cannot be cloned" (the full name), and a player's PlayerGui and PlayerScripts and a
+        // GetTextBoundsParams answer nil, Archivable as they are (measured, Studio 0.747, a client and a server:
+        // tools/parity/probes/instance_api_texts.luau; the script folders on a place copy holding them: parent_locks.luau's log)
+        match &*engine.reflection.class(class).name {
+            "Terrain" => return raise("Cannot Clone() Terrain"),
+            "StarterPlayerScripts" | "StarterCharacterScripts" => return raise(format!("{} cannot be cloned", full_name(engine, id))),
+            "PlayerGui" | "PlayerScripts" | "GetTextBoundsParams" => return Ok(values([LuaValue::Nil])),
+            _ => {}
+        }
         optional_instance(lua, engine, clone(engine, id))
     });
     behaviors.add_method(base, K::Clone as NameId, clone_method.clone());

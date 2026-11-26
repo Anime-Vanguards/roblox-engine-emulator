@@ -15319,3 +15319,24 @@ fn attribute_names_are_refused_in_a_clients_order() {
     // the last names the lone lead byte 0xC3 of `Ü`, not the character
     assert!(output.iter().all(|line| line.starts_with("print: true true ")), "{output:?}");
 }
+
+/// A clone's attribute holding an instance of the copied tree holds the copy's instance, one outside keeps its target (measured,
+/// Studio 0.747: tools/parity/probes/datatype_edges.luau `clone-attribute`).
+#[test]
+fn a_clones_instance_attributes_point_into_the_copy() {
+    assert_script(
+        r#"
+        local Model = Instance.new("Model")
+        local Inside = Instance.new("Part")
+        Inside.Parent = Model
+        Model:SetAttribute("Self", Model)
+        Model:SetAttribute("Child", Inside)
+        Model:SetAttribute("Outside", workspace)
+        local Copy = Model:Clone()
+        assert(Copy:GetAttribute("Self"):Get() == Copy)
+        assert(Copy:GetAttribute("Child"):Get() == Copy:FindFirstChildOfClass("Part"))
+        assert(Copy:GetAttribute("Outside"):Get() == workspace)
+        assert(Model:GetAttribute("Self"):Get() == Model)
+        "#,
+    );
+}

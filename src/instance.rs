@@ -131,6 +131,12 @@ pub fn new_instance(
         .ok_or_else(|| ScriptError::plain(format!("Unable to create an Instance of type \"{class_name}\"")))?;
     let id = create(state, reflection, class);
     state.dom.at_mut(id).set_flag(flags::SCRIPT_CREATED, true);
+    // a GetTextBoundsParams' Parent is locked as an instance's from the start: "The Parent property of Instance is locked, current
+    // parent: NULL, new parent Workspace", Instance.new's parent argument too (measured, Studio 0.747, a client and a server:
+    // tools/parity/probes/instance_api_texts.luau)
+    if &*reflection.class(class).name == "GetTextBoundsParams" {
+        state.dom.at_mut(id).set_flag(flags::PARENT_LOCKED, true);
+    }
     if let Some(parent) = parent {
         set_parent(state, reflection, hooks, id, Some(parent))?;
     }
@@ -675,7 +681,27 @@ pub fn set_parent(
         }
         _ => {}
     }
+    if let Some(parent) = new_parent
+        && let Some(message) = parent_rule(reflection, state.dom.at(id).class, state.dom.at(parent).class)
+    {
+        return Err(ScriptError::plain(message));
+    }
     reparent(state, reflection, hooks, id, new_parent)
+}
+
+/// The parent some classes require, as a playing client and a server refuse another (a Parent write and Instance.new's parent
+/// alike; nil and a parent's own move are fine): an AdPortal goes under a Part (no other BasePart), an Animator under a Humanoid or
+/// an AnimationController, a Bone under a BasePart or a Bone, a WrapLayer or WrapTarget under a MeshPart (measured, Studio 0.747:
+/// tools/parity/probes/instance_api_texts.luau).
+fn parent_rule(reflection: &Reflection, class: ClassId, parent: ClassId) -> Option<&'static str> {
+    let is = |name: &str| reflection.is_a(parent, name);
+    match &*reflection.class(class).name {
+        "AdPortal" if &*reflection.class(parent).name != "Part" => Some("AdPortal must be parented to a Part."),
+        "Animator" if !is("Humanoid") && !is("AnimationController") => Some("Animator has to be placed under Humanoid or AnimationController!"),
+        "Bone" if !is("BasePart") && !is("Bone") => Some("Bones must be parented to a BasePart or another Bone."),
+        "WrapLayer" | "WrapTarget" if !is("MeshPart") => Some("BaseWrap must be parented to a MeshPart."),
+        _ => None,
+    }
 }
 
 /// set_parent past its Parent locks: the new parent's own checks, then the move and its events.
@@ -876,6 +902,21 @@ pub fn clone_instance_mapped(state: &mut State, reflection: &Reflection, root: I
         let props = state.dom.at_mut(copy).props.own_mut();
         for (index, target) in remapped {
             props[index].1 = Value::Instance(target);
+        }
+    }
+    // an attribute holding an instance of the copied tree holds its copy, one outside it keeps its target (measured, Studio 0.747,
+    // a client and a server: tools/parity/probes/datatype_edges.luau `clone-attribute`); a lazily imported plan node's attributes
+    // come from a file and hold no instance
+    for &(_, copy) in &map {
+        let crate::dom::Attributes::Own(attributes) = &state.dom.at(copy).attributes else { continue };
+        let remapped: Vec<(usize, InstanceId)> =
+            attributes.iter().enumerate().filter_map(|(index, (_, value))| copies.get(&value.as_instance()?).map(|c| (index, *c))).collect();
+        if remapped.is_empty() {
+            continue;
+        }
+        let attributes = state.dom.at_mut(copy).attributes.own_mut();
+        for (index, target) in remapped {
+            attributes[index].1 = Value::Instance(target);
         }
     }
     for &(_, copy) in &map {
