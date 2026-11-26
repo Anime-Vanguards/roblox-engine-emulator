@@ -1,10 +1,6 @@
 {
 	"character_write": [
 		{
-			"line": "server: M1 to M2, in the thread: old.Parent=nil Character=M2 new Backpack=true",
-			"why": "a server's write of a model gives the player a new Backpack with StarterPack's tools (and copies StarterGui's ResetOnSpawn guis again), as a spawn does; ree keeps the Backpack and PlayerGui as they are"
-		},
-		{
 			"line": "client: M5 to M6, M5 put back: M5 AncestryChanged nil, CharacterRemoving M5, CharacterAdded M6, Character M6, M5 AncestryChanged Workspace",
 			"why": "the server takes the old character out and a CharacterRemoving handler puts it back in the same frame: a real client sees both moves, ree's replication sends where an instance is at the frame's end (no move here)"
 		}

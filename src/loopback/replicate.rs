@@ -1157,7 +1157,7 @@ pub fn apply(lua: &Lua, client: &Rc<Engine>, endpoint: &Rc<Endpoint>, message: M
             } else if crate::services::players::is_character(&state, copy, name) {
                 // (a client fires CharacterRemoving and CharacterAdded from the change; the old character's removal came as its
                 // own change before it: services/players.rs)
-                crate::services::players::set_character(&mut state, &client.reflection, &hooks, copy, value, false);
+                crate::services::players::set_character(&mut state, &client.reflection, &hooks, copy, value, false, crate::services::players::Spawn::No);
             } else {
                 core::raw_set(&mut state, &client.reflection, &hooks, copy, name, value);
             }

@@ -1257,6 +1257,71 @@ if {held} then Player.Character = Old end
     assert!((after_with - after_without).abs() < 1e-12, "the destroy: {after_with} against {after_without}");
 }
 
+/// A script's write of a Character instance on a server is a spawn (services/players.rs respawn_backpack, reset_player_gui; measured
+/// in 0.747 play sessions, tools/parity/probes/loopback/character_respawn.luau): a new Backpack with StarterPack's copies, then the
+/// StarterGear's, before CharacterAdded (the old one destroyed, with what a script put in it); when the character is in the
+/// DataModel, the PlayerGui's guis that reset on spawn copied again from StarterGui between CharacterAdded and Changed, all of
+/// StarterGui's the first time. A parentless character gets the Backpack only, nil and the same value nothing. ree left both as
+/// they were.
+#[test]
+fn a_servers_character_write_is_a_spawn() {
+    let lines = run(
+        RunContext::Server,
+        r#"
+        local Players = game:GetService("Players")
+        local function Make(Class, Name, Parent) local X = Instance.new(Class) X.Name = Name X.Parent = Parent return X end
+        Make("Tool", "PackTool", game:GetService("StarterPack"))
+        Make("Folder", "PackFolder", game:GetService("StarterPack"))
+        Make("ScreenGui", "Reset", game:GetService("StarterGui"))
+        Make("ScreenGui", "Keep", game:GetService("StarterGui")).ResetOnSpawn = false
+        Make("Folder", "GuiFolder", game:GetService("StarterGui"))
+        local Player = Instance.new("Player")
+        Player.Parent = Players
+        Make("Tool", "GearTool", Player:FindFirstChildOfClass("StarterGear"))
+        local Gui = Player:FindFirstChildOfClass("PlayerGui")
+        local function Names(X)
+            local Out = {}
+            for _, Child in X:GetChildren() do table.insert(Out, Child.Name) end
+            return table.concat(Out, ",")
+        end
+        local Order = {}
+        Player.ChildAdded:Connect(function(X) table.insert(Order, "+" .. X.Name) end)
+        Player.ChildRemoved:Connect(function(X) table.insert(Order, "-" .. X.Name) end)
+        Player.CharacterAdded:Connect(function(X) table.insert(Order, "added " .. X.Name) end)
+        Gui.ChildAdded:Connect(function(X) table.insert(Order, "gui+" .. X.Name) end)
+        Gui.ChildRemoved:Connect(function(X) table.insert(Order, "gui-" .. X.Name) end)
+        Player:GetPropertyChangedSignal("Character"):Connect(function() table.insert(Order, "changed") end)
+        local function Case(Label, Value)
+            local Pack = Player:FindFirstChildOfClass("Backpack")
+            Make("Folder", "Extra", Pack)
+            Player.Character = Value
+            task.wait()
+            print(Label, Player:FindFirstChildOfClass("Backpack") ~= Pack, Pack.Parent, Names(Player:FindFirstChildOfClass("Backpack")), Names(Gui), table.concat(Order, " "))
+            table.clear(Order)
+        end
+        local function Model(Name, Parent) return Make("Model", Name, Parent) end
+        Case("first", Model("M1", workspace))
+        Case("again", Model("M2", game:GetService("ReplicatedStorage")))
+        Case("same", Player.Character)
+        Case("nil", nil)
+        Case("parentless", Model("M3", nil))
+        "#,
+        0.5,
+    );
+    let printed: Vec<&str> = lines.iter().filter_map(|line| line.strip_prefix("print: ")).collect();
+    assert_eq!(
+        printed,
+        [
+            "first true nil PackTool,PackFolder,GearTool Reset,Keep,GuiFolder -Backpack +Backpack added M1 gui+Reset gui+Keep gui+GuiFolder changed",
+            "again true nil PackTool,PackFolder,GearTool Keep,Reset,GuiFolder -Backpack +Backpack added M2 gui-GuiFolder gui-Reset gui+Reset gui+GuiFolder changed",
+            "same false Player PackTool,PackFolder,GearTool,Extra Keep,Reset,GuiFolder ",
+            "nil false Player PackTool,PackFolder,GearTool,Extra,Extra Keep,Reset,GuiFolder changed",
+            "parentless true nil PackTool,PackFolder,GearTool Keep,Reset,GuiFolder -Backpack +Backpack added M3 changed",
+        ],
+        "{lines:?}"
+    );
+}
+
 /// A server's StarterGui answers a client's core GUI calls with a warning (measured on a 0.747 server, service_answers.luau): the
 /// arguments cast as a client casts them, then "StarterGui:SetCoreGuiEnabled must be called from a local script." and nothing
 /// done, GetCoreGuiEnabled false after its warning, SetCore a warning and nothing. ree answered true and reported them missing.

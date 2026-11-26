@@ -1,0 +1,32 @@
+# engine: Roblox Studio 0.747.0.7471481, a headless play session of one server and one client in processes of their own (the server's half a server Script from the server's start, the client's half a job in the client; script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-26
+# repeated: 2 captures, the same lines
+server: start: pack={} gui={} gear={GearTool}
+server: nil to M1, in the thread: same Backpack=false pack={GearTool PackFolder PackTool} gui={GuiFolder Keep Reset}
+server: nil to M1: old Backpack Destroying, Player.ChildRemoved Backpack, old Backpack AncestryChanged nil, Player.ChildAdded Backpack {GearTool PackFolder PackTool}, CharacterAdded M1 pack={GearTool PackFolder PackTool} gui={GuiFolder Keep Reset}, PlayerGui.ChildAdded Reset, PlayerGui.ChildAdded Keep, PlayerGui.ChildAdded GuiFolder, Character M1 pack={GearTool PackFolder PackTool} gui={GuiFolder Keep Reset}
+server: nil to M1, after: pack={GearTool PackFolder PackTool} gui={GuiFolder Keep Reset} Reset={} gear={GearTool} listed [PackTool PackFolder GearTool] [Reset Keep GuiFolder] [StarterGear PlayerGui Backpack]
+server: M1 to M2, in the thread: same Backpack=false pack={GearTool PackFolder PackTool} gui={GuiFolder Keep Reset}
+server: M1 to M2: CharacterRemoving M1, old Backpack Destroying, Player.ChildRemoved Backpack, old Backpack AncestryChanged nil, Player.ChildAdded Backpack {GearTool PackFolder PackTool}, CharacterAdded M2 pack={GearTool PackFolder PackTool} gui={GuiFolder Keep Reset}, old GuiFolder Destroying, PlayerGui.ChildRemoved GuiFolder, old GuiFolder AncestryChanged nil, old Reset Destroying, PlayerGui.ChildRemoved Reset, old Reset AncestryChanged nil, PlayerGui.ChildAdded Reset, PlayerGui.ChildAdded GuiFolder, Character M2 pack={GearTool PackFolder PackTool} gui={GuiFolder Keep Reset}
+server: M1 to M2, after: pack={GearTool PackFolder PackTool} gui={GuiFolder Keep Reset} Reset={} gear={GearTool} listed [PackTool PackFolder GearTool] [Keep Reset GuiFolder] [StarterGear PlayerGui Backpack]
+server: M2 again, in the thread: same Backpack=true pack={GearTool PackFolder PackTool} gui={GuiFolder Keep Reset}
+server: M2 again: 
+server: M2 again, after: pack={GearTool PackFolder PackTool} gui={GuiFolder Keep Reset} Reset={} gear={GearTool} listed [PackTool PackFolder GearTool] [Keep Reset GuiFolder] [StarterGear PlayerGui Backpack]
+server: M2 to M3 in ReplicatedStorage, in the thread: same Backpack=false pack={GearTool PackFolder PackTool} gui={GuiFolder Keep Reset}
+server: M2 to M3 in ReplicatedStorage: CharacterRemoving M2, old Backpack Destroying, Player.ChildRemoved Backpack, old Backpack AncestryChanged nil, Player.ChildAdded Backpack {GearTool PackFolder PackTool}, CharacterAdded M3 pack={GearTool PackFolder PackTool} gui={GuiFolder Keep Reset}, old GuiFolder Destroying, PlayerGui.ChildRemoved GuiFolder, old GuiFolder AncestryChanged nil, old Reset Destroying, PlayerGui.ChildRemoved Reset, old Reset AncestryChanged nil, PlayerGui.ChildAdded Reset, PlayerGui.ChildAdded GuiFolder, Character M3 pack={GearTool PackFolder PackTool} gui={GuiFolder Keep Reset}
+server: M2 to M3 in ReplicatedStorage, after: pack={GearTool PackFolder PackTool} gui={GuiFolder Keep Reset} Reset={} gear={GearTool} listed [PackTool PackFolder GearTool] [Keep Reset GuiFolder] [StarterGear PlayerGui Backpack]
+server: M3 to nil, in the thread: same Backpack=true pack={GearTool PackFolder PackTool} gui={GuiFolder Keep Reset}
+server: M3 to nil: CharacterRemoving M3, Character nil pack={GearTool PackFolder PackTool} gui={GuiFolder Keep Reset}
+server: M3 to nil, after: pack={GearTool PackFolder PackTool} gui={GuiFolder Keep Reset} Reset={} gear={GearTool} listed [PackTool PackFolder GearTool] [Keep Reset GuiFolder] [StarterGear PlayerGui Backpack]
+server: nil to M4 parentless, in the thread: same Backpack=false pack={GearTool PackFolder PackTool} gui={GuiFolder Keep Reset}
+server: nil to M4 parentless: old Backpack Destroying, Player.ChildRemoved Backpack, old Backpack AncestryChanged nil, Player.ChildAdded Backpack {GearTool PackFolder PackTool}, CharacterAdded M4 pack={GearTool PackFolder PackTool} gui={GuiFolder Keep Reset}, Character M4 pack={GearTool PackFolder PackTool} gui={GuiFolder Keep Reset}
+server: nil to M4 parentless, after: pack={GearTool PackFolder PackTool} gui={GuiFolder Keep Reset} Reset={} gear={GearTool} listed [PackTool PackFolder GearTool] [Keep Reset GuiFolder] [StarterGear PlayerGui Backpack]
+server: M4 to M5, in the thread: same Backpack=false pack={GearTool PackFolder PackTool} gui={GuiFolder Keep Reset}
+server: M4 to M5: CharacterRemoving M4, old Backpack Destroying, Player.ChildRemoved Backpack, old Backpack AncestryChanged nil, Player.ChildAdded Backpack {GearTool PackFolder PackTool}, CharacterAdded M5 pack={GearTool PackFolder PackTool} gui={GuiFolder Keep Reset}, old GuiFolder Destroying, PlayerGui.ChildRemoved GuiFolder, old GuiFolder AncestryChanged nil, old Reset Destroying, PlayerGui.ChildRemoved Reset, old Reset AncestryChanged nil, PlayerGui.ChildAdded Reset, PlayerGui.ChildAdded GuiFolder, Character M5 pack={GearTool PackFolder PackTool} gui={GuiFolder Keep Reset}
+server: M4 to M5, after: pack={GearTool PackFolder PackTool} gui={GuiFolder Keep Reset} Reset={} gear={GearTool} listed [PackTool PackFolder GearTool] [Keep Reset GuiFolder] [StarterGear PlayerGui Backpack]
+client: nil to M1: pack={GearTool PackFolder PackTool} gui={GuiFolder Keep Reset} Reset={}
+client: M1 to M2: pack={GearTool PackFolder PackTool} gui={GuiFolder Keep Reset} Reset={}
+client: M2 again: pack={GearTool PackFolder PackTool} gui={GuiFolder Keep Reset} Reset={}
+client: M2 to M3 in ReplicatedStorage: pack={GearTool PackFolder PackTool} gui={GuiFolder Keep Reset} Reset={}
+client: M3 to nil: pack={GearTool PackFolder PackTool} gui={GuiFolder Keep Reset} Reset={}
+client: nil to M4 parentless: pack={GearTool PackFolder PackTool} gui={GuiFolder Keep Reset} Reset={}
+client: M4 to M5: pack={GearTool PackFolder PackTool} gui={GuiFolder Keep Reset} Reset={}

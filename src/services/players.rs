@@ -76,12 +76,24 @@ struct Names {
     players: ClassId,
     player: ClassId,
     player_gui: Option<ClassId>,
+    /// What a server's Character write spawns ([`respawn_backpack`], [`reset_player_gui`])
+    spawn: Option<SpawnNames>,
     character: NameId,
     character_added: NameId,
     character_removing: NameId,
     player_removing: NameId,
     destroy_behavior: Option<NameId>,
     disabled: Option<EnumItemId>,
+}
+
+/// The classes and the property a spawn reads
+#[derive(Clone, Copy)]
+struct SpawnNames {
+    backpack: ClassId,
+    starter_gear: ClassId,
+    starter_pack: ClassId,
+    starter_gui: ClassId,
+    reset_on_spawn: NameId,
 }
 
 /// A kicked player waiting to leave ([`kick`], [`network_step`])
@@ -107,6 +119,8 @@ pub(crate) struct Departures {
     pending: Vec<(f64, InstanceId)>,
     /// Players kicked and not yet gone
     kicks: Vec<Kick>,
+    /// Players a server's Character write spawned: a later spawn copies StarterGui's guis that reset on spawn only
+    spawned: Vec<InstanceId>,
 }
 
 /// Interns what the leave reads (services.rs install_players).
@@ -125,6 +139,18 @@ pub(crate) fn install(state: &mut State, reflection: &Reflection, server: bool) 
         players,
         player,
         player_gui: reflection.class_id("PlayerGui"),
+        spawn: match (
+            reflection.class_id("Backpack"),
+            reflection.class_id("StarterGear"),
+            reflection.class_id("StarterPack"),
+            reflection.class_id("StarterGui"),
+            reflection.name_id("ResetOnSpawn"),
+        ) {
+            (Some(backpack), Some(starter_gear), Some(starter_pack), Some(starter_gui), Some(reset_on_spawn)) => {
+                Some(SpawnNames { backpack, starter_gear, starter_pack, starter_gui, reset_on_spawn })
+            }
+            _ => None,
+        },
         character,
         character_added,
         character_removing,
@@ -176,12 +202,43 @@ pub(crate) fn is_character(state: &State, id: InstanceId, name: NameId) -> bool 
 }
 
 /// A script's write of a Player's Character (lua/instance.rs script_set_property): [`set_character`], the old character taken
-/// out on a server. Returns whether the value changed.
+/// out on a server, where a write of an instance is also a spawn ([`Spawn`]). Returns whether the value changed.
 pub(crate) fn write_character(engine: &Engine, player: InstanceId, value: Value) -> bool {
+    let server = engine.state.borrow().collection.departures.server;
+    let spawn = if server && matches!(value, Value::Instance(_)) { Spawn::Spawn } else { Spawn::No };
+    if spawn == Spawn::Spawn {
+        // (what the spawn copies, a project's waiting children first)
+        let templates: Vec<InstanceId> = {
+            let state = engine.state.borrow();
+            let names = state.collection.departures.names.and_then(|names| names.spawn);
+            match (names, state.collection.game) {
+                (Some(names), Some(game)) => [
+                    state.dom.find_child_of_class(game, names.starter_pack),
+                    state.dom.find_child_of_class(game, names.starter_gui),
+                    state.dom.get(player).and_then(|_| state.dom.find_child_of_class(player, names.starter_gear)),
+                ]
+                .into_iter()
+                .flatten()
+                .collect(),
+                _ => Vec::new(),
+            }
+        };
+        for template in templates {
+            crate::project::materialize_deep(engine, template);
+        }
+    }
     let hooks = engine.hooks.borrow();
     let mut state = engine.state.borrow_mut();
-    let server = state.collection.departures.server;
-    set_character(&mut state, &engine.reflection, &hooks, player, value, server)
+    set_character(&mut state, &engine.reflection, &hooks, player, value, server, spawn)
+}
+
+/// Whether a Character change is a spawn: a server script's write of an instance
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Spawn {
+    No,
+    /// The player gets a new Backpack with StarterGear's and StarterPack's copies before CharacterAdded ([`respawn_backpack`]) and,
+    /// when the new character is in the DataModel, StarterGui's guis again after it ([`reset_player_gui`])
+    Spawn,
 }
 
 /// A player's Character becoming `new`: CharacterRemoving with the old character when it held one; with `takes_out` (a
@@ -189,7 +246,7 @@ pub(crate) fn write_character(engine: &Engine, player: InstanceId, value: Value)
 /// it is an instance; then Changed and the property's signal (Changed's hooks after). With `takes_out` the old character is also
 /// destroyed a second on, unless the place's PlayerCharacterDestroyBehavior is Disabled or it is destroyed already. The value it
 /// holds: nothing. Returns whether the value changed.
-pub(crate) fn set_character(state: &mut State, reflection: &Reflection, hooks: &Hooks, player: InstanceId, new: Value, takes_out: bool) -> bool {
+pub(crate) fn set_character(state: &mut State, reflection: &Reflection, hooks: &Hooks, player: InstanceId, new: Value, takes_out: bool, spawn: Spawn) -> bool {
     let Some(names) = state.collection.departures.names else { return false };
     let held = match state.dom.at(player).stored(names.character) {
         Some(Value::Instance(old)) => Some(*old),
@@ -214,8 +271,16 @@ pub(crate) fn set_character(state: &mut State, reflection: &Reflection, hooks: &
     }
     let previous = state.dom.at(player).stored(names.character).cloned();
     core::raw_set_silent(state, reflection, player, names.character, new);
-    if let Some(added) = wanted.filter(|&added| state.dom.get(added).is_some()) {
+    let added = wanted.filter(|&added| state.dom.get(added).is_some());
+    let spawning = spawn == Spawn::Spawn && added.is_some() && in_players(state, player);
+    if spawning {
+        respawn_backpack(state, reflection, hooks, player);
+    }
+    if let Some(added) = added {
         core::fire_event(state, player, names.character_added, vec![Value::Instance(added)]);
+    }
+    if spawning && added.is_some_and(|added| super::in_data_model(state, added)) {
+        reset_player_gui(state, reflection, hooks, player);
     }
     core::notify_changed(state, reflection, hooks, player, names.character, previous);
     if takes_out
@@ -248,7 +313,7 @@ pub(crate) fn remove_character(state: &mut State, reflection: &Reflection, hooks
     if !server && character != player && !state.dom.is_descendant_of(player, character) {
         let _ = core::set_parent(state, reflection, hooks, character, None);
     }
-    set_character(state, reflection, hooks, player, Value::Nil, server);
+    set_character(state, reflection, hooks, player, Value::Nil, server, Spawn::No);
 }
 
 /// A server's leave, after the character's step and before the rest of the player's DescendantRemoving events: the player's
@@ -262,9 +327,14 @@ pub(crate) fn destroy_player_gui(state: &mut State, reflection: &Reflection, hoo
     }
     let Some(gui) = state.dom.find_child_of_class(player, class) else { return };
     let muted = Muted::raise(&state.sched.muted);
-    // (Destroy's steps on the state alone, lua/instance.rs destroy_subtree's order: each instance's Destroying, then its
-    // removal, then its children's in turn; a GUI holds no bundle to import first)
-    let mut steps = vec![(gui, false)];
+    destroy_tree(state, reflection, hooks, gui);
+    drop(muted);
+}
+
+/// `root` and what it holds destroyed as Destroy does, on the state alone (lua/instance.rs destroy_subtree's order: each instance's
+/// Destroying, then its removal, then its children's in turn; what the engine destroys holds no bundle to import first).
+fn destroy_tree(state: &mut State, reflection: &Reflection, hooks: &Hooks, root: InstanceId) {
+    let mut steps = vec![(root, false)];
     while let Some((id, finish)) = steps.pop() {
         if finish {
             core::finish_destroy(state, id);
@@ -279,6 +349,64 @@ pub(crate) fn destroy_player_gui(state: &mut State, reflection: &Reflection, hoo
         let Ok(children) = core::begin_destroy(state, reflection, hooks, id) else { continue };
         steps.push((id, true));
         steps.extend(children.into_iter().rev().map(|child| (child, false)));
+    }
+}
+
+/// A spawn's Backpack (a server script's Character write of an instance, measured in roblox-sim 0.747 sessions: the paired probe
+/// tools/parity/probes/loopback/character_respawn.luau): after the old character's removal and before CharacterAdded the
+/// player's Backpack is destroyed (its Destroying, then its removal events), what a script put in it with it, and a new one
+/// holding copies of StarterPack's children, then of the player's StarterGear's, takes its place (the player's ChildAdded, the copies
+/// in it already). The engine's step: muted, as the leave's are (what it costs a server script is not measured).
+fn respawn_backpack(state: &mut State, reflection: &Reflection, hooks: &Hooks, player: InstanceId) {
+    let (Some(names), Some(game)) = (state.collection.departures.names.and_then(|names| names.spawn), state.collection.game) else { return };
+    let muted = Muted::raise(&state.sched.muted);
+    if let Some(old) = state.dom.find_child_of_class(player, names.backpack) {
+        destroy_tree(state, reflection, hooks, old);
+    }
+    let backpack = core::create_named(state, reflection, names.backpack, "Backpack");
+    let gear = state.dom.find_child_of_class(player, names.starter_gear);
+    let pack = state.dom.find_child_of_class(game, names.starter_pack);
+    for source in [pack, gear].into_iter().flatten() {
+        for template in state.dom.at(source).children.to_vec() {
+            if let Some(copy) = core::clone_instance(state, reflection, template) {
+                state.dom.attach(copy, backpack);
+            }
+        }
+    }
+    let _ = core::set_parent(state, reflection, hooks, backpack, Some(player));
+    drop(muted);
+}
+
+/// A spawn's PlayerGui, when the new character is in the DataModel (measured likewise; a parentless character copies nothing):
+/// after CharacterAdded and before Character's Changed, the guis in the PlayerGui that reset on spawn are destroyed, the last
+/// first, and StarterGui's are copied in again in StarterGui's order; the player's first spawn copies all of StarterGui's. A gui
+/// that resets is any but a LayerCollector whose ResetOnSpawn is false (a Folder resets). Muted, as [`respawn_backpack`].
+fn reset_player_gui(state: &mut State, reflection: &Reflection, hooks: &Hooks, player: InstanceId) {
+    let Some(names) = state.collection.departures.names else { return };
+    let (Some(spawn), Some(class), Some(game)) = (names.spawn, names.player_gui, state.collection.game) else { return };
+    let Some(gui) = state.dom.find_child_of_class(player, class) else { return };
+    let resets = |state: &State, id: InstanceId| state.dom.boolean(id, spawn.reset_on_spawn).unwrap_or(true);
+    let first = !state.collection.departures.spawned.contains(&player);
+    if first {
+        state.collection.departures.spawned.push(player);
+    }
+    let muted = Muted::raise(&state.sched.muted);
+    if !first {
+        for child in state.dom.at(gui).children.to_vec().into_iter().rev() {
+            if resets(state, child) {
+                destroy_tree(state, reflection, hooks, child);
+            }
+        }
+    }
+    if let Some(starter) = state.dom.find_child_of_class(game, spawn.starter_gui) {
+        for template in state.dom.at(starter).children.to_vec() {
+            if !first && !resets(state, template) {
+                continue;
+            }
+            if let Some(copy) = core::clone_instance(state, reflection, template) {
+                let _ = core::set_parent(state, reflection, hooks, copy, Some(gui));
+            }
+        }
     }
     drop(muted);
 }
