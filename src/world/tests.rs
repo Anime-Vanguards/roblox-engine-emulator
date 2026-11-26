@@ -11258,3 +11258,85 @@ fn the_broadphase_follows_parts_moved_below_one_another() {
     }
 }
 
+/// The legacy motors (world/joints.rs legacy_angle, step_motors; Studio 0.747, a playing client and its server,
+/// tools/parity/probes/part_rules.luau and rigid_joints.luau): CurrentAngle turns Part1 about C0's Z at once (from Part1's side the
+/// same way), each simulation step turns it toward DesiredAngle in quarter steps of MaxVelocity (none while less than a quarter step
+/// is left; a NaN turns it down), a Motor6D's Transform once written replaces its angle, a Position write's C1 keeps the turn, and a
+/// loose motor does not turn.
+#[test]
+fn legacy_motors_turn_toward_their_desired_angle() {
+    let (lua, engine) = start_play();
+    run(
+        &lua,
+        &engine,
+        r#"
+        workspace.Gravity = 0
+        local function Part(Name, Anchored, Size, At)
+            local P = Instance.new("Part")
+            P.Name, P.Anchored, P.CanCollide, P.Size, P.CFrame = Name, Anchored, false, Size, At
+            P.Parent = workspace
+            return P
+        end
+        local function Near(A, B, Case)
+            assert(A:FuzzyEq(B, 1e-5), `{Case}: {A}, the client's {B}`)
+        end
+        local function Is(Got, Want, Case)
+            assert(Got == Want, `{Case}: {Got}, the client's {Want}`)
+        end
+        local Base = Part("Base", true, Vector3.new(2, 2, 2), CFrame.new(0, 300, 0))
+        local Arm = Part("Arm", false, Vector3.new(1, 1, 4), CFrame.new(0, 300, 3))
+        local M = Instance.new("Motor")
+        M.Part0, M.Part1, M.C0, M.C1 = Base, Arm, CFrame.new(0, 0, 1.5), CFrame.new(0, 0, -1.5)
+        M.Parent = Base
+        M.CurrentAngle = 0.25
+        Near(Arm.CFrame, Base.CFrame * CFrame.new(0, 0, 1.5) * CFrame.Angles(0, 0, 0.25) * CFrame.new(0, 0, 1.5), "a CurrentAngle write")
+        M.DesiredAngle = 1
+        task.wait()
+        Is(M.CurrentAngle, 0.25, "no MaxVelocity, no turn")
+        -- (steps of a quarter of 0.25 land on 1 exactly)
+        M.MaxVelocity = 0.25
+        task.wait()
+        Is(M.CurrentAngle, 0.5, "a frame turns MaxVelocity")
+        for _ = 1, 3 do
+            task.wait()
+        end
+        Is(M.CurrentAngle, 1, "it reaches DesiredAngle")
+        Near(Arm.CFrame, Base.CFrame * CFrame.new(0, 0, 1.5) * CFrame.Angles(0, 0, 1) * CFrame.new(0, 0, 1.5), "turned there")
+        M.DesiredAngle = 1.05
+        task.wait()
+        Is(M.CurrentAngle, 1, "less than a quarter step left")
+        M.MaxVelocity, M.DesiredAngle = 0.1, 0 / 0
+        task.wait()
+        assert(math.abs(M.CurrentAngle - 0.9) < 1e-6, `a NaN turns it down: {M.CurrentAngle}`)
+        -- a Position write of Part1 rewrites C1 keeping the turn
+        M.MaxVelocity = 0
+        Arm.Position += Vector3.new(0, 0, 4)
+        Near(Arm.CFrame, Base.CFrame * M.C0 * CFrame.Angles(0, 0, M.CurrentAngle) * M.C1:Inverse(), "a Position write")
+        -- Part0 free, Part1 anchored: Part0 = Part1 * C1 * Rz(angle) * C0:Inverse()
+        local Free, Fixed = Part("Free", false, Vector3.new(2, 2, 2), CFrame.new(10, 300, 0)), Part("Fixed", true, Vector3.new(1, 1, 4), CFrame.new(10, 300, 3))
+        local R = Instance.new("Motor")
+        R.Part0, R.Part1, R.C0, R.C1 = Free, Fixed, CFrame.new(0, 0, 1.5), CFrame.new(0, 0, -1.5)
+        R.Parent = Free
+        R.CurrentAngle = 0.7
+        Near(Free.CFrame, Fixed.CFrame * CFrame.new(0, 0, -1.5) * CFrame.Angles(0, 0, 0.7) * CFrame.new(0, 0, -1.5), "from Part1's side")
+        -- a Motor6D: CurrentAngle until its Transform is written
+        local Arm2 = Part("Arm2", false, Vector3.new(1, 1, 4), CFrame.new(0, 300, 3))
+        local M6 = Instance.new("Motor6D")
+        M6.Part0, M6.Part1, M6.C0, M6.C1 = Base, Arm2, CFrame.new(0, 0, 1.5), CFrame.new(0, 0, -1.5)
+        M6.Parent = Base
+        M6.CurrentAngle = 0.4
+        Near(Arm2.CFrame, Base.CFrame * CFrame.new(0, 0, 1.5) * CFrame.Angles(0, 0, 0.4) * CFrame.new(0, 0, 1.5), "a Motor6D's angle")
+        M6.Transform = CFrame.Angles(0.3, 0, 0)
+        task.wait()
+        M6.Transform = CFrame.new()
+        task.wait()
+        M6.CurrentAngle = 0.6
+        Near(Arm2.CFrame, Base.CFrame * CFrame.new(0, 0, 3), "its Transform alone once written")
+        -- a loose motor keeps its angle
+        local Loose = Instance.new("Motor")
+        Loose.MaxVelocity, Loose.DesiredAngle = 0.1, 1
+        task.wait()
+        Is(Loose.CurrentAngle, 0, "a loose motor")
+        "#,
+    );
+}

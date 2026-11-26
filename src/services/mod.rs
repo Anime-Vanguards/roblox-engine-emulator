@@ -1091,6 +1091,8 @@ fn install_run_service(engine: &Rc<Engine>, behaviors: &mut Behaviors, reflectio
             super::scheduler::flush_deferred(lua, engine)?;
             // Motor6D.Transform: applied in a batch after PreSimulation (Roblox's Motor6D docs)
             crate::luau_profile::engine_step("joints", || crate::world::joints::step_transforms(engine));
+            // (the legacy motors turn toward their DesiredAngle: world/joints.rs step_motors)
+            crate::luau_profile::engine_step("joints", || crate::world::joints::step_motors(engine));
             // The physics step: free assemblies fall (world::gravity); the spatial index takes in what entered the Workspace
             crate::luau_profile::engine_step("physics", || crate::world::gravity::step(engine, delta));
             crate::world::broadphase::index_parts(engine);

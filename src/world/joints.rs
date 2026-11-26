@@ -94,7 +94,8 @@
 //! order: [`refresh_attached`], [`taken_up`]). A Parent write pays what a client spends taking joints out of those lists
 //! ([`left_every_world`]; on a move between worlds too: [`relist_moved`]).
 //!
-//! Not modelled: Motor.CurrentAngle / DesiredAngle (the legacy motors' rotation), AnimationConstraint,
+//! A legacy Motor turns by its CurrentAngle toward its DesiredAngle ([`legacy_angle`], [`step_motors`]).
+//! Not modelled: AnimationConstraint,
 //! RigidConstraint and the other constraints (solver-driven, nothing is simulated), and the members
 //! that report assemblies other than AssemblyRootPart (GetRootPart, GetConnectedParts,
 //! JointInstance.Active).
@@ -150,6 +151,11 @@ struct Setup {
     weld_state: NameId,
     base_part: ClassId,
     motor6d: Option<ClassId>,
+    /// The legacy Motor (and Motor6D under it) and its angles ([`legacy_angle`], [`step_motors`])
+    motor: Option<ClassId>,
+    current_angle: Option<NameId>,
+    desired_angle: Option<NameId>,
+    max_velocity: Option<NameId>,
     world_root: ClassId,
     workspace: Option<ClassId>,
     joints_service: Option<ClassId>,
@@ -243,6 +249,10 @@ pub struct Joints {
     bulk: u32,
     /// Motor6Ds whose Transform changed since the last simulation step
     pending: Vec<InstanceId>,
+    /// Motor6Ds whose Transform was ever written: their CurrentAngle no longer turns them ([`legacy_angle`])
+    transformed: FxHashSet<InstanceId>,
+    /// Motors whose CurrentAngle may still turn toward their DesiredAngle ([`step_motors`])
+    turning: FxHashSet<InstanceId>,
     /// While positive, CFrame and joint writes are the assembly code's own (already consistent)
     quiet: u32,
     /// Model:PivotTo / ScaleTo: nesting depth, the parts they wrote (in order, with the CFrame each
@@ -998,6 +1008,10 @@ pub fn install(engine: &Rc<Engine>) {
         weld_state,
         base_part,
         motor6d,
+        motor,
+        current_angle: name("CurrentAngle"),
+        desired_angle: name("DesiredAngle"),
+        max_velocity: name("MaxVelocity"),
         world_root,
         workspace: class("Workspace"),
         joints_service: class("JointsService"),
@@ -1639,6 +1653,8 @@ fn forget(state: &mut State, id: InstanceId) {
     for joint in joints.attached.remove(&id).unwrap_or_default() {
         joints.detach(joint);
     }
+    joints.transformed.remove(&id);
+    joints.turning.remove(&id);
 }
 
 fn setup_of(state: &State) -> Option<Rc<Setup>> {
@@ -1673,6 +1689,7 @@ fn is_part(state: &State, reflection: &Reflection, setup: &Setup, id: InstanceId
 fn index_joint(state: &mut State, reflection: &Reflection, setup: &Setup, joint: InstanceId) {
     let flips = reindex(state, reflection, setup, joint, false);
     drop_flipped(&mut state.joints, &flips);
+    note_turning(state, reflection, setup, joint);
 }
 
 /// [`index_joint`]'s work, the parts whose marks for the joint changed under its new parts returned ([`relink`]) for the caller
@@ -3072,10 +3089,52 @@ fn across(state: &State, reflection: &Reflection, setup: &Setup, joint: Instance
                 Some(motor) if reflection.class(class).is_a(motor) => frame::affine_of(state.dom.raw_get(joint, setup.transform)),
                 _ => Affine3A::IDENTITY,
             };
-            c0 * transform * inverse(&c1)
+            match legacy_angle(state, reflection, setup, joint) {
+                // (from Part1's side the angle turns Part0 the same way: Part0 = Part1 * C1 * Rz(angle) * C0:Inverse(), measured)
+                Some(angle) if reference(state, joint, setup.part0) != Some(from) => {
+                    return inverse(&(c0 * turn_z(-angle) * transform * inverse(&c1)));
+                }
+                Some(angle) => c0 * turn_z(angle) * transform * inverse(&c1),
+                None => c0 * transform * inverse(&c1),
+            }
         }
     };
     if reference(state, joint, setup.part0) == Some(from) { forward } else { inverse(&forward) }
+}
+
+/// A legacy Motor's turn: its CurrentAngle about Z between C0 and C1, Part1 = Part0 * C0 * CFrame.Angles(0, 0, CurrentAngle) *
+/// C1:Inverse() (Studio 0.747, a playing client and its server: a write places it at once, and each simulation step turns it toward
+/// DesiredAngle, [`step_motors`]; tools/parity/probes/legacy_motors.luau). A Motor6D turns so until its Transform is first written,
+/// and from then by its Transform alone. None for no turn (an angle of 0 leaves the arithmetic as it was).
+fn legacy_angle(state: &State, reflection: &Reflection, setup: &Setup, joint: InstanceId) -> Option<f32> {
+    let class = reflection.class(state.dom.at(joint).class);
+    if !setup.motor.is_some_and(|motor| class.is_a(motor)) {
+        return None;
+    }
+    if setup.motor6d.is_some_and(|motor6d| class.is_a(motor6d)) && state.joints.transformed.contains(&joint) {
+        return None;
+    }
+    let angle = state.dom.number(joint, setup.current_angle?)? as f32;
+    (angle != 0.0).then_some(angle)
+}
+
+/// A turn about Z by `angle`, its sine and cosine worked out in double and stored as floats (a client's: sin 0.1 reads 0.099833414).
+fn turn_z(angle: f32) -> Affine3A {
+    let (sin, cos) = f64::from(angle).sin_cos();
+    let (sin, cos) = (sin as f32, cos as f32);
+    Affine3A::from_mat3(glam::Mat3::from_cols(glam::Vec3::new(cos, sin, 0.0), glam::Vec3::new(-sin, cos, 0.0), glam::Vec3::Z))
+}
+
+/// Notes `motor` as turning when its CurrentAngle is not its DesiredAngle and it has a MaxVelocity ([`step_motors`]).
+fn note_turning(state: &mut State, reflection: &Reflection, setup: &Setup, motor: InstanceId) {
+    if !setup.motor.is_some_and(|class| reflection.class(state.dom.at(motor).class).is_a(class)) {
+        return;
+    }
+    let read = |name: Option<NameId>| name.and_then(|name| state.dom.number(motor, name)).unwrap_or(0.0) as f32;
+    let (current, desired, velocity) = (read(setup.current_angle), read(setup.desired_angle), read(setup.max_velocity));
+    if velocity != 0.0 && current != desired {
+        state.joints.turning.insert(motor);
+    }
 }
 
 /// Moves a part the assembly code computed: stored, the engine's hooks told, no Changed events. Its component stays settled.
@@ -3176,11 +3235,16 @@ fn changed(state: &mut State, reflection: &Reflection, hooks: &Hooks, id: Instan
             return;
         }
         part_moved(state, reflection, hooks, &setup, id, before);
-    } else if name == setup.c0 || name == setup.c1 || name == setup.part0 || name == setup.part1 || name == setup.enabled {
+    } else if name == setup.c0 || name == setup.c1 || name == setup.part0 || name == setup.part1 || name == setup.enabled || Some(name) == setup.current_angle {
         let kind = setup.kind(state.dom.at(id).class);
         if kind == Kind::Other {
             return;
         }
+        if Some(name) == setup.current_angle {
+            note_turning(state, reflection, &setup, id);
+        }
+        // (a C0, C1 or CurrentAngle write places parts and links nothing new)
+        let placing = name == setup.c0 || name == setup.c1 || Some(name) == setup.current_angle;
         ensure_scanned(state, reflection, &setup);
         // (the assemblies of the parts it linked and links read their motion again once the write is done: a C0 or C1 moves the parts
         // it places within their assembly too)
@@ -3202,8 +3266,8 @@ fn changed(state: &mut State, reflection: &Reflection, hooks: &Hooks, id: Instan
         }
         index_joint(state, reflection, &setup, id);
         let links = name == setup.part0 || name == setup.part1 || name == setup.enabled && state.dom.boolean(id, setup.enabled) != Some(false);
-        let flips = if name != setup.c0 && name != setup.c1 { relink(state, reflection, &setup, id) } else { [None, None] };
-        if name != setup.c0 && name != setup.c1 {
+        let flips = if !placing { relink(state, reflection, &setup, id) } else { [None, None] };
+        if !placing {
             refresh_attached(state, reflection, &setup, id, None);
         }
         if kind == Kind::WeldConstraint && links {
@@ -3256,10 +3320,16 @@ fn changed(state: &mut State, reflection: &Reflection, hooks: &Hooks, id: Instan
                 state.joints.regrouped.extend(found.anchored.borrow().iter().copied());
             }
         }
+    } else if Some(name) == setup.desired_angle || Some(name) == setup.max_velocity {
+        // (a legacy motor given somewhere to turn to, or a speed: step_motors)
+        note_turning(state, reflection, &setup, id);
     } else if name == setup.transform {
         let is_motor = setup.motor6d.is_some_and(|motor| reflection.class(state.dom.at(id).class).is_a(motor));
         if is_motor && !state.joints.pending.contains(&id) {
             state.joints.pending.push(id);
+        }
+        if is_motor {
+            state.joints.transformed.insert(id);
         }
         // (its parts are no longer where it puts them until the simulation step)
         if is_motor {
@@ -4456,6 +4526,16 @@ pub fn move_alone(state: &mut State, reflection: &Reflection, hooks: &Hooks, par
                         Some(motor) if reflection.class(class).is_a(motor) => frame::affine_of(state.dom.raw_get(joint, setup.transform)),
                         _ => Affine3A::IDENTITY,
                     };
+                    // (a legacy motor's turn, the way it turns from the side nearer the root: legacy_angle, across; measured, a Position
+                    // write of a turned Motor's Part1 keeps it turned)
+                    let transform = match legacy_angle(state, reflection, &setup, joint) {
+                        Some(angle) => {
+                            let place = |at: InstanceId| tree.as_ref().and_then(|tree| tree.place.get(&at).copied());
+                            let part1_above = matches!((place(part0), place(part1)), (Some((a0, i0)), Some((a1, i1))) if a0 == a1 && i1 < i0);
+                            turn_z(if part1_above { -angle } else { angle }) * transform
+                        }
+                        None => transform,
+                    };
                     // Part0 * C0 * Transform = Part1 * C1
                     let (name, value) = if part0 == part {
                         (setup.c0, inverse(cframe) * cframe_of(state, &setup, part1) * c1 * inverse(&transform))
@@ -4975,6 +5055,56 @@ pub fn step_transforms(engine: &Engine) {
         }
     }
     settle_from_roots(&mut state, &engine.reflection, &hooks, &setup, &seeds);
+}
+
+/// The simulation step's legacy motors: each active Motor (and Motor6D) whose CurrentAngle is not its DesiredAngle turns toward it in
+/// four quarter steps of its MaxVelocity's size (MaxVelocity a 60 Hz frame), a step taken while the angle left is not below it (a
+/// NaN DesiredAngle turns it down), and its assembly settles from its root. Measured in a playing client and its server (Studio
+/// 0.747, tools/parity/probes/legacy_motors.luau): a client steps in quarters of MaxVelocity by its frames' real time, so its angle
+/// after a frame varies between runs; its end and its rules do not. The angle changes without Changed events, as physics moves
+/// parts. A motor outside every world does not turn.
+pub fn step_motors(engine: &Engine) {
+    let hooks = engine.hooks.borrow();
+    let mut state = engine.state.borrow_mut();
+    if state.joints.turning.is_empty() {
+        return;
+    }
+    let Some(setup) = setup_of(&state) else { return };
+    let (Some(current_name), Some(desired_name), Some(velocity_name)) = (setup.current_angle, setup.desired_angle, setup.max_velocity) else { return };
+    let mut motors: Vec<InstanceId> = state.joints.turning.iter().copied().collect();
+    motors.sort_by_key(|&motor| state.dom.get(motor).map(|instance| instance.serial));
+    ensure_scanned(&mut state, &engine.reflection, &setup);
+    let mut seeds = Vec::new();
+    for motor in motors {
+        if !alive(&state, motor) {
+            state.joints.turning.remove(&motor);
+            continue;
+        }
+        if active_parts(&state, &engine.reflection, &setup, motor, None).is_none() {
+            continue;
+        }
+        // (in double within a step, stored as a float: 0.7 turned by eight steps of 0.0125 reads 0.800000012, a client's)
+        let read = |name: NameId| f64::from(state.dom.number(motor, name).unwrap_or(0.0) as f32);
+        let (mut angle, desired, step) = (read(current_name), read(desired_name), read(velocity_name).abs() * 0.25);
+        let mut moved = false;
+        for _ in 0..4 {
+            let left = desired - angle;
+            if left.abs() < step || step == 0.0 {
+                break;
+            }
+            angle += if left > 0.0 { step } else { -step };
+            moved = true;
+        }
+        if !moved {
+            state.joints.turning.remove(&motor);
+            continue;
+        }
+        core::raw_set_unsignalled(&mut state, &engine.reflection, &hooks, motor, current_name, Value::Number(f64::from(angle as f32)));
+        seeds.extend(parts_of(&state, &setup, motor).into_iter().flatten());
+    }
+    if !seeds.is_empty() {
+        settle_from_roots(&mut state, &engine.reflection, &hooks, &setup, &seeds);
+    }
 }
 
 #[cfg(test)]

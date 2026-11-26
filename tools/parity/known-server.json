@@ -537,10 +537,6 @@
 	],
 	"rigid_joints": [
 		{
-			"line": "joint Motor ",
-			"why": "a legacy Motor places Part1 at Part0 * C0 * CFrame.Angles(0, 0, CurrentAngle) * C1:Inverse() in a client; ree ignores CurrentAngle"
-		},
-		{
 			"line": "model-in listed",
 			"why": "the order a spatial query lists a model's parts when it comes in with its welds, after a weld ends and after an Anchored write: a client files each assembly's parts together (m1,m2,m4,m6 then m3,m5); ree lists them in the order they were made"
 		},
