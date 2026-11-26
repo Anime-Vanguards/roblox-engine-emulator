@@ -15088,3 +15088,29 @@ fn legacy_resumptions_read_the_last_frames_time() {
         );
     }
 }
+
+/// A function delay() or spawn() calls gets two numbers, the time it waited and a clock, as wait() returns them: a playing client's
+/// and a server's alike (Studio 0.747, tools/parity/probes/resumption_time.luau). ree called it with none.
+#[test]
+fn legacy_delay_and_spawn_functions_get_the_time_they_waited_and_a_clock() {
+    use super::RunContext;
+    let script = r#"
+        local Got = {}
+        delay(0, function(...)
+            Got.delay = table.pack(...)
+        end)
+        spawn(function(...)
+            Got.spawn = table.pack(...)
+        end)
+        task.wait(0.1)
+        for _, Kind in { "delay", "spawn" } do
+            local Values = Got[Kind]
+            print(Kind, Values.n, typeof(Values[1]), typeof(Values[2]), math.round(Values[1] * 60), Values[2] <= os.clock())
+        end
+    "#;
+    for run_context in [RunContext::Client, RunContext::Server] {
+        let (lua, engine) = start_with(Options { mode: "play".into(), run_context, ..Options::default() });
+        let output = run(&lua, &engine, script);
+        assert_eq!(output, ["print: delay 2 number number 2 true", "print: spawn 2 number number 2 true"], "{run_context:?}");
+    }
+}

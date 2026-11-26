@@ -702,6 +702,12 @@ impl Scheduler {
         self.time_behind.unwrap_or(self.now)
     }
 
+    /// os.clock() at the frame's time, before the work charged in the frame, without taking a reading (a reading moves the clock's
+    /// work into it and counts against the busy-loop allowance)
+    pub fn frame_clock(&self) -> f64 {
+        self.clock_base + self.now + self.stretch
+    }
+
     /// os.clock()
     pub fn clock(&mut self) -> f64 {
         self.clock_base + self.elapsed()
@@ -1731,6 +1737,17 @@ fn run_timers_in(lua: &Lua, engine: &Rc<Engine>, legacy: bool, limit: Option<f64
             TimerKind::Wait => LuaMultiValue::from_iter([LuaValue::Number(elapsed)]),
             TimerKind::LegacyWait => {
                 let clock = engine.state.borrow_mut().sched.clock();
+                LuaMultiValue::from_iter([LuaValue::Number(elapsed), LuaValue::Number(clock)])
+            }
+            // A function delay() or spawn() calls gets two numbers, the time it waited and a clock, as wait() returns them (Studio
+            // 0.747, a playing client and a server: tools/parity/probes/resumption_time.luau; a client's clock is a real-time one of
+            // the game's run, about a frame below time()). The clock is os.clock's at the frame's time, read without taking a
+            // clock reading (a frame's first reading sets where its work starts counting)
+            TimerKind::Delay if legacy => {
+                let mut state = engine.state.borrow_mut();
+                state.sched.clear_task_state(&timer.thread);
+                let clock = state.sched.frame_clock();
+                drop(state);
                 LuaMultiValue::from_iter([LuaValue::Number(elapsed), LuaValue::Number(clock)])
             }
             TimerKind::Delay => {
