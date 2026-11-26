@@ -1,0 +1,252 @@
+# engine: Roblox Studio 0.747.0.7471481, the server of a headless play session (a Script in ServerScriptService, script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-26
+readonly AdGui.Status (AdGui) loose=EnumItem(Enum.AdUnitStatus.Inactive) world=EnumItem(Enum.AdUnitStatus.Inactive)
+readonly AdPlacement.RewardId (AdPlacement) loose="" world=""
+readonly AdPlacement.RewardImageContent (AdPlacement) loose=Content(Content{SourceType=None}) world=Content(Content{SourceType=None})
+readonly AdPlacement.RewardName (AdPlacement) loose="" world=""
+readonly AdPlacement.Visible (AdPlacement) loose=false world=false
+readonly AdPortal.Status (AdPortal) loose=EnumItem(Enum.AdUnitStatus.Inactive) world=-
+readonly AnimationClip.Length (AnimationGraphDefinition) loose=0 world=0
+readonly AnimationConstraint.C0 (AnimationConstraint) loose=CF(0 0 0 1 0 0 0 1 0 0 0 1) world=CF(0 0 0 1 0 0 0 1 0 0 0 1)
+readonly AnimationConstraint.C1 (AnimationConstraint) loose=CF(0 0 0 1 0 0 0 1 0 0 0 1) world=CF(0 0 0 1 0 0 0 1 0 0 0 1)
+readonly AnimationConstraint.Part0 (AnimationConstraint) loose=nil world=nil
+readonly AnimationConstraint.Part1 (AnimationConstraint) loose=nil world=nil
+readonly Animator.EvaluationThrottled (Animator) loose=false world=-
+readonly Animator.RootMotion (Animator) loose=CF(0 0 0 1 0 0 0 1 0 0 0 1) world=-
+readonly Animator.RootMotionWeight (Animator) loose=0 world=-
+readonly AtmosphereSensor.AirDensity (AtmosphereSensor) loose=0 world=0
+readonly AtmosphereSensor.RelativeWindVelocity (AtmosphereSensor) loose=V3(0 0 0) world=V3(0 0 0)
+readonly Attachment.WorldRotation (Attachment) loose=V3(-0 0 -0) world=V3(-0 0 -0)
+readonly AudioAnalyzer.PeakLevel (AudioAnalyzer) loose=0 world=0
+readonly AudioAnalyzer.RmsLevel (AudioAnalyzer) loose=0 world=0
+readonly AudioDeviceInput.Active (AudioDeviceInput) loose=false world=false
+readonly AudioPlayer.IsPlaying (AudioPlayer) loose=false world=false
+readonly AudioPlayer.IsReady (AudioPlayer) loose=false world=false
+readonly AudioPlayer.TimeLength (AudioPlayer) loose=0 world=0
+readonly AudioRecorder.IsRecording (AudioRecorder) loose=false world=false
+readonly AudioRecorder.TimeLength (AudioRecorder) loose=0 world=0
+readonly AudioSpeechToText.VoiceDetected (AudioSpeechToText) loose=false world=false
+readonly AudioStreamReader.SampleFormat (AudioStreamReader) loose=EnumItem(Enum.AudioSampleFormat.Float32) world=EnumItem(Enum.AudioSampleFormat.Float32)
+readonly AudioStreamReader.SampleRate (AudioStreamReader) loose=48000 world=48000
+readonly AudioStreamWriter.SampleFormat (AudioStreamWriter) loose=EnumItem(Enum.AudioSampleFormat.Float32) world=EnumItem(Enum.AudioSampleFormat.Float32)
+readonly AudioStreamWriter.SampleRate (AudioStreamWriter) loose=48000 world=48000
+readonly AudioTextToSpeech.IsLoaded (AudioTextToSpeech) loose=false world=false
+readonly AudioTextToSpeech.IsPlaying (AudioTextToSpeech) loose=false world=false
+readonly AudioTextToSpeech.TimeLength (AudioTextToSpeech) loose=0 world=0
+readonly BasePart.AssemblyCenterOfMass (Part) loose=V3(0 0 0) world=V3(0 0 0)
+readonly BasePart.AssemblyMass (Part) loose=6.7200002670288086 world=6.7200002670288086
+readonly BasePart.AssemblyRootPart (Part) loose=nil world=Instance(Part)
+readonly BasePart.CenterOfMass (Part) loose=V3(0 0 0) world=V3(0 0 0)
+readonly BasePart.CurrentPhysicalProperties (Part) loose=PhysicalProperties(0.699999988, 0.300000012, 0.5, 1, 1, 0.300000012) world=PhysicalProperties(0.699999988, 0.300000012, 0.5, 1, 1, 0.300000012)
+readonly BasePart.ExtentsCFrame (Part) loose=CF(0 0 0 1 0 0 0 1 0 0 0 1) world=CF(0 0 0 1 0 0 0 1 0 0 0 1)
+readonly BasePart.ExtentsSize (Part) loose=V3(4 1.20000005 2) world=V3(4 1.20000005 2)
+readonly BasePart.Mass (Part) loose=6.7200002670288086 world=6.7200002670288086
+readonly BasePart.ReceiveAge (Part) loose=0 world=0
+readonly BasePart.ResizeIncrement (Part) loose=1 world=1
+readonly BasePart.ResizeableFaces (Part) loose=Faces(Right, Top, Back, Left, Bottom, Front) world=Faces(Right, Top, Back, Left, Bottom, Front)
+readonly BasePart.SpecificGravity (Part) loose=0.69999998807907104 world=0.69999998807907104
+readonly BaseScript.RunContext (Script) loose=EnumItem(Enum.RunContext.Legacy) world=EnumItem(Enum.RunContext.Legacy)
+readonly BaseWrap.CageMeshContent (WrapLayer) loose=Content(Content{SourceType=None}) world=-
+readonly BaseWrap.CageMeshId (WrapLayer) loose="" world=-
+readonly BaseWrap.CageOrigin (WrapLayer) loose=CF(0 0 0 1 0 0 0 1 0 0 0 1) world=-
+readonly BaseWrap.CageOriginWorld (WrapLayer) loose=CF(0 0 0 1 0 0 0 1 0 0 0 1) world=-
+readonly BaseWrap.ImportOrigin (WrapLayer) loose=CF(0 0 0 1 0 0 0 1 0 0 0 1) world=-
+readonly BaseWrap.ImportOriginWorld (WrapLayer) loose=CF(0 0 0 1 0 0 0 1 0 0 0 1) world=-
+readonly BillboardGui.CurrentDistance (BillboardGui) loose=0 world=0
+readonly Bone.TransformedCFrame (Bone) loose=CF(0 0 0 1 0 0 0 1 0 0 0 1) world=-
+readonly Bone.TransformedWorldCFrame (Bone) loose=CF(0 0 0 1 0 0 0 1 0 0 0 1) world=-
+readonly Camera.NearPlaneZ (Camera) loose=-0.5 world=-0.5
+readonly Camera.ViewportSize (Camera) loose=V2(1 1) world=V2(1 1)
+readonly Constraint.Active (HingeConstraint) loose=false world=false
+readonly ControllerBase.Active (AirController) loose=false world=false
+readonly CylindricalConstraint.CurrentAngle (CylindricalConstraint) loose=0 world=0
+readonly CylindricalConstraint.WorldRotationAxis (CylindricalConstraint) loose=V3(1 0 0) world=V3(1 0 0)
+readonly Decal.EmissiveMaskContent (Decal) loose=Content(Content{SourceType=None}) world=Content(Content{SourceType=None})
+readonly Decal.MetalnessMapContent (Decal) loose=Content(Content{SourceType=None}) world=Content(Content{SourceType=None})
+readonly Decal.NormalMapContent (Decal) loose=Content(Content{SourceType=None}) world=Content(Content{SourceType=None})
+readonly Decal.RoughnessMapContent (Decal) loose=Content(Content{SourceType=None}) world=Content(Content{SourceType=None})
+readonly FeatureMatchingTable.SchemaName (FeatureMatchingTable) loose="" world=""
+readonly FloatCurve.Length (FloatCurve) loose=0 world=0
+readonly FluidForceSensor.BuoyancyForce (FluidForceSensor) loose=V3(0 0 0) world=V3(0 0 0)
+readonly FluidForceSensor.BuoyancyTorque (FluidForceSensor) loose=V3(0 0 0) world=V3(0 0 0)
+readonly FluidForceSensor.CenterOfPressure (FluidForceSensor) loose=V3(0 0 0) world=V3(0 0 0)
+readonly FluidForceSensor.Force (FluidForceSensor) loose=V3(0 0 0) world=V3(0 0 0)
+readonly FluidForceSensor.Torque (FluidForceSensor) loose=V3(0 0 0) world=V3(0 0 0)
+readonly GuiBase2d.AbsolutePosition (Frame) loose=V2(0 0) world=V2(0 0)
+readonly GuiBase2d.AbsoluteRotation (Frame) loose=0 world=0
+readonly GuiBase2d.AbsoluteSize (Frame) loose=V2(0 0) world=V2(0 0)
+readonly GuiObject.GuiState (Frame) loose=EnumItem(Enum.GuiState.Idle) world=EnumItem(Enum.GuiState.Idle)
+readonly HingeConstraint.CurrentAngle (HingeConstraint) loose=0 world=0
+readonly Humanoid.CollisionType (Humanoid) loose=EnumItem(Enum.HumanoidCollisionType.OuterBox) world=EnumItem(Enum.HumanoidCollisionType.OuterBox)
+readonly Humanoid.FloorMaterial (Humanoid) loose=EnumItem(Enum.Material.Air) world=EnumItem(Enum.Material.Air)
+readonly Humanoid.MoveDirection (Humanoid) loose=V3(0 0 0) world=V3(0 0 0)
+readonly Humanoid.RootPart (Humanoid) loose=nil world=nil
+readonly Humanoid.SeatPart (Humanoid) loose=nil world=nil
+readonly ImageButton.IsLoaded (ImageButton) loose=false world=false
+readonly ImageLabel.IsLoaded (ImageLabel) loose=false world=false
+readonly InputAction.PreferredBinding (InputAction) loose=nil world=nil
+readonly InputActionLabel.ResolvedImageContent (InputActionLabel) loose=Content(Content{SourceType=None}) world=Content(Content{SourceType=None})
+readonly InputActionLabel.ResolvedText (InputActionLabel) loose="" world=""
+readonly JointInstance.Active (Weld) loose=false world=false
+readonly MarkerCurve.Length (MarkerCurve) loose=0 world=0
+readonly MaterialVariant.BaseMaterial (MaterialVariant) loose=EnumItem(Enum.Material.Plastic) world=EnumItem(Enum.Material.Plastic)
+readonly MeshPart.HasJointOffset (MeshPart) loose=false world=false
+readonly MeshPart.HasSkinnedMesh (MeshPart) loose=false world=false
+readonly MeshPart.JointOffset (MeshPart) loose=V3(0 0 0) world=V3(0 0 0)
+readonly MeshPart.MeshContent (MeshPart) loose=Content(Content{SourceType=None}) world=Content(Content{SourceType=None})
+readonly MeshPart.MeshId (MeshPart) loose="" world=""
+readonly MeshPart.RenderFidelity (MeshPart) loose=EnumItem(Enum.RenderFidelity.Automatic) world=EnumItem(Enum.RenderFidelity.Automatic)
+readonly PartOperation.RenderFidelity (PartOperation) loose=EnumItem(Enum.RenderFidelity.Automatic) world=EnumItem(Enum.RenderFidelity.Automatic)
+readonly PartOperation.SmoothingAngle (PartOperation) loose=0 world=0
+readonly PartOperation.TriangleCount (PartOperation) loose=0 world=0
+readonly PhysicsActivitySensor.Active (PhysicsActivitySensor) loose=true world=true
+readonly ProceduralModel.GenerationError (ProceduralModel) loose="" world=""
+readonly RodConstraint.CurrentDistance (RodConstraint) loose=0 world=0
+readonly RopeConstraint.CurrentDistance (RopeConstraint) loose=0 world=0
+readonly RotationCurve.Length (RotationCurve) loose=0 world=0
+readonly ScrollingFrame.AbsoluteCanvasSize (ScrollingFrame) loose=V2(0 0) world=V2(0 0)
+readonly ScrollingFrame.AbsoluteWindowSize (ScrollingFrame) loose=V2(0 0) world=V2(0 0)
+readonly Seat.Occupant (Seat) loose=nil world=nil
+readonly SkateboardController.Steer (SkateboardController) loose=0 world=0
+readonly SkateboardController.Throttle (SkateboardController) loose=0 world=0
+readonly SkateboardPlatform.Controller (SkateboardPlatform) loose=nil world=nil
+readonly SkateboardPlatform.ControllingHumanoid (SkateboardPlatform) loose=nil world=nil
+readonly SlidingBallConstraint.CurrentPosition (CylindricalConstraint) loose=0 world=0
+readonly Sound.IsLoaded (Sound) loose=false world=false
+readonly Sound.IsPaused (Sound) loose=true world=true
+readonly Sound.IsPlaying (Sound) loose=false world=false
+readonly Sound.PlaybackLoudness (Sound) loose=0 world=0
+readonly Sound.TimeLength (Sound) loose=0 world=0
+readonly Sound.isPlaying (Sound) loose=false world=false
+readonly SpringConstraint.CurrentLength (SpringConstraint) loose=0 world=0
+readonly StarterGear.Loaded (StarterGear) loose=false world=false
+readonly StyleQuery.IsActive (StyleQuery) loose=false world=false
+readonly StyleRule.SelectorError (StyleRule) loose="" world=""
+readonly SurfaceAppearance.ColorMapContent (SurfaceAppearance) loose=Content(Content{SourceType=None}) world=Content(Content{SourceType=None})
+readonly SurfaceAppearance.EmissiveMaskContent (SurfaceAppearance) loose=Content(Content{SourceType=None}) world=Content(Content{SourceType=None})
+readonly SurfaceAppearance.MetalnessMapContent (SurfaceAppearance) loose=Content(Content{SourceType=None}) world=Content(Content{SourceType=None})
+readonly SurfaceAppearance.NormalMapContent (SurfaceAppearance) loose=Content(Content{SourceType=None}) world=Content(Content{SourceType=None})
+readonly SurfaceAppearance.RoughnessMapContent (SurfaceAppearance) loose=Content(Content{SourceType=None}) world=Content(Content{SourceType=None})
+readonly TerrainRegion.IsSmooth (TerrainRegion) loose=true world=true
+readonly TerrainRegion.SizeInCells (TerrainRegion) loose=V3(1 1 1) world=V3(1 1 1)
+readonly TextBox.ContentText (TextBox) loose="TextBox" world="TextBox"
+readonly TextBox.OpenTypeFeaturesError (TextBox) loose="" world=""
+readonly TextBox.TextBounds (TextBox) loose=V2(0 0) world=V2(0 0)
+readonly TextBox.TextFits (TextBox) loose=false world=false
+readonly TextButton.ContentText (TextButton) loose="Button" world="Button"
+readonly TextButton.LocalizedText (TextButton) loose="" world="Button"
+readonly TextButton.OpenTypeFeaturesError (TextButton) loose="" world=""
+readonly TextButton.TextBounds (TextButton) loose=V2(0 0) world=V2(0 0)
+readonly TextButton.TextFits (TextButton) loose=false world=false
+readonly TextChannel.DirectChatRequester (TextChannel) loose=nil world=nil
+readonly TextLabel.ContentText (TextLabel) loose="Label" world="Label"
+readonly TextLabel.LocalizedText (TextLabel) loose="" world="Label"
+readonly TextLabel.OpenTypeFeaturesError (TextLabel) loose="" world=""
+readonly TextLabel.TextBounds (TextLabel) loose=V2(0 0) world=V2(0 0)
+readonly TextLabel.TextFits (TextLabel) loose=false world=false
+readonly TorsionSpringConstraint.CurrentAngle (TorsionSpringConstraint) loose=0 world=0
+readonly TriangleMeshPart.CollisionFidelity (MeshPart) loose=EnumItem(Enum.CollisionFidelity.Box) world=EnumItem(Enum.CollisionFidelity.Box)
+readonly TriangleMeshPart.CollisionPrecision (MeshPart) loose=0 world=0
+readonly TriangleMeshPart.FluidFidelity (MeshPart) loose=EnumItem(Enum.FluidFidelity.Automatic) world=EnumItem(Enum.FluidFidelity.Automatic)
+readonly TriangleMeshPart.MeshSize (MeshPart) loose=V3(0 0 0) world=V3(0 0 0)
+readonly Tween.Instance (Tween) loose=nil world=nil
+readonly Tween.TweenInfo (Tween) loose=TweenInfo(Time:1 DelayTime:0 RepeatCount:0 Reverses:False EasingDirection:Out EasingStyle:Quad) world=TweenInfo(Time:1 DelayTime:0 RepeatCount:0 Reverses:False EasingDirection:Out EasingStyle:Quad)
+readonly TweenBase.PlaybackState (Tween) loose=EnumItem(Enum.PlaybackState.Begin) world=EnumItem(Enum.PlaybackState.Begin)
+readonly UIGridLayout.AbsoluteCellCount (UIGridLayout) loose=V2(0 0) world=V2(1 9)
+readonly UIGridLayout.AbsoluteCellSize (UIGridLayout) loose=V2(100 100) world=V2(100 100)
+readonly UIGridStyleLayout.AbsoluteContentSize (UIListLayout) loose=V2(0 0) world=V2(0 0)
+readonly UIPageLayout.CurrentPage (UIPageLayout) loose=nil world=nil
+readonly ValueCurve.Length (ValueCurve) loose=0 world=0
+readonly ValueCurve.ValueType (ValueCurve) loose="nil" world="nil"
+readonly VehicleSeat.AreHingesDetected (VehicleSeat) loose=0 world=0
+readonly VehicleSeat.Occupant (VehicleSeat) loose=nil world=nil
+readonly VideoFrame.IsLoaded (VideoFrame) loose=false world=false
+readonly VideoFrame.Resolution (VideoFrame) loose=V2(0 0) world=V2(0 0)
+readonly VideoFrame.TimeLength (VideoFrame) loose=0 world=0
+readonly VideoPlayer.IsLoaded (VideoPlayer) loose=false world=false
+readonly VideoPlayer.IsPlaying (VideoPlayer) loose=false world=false
+readonly VideoPlayer.Resolution (VideoPlayer) loose=V2(0 0) world=V2(0 0)
+readonly VideoPlayer.TimeLength (VideoPlayer) loose=0 world=0
+readonly WeldConstraint.Active (WeldConstraint) loose=false world=false
+readonly Wire.Connected (Wire) loose=false world=false
+readonly WrapLayer.BindOffset (WrapLayer) loose=CF(0 0 0 1 0 0 0 1 0 0 0 1) world=-
+readonly WrapLayer.ReferenceMeshContent (WrapLayer) loose=Content(Content{SourceType=None}) world=-
+readonly WrapLayer.ReferenceMeshId (WrapLayer) loose="" world=-
+readonly WrapLayer.ReferenceOrigin (WrapLayer) loose=CF(0 0 0 1 0 0 0 1 0 0 0 1) world=-
+readonly WrapLayer.ReferenceOriginWorld (WrapLayer) loose=CF(0 0 0 1 0 0 0 1 0 0 0 1) world=-
+readonly WrapLayer.RotateScaleDeformationMap (WrapLayer) loose=Content(Content{SourceType=None}) world=-
+readonly WrapLayer.ScaleOnlyDeformationMap (WrapLayer) loose=Content(Content{SourceType=None}) world=-
+readonly WrapLayer.ShrinkFactor (WrapLayer) loose=0 world=-
+readonly WrapLayer.TargetShaping (WrapLayer) loose=0 world=-
+readonly WrapTarget.Stiffness (WrapTarget) loose=0 world=-
+service Workspace.AuthorityMode EnumItem(Enum.AuthorityMode.Automatic)
+service Workspace.FallHeightEnabled true
+service Workspace.FallenPartsDestroyHeight -500
+service Workspace.FilteringEnabled true
+service Workspace.InterpolationThrottling EnumItem(Enum.InterpolationThrottlingMode.Default)
+service Workspace.StreamingEnabled false
+service Workspace.Terrain Instance(Terrain)
+service Players.BubbleChat false
+service Players.ClassicChat true
+service Players.LocalPlayer nil
+service Players.MaxPlayers 12
+service Players.NumPlayers 1
+service Players.PreferredPlayers 0
+service Players.localPlayer nil
+service Players.numPlayers 1
+service Lighting.LightingStyle EnumItem(Enum.LightingStyle.Realistic)
+service Lighting.PrioritizeLightingQuality true
+service UserInputService.AccelerometerEnabled false
+service UserInputService.GamepadEnabled false
+service UserInputService.GyroscopeEnabled false
+service UserInputService.KeyboardEnabled true
+service UserInputService.MouseEnabled true
+service UserInputService.OnScreenKeyboardPosition V2(0 0)
+service UserInputService.OnScreenKeyboardSize V2(0 0)
+service UserInputService.OnScreenKeyboardVisible false
+service UserInputService.PreferredInput EnumItem(Enum.PreferredInput.KeyboardAndMouse)
+service UserInputService.TouchEnabled false
+service UserInputService.UserHeadCFrame CF(0 0 0 1 0 0 0 1 0 0 0 1)
+service UserInputService.VREnabled false
+service StarterPlayer.AllowCustomAnimations true
+service SoundService.CharacterSoundsUseNewApi EnumItem(Enum.RolloutState.Default)
+service HttpService.HttpEnabled false
+service GuiService.IsModalDialog false
+service GuiService.IsWindows true
+service GuiService.MenuIsOpen false
+service GuiService.PreferredTextSize EnumItem(Enum.PreferredTextSize.Medium)
+service GuiService.PreferredTransparency 1
+service GuiService.ReducedMotionEnabled false
+service GuiService.TopbarInset Rect(0, 0, 0, 0)
+service GuiService.ViewportDisplaySize EnumItem(Enum.DisplaySize.Small)
+service ContentProvider.BaseUrl ""
+service LocalizationService.RobloxLocaleId "en-us"
+service LocalizationService.SystemLocaleId "en-us"
+service TextChatService.ChatTranslationEnabled true
+service TextChatService.ChatVersion EnumItem(Enum.ChatVersion.LegacyChatService)
+service TextChatService.CreateDefaultCommands true
+service TextChatService.CreateDefaultTextChannels true
+service VRService.ThirdPersonFollowCamEnabled true
+service VRService.VREnabled false
+service Chat.LoadDefaultChat true
+service Selection.SelectionThickness 0.019999999552965164
+service TestService.Enabled true
+service TestService.ErrorCount 0
+service TestService.TestCount 0
+service TestService.WarnCount 0
+service Terrain.AssemblyCenterOfMass V3(0 0 0)
+service Terrain.AssemblyMass inf
+service Terrain.AssemblyRootPart Instance(Terrain)
+service Terrain.CenterOfMass V3(0 0 0)
+service Terrain.CurrentPhysicalProperties PhysicalProperties(0.699999988, 0.300000012, 0.5, 1, 1, 0.300000012)
+service Terrain.Decoration false
+service Terrain.ExtentsCFrame CF(0 0 0 1 0 0 0 1 0 0 0 1)
+service Terrain.ExtentsSize V3(2044 252 2044)
+service Terrain.GrassLength 0.69999998807907104
+service Terrain.IsSmooth true
+service Terrain.Mass 736987904
+service Terrain.MaxExtents Region3int16(-32000, -32000, -32000; 32000, 32000, 32000)
+service Terrain.ReceiveAge 0
+service Terrain.ResizeIncrement 1
+service Terrain.ResizeableFaces Faces()
+service Terrain.SpecificGravity 0.69999998807907104

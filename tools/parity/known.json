@@ -457,6 +457,40 @@
 			"why": "the capture's job environment has no script global (a LocalScript's has one); ree's harness has one"
 		}
 	],
+	"events_fired": [
+		{
+			"line": "step tag-",
+			"why": "CollectionService.TagAdded / TagRemoved fire when the first instance in the DataModel takes a tag and the last one loses it (not for a loose instance); ree never fires them"
+		},
+		{
+			"line": "step services",
+			"why": "game.ServiceAdded fires for each service GetService makes; ree never fires it"
+		},
+		{
+			"line": "step item-changed",
+			"why": "game.ItemChanged fires for each property change in the DataModel (instance, property name; Parent too); ree never fires it"
+		},
+		{
+			"line": "step lighting-",
+			"why": "Lighting.LightingChanged fires for a Lighting property change (false) and a Sky added (true, twice); ree never fires it"
+		},
+		{
+			"line": "step sound-",
+			"why": "a Sound's Play / Pause / Resume / Stop fire Played / Paused / Resumed / Stopped in a client and a server, with no SoundId; ree fires none"
+		},
+		{
+			"line": "step emotes",
+			"why": "HumanoidDescription:SetEmotes / SetEquippedEmotes fire EmotesChanged / EquippedEmotesChanged; ree does not emulate the methods"
+		},
+		{
+			"line": "step equipped-emotes",
+			"why": "HumanoidDescription:SetEmotes / SetEquippedEmotes fire EmotesChanged / EquippedEmotesChanged; ree does not emulate the methods"
+		},
+		{
+			"line": "connect ",
+			"why": "InputContext.InputActionsChanged, InputAction.InputBindingsChanged and ScriptContext.ErrorDetailed need the RobloxScript capability to connect to (`The current thread cannot connect '<event>' (lacking capability RobloxScript)`); ree connects a game script"
+		}
+	],
 	"global_settings_services": [
 		{
 			"line": "BulkImportService ",
@@ -967,6 +1001,124 @@
 		{
 			"line": "hidden parent length -> 89.443",
 			"why": "plain ree has no GUI layout; rur adds one and prints this line (run.mjs --rur)"
+		}
+	],
+	"readonly_properties": [
+		{
+			"line": "readonly AdPortal.",
+			"why": "read-only property: a client refuses to parent AdPortal outside a Part (`AdPortal must be parented to a Part.`), Animator outside a Humanoid or AnimationController, Bone outside a BasePart or Bone and a WrapLayer / WrapTarget outside a MeshPart (`BaseWrap must be parented to a MeshPart.`); ree parents them anywhere"
+		},
+		{
+			"line": "readonly Animator.",
+			"why": "read-only property: parent rules as for AdPortal (`Animator has to be placed under Humanoid or AnimationController!`)"
+		},
+		{
+			"line": "readonly BasePart.CurrentPhysicalProperties",
+			"why": "read-only property: a part's CurrentPhysicalProperties is its material's (0.7, 0.3, 0.5, 1, 1, 0.3 for Plastic) in a client; ree reads nil"
+		},
+		{
+			"line": "readonly BasePart.ResizeableFaces",
+			"why": "read-only property: a part's ResizeableFaces lists all six faces in a client; ree reads nil"
+		},
+		{
+			"line": "readonly BaseWrap.",
+			"why": "read-only property: parent rules as for AdPortal (`BaseWrap must be parented to a MeshPart.`)"
+		},
+		{
+			"line": "readonly Bone.",
+			"why": "read-only property: parent rules as for AdPortal (`Bones must be parented to a BasePart or another Bone.`)"
+		},
+		{
+			"line": "readonly ImageButton.IsLoaded",
+			"why": "read-only property: an image with no image is not loaded in a client; ree answers true"
+		},
+		{
+			"line": "readonly ImageLabel.IsLoaded",
+			"why": "read-only property: an image with no image is not loaded in a client; ree answers true"
+		},
+		{
+			"line": "readonly Sound.",
+			"why": "read-only property: a Sound with no SoundId is not loaded and lasts 0 in a client; ree answers true and 1"
+		},
+		{
+			"line": "readonly TextBox.TextBounds",
+			"why": "read-only property: text bounds come from a GUI layer's text measurement (a host's), which plain ree has not"
+		},
+		{
+			"line": "readonly TextButton.LocalizedText",
+			"why": "read-only property: LocalizedText is empty until the object is in the DataModel in a client; ree reads the Text"
+		},
+		{
+			"line": "readonly TextButton.TextBounds",
+			"why": "read-only property: text bounds come from a GUI layer's text measurement (a host's), which plain ree has not"
+		},
+		{
+			"line": "readonly TextLabel.LocalizedText",
+			"why": "read-only property: LocalizedText is empty until the object is in the DataModel in a client; ree reads the Text"
+		},
+		{
+			"line": "readonly TextLabel.TextBounds",
+			"why": "read-only property: text bounds come from a GUI layer's text measurement (a host's), which plain ree has not"
+		},
+		{
+			"line": "readonly TriangleMeshPart.MeshSize",
+			"why": "read-only property: a MeshPart with no mesh has MeshSize 0, 0, 0 in a client; ree reads its Size"
+		},
+		{
+			"line": "readonly Tween.TweenInfo",
+			"why": "read-only property: Instance.new(\"Tween\")'s TweenInfo is the default TweenInfo in a client; ree reads nil"
+		},
+		{
+			"line": "readonly UIGridLayout.AbsoluteCellCount",
+			"why": "read-only property: a layout's cell count comes from a GUI layer's layout (a host's), which plain ree has not"
+		},
+		{
+			"line": "readonly WrapLayer.",
+			"why": "read-only property: parent rules as for AdPortal (`BaseWrap must be parented to a MeshPart.`)"
+		},
+		{
+			"line": "readonly WrapTarget.",
+			"why": "read-only property: parent rules as for AdPortal (`BaseWrap must be parented to a MeshPart.`)"
+		},
+		{
+			"line": "service Workspace.FilteringEnabled",
+			"why": "read-only property: Workspace.FilteringEnabled reads true in a playing client and server; ree reads false"
+		},
+		{
+			"line": "service Players.",
+			"why": "read-only property: NumPlayers / PreferredPlayers count the joined player (1) and ClassicChat reads true in a client and a server; ree counts 0 while it has a LocalPlayer and reads false"
+		},
+		{
+			"line": "service Lighting.",
+			"why": "read-only property: LightingStyle / PrioritizeLightingQuality are the capture place's settings (Realistic, true), not a default; ree reads the defaults"
+		},
+		{
+			"line": "service GuiService.IsWindows",
+			"why": "read-only property: IsWindows is the capture machine's platform (true); ree's client profile says false"
+		},
+		{
+			"line": "service ContentProvider.BaseUrl",
+			"why": "read-only property: ContentProvider.BaseUrl is https://www.roblox.com/ in a client; ree reads empty"
+		},
+		{
+			"line": "service TextChatService.",
+			"why": "read-only property: TextChatService.ChatTranslationEnabled reads true; ree false"
+		},
+		{
+			"line": "service VRService.",
+			"why": "read-only property: VRService.ThirdPersonFollowCamEnabled reads true; ree false"
+		},
+		{
+			"line": "service Selection.",
+			"why": "read-only property: Selection.SelectionThickness reads 0.02; ree 0"
+		},
+		{
+			"line": "service TestService.",
+			"why": "read-only property: TestService.Enabled reads true; ree false"
+		},
+		{
+			"line": "service Terrain.",
+			"why": "read-only property: Terrain's CurrentPhysicalProperties, ExtentsSize (2044 252 2044), IsSmooth, MaxExtents, ResizeIncrement, ResizeableFaces and SpecificGravity have values in a client; ree reads nil or 0"
 		}
 	],
 	"reflection": [

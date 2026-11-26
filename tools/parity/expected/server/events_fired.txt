@@ -1,0 +1,54 @@
+# engine: Roblox Studio 0.747.0.7471481, the server of a headless play session (a Script in ServerScriptService, script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-26
+connect CollectionService.TagAdded ok
+connect CollectionService.TagRemoved ok
+connect CollectionService.ItemAdded ok
+connect CollectionService.ItemRemoved ok
+step tag-loose 
+step tag-parented CollectionService.TagAdded("ParityEventTag")
+step tag-second-instance 
+step tag-remove-one 
+step tag-remove-last CollectionService.TagRemoved("ParityEventTag")
+step tag-new-in-world CollectionService.TagAdded("ParityEventTag2")
+step tag-destroy CollectionService.TagRemoved("ParityEventTag2")
+connect game.ServiceAdded ok
+connect game.ServiceRemoving ok
+connect game.ItemChanged ok
+step services game.ServiceAdded(PathfindingService(Instance)),game.ServiceAdded(HapticService(HapticService))
+step item-changed game.ItemChanged(Folder(Renamed) "Name"),game.ItemChanged(Workspace(Workspace) "Gravity"),game.ItemChanged(Workspace(Workspace) "Gravity")
+connect Lighting.LightingChanged ok
+step lighting-ambient Lighting.LightingChanged(false)
+step lighting-clock Lighting.LightingChanged(false)
+step lighting-sky Lighting.LightingChanged(true),Lighting.LightingChanged(true)
+step lighting-brightness Lighting.LightingChanged(false)
+connect Sound.Played ok
+connect Sound.Resumed ok
+connect Sound.Paused ok
+connect Sound.Stopped ok
+connect Sound.Ended ok
+connect Sound.Loaded ok
+connect Sound.DidLoop ok
+step sound-play game.ItemChanged(Sound(ParitySound) "Parent"),Sound.Played(""),game.ItemChanged(Sound(ParitySound) "Playing")
+step sound-pause Sound.Paused(""),game.ItemChanged(Sound(ParitySound) "Playing")
+step sound-resume Sound.Resumed(""),game.ItemChanged(Sound(ParitySound) "Playing")
+step sound-stop Sound.Stopped(""),game.ItemChanged(Sound(ParitySound) "Playing")
+step sound-playing game.ItemChanged(Sound(ParitySound) "Playing")
+step sound-playing-off game.ItemChanged(Sound(ParitySound) "Playing")
+connect HumanoidDescription.EmotesChanged ok
+connect HumanoidDescription.EquippedEmotesChanged ok
+step emotes HumanoidDescription.EmotesChanged(table)
+step equipped-emotes HumanoidDescription.EquippedEmotesChanged(table)
+connect InputContext.InputActionsChanged E(The current thread cannot connect 'InputActionsChanged' (lacking capability RobloxScript))
+connect InputAction.InputBindingsChanged E(The current thread cannot connect 'InputBindingsChanged' (lacking capability RobloxScript))
+step action-parent 
+step binding-parent 
+step context-parent 
+connect ParticleEmitter.OnEmitRequested ok
+connect ParticleEmitter.OnClearRequested ok
+step emit 
+step clear 
+connect PhysicsService.CollisionGroupCollidableChanged ok
+connect Workspace.CollisionGroupCollidableChanged ok
+step collidable 
+connect ScriptContext.ErrorDetailed E(The current thread cannot connect 'ErrorDetailed' (lacking capability RobloxScript))
+step script-error 
