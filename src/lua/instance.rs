@@ -1196,13 +1196,12 @@ pub fn attribute_name_error(name: &[u8]) -> Option<Vec<u8>> {
     Some([b"Attribute name contains illegal character '".as_slice(), &[illegal], b"' (\"", name, b"\")"].concat())
 }
 
-/// A capability-only property `name` of `class` (reflection.rs CAPABILITY_ONLY): its declaring class's name and the capability a
-/// game script lacks for it.
-fn capability_property(engine: &Engine, class: ClassId, name: &[u8]) -> Option<(&'static str, &'static str)> {
+/// A capability-only property `name` of `class` (reflection.rs CAPABILITY_ONLY): the capability a game script lacks for it.
+fn capability_property(engine: &Engine, class: ClassId, name: &[u8]) -> Option<&'static str> {
     crate::reflection::CAPABILITY_ONLY
         .iter()
         .find(|(owner, property, _)| property.as_bytes() == name && engine.reflection.is_a(class, owner))
-        .map(|&(owner, _, capability)| (owner, capability))
+        .map(|&(_, _, capability)| capability)
 }
 
 /// The property IsPropertyModified, ResetPropertyToDefault and GetStyled name (their string parameter, cast as `strings` casts it):
@@ -1215,11 +1214,12 @@ fn property_name_arg(engine: &Engine, id: InstanceId, args: &Args, method: &str)
     let class = engine.state.borrow().dom.at(id).class;
     let text = args.string(1).map(|s| s.as_bytes().to_vec()).unwrap_or_default();
     let shown = String::from_utf8_lossy(&text);
-    if let Some((owner, capability)) = capability_property(engine, class, &text) {
+    // (the instance's own class, not the declaring one: the Workspace's LevelOfDetail is `Workspace.LevelOfDetail`, measured)
+    if let Some(capability) = capability_property(engine, class, &text) {
         return raise(if method == "GetStyled" {
             format!("The current thread cannot call GetStyled() on '{shown}' (lacking capability {capability})")
         } else {
-            format!("The current thread cannot call {method}() on {owner}.{shown} (lacking capability {capability})")
+            format!("The current thread cannot call {method}() on {}.{shown} (lacking capability {capability})", engine.reflection.class(class).name)
         });
     }
     let name = engine.reflection.name_id_bytes(&text).filter(|&name| {
@@ -1709,7 +1709,7 @@ fn install_base(behaviors: &mut Behaviors, reflection: &crate::Reflection) {
         // PVInstance.Origin, Model.WorldPivotData) "Origin is not a scriptable property.", and any other name, a deprecated lower-case
         // one with no member of its own too, "Nope is not a valid property name."; measured, Studio 0.747, a client and a server:
         // tools/parity/probes/instance_api_texts.luau)
-        if let Some((_, capability)) = capability_property(engine, class, &text) {
+        if let Some(capability) = capability_property(engine, class, &text) {
             return raise(format!("The current thread cannot read '{shown}' (lacking capability {capability})"));
         }
         let name = engine.reflection.name_id_bytes(&text);

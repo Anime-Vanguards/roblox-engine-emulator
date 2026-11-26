@@ -15341,6 +15341,7 @@ fn instance_api_errors_and_locks_are_a_clients() {
         assert(Message(function() return workspace:GetPropertyChangedSignal("StreamingMinRadius") end) == "The current thread cannot read 'StreamingMinRadius' (lacking capability PluginOrOpenCloud)")
         assert(Message(function() return workspace:IsPropertyModified("StreamingMinRadius") end) == "The current thread cannot call IsPropertyModified() on Workspace.StreamingMinRadius (lacking capability PluginOrOpenCloud)")
         assert(Message(function() return workspace:GetStyled("StreamingMinRadius") end) == "The current thread cannot call GetStyled() on 'StreamingMinRadius' (lacking capability PluginOrOpenCloud)")
+        assert(Message(function() return workspace:IsPropertyModified("LevelOfDetail") end) == "The current thread cannot call IsPropertyModified() on Workspace.LevelOfDetail (lacking capability PluginOrOpenCloud)")
         assert(tostring(Folder:GetAttributeChangedSignal("n")) == "Signal nAttributeChanged")
         assert(tostring(Folder:GetAttributeChangedSignal(5)) == "Signal 5AttributeChanged")
         assert(Message(function() return workspace.Terrain:Clone() end) == "Cannot Clone() Terrain")
