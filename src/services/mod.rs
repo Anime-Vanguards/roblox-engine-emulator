@@ -493,33 +493,44 @@ pub fn user_settings(engine: &Engine) -> Option<InstanceId> {
 }
 
 /// GetService's and FindService's name as a client reads it (convert::string_param): a string as it is, any other value but nil
-/// its text after the warning. The flag says the name is a cast's that a client answers nil for when it names no service: the
-/// text of an Instance, an EnumItem, an Enum, the Enums, a function, a thread, a plain userdata or a signal ("Instance", the item's
-/// name, "nil", "function", "EventInstance"), which a client takes for a name it knows that is no service's, as it takes a class
-/// name that is no service's (measured, Studio 0.747, a playing client and a server: GetService(workspace),
-/// GetService(Enum.Material.Plastic), GetService(print) are nil, GetService(Enum.CoreGuiType.Chat) the Chat service, and
-/// GetService(true), GetService({}), GetService(Vector3.new()) and GetService(5) raise `'<text>' is not a valid Service name`).
-/// Not matched: a string that names no service raises here, as before, where a client answers nil for one it knows (`Part`,
-/// `Instance`, `Plastic`, `Anchored`, `nil`, `function`; `Nope`, `true` and `Lighting ` raise there too).
-fn service_param(lua: &Lua, engine: &Engine, args: &Args) -> Result<(String, bool), Flow> {
+/// its text after the warning. A client then answers nil for a name it knows that is no service's and raises `'<name>' is not a
+/// valid Service name` for any other ([`names_no_service`]), whatever value the name came from (measured, Studio 0.747, a playing
+/// client and a server: GetService(workspace), GetService(Enum.Material.Plastic), GetService(print) are nil,
+/// GetService(Enum.CoreGuiType.Chat) the Chat service, and GetService(true), GetService({}), GetService(Vector3.new()) and
+/// GetService(5) raise).
+fn service_param(lua: &Lua, engine: &Engine, args: &Args) -> Result<String, Flow> {
     let value = args.get(1);
     match value {
-        LuaValue::String(name) => Ok((name.to_string_lossy(), false)),
+        LuaValue::String(name) => Ok(name.to_string_lossy()),
         LuaValue::Nil => raise("Argument 1 missing or nil"),
-        _ => {
-            let text = String::from_utf8_lossy(&convert::string_param(lua, engine, value, 1, true)?).into_owned();
-            let known = matches!(
-                super::lua::typeof_value(engine, value).as_str(),
-                "Instance" | "EnumItem" | "Enum" | "Enums" | "function" | "thread" | "userdata" | "RBXScriptSignal"
-            );
-            Ok((text, known))
-        }
+        _ => Ok(String::from_utf8_lossy(&convert::string_param(lua, engine, value, 1, true)?).into_owned()),
     }
 }
 
 /// Whether `name` is a service's class name.
 fn names_service(engine: &Engine, name: &str) -> bool {
     engine.reflection.class_by_name(name).is_some_and(|class| class.service)
+}
+
+/// Whether GetService and FindService answer nil for `name`, a name that is no service's: one a client knows as a class's, a
+/// member's, an enum's, an enum item's or a type's (Reflection::knows_name: "Part", "Anchored", "Plastic", "Instance", "nil",
+/// "function", "EventInstance", "bool"), where any other ("Nope", "true", "5", "Lighting ", "part" in another case, a script's
+/// own instance name or tag) raises "'<name>' is not a valid Service name" (measured, Studio 0.747, every class, member, enum
+/// and item name of the dump and of rbx-dom's database and 230 others, a playing client and a server alike:
+/// tools/parity/probes/service_names.luau).
+fn names_no_service(engine: &Engine, name: &str) -> bool {
+    !names_service(engine, name) && engine.reflection.knows_name(name)
+}
+
+/// GetService of a name that is no service's but a class's whose making a game script is refused: a client tries to make one
+/// and raises its refusal (measured, 0.747, a playing client and a server: GetService("Player"), GetService("AuroraScript");
+/// every other class of the dump and of rbx-dom's database answers nil).
+fn refused_class(name: &str) -> Option<&'static str> {
+    match name {
+        "Player" => Some("The current thread cannot create 'Player' (lacking capability WritePlayer)"),
+        "AuroraScript" => Some("This type can not be instantiated"),
+        _ => None,
+    }
 }
 
 pub fn find_service(engine: &Engine, game: InstanceId, service_name: &str) -> Option<InstanceId> {
@@ -612,8 +623,11 @@ fn install_data_model(behaviors: &mut Behaviors, reflection: &Reflection, option
     // DataModel
     if let Some(data_model) = class(reflection, "DataModel") {
         let get = method(|lua, engine, id, args| {
-            let (service_name, known) = service_param(lua, engine, args)?;
-            if known && !names_service(engine, &service_name) {
+            let service_name = service_param(lua, engine, args)?;
+            if names_no_service(engine, &service_name) {
+                if let Some(refused) = refused_class(&service_name) {
+                    return raise(refused);
+                }
                 return Ok(values([LuaValue::Nil]));
             }
             if ROBLOX_ONLY_SERVICES.contains(&&*service_name) {
@@ -630,11 +644,11 @@ fn install_data_model(behaviors: &mut Behaviors, reflection: &Reflection, option
         behaviors.add_method(data_model, K::GetService as NameId, get.clone());
         behaviors.add_method(data_model, K::service as NameId, get);
         behaviors.add_method(data_model, K::FindService as NameId, method(|lua, engine, id, args| {
-            let (service_name, known) = service_param(lua, engine, args)?;
-            if known && !names_service(engine, &service_name) {
+            let service_name = service_param(lua, engine, args)?;
+            if names_no_service(engine, &service_name) {
                 return Ok(values([LuaValue::Nil]));
             }
-            // (a name that is no service's raises as GetService does: tools/parity/probes/core_services.luau)
+            // (a name no class, member, enum or type has raises as GetService does: tools/parity/probes/service_names.luau)
             if !names_service(engine, &service_name) && !settings::found_nowhere(&service_name) {
                 return raise(format!("'{service_name}' is not a valid Service name"));
             }

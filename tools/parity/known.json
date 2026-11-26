@@ -491,36 +491,6 @@
 			"why": "InputContext.InputActionsChanged, InputAction.InputBindingsChanged and ScriptContext.ErrorDetailed need the RobloxScript capability to connect to (`The current thread cannot connect '<event>' (lacking capability RobloxScript)`); ree connects a game script"
 		}
 	],
-	"global_settings_services": [
-		{
-			"line": "BulkImportService ",
-			"why": "rbx-dom's database (Roblox 700) still describes this service class, which a 0.747 client no longer has: ree answers it as another class (nil)"
-		},
-		{
-			"line": "ChatbotUIService ",
-			"why": "rbx-dom's database (Roblox 700) still describes this service class, which a 0.747 client no longer has: ree answers it as another class (nil)"
-		},
-		{
-			"line": "ConversationalAIAcceptanceService ",
-			"why": "rbx-dom's database (Roblox 700) still describes this service class, which a 0.747 client no longer has: ree answers it as another class (nil)"
-		},
-		{
-			"line": "DataModelPatchService ",
-			"why": "rbx-dom's database (Roblox 700) still describes this service class, which a 0.747 client no longer has: ree answers it as another class (nil)"
-		},
-		{
-			"line": "LSPFileSyncService ",
-			"why": "rbx-dom's database (Roblox 700) still describes this service class, which a 0.747 client no longer has: ree answers it as another class (nil)"
-		},
-		{
-			"line": "SnippetService ",
-			"why": "rbx-dom's database (Roblox 700) still describes this service class, which a 0.747 client no longer has: ree answers it as another class (nil)"
-		},
-		{
-			"line": "StreamingService ",
-			"why": "rbx-dom's database (Roblox 700) still describes this service class, which a 0.747 client no longer has: ree answers it as another class (nil)"
-		}
-	],
 	"global_settings_tree": [
 		{
 			"line": "method GetFFlag ",

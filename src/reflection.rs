@@ -370,7 +370,51 @@ pub struct Reflection {
     members: OnceLock<members::Members>,
     /// The dump they are built from (the compiled-in one; [`Self::from_dump`] builds them at once)
     member_source: DumpSource,
+    /// The names a client knows ([`Self::knows_name`]), built on first use
+    known_names: OnceLock<FxHashSet<Box<str>>>,
 }
+
+/// Classes rbx-dom's database (Roblox 700) still describes that a 0.747 client no longer has: the database's other classes are
+/// loaded beside the dump's, these not, so GetService, FindService and Instance.new take them for names no class has (a playing
+/// client and a server, script identity 2: `game:FindService("StreamingService")` and a settings root's GetService raise "'StreamingService'
+/// is not a valid Service name"; tools/parity/probes/service_names.luau and global_settings_services.luau).
+const GONE_CLASSES: &[&str] = &[
+    "BulkImportService", "ChatbotUIService", "ConversationalAIAcceptanceService", "DataModelPatchService", "EmotesPages", "HandRigDescription",
+    "LSPFileSyncService", "PlayerDataRecord", "PlayerDataRecordConfig", "SnippetService", "StreamingService",
+];
+
+/// Member, enum and enum item names rbx-dom's database (Roblox 700) lists that a 0.747 client knows under no class, member, enum
+/// or item ([`Reflection::knows_name`]; measured with every name of the dump and of rbx-dom's database, a playing client and a
+/// server alike).
+const GONE_NAMES: &[&str] = &[
+    "AllowClientInsertModels", "CameraAdaptiveSpeed", "CameraOrbitSensitivity", "CameraPanSensitivity", "CameraSpeedLockDefault", "CameraZoomSpeed",
+    "ConvexDecompCompressed", "DefaultRecordName", "FlushedTime", "GameSettingsAssetIDFace", "GameSettingsAssetIDHead", "GameSettingsAssetIDLeftArm",
+    "GameSettingsAssetIDLeftLeg", "GameSettingsAssetIDPants", "GameSettingsAssetIDRightArm", "GameSettingsAssetIDRightLeg", "GameSettingsAssetIDShirt",
+    "GameSettingsAssetIDTeeShirt", "GameSettingsAssetIDTorso", "GameSettingsScaleRangeBodyType", "GameSettingsScaleRangeHead",
+    "GameSettingsScaleRangeHeight", "GameSettingsScaleRangeProportion", "GameSettingsScaleRangeWidth", "HasMultiTouchStarted",
+    "IsMultiTouchEmulationOn", "IsMultiTouchEnabled", "IsMutedForCapture", "LeftToes", "LeftToesRangeMax", "LeftToesRangeMin", "LeftToesSize",
+    "LeftToesTposeAdjustment", "LoadFailureBehavior", "LoadedTime", "LocalSimulationValidation", "ModifiedTime", "MoverConstraintRootBehavior",
+    "NewRecord", "Pelvis", "PelvisRangeMax", "PelvisRangeMin", "PelvisSize", "PelvisTposeAdjustment", "PhysicsImprovedSleep", "PivotPosition",
+    "PositionOverride", "PrimalPhysicsSolver", "Readable", "RecordName", "RightToes", "RightToesRangeMax", "RightToesRangeMin", "RightToesSize",
+    "RightToesTposeAdjustment", "SerializedOperationGraph", "SkinningEnabled", "StepIdOffset", "ValidateUgcBody", "Waveform", "Writable", "shap",
+    "siz",
+    // enums
+    "CatalogTimedOptionFilter", "HandRigDescriptionSide", "Language", "MoverConstraintRootBehaviorMode", "PlayerDataErrorState",
+    "PlayerDataLoadFailureBehavior",
+    // enum items
+    "BlendNode", "FallbackToDefault", "FlushFailed", "TimedOptionOnly",
+];
+
+/// Names a 0.747 client knows beside its classes', members', enums' and items' ([`Reflection::knows_name`]): the engine's value
+/// type names and a few others, measured (a playing client and a server alike). Others that are neither (`boolean`, `void`,
+/// `Objects`, `EnumItem`, `Enums`, `RBXScriptSignal`, `userdata`, `vector`, `game`, `print`, `math`, `Bright red`) it does not know.
+const TYPE_NAMES: &[&str] = &[
+    "string", "number", "bool", "int", "int64", "float", "double", "null", "nil", "function", "table", "thread", "buffer", "Tuple", "Array",
+    "Dictionary", "Map", "Variant", "Content", "ProtectedString", "BinaryString", "SharedString", "Ray", "Region3", "NumberSequence",
+    "ColorSequence", "PhysicalProperties", "DateTime", "RaycastParams", "OverlapParams", "EventInstance", "Path2DControlPoint",
+    "SecurityCapabilities", "Signal", "Connection", "token", "Rect2D", "InstanceRef", "script", "settings", "stats", "time", "type", "x",
+    "part", "folder", "roblox",
+];
 
 /// The dump the member info is built from, which Debug gives as its size only.
 #[derive(Clone, Copy, Default)]
@@ -1239,7 +1283,8 @@ impl Reflection {
 
     #[inline(never)]
     fn load_lune_supplement(&mut self, database: &rbx_reflection::ReflectionDatabase, superclass_names: &mut Vec<Option<String>>) {
-        let mut names: Vec<&str> = database.classes.keys().map(|name| name.as_ref()).collect();
+        // (not the classes a 0.747 client no longer has: GONE_CLASSES)
+        let mut names: Vec<&str> = database.classes.keys().map(|name| name.as_ref()).filter(|name| !GONE_CLASSES.contains(name)).collect();
         // rbx-dom's map order is arbitrary; sort so class ids are stable across processes
         crate::sort::ord(&mut names);
         for name in names {
@@ -1440,6 +1485,45 @@ impl Reflection {
 
     pub fn class_by_name(&self, name: &str) -> Option<&ClassInfo> {
         self.class_id(name).map(|id| self.class(id))
+    }
+
+    /// Whether a client knows `name` as a name: a class's, a member's of any class (rbx-dom's hidden ones too), an enum's or an
+    /// enum item's, or one of [`TYPE_NAMES`]; not one only rbx-dom's older database lists ([`GONE_NAMES`]) nor a script's own
+    /// string (an instance's name, an attribute or a tag a script gave: none counts). GetService and FindService answer nil for a
+    /// name it knows that no service has and raise for any other (measured with every name of the dump and of rbx-dom's
+    /// database, 0.747, a playing client and a server alike: services::install_data_model). Built on first use.
+    pub fn knows_name(&self, name: &str) -> bool {
+        self.known_names
+            .get_or_init(|| {
+                let mut known: FxHashSet<Box<str>> = FxHashSet::default();
+                for class in &self.classes {
+                    known.insert(class.name.clone());
+                    let members = class.own_events.iter().chain(&class.own_methods).chain(&class.own_callbacks);
+                    known.extend(members.map(|&name| self.names[name as usize].clone()));
+                    known.extend(class.own_properties.iter().map(|&index| self.names[self.properties[index as usize].name as usize].clone()));
+                }
+                // (the properties rbx-dom lists for a class the dump has too, which the engine does not load: hidden ones)
+                if let Ok(database) = rbx_reflection_database::get() {
+                    for descriptor in database.classes.values() {
+                        known.extend(descriptor.properties.keys().map(|name| Box::<str>::from(name.as_ref())));
+                    }
+                }
+                for info in &self.enums {
+                    known.insert(info.name.clone());
+                    known.extend(info.by_name.keys().cloned());
+                }
+                // (the members a class has only through the engine's behaviours: Player's Kick, LoadCharacter, ...)
+                for &(_, methods) in BEHAVIOR_METHODS {
+                    known.extend(methods.iter().map(|&name| Box::<str>::from(name)));
+                }
+                known.extend(BEHAVIOR_PROPERTIES.iter().map(|&(_, name, ..)| Box::<str>::from(name)));
+                known.extend(TYPE_NAMES.iter().map(|&name| Box::<str>::from(name)));
+                for name in GONE_NAMES.iter().chain(GONE_CLASSES) {
+                    known.remove(*name);
+                }
+                known
+            })
+            .contains(name)
     }
 
     /// `Class.Ancestors[Name]` by name (false for unknown class names).

@@ -15114,3 +15114,50 @@ fn legacy_delay_and_spawn_functions_get_the_time_they_waited_and_a_clock() {
         assert_eq!(output, ["print: delay 2 number number 2 true", "print: spawn 2 number number 2 true"], "{run_context:?}");
     }
 }
+
+/// GetService and FindService of a string that names no service answer nil when a client knows the name (a class's, a member's,
+/// an enum's, an item's, a type's) and raise for any other; the classes rbx-dom's older database lists that a 0.747 client no
+/// longer has are no classes. Measured on a 0.747 client and server with every name of the dump and of rbx-dom's database
+/// (tools/parity/probes/service_names.luau). ree raised for every name that was no service's.
+#[test]
+fn get_service_answers_nil_for_a_name_a_client_knows() {
+    let (lua, engine) = start();
+    let output = run(
+        &lua,
+        &engine,
+        r#"
+        local function Outcome(Method, Name)
+            local Ok, Value = pcall(Method, game, Name)
+            return if Ok then tostring(Value) else Value
+        end
+        for _, Name in { "Part", "Anchored", "Plastic", "Material", "bool", "Kick", "Player", "AuroraScript", "Nope", "part", "StreamingService", "GameSettingsAssetIDFace", "Language" } do
+            print(Name, Outcome(game.FindService, Name), Outcome(game.GetService, Name))
+        end
+        local Folder = Instance.new("Folder")
+        Folder.Name = "MadeByScript"
+        Folder:AddTag("MadeTag")
+        print(Outcome(game.FindService, "MadeByScript"), Outcome(game.FindService, "MadeTag"), pcall(Instance.new, "HandRigDescription"))
+        "#,
+    );
+    let printed: Vec<&str> = output.iter().filter_map(|line| line.strip_prefix("print: ")).collect();
+    assert_eq!(
+        printed,
+        [
+            "Part nil nil",
+            "Anchored nil nil",
+            "Plastic nil nil",
+            "Material nil nil",
+            "bool nil nil",
+            "Kick nil nil",
+            "Player nil The current thread cannot create 'Player' (lacking capability WritePlayer)",
+            "AuroraScript nil This type can not be instantiated",
+            "Nope 'Nope' is not a valid Service name 'Nope' is not a valid Service name",
+            "part nil nil",
+            "StreamingService 'StreamingService' is not a valid Service name 'StreamingService' is not a valid Service name",
+            "GameSettingsAssetIDFace 'GameSettingsAssetIDFace' is not a valid Service name 'GameSettingsAssetIDFace' is not a valid Service name",
+            "Language 'Language' is not a valid Service name 'Language' is not a valid Service name",
+            "'MadeByScript' is not a valid Service name 'MadeTag' is not a valid Service name false Unable to create an Instance of type \"HandRigDescription\"",
+        ],
+        "{output:?}"
+    );
+}
