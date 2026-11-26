@@ -423,8 +423,9 @@ return {
 
 /// After the join every change the server makes in the replicated containers arrives at the client's next frame, as its
 /// value when the server's frame ended: three writes give one Changed with the last, a made child arrives whole, a move
-/// out of the containers leaves the client's copy unparented (the same instance comes back), a destroy destroys it; a
-/// write to ServerStorage sends nothing, and a client's own write stays until the server writes the property again
+/// out of the containers leaves the client's copy unparented (the same instance comes back, its child taken out and put
+/// back as a client takes a tree it knows: replication_reentry_tree.luau), a destroy destroys it; a write to ServerStorage
+/// sends nothing, and a client's own write stays until the server writes the property again
 #[test]
 fn the_servers_changes_arrive_at_the_clients_next_frame() {
     let summary = run_pair(
@@ -492,7 +493,7 @@ return {
     let lines = lines(&summary);
     assert_eq!(summary["status"], "ok", "{lines:?}");
     assert!(
-        has(&lines, "client print: seen Changed 100 / Changed 3 / ChildAdded Child 5 / Parent nil / Parent ReplicatedStorage / Changed 4 / Destroying / Parent nil"),
+        has(&lines, "client print: seen Changed 100 / Changed 3 / ChildAdded Child 5 / Parent nil / Parent ReplicatedStorage / ChildAdded Child 5 / Changed 4 / Destroying / Parent nil"),
         "{lines:?}"
     );
     assert!(has(&lines, "client print: gone true nil"), "{lines:?}");

@@ -13,7 +13,13 @@
 //!   and its revert give none, two properties' Changed come in the order first written, and remote events keep their
 //!   place among them (an instance made, parented and passed to FireClient arrives before the event).
 //! - Hierarchy: an instance the server unparents or moves out of the containers keeps its copy on the client with Parent
-//!   nil (it comes back as the same instance); a destroyed one is destroyed there.
+//!   nil (it comes back as the same instance); a destroyed one is destroyed there. Every move arrives, in order, however
+//!   many one frame made (Studio 0.747, tools/parity/probes/loopback/replication_same_frame_moves.luau): out of a parent
+//!   and back, through another folder, out of the containers and back are each two moves; a new instance arrives at the
+//!   parent it first had in the containers, then moves; a move then a destroy arrive in that order. A move made while the
+//!   instance is out of the containers never arrives. An instance coming back into the containers, in the same frame or
+//!   later, enters as a client takes a tree it knows: its copy's children leave it, it enters, then each of its children
+//!   enters so in turn, a new one arriving in its place (replication_reentry_tree.luau; [`re_enter`]).
 //! - Order: each side keeps its lists as a client does (dom.rs Children: out of a list of more than 20 the last child takes a
 //!   taken one's place), so the server's changes leave the client's lists in the server's order; but the join's copy lists
 //!   each list in the order its children came into the containers ([`Ranks`]: tools/parity/probes/loopback/child_order.luau).
@@ -24,7 +30,7 @@
 use std::rc::Rc;
 
 use mlua::prelude::*;
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::{Endpoint, Side, bridge::{Bridge, Msg, Node}};
 use crate::{ClassId, Engine, InstanceId, K, NameId, Reflection, State, dom::flags, instance as core, value::{Str, Value}};
@@ -167,7 +173,8 @@ fn push_joined(state: &State, ranks: &Ranks, node: InstanceId, copy: InstanceId,
 /// What the server did this frame that the client may have to hear of, in the order first done (sealed at the frame's
 /// end by [`flush`]: values are read then).
 pub enum Change {
-    Moved(InstanceId),
+    /// An instance's parent changed: to `parent`, in the replicated containers after it (`inside`) and before it (`was`)
+    Moved { id: InstanceId, parent: Option<InstanceId>, inside: bool, was: bool },
     Prop(InstanceId, NameId, bool),
     Attr(InstanceId, Str),
     Tag(InstanceId, Str),
@@ -536,7 +543,7 @@ fn install(server: &Rc<Engine>, bridge: &Rc<Bridge>, filter: Rc<Filter>, exclude
         if (was || now || state.dom.at(id).flags & flags::SENT != 0)
             && let Some(log) = state.loopback_log.as_mut()
         {
-            log.push(Change::Moved(id));
+            log.push(Change::Moved { id, parent: new, inside: now, was });
         }
     }));
     hooks.property_changed.push(Box::new(move |state, id, name| {
@@ -589,7 +596,13 @@ pub fn flush(server: &Engine, bridge: &Bridge) {
     };
     let reflection = &server.reflection;
     let mut out: Vec<Msg> = Vec::with_capacity(log.len());
-    let mut moved: FxHashSet<InstanceId> = FxHashSet::default();
+    // (how many of each instance's moves this batch still holds: its last one, when it was destroyed, is its destroy)
+    let mut moves_left: FxHashMap<InstanceId, u32> = FxHashMap::default();
+    for change in &log {
+        if let Change::Moved { id, .. } = change {
+            *moves_left.entry(*id).or_default() += 1;
+        }
+    }
     let mut written: FxHashSet<(InstanceId, NameId)> = FxHashSet::default();
     let mut attributed: FxHashSet<(InstanceId, Str)> = FxHashSet::default();
     let mut tagged: FxHashSet<(InstanceId, Str)> = FxHashSet::default();
@@ -614,10 +627,12 @@ pub fn flush(server: &Engine, bridge: &Bridge) {
                     out.push(Msg::WorldGroups { id, snapshot });
                 }
             }
-            Change::Moved(id) => {
-                if moved.insert(id) {
-                    created += flush_move(server, &mut state, reflection, &filter, id, &mut out, &mut whole);
-                }
+            Change::Moved { id, parent, inside, was } => {
+                let left = moves_left.get_mut(&id).map_or(0, |count| {
+                    *count -= 1;
+                    *count
+                });
+                created += flush_move(server, &mut state, reflection, &filter, Step { id, parent, inside, was, last: left == 0 }, &moves_left, &mut out, &mut whole);
             }
             Change::Prop(id, name, quiet) => {
                 if whole.contains(&id) || !written.insert((id, name)) || !(sent_and_replicated(&state, id) || leaving_player(&state, reflection, id)) {
@@ -672,79 +687,121 @@ fn leaving_player(state: &State, reflection: &Reflection, id: InstanceId) -> boo
     state.dom.get(id).is_some_and(|instance| instance.flags & (flags::SENT | flags::REPLICATED) == flags::SENT && reflection.class_id("Player") == Some(instance.class))
 }
 
-/// What a moved instance comes to: a tree the client makes (a new instance entering), a move of the client's copy (in or
-/// out of the containers), a destroy, or nothing (never sent and not replicated). Returns how many instances it made.
-fn flush_move(server: &Engine, state: &mut State, reflection: &Reflection, filter: &Filter, id: InstanceId, out: &mut Vec<Msg>, whole: &mut FxHashSet<InstanceId>) -> u64 {
+/// One logged move ([`Change::Moved`]); `last`: the batch holds no later move of the instance
+struct Step {
+    id: InstanceId,
+    parent: Option<InstanceId>,
+    inside: bool,
+    was: bool,
+    last: bool,
+}
+
+/// What one move of an instance comes to, in its place (every move of a frame arrives: Studio 0.747,
+/// replication_same_frame_moves.luau): a tree the client makes (a new instance entering, at the parent this move gave it), a
+/// move of the client's copy within the containers or out of them, the copy coming back ([`re_enter`]), a destroy (the
+/// destroyed instance's last move), or nothing (a move out of the containers the whole time, or of what the client never had).
+/// Returns how many instances it made.
+#[allow(clippy::too_many_arguments)]
+fn flush_move(server: &Engine, state: &mut State, reflection: &Reflection, filter: &Filter, step: Step, pending: &Pending, out: &mut Vec<Msg>, whole: &mut FxHashSet<InstanceId>) -> u64 {
+    let id = step.id;
     let Some(instance) = state.dom.get(id) else { return 0 };
     let sent = instance.flags & flags::SENT != 0;
-    if instance.flags & flags::DESTROYED != 0 {
+    if instance.flags & flags::DESTROYED != 0 && step.last {
         if sent {
             out.push(Msg::Destroy { id });
         }
         return 0;
     }
-    let now = instance.flags & flags::REPLICATED != 0;
-    let parent = instance.parent;
-    match (now, sent) {
+    match (step.inside, sent) {
         (true, false) => {
-            let Some(parent) = parent else { return 0 };
-            let nodes = tree(state, reflection, filter, id, whole);
-            let count = nodes.len() as u64;
-            let groups = crate::services::physics::sent_models(server, nodes.iter().map(|node| node.id));
-            out.push(Msg::Tree { parent, nodes, groups });
-            count
+            let Some(parent) = step.parent else { return 0 };
+            enter_new(server, state, reflection, filter, id, parent, pending, out, whole)
         }
-        (true, true) => {
-            // (the WorldModels coming back take their groups before they enter, as a new tree's do: those messages go in front
-            // of the move)
-            let at = out.len();
-            let mut groups: Vec<Msg> = Vec::new();
-            out.push(Msg::Parent { id, parent });
-            // back in the containers after time out of them: what changed meanwhile, and children made meanwhile
-            let mut made = 0;
-            let mut stack = vec![id];
-            while let Some(node) = stack.pop() {
-                let flags_now = state.dom.at(node).flags;
-                if flags_now & flags::REPLICATED == 0 {
-                    continue;
-                }
-                if flags_now & flags::SENT == 0 {
-                    let Some(parent) = state.dom.at(node).parent else { continue };
-                    let nodes = tree(state, reflection, filter, node, whole);
-                    made += nodes.len() as u64;
-                    let tree_groups = crate::services::physics::sent_models(server, nodes.iter().map(|node| node.id));
-                    out.push(Msg::Tree { parent, nodes, groups: tree_groups });
-                    continue;
-                }
-                if flags_now & flags::STALE != 0 {
-                    state.dom.at_mut(node).flags &= !flags::STALE;
-                    whole.insert(node);
-                    let class = state.dom.at(node).class;
-                    for (name, value) in state.dom.at(node).props.iter() {
-                        if filter.replicates(reflection, class, name)
-                            && let Some(value) = super::wire::portable(value)
-                        {
-                            out.push(Msg::Prop { id: node, name, value, quiet: false });
-                        }
-                    }
-                    for (name, value) in state.dom.at(node).attributes.iter() {
-                        if let Some(value) = super::wire::portable(value) {
-                            out.push(Msg::Attr { id: node, name: name.clone(), value });
-                        }
-                    }
-                    groups.extend(crate::services::physics::sent_models(server, std::iter::once(node)).into_iter().map(|(_, snapshot)| Msg::WorldGroups { id: node, snapshot }));
-                }
-                stack.extend(state.dom.at(node).children.iter().rev());
-            }
-            out.splice(at..at, groups);
-            made
+        (true, true) if step.was => {
+            out.push(Msg::Parent { id, parent: step.parent });
+            0
         }
-        (false, true) => {
+        (true, true) => match step.parent {
+            Some(parent) => re_enter(server, state, reflection, filter, id, parent, pending, out, whole),
+            None => 0,
+        },
+        (false, true) if step.was => {
             out.push(Msg::Parent { id, parent: None });
             0
         }
-        (false, false) => 0,
+        _ => 0,
     }
+}
+
+/// How many moves of each instance the batch holds after the one being sealed
+type Pending = FxHashMap<InstanceId, u32>;
+
+/// Whether `node` (below an instance entering the containers) goes with it: not when a later move of the batch is its own (it
+/// came under it after this move, and that move sends it); else its flag says so while the instance is still in the
+/// containers when the batch is sealed, and one that left again in the same frame takes its whole subtree (flags cleared)
+fn goes_along(state: &State, node: InstanceId, flagged: bool, pending: &Pending) -> bool {
+    (!flagged || state.dom.at(node).flags & flags::REPLICATED != 0) && pending.get(&node).is_none_or(|&count| count == 0)
+}
+
+/// A new instance entering the containers under `parent`: the client makes its tree; what the client already has below it
+/// (moved in while it was out of them) is not in the tree and comes back after it ([`re_enter`]). Returns how many it made.
+#[allow(clippy::too_many_arguments)]
+fn enter_new(server: &Engine, state: &mut State, reflection: &Reflection, filter: &Filter, id: InstanceId, parent: InstanceId, pending: &Pending, out: &mut Vec<Msg>, whole: &mut FxHashSet<InstanceId>) -> u64 {
+    let mut known: Vec<(InstanceId, InstanceId)> = Vec::new();
+    let nodes = tree_of(state, reflection, filter, id, whole, pending, &mut known);
+    let mut made = nodes.len() as u64;
+    let groups = crate::services::physics::sent_models(server, nodes.iter().map(|node| node.id));
+    out.push(Msg::Tree { parent, nodes, groups });
+    for (node, node_parent) in known {
+        made += re_enter(server, state, reflection, filter, node, node_parent, pending, out, whole);
+    }
+    made
+}
+
+/// An instance the client has a copy of coming back into the containers under `parent` (in the frame it left or later): a
+/// client takes the tree as one it knows (Studio 0.747, replication_reentry_tree.luau). Each instance of it, from the top, in
+/// GetDescendants' order: its copy's children leave it (`Detach`), it enters under its parent, then its children (as the
+/// server has them now) do the same in turn; a child the client has no copy of (made while it was out) arrives as a new tree
+/// in its place. A child the server took out meanwhile stays out (its move then never arrived), and one moved elsewhere in the
+/// tree enters there. Each copy takes what changed while it was out after it enters; the WorldModels coming back take their
+/// groups before the first message. Returns how many instances the client made.
+#[allow(clippy::too_many_arguments)]
+fn re_enter(server: &Engine, state: &mut State, reflection: &Reflection, filter: &Filter, id: InstanceId, parent: InstanceId, pending: &Pending, out: &mut Vec<Msg>, whole: &mut FxHashSet<InstanceId>) -> u64 {
+    let flagged = state.dom.at(id).flags & flags::REPLICATED != 0;
+    let at = out.len();
+    let mut groups: Vec<Msg> = Vec::new();
+    let mut made = 0;
+    let mut stack = vec![(id, parent)];
+    while let Some((node, node_parent)) = stack.pop() {
+        let flags_now = state.dom.at(node).flags;
+        if flags_now & flags::SENT == 0 {
+            made += enter_new(server, state, reflection, filter, node, node_parent, pending, out, whole);
+            continue;
+        }
+        out.push(Msg::Detach { id: node });
+        out.push(Msg::Parent { id: node, parent: Some(node_parent) });
+        if flags_now & flags::STALE != 0 {
+            state.dom.at_mut(node).flags &= !flags::STALE;
+            whole.insert(node);
+            let class = state.dom.at(node).class;
+            for (name, value) in state.dom.at(node).props.iter() {
+                if filter.replicates(reflection, class, name)
+                    && let Some(value) = super::wire::portable(value)
+                {
+                    out.push(Msg::Prop { id: node, name, value, quiet: false });
+                }
+            }
+            for (name, value) in state.dom.at(node).attributes.iter() {
+                if let Some(value) = super::wire::portable(value) {
+                    out.push(Msg::Attr { id: node, name: name.clone(), value });
+                }
+            }
+            groups.extend(crate::services::physics::sent_models(server, std::iter::once(node)).into_iter().map(|(_, snapshot)| Msg::WorldGroups { id: node, snapshot }));
+        }
+        stack.extend(state.dom.at(node).children.iter().rev().filter(|&&child| goes_along(state, child, flagged, pending)).map(|&child| (child, node)));
+    }
+    out.splice(at..at, groups);
+    made
 }
 
 /// Instance `id` as a client copy is made of it (`parent`: its parent's index among the nodes made with it)
@@ -913,13 +970,23 @@ fn fill_copy(state: &mut State, copy: InstanceId, node: &mut Node, (refs, attrib
     target.flags |= node.studio_flags;
 }
 
-/// `root` and its replicated descendants as the client makes them (marked sent), in GetDescendants' order
-fn tree(state: &mut State, reflection: &Reflection, filter: &Filter, root: InstanceId, whole: &mut FxHashSet<InstanceId>) -> Vec<Node> {
+/// `root` and its replicated descendants as the client makes them (marked sent), in GetDescendants' order, as an instance
+/// entering the containers in a move takes them ([`enter_new`]): what the client already has a copy of below it is left out,
+/// listed in `known` with its parent (it comes back after the tree), as is what a later move of the batch brings under it;
+/// a root out of the containers again by the batch's end takes its whole subtree
+fn tree_of(state: &mut State, reflection: &Reflection, filter: &Filter, root: InstanceId, whole: &mut FxHashSet<InstanceId>, pending: &Pending, known: &mut Vec<(InstanceId, InstanceId)>) -> Vec<Node> {
+    let flagged = state.dom.at(root).flags & flags::REPLICATED != 0;
     let mut nodes: Vec<Node> = Vec::new();
     let mut stack: Vec<(InstanceId, Option<u32>)> = vec![(root, None)];
     while let Some((id, parent)) = stack.pop() {
         let instance = state.dom.at(id);
-        if instance.flags & flags::REPLICATED == 0 {
+        if id != root && !goes_along(state, id, flagged, pending) {
+            continue;
+        }
+        if id != root && instance.flags & flags::SENT != 0 {
+            if let Some(index) = parent {
+                known.push((id, nodes[index as usize].id));
+            }
             continue;
         }
         let node = node_of(state, reflection, filter, id, parent);
@@ -1131,6 +1198,18 @@ pub fn apply(lua: &Lua, client: &Rc<Engine>, endpoint: &Rc<Endpoint>, message: M
             // the tree enters at once: its DescendantAdded, ChildAdded, the tagged instances' added signals
             if let Some(&root) = made.first() {
                 let _ = crate::lua::instance::set_parent(client, root, Some(parent));
+            }
+        }
+        Msg::Detach { id } => {
+            let Some(copy) = live(id) else { return Ok(()) };
+            let children: Vec<InstanceId> = {
+                let state = client.state.borrow();
+                let ids = bridge.ids.borrow();
+                state.dom.children_of(copy).iter().copied().filter(|&child| ids.to_server.get(child).is_some()).collect()
+            };
+            for child in children {
+                client.state.borrow_mut().dom.pin(child);
+                let _ = crate::lua::instance::set_parent(client, child, None);
             }
         }
         Msg::Parent { id, parent } => {

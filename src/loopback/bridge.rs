@@ -26,6 +26,9 @@ pub enum Msg {
     Tree { parent: InstanceId, nodes: Vec<Node>, groups: Vec<(u32, crate::services::physics::Snapshot)> },
     /// An instance the client has moved: under `parent` (mapped at delivery), or out of the replicated containers (None)
     Parent { id: InstanceId, parent: Option<InstanceId> },
+    /// An instance coming back into the replicated containers: its copy's children that are copies leave it first (each to
+    /// nil, in child order), as a client takes them out before the instance enters (replicate.rs `re_enter`)
+    Detach { id: InstanceId },
     /// A property's value when its batch was sealed (instance values mapped at delivery); `quiet`: a physics move, which
     /// fires no Changed
     Prop { id: InstanceId, name: NameId, value: Value, quiet: bool },

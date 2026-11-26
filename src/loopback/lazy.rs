@@ -79,7 +79,7 @@ pub fn materialized(engine: &Engine, id: InstanceId, before: usize) {
                 if parent_flags & flags::SENT != 0
                     && let Some(log) = state.loopback_log.as_mut()
                 {
-                    log.push(Change::Moved(child));
+                    log.push(Change::Moved { id: child, parent: Some(id), inside: true, was: false });
                 }
             }
             _ => {}

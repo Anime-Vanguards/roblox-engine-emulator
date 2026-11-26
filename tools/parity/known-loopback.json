@@ -1,10 +1,4 @@
 {
-	"character_write": [
-		{
-			"line": "client: M5 to M6, M5 put back: M5 AncestryChanged nil, CharacterRemoving M5, CharacterAdded M6, Character M6, M5 AncestryChanged Workspace",
-			"why": "the server takes the old character out and a CharacterRemoving handler puts it back in the same frame: a real client sees both moves, ree's replication sends where an instance is at the frame's end (no move here)"
-		}
-	],
 	"remote_latency": [
 		{
 			"line": "client: InvokeServer round trip: 60 answered, fewest frames 1",
