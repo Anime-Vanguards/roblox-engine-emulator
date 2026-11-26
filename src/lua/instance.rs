@@ -503,7 +503,11 @@ pub fn assign(lua: &Lua, engine: &Rc<Engine>, id: InstanceId, key: &LuaValue, va
                     let state = engine.state.borrow();
                     let changed = name == K::Parent as NameId || version.is_none_or(|version| state.dom.get(id).is_none_or(|part| part.version != version));
                     let property = engine.reflection.name(name);
-                    let (placed, levels) = if changed && part { crate::world::placement(&state.dom, &engine.reflection, engine.world().workspace, id) } else { (false, 0) };
+                    let (placed, levels) = if changed && part {
+                        crate::world::placement(&state.dom, &engine.reflection, engine.world().workspace, id)
+                    } else {
+                        (changed && camera_placed(engine, &state, class, id), 0)
+                    };
                     // (a Parent setter's move pays its levels itself: set_parent; a CollisionGroup setter that changed the part's
                     // CollisionGroupId made one more change: services/physics.rs wrote_id)
                     let id_changed = crate::services::physics::wrote_id(engine, name);
@@ -573,7 +577,12 @@ pub fn report_unemulated_write(engine: &Engine, id: InstanceId, name: NameId, at
 /// Whether the instance (of `class`) is a part in the Workspace, and how many WorldModels are above it when it is a part (world/mod.rs
 /// placement: one lookup, whatever its depth); neither for any other instance.
 fn part_placement(engine: &Engine, state: &State, class: ClassId, id: InstanceId) -> (bool, u32) {
-    if engine.reflection.is_a(class, "BasePart") { crate::world::placement(&state.dom, &engine.reflection, engine.world().workspace, id) } else { (false, 0) }
+    if engine.reflection.is_a(class, "BasePart") { crate::world::placement(&state.dom, &engine.reflection, engine.world().workspace, id) } else { (camera_placed(engine, state, class, id), 0) }
+}
+
+/// Whether `id` is a Camera in the Workspace, whose writes cost a client more than a loose camera's (cost.rs camera_write)
+fn camera_placed(engine: &Engine, state: &State, class: ClassId, id: InstanceId) -> bool {
+    engine.reflection.is_a(class, "Camera") && state.dom.is_descendant_of(id, engine.world().workspace)
 }
 
 /// What a change of `property` costs a part below `levels` WorldModels for them (cost.rs world_levels, part_changes;

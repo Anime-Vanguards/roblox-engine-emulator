@@ -13186,6 +13186,52 @@ fn a_player_mouses_plain_reads_cost_what_a_client_spends() {
     );
 }
 
+/// A Camera's CFrame, Focus and FieldOfView writes cost what a client spends on them, in the Workspace and out of it (cost.rs
+/// camera_write; Studio 0.747, a headless client, its server and a rendered client: CFrame 0.17-0.19 us and 0.11-0.12). Before, a
+/// camera's CFrame cost 0.345 and the others 0.30.
+#[test]
+fn camera_writes_cost_what_a_client_spends() {
+    let (lua, engine) = start_with(Options { mode: "play".into(), ..Options::default() });
+    engine_lua::modules::interpret_all(&lua, &engine);
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    run(
+        &lua,
+        &engine,
+        r##"
+        local Current = workspace.CurrentCamera
+        local Loose = Instance.new("Camera")
+        local A, B = CFrame.new(1, 2, 3), CFrame.new(4, 5, 6)
+        local function Cost(Write)
+            Write(B)
+            local Start = os.clock()
+            Write(A)
+            return os.clock() - Start
+        end
+        -- (each changed write past the same write changing nothing: the write's price less a quiet write's)
+        local function Quiet(Write)
+            Write(A)
+            local Start = os.clock()
+            Write(A)
+            return os.clock() - Start
+        end
+        local function Changed(Write)
+            return Cost(Write) - Quiet(Write)
+        end
+        shared.Camera = {
+            Current = Changed(function(V) Current.CFrame = V end),
+            Loose = Changed(function(V) Loose.CFrame = V end),
+            Focus = Changed(function(V) Current.Focus = V end),
+            -- (FieldOfView's setter costs its write whether or not the value changes: past a quiet CFrame write)
+            View = Cost(function(V) Current.FieldOfView = if V == A then 60 else 61 end) - Quiet(function(V) Current.CFrame = if V == A then A else B end),
+        }
+        "##,
+    );
+    // (within what the changed values' events add: 0.015 us)
+    let quiet = crate::cost::WRITE_QUIET;
+    for (key, price) in [("Current", 0.175e-6 - quiet), ("Loose", 0.11e-6 - quiet), ("Focus", 0.095e-6 - quiet), ("View", 0.215e-6 - quiet)] {
+        run(&lua, &engine, &format!("assert(math.abs(shared.Camera.{key} - {price:e}) < 0.015e-6, `{key}: {{shared.Camera.{key}}} not {price:e}`)"));
+    }
+}
 
 /// A group change works out every part's CollisionGroupId in the Workspace again, and costs the work clock what a server spends
 /// on that (roblox-sim, Studio 0.747: cost.rs COLLISION_GROUP_PART, COLLISION_GROUP_CHANGED): 1.7 ns a part whose id stays and

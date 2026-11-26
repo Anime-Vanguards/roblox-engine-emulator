@@ -2370,7 +2370,7 @@ pub fn place_write_scale(prices: &PlacePrices, place_id: f64, property: &str, pl
 /// held-out third), BrickColor 0.55, Material 0.38, Transparency 0.25, CanCollide / CastShadow / Reflectance 0.22-0.26; out of the
 /// workspace geometry 0.145-0.165 and the rest 0.057; an effect's property (a Beam's, ParticleEmitter's, light's or Highlight's)
 /// 0.17-0.19; a GUI object's 0.17-0.22, its Size 0.25, a Color3 0.32, an image 0.78, a Text 0.45; a UI modifier's (UIGradient,
-/// UIStroke, UIScale) 0.16-0.24; an Attachment's 0.115; a joint's C0 0.14; a Camera's CFrame 0.34; Name 0.30; a Bone's or
+/// UIStroke, UIScale) 0.16-0.24; an Attachment's 0.115; a joint's C0 0.14; a Camera's CFrame, Focus and FieldOfView by where it is ([`camera_write`]); Name 0.30; a Bone's or
 /// Motor6D's Transform 0.06. A Studio playtest client, where these were measured before, read most of them 1.3-2.6x dearer and a
 /// part's geometry 0.77x: its Explorer and Properties window listen, and only a rendered client pays for what is drawn. Nothing changed:
 /// [`WRITE_QUIET`]. `placed` is whether the instance is in the workspace.
@@ -2406,8 +2406,10 @@ pub fn write(reflection: &Reflection, class: ClassId, property: &str, changed: b
     if property == "Text" && matches!(name, "TextLabel" | "TextButton" | "TextBox") {
         return TEXT_WRITE;
     }
-    if name == "Camera" && property == "CFrame" {
-        return 0.345e-6;
+    if name == "Camera" {
+        if let Some(price) = camera_write(property, placed) {
+            return price;
+        }
     }
     if reflection.is_a(class, "Attachment") {
         return 0.115e-6;
@@ -2431,6 +2433,25 @@ pub fn write(reflection: &Reflection, class: ClassId, property: &str, changed: b
         return 0.176e-6;
     }
     0.30e-6
+}
+
+/// A Camera's CFrame, Focus or FieldOfView changed by a script, in the Workspace (the current camera or another) or out of it, in a
+/// playing client and a server alike (roblox-sim, Studio 0.747: a headless client, its server and a rendered client, two sessions
+/// each; os.clock around 2,000 writes a sample alternating two values, the median of 15 less an empty loop, each sample beside a
+/// part's unchanged Transparency write): CFrame 0.17-0.19 us in the Workspace and 0.11-0.12 out of it, Focus 0.10 and 0.07,
+/// FieldOfView 0.21-0.23 and 0.12-0.13. ree charged 0.345 for CFrame (the parity bench's rendered client in a game's place, 0.42-0.48
+/// with the game's own listeners: one Changed and one CFrame signal connection put a client's write at 0.68-0.76, three of each at
+/// 1.33-1.81, which ree's signal prices give past this price) and the defaulted 0.30 for the others.
+fn camera_write(property: &str, placed: bool) -> Option<f64> {
+    Some(match (property, placed) {
+        ("CFrame" | "CoordinateFrame", true) => 0.175e-6,
+        ("CFrame" | "CoordinateFrame", false) => 0.11e-6,
+        ("Focus", true) => 0.095e-6,
+        ("Focus", false) => 0.07e-6,
+        ("FieldOfView", true) => 0.215e-6,
+        ("FieldOfView", false) => 0.12e-6,
+        _ => return None,
+    })
 }
 
 /// Instance.new by class, in the parity bench: a Part 0.83 us, a MeshPart 1.89, a Model 0.58, a
@@ -2615,7 +2636,7 @@ pub fn write_kinds(reflection: &Reflection, class: ClassId, property: &str, chan
     let named = (property == "Transform" && (reflection.is_a(class, "Motor6D") || reflection.is_a(class, "Bone")))
         || ((property == "C0" || property == "C1") && reflection.is_a(class, "JointInstance"))
         || (property == "Text" && matches!(&*reflection.class(class).name, "TextLabel" | "TextButton" | "TextBox"))
-        || (&*reflection.class(class).name == "Camera" && property == "CFrame")
+        || (&*reflection.class(class).name == "Camera" && camera_write(property, placed).is_some())
         || reflection.is_a(class, "Attachment")
         || reflection.is_a(class, "GuiObject")
         || reflection.is_a(class, "UIComponent")
