@@ -69,22 +69,30 @@
 			"why": "RunService.RenderStepped:Wait on a server raises `RenderStepped event can only be used from local scripts`, and ConnectParallel in a server Script outside an Actor raises `Event.ConnectParallel: The calling script must be rooted under an Actor.`; ree waits, and words the second as a call from no script"
 		}
 	],
-	"assembly_mass": [
+	"assembly_motion": [
 		{
-			"line": "velocity-two-anchored a-unanchored A root=B mass=inf text=inf get=5.5999999046325684 own=5.5999999046325684 centre=861.965515 60.3448257 40 centretext=861.9655151367188, 60.344825744628906, 40 linear=0 0 2.06896567 angular=0 2 0 velocity=0 0 6 rotvelocity=0 2 0",
-			"why": "an Anchored write that joins two assemblies: a client reads the joined parts' velocities from the new root's motion (its Velocity and spin, across the joined centre), ree keeps what each part's last velocity write left; how a split shares the motion out is not measured"
+			"line": "pairs joined X1 root=X2 linear=0 -2.24999976 -2 angular=0 0 0.75 velocity=0 -4.5 -2 rotvelocity=0 0 0.75",
+			"why": "a weld joining two assemblies of two parts each: a client sums the joined centre of mass in an order of its own (the two small parts first, then the large ones), a float step off ree, which sums them in its walk from the root, so the centre velocity reads a float step apart (the centre-precision measure entry, ASM-WELD-PRECISION)"
 		},
 		{
-			"line": "velocity-two-anchored a-unanchored B root=B mass=inf text=inf get=11.199999809265137 own=11.199999809265137 centre=861.965515 60.3448257 40 centretext=861.9655151367188, 60.344825744628906, 40 linear=0 0 2.06896567 angular=0 2 0 velocity=0 0 0 rotvelocity=0 2 0",
-			"why": "an Anchored write that joins two assemblies: a client reads the joined parts' velocities from the new root's motion (its Velocity and spin, across the joined centre), ree keeps what each part's last velocity write left; how a split shares the motion out is not measured"
+			"line": "pairs joined Y1 root=X2 linear=0 -2.24999976 -2 angular=0 0 0.75 velocity=0 -3 -2 rotvelocity=0 0 0.75",
+			"why": "a weld joining two assemblies of two parts each: a client sums the joined centre of mass in an order of its own (the two small parts first, then the large ones), a float step off ree, which sums them in its walk from the root, so the centre velocity reads a float step apart (the centre-precision measure entry, ASM-WELD-PRECISION)"
 		},
 		{
-			"line": "velocity-two-anchored a-unanchored C root=B mass=inf text=inf get=1.3999999761581421 own=1.3999999761581421 centre=861.965515 60.3448257 40 centretext=861.9655151367188, 60.344825744628906, 40 linear=0 0 2.06896567 angular=0 2 0 velocity=0 0 6 rotvelocity=0 2 0",
-			"why": "an Anchored write that joins two assemblies: a client reads the joined parts' velocities from the new root's motion (its Velocity and spin, across the joined centre), ree keeps what each part's last velocity write left; how a split shares the motion out is not measured"
+			"line": "pairs joined X2 root=X2 linear=0 -2.24999976 -2 angular=0 0 0.75 velocity=0 0 -2 rotvelocity=0 0 0.75",
+			"why": "a weld joining two assemblies of two parts each: a client sums the joined centre of mass in an order of its own (the two small parts first, then the large ones), a float step off ree, which sums them in its walk from the root, so the centre velocity reads a float step apart (the centre-precision measure entry, ASM-WELD-PRECISION)"
 		},
 		{
-			"line": "velocity-two-anchored a-unanchored D root=B mass=inf text=inf get=2.0999999046325684 own=2.0999999046325684 centre=861.965515 60.3448257 40 centretext=861.9655151367188, 60.344825744628906, 40 linear=0 0 2.06896567 angular=0 2 0 velocity=0 0 0 rotvelocity=0 2 0",
-			"why": "an Anchored write that joins two assemblies: a client reads the joined parts' velocities from the new root's motion (its Velocity and spin, across the joined centre), ree keeps what each part's last velocity write left; how a split shares the motion out is not measured"
+			"line": "pairs joined Y2 root=X2 linear=0 -2.24999976 -2 angular=0 0 0.75 velocity=0 -1.5 -2 rotvelocity=0 0 0.75",
+			"why": "a weld joining two assemblies of two parts each: a client sums the joined centre of mass in an order of its own (the two small parts first, then the large ones), a float step off ree, which sums them in its walk from the root, so the centre velocity reads a float step apart (the centre-precision measure entry, ASM-WELD-PRECISION)"
+		},
+		{
+			"line": "split own Z root=Z linear=1 0 -4 angular=0 1 0 velocity=1 0 -4 rotvelocity=0 1 0",
+			"why": "a client keeps in a part's body the motion a script's read of its Velocity or RotVelocity works out (here the reads before the split), so the piece split off reads it; ree keeps a part's body from velocity writes, simulation steps and joins alone (no hook on a property's read)"
+		},
+		{
+			"line": "split read Z root=Z linear=1 0 -4 angular=0 1 0 velocity=1 0 -4 rotvelocity=0 1 0",
+			"why": "a client keeps in a part's body the motion a script's read of its Velocity or RotVelocity works out (here the reads before the split), so the piece split off reads it; ree keeps a part's body from velocity writes, simulation steps and joins alone (no hook on a property's read)"
 		}
 	],
 	"bulk_move_args": [

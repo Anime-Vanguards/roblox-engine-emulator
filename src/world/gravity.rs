@@ -127,6 +127,13 @@ pub struct Gravity {
     spin: FxHashMap<InstanceId, Vec3>,
     /// Impulses applied since the last step, by part: linear (ApplyImpulse) and angular
     impulses: FxHashMap<InstanceId, (Vec3, Vec3)>,
+    /// Each part's own motion, as a client's physics body keeps it: the velocity of its position and the spin. A velocity write
+    /// sets its assembly root's ([`assign`]), a simulation step each part's it moves ([`fly`]); none reads zero. An assembly reads its
+    /// motion from its root's, so a part that leaves its root's assembly, or becomes its assembly's root, takes what its own body
+    /// holds ([`assemblies_changed`])
+    bodies: FxHashMap<InstanceId, (Vec3, Vec3)>,
+    /// The parts whose velocities, spin or body are not all zero (world/joints.rs `motion` follows whether there is any)
+    moving: FxHashSet<InstanceId>,
 }
 
 impl Gravity {
@@ -236,6 +243,10 @@ pub fn install(engine: &Rc<Engine>) {
         gravity.spin.remove(&id);
         gravity.impulses.remove(&id);
         gravity.added.retain(|&focus| focus != id);
+        gravity.bodies.remove(&id);
+        if gravity.moving.remove(&id) {
+            state.joints.motion = !state.gravity.moving.is_empty();
+        }
     }));
     drop(hooks);
     install_body(engine, &body_setup);
@@ -608,7 +619,9 @@ fn body_of(state: &State, setup: &Setup, assembly: &[InstanceId]) -> Body {
 /// centre's velocity and keeps the spin; Velocity sets the root's, whichever part it is written to; AssemblyAngularVelocity sets
 /// the spin and keeps the centre's velocity; RotVelocity sets the spin and keeps the root's. Each is worked out in floats as the
 /// client works it (a velocity written and a spin after it read back 1.99999988 for 2), so the written name reads back what the
-/// client's does, not always what was written. A flying assembly flies on with it.
+/// client's does, not always what was written. The motion is the root's body's ([`Gravity::bodies`]): the write sets the root's alone,
+/// as a client's does (a part welded to the root and split off later reads its own body, not the write: [`assemblies_changed`]). A
+/// flying assembly flies on with it.
 fn assign(state: &mut State, reflection: &Reflection, setup: &Setup, id: InstanceId, name: NameId, angular: bool) {
     if state.dom.get(id).is_none() || !reflection.class(state.dom.at(id).class).is_a(setup.base_part) {
         return;
@@ -627,7 +640,6 @@ fn assign(state: &mut State, reflection: &Reflection, setup: &Setup, id: Instanc
     let (parts, offset) = joints::assembly_frame(state, reflection, id, |state, part| part_point(state, setup, part));
     let root = parts[0];
     let vector = |state: &State, part: InstanceId, name: Option<NameId>| name.and_then(|name| state.dom.raw_get(part, name)).and_then(frame::vector_of).unwrap_or(Vec3::ZERO);
-    let position = |state: &State, part: InstanceId| Vec3::from(frame::affine_of(state.dom.raw_get(part, setup.cframe)).translation);
     // (the motion before the write, from what it left: the root's Velocity is its position's, and of the two names of the spin the
     // one not written still holds it)
     let (at_root, spin) = if !angular {
@@ -641,9 +653,30 @@ fn assign(state: &mut State, reflection: &Reflection, setup: &Setup, id: Instanc
         let before = vector(state, id, setup.rot_velocity);
         (vector(state, root, Some(setup.velocity)) + (before - value).cross(offset), value)
     };
+    set_body(state, root, at_root, spin);
+    write_motion(state, setup, &parts, offset, flying);
+}
+
+/// Sets `part`'s body ([`Gravity::bodies`]).
+fn set_body(state: &mut State, part: InstanceId, velocity: Vec3, spin: Vec3) {
+    if velocity == Vec3::ZERO && spin == Vec3::ZERO {
+        state.gravity.bodies.remove(&part);
+    } else {
+        state.gravity.bodies.insert(part, (velocity, spin));
+    }
+}
+
+/// Each of `parts` (an assembly, its root first; `offset` its centre of mass's from the root) reads the motion of the root's body, as a
+/// client reads an assembly's: AssemblyLinearVelocity the velocity of its centre of mass, the legacy Velocity each part's own
+/// position's, AssemblyAngularVelocity and RotVelocity the spin, worked out in floats as a client works them. A flying assembly
+/// (`flying`) flies on with it.
+fn write_motion(state: &mut State, setup: &Setup, parts: &[InstanceId], offset: Vec3, flying: bool) {
+    let root = parts[0];
+    let (at_root, spin) = state.gravity.bodies.get(&root).copied().unwrap_or((Vec3::ZERO, Vec3::ZERO));
+    let position = |state: &State, part: InstanceId| Vec3::from(frame::affine_of(state.dom.raw_get(part, setup.cframe)).translation);
     let linear = at_root + spin.cross(offset);
     let root_at = position(state, root);
-    for &part in parts.iter() {
+    for &part in parts {
         let own = at_root + spin.cross(position(state, part) - root_at);
         for (target, written) in [(Some(setup.velocity), own), (setup.assembly_linear, linear), (setup.assembly_angular, spin), (setup.rot_velocity, spin)] {
             if let Some(target) = target {
@@ -659,6 +692,83 @@ fn assign(state: &mut State, reflection: &Reflection, setup: &Setup, id: Instanc
                 state.gravity.spin.insert(part, spin);
             }
         }
+        let still = own == Vec3::ZERO && linear == Vec3::ZERO && spin == Vec3::ZERO && !state.gravity.bodies.contains_key(&part);
+        if still {
+            state.gravity.moving.remove(&part);
+        } else {
+            state.gravity.moving.insert(part);
+        }
+    }
+    state.joints.motion = !state.gravity.moving.is_empty();
+}
+
+/// A joint started a link: a client works out the motion of the joint's end on the side that keeps its root, and keeps it in the body
+/// of each part from the root down to that end (`path`, the root first: world/joints.rs root_path), from the root's motion as it is now
+/// (Studio 0.747, a playing client and its server: a chain welded on a part at a time to a moving part, then a part of it anchored or
+/// split off, reads the motion the join left in it, and a part beyond that end none; a later write to the root leaves it as the join
+/// left it; tools/parity/probes/assembly_motion.luau). A script's read of a part's Velocity or RotVelocity keeps its motion in its
+/// body the same way on a client, which is not modelled (ree has no hook on a property's read).
+pub(crate) fn hold_path(state: &mut State, path: &[InstanceId]) {
+    let Some(setup) = state.gravity.setup.clone() else { return };
+    let Some((&root, rest)) = path.split_first() else { return };
+    let (at_root, spin) = state.gravity.bodies.get(&root).copied().unwrap_or((Vec3::ZERO, Vec3::ZERO));
+    let position = |state: &State, part: InstanceId| Vec3::from(frame::affine_of(state.dom.raw_get(part, setup.cframe)).translation);
+    let root_at = position(state, root);
+    for &part in rest {
+        let own = at_root + spin.cross(position(state, part) - root_at);
+        set_body(state, part, own, spin);
+        if state.gravity.bodies.contains_key(&part) {
+            state.gravity.moving.insert(part);
+        }
+    }
+    state.joints.motion = !state.gravity.moving.is_empty();
+}
+
+/// The assemblies a write joined, split or rooted elsewhere (world/joints.rs `regrouped`: the parts whose assembly it may have
+/// changed) read their motion from their roots' bodies ([`write_motion`]), as a client's do (Studio 0.747, a playing client and its
+/// server alike, tools/parity/probes/assembly_motion.luau): the parts a weld or an Anchored write joins to an assembly take its root's
+/// velocity and spin, the joined centre's velocity with them, whichever assembly they came from; a piece split off takes what the body
+/// of its new root holds (its point velocity and the spin when a simulation step or a velocity write as that piece's root set it,
+/// else nothing: a piece split off in the frame a script set the velocity reads zero) and the piece that keeps the root keeps the
+/// motion, its centre's velocity worked out again; a part that becomes its assembly's root (anchored, or ranked above the root) gives
+/// the assembly its own body's motion. While no part moves, nothing is looked at.
+pub(crate) fn assemblies_changed(state: &mut State, reflection: &Reflection) {
+    if state.joints.regrouped.is_empty() {
+        return;
+    }
+    let seeds = std::mem::take(&mut state.joints.regrouped);
+    let Some(setup) = state.gravity.setup.clone() else { return };
+    let mut done: FxHashSet<InstanceId> = FxHashSet::default();
+    for &seed in &seeds {
+        if state.gravity.moving.is_empty() {
+            break;
+        }
+        if state.dom.get(seed).is_none() || !reflection.class(state.dom.at(seed).class).is_a(setup.base_part) || super::world_root_of(state, reflection, setup.world_root, seed).is_none() {
+            continue;
+        }
+        let (parts, offset) = joints::assembly_offset(state, reflection, seed, |state, part| part_point(state, &setup, part));
+        if !done.insert(parts[0]) {
+            continue;
+        }
+        // (an assembly that does not move and holds no part that moved has nothing to change)
+        let gravity = &state.gravity;
+        let still = !gravity.bodies.contains_key(&parts[0])
+            && if gravity.moving.len() < parts.len() {
+                let set: FxHashSet<InstanceId> = parts.iter().copied().collect();
+                !gravity.moving.iter().any(|part| set.contains(part))
+            } else {
+                !parts.iter().any(|part| gravity.moving.contains(part))
+            };
+        if still {
+            continue;
+        }
+        let flying = parts.iter().any(|part| state.gravity.velocity.contains_key(part));
+        write_motion(state, &setup, &parts, offset, flying);
+    }
+    let mut seeds = seeds;
+    seeds.clear();
+    if state.joints.regrouped.is_empty() {
+        state.joints.regrouped = seeds;
     }
 }
 
@@ -744,7 +854,10 @@ fn fly(state: &mut State, reflection: &Reflection, hooks: &Hooks, setup: &Setup,
         } else {
             state.gravity.spin.remove(&other);
         }
+        set_body(state, other, velocity, omega);
+        state.gravity.moving.insert(other);
     }
+    state.joints.motion = true;
     state.gravity.stepping = false;
     // (the centres of mass read since the last step, worked out again where the step left the parts)
     joints::moved(state, part);

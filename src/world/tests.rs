@@ -2974,6 +2974,77 @@ fn joints_service_links_joint_instances_between_parts_of_the_workspace() {
     );
 }
 
+/// An assembly reads its motion from its root's body, as a playing client keeps it (Studio 0.747, client and server,
+/// tools/parity/probes/assembly_motion.luau): parts a weld joins take the root's velocity and spin, the joined centre's velocity with
+/// them; a piece split off reads what its new root's body holds (nothing, in the frame a write set the motion of a root it hung
+/// from); a part anchored in a moving assembly gives it the motion a join left in it (each part from the root to the end a joint
+/// joined a part at); a part moved within it reads its velocity at its new place.
+#[test]
+fn an_assembly_reads_its_motion_from_its_roots_body() {
+    check(
+        r#"
+        local function Part(Name, X, Size)
+            local P = Instance.new("Part")
+            P.Name, P.Size, P.CanCollide = Name, Size or Vector3.one, false
+            P.CFrame = CFrame.new(300 + X, 60, 40)
+            P.Parent = workspace
+            return P
+        end
+        local function Weld(A, B)
+            local W = Instance.new("Weld")
+            W.Part0, W.Part1 = A, B
+            W.C0 = A.CFrame:ToObjectSpace(B.CFrame)
+            W.Parent = A
+            return W
+        end
+        local function Is(Case, P, Velocity, Spin)
+            assert(P.Velocity == Velocity and P.RotVelocity == Spin and P.AssemblyAngularVelocity == Spin, `{Case}: {P.Name} {P.Velocity} {P.RotVelocity}, the client's {Velocity} {Spin}`)
+        end
+        -- a join: Y takes X's motion, whatever it had
+        local X, Y = Part("X", 0, Vector3.new(2, 2, 2)), Part("Y", 4)
+        X.AssemblyLinearVelocity, X.AssemblyAngularVelocity = Vector3.new(1, 0, 0), Vector3.new(0, 0.5, 0)
+        Y.AssemblyLinearVelocity, Y.AssemblyAngularVelocity = Vector3.new(0, 0, 3), Vector3.new(0, 1, 0)
+        Weld(X, Y)
+        Is("join", Y, Vector3.new(1, 0, -2), Vector3.new(0, 0.5, 0))
+        Is("join", X, Vector3.new(1, 0, 0), Vector3.new(0, 0.5, 0))
+        assert(Y.AssemblyLinearVelocity == X.AssemblyLinearVelocity and Y.AssemblyLinearVelocity ~= Vector3.new(1, 0, 0), `the joined centre's velocity {Y.AssemblyLinearVelocity}`)
+        X:Destroy()
+        Y:Destroy()
+        -- X moving alone, then Y and Z welded on (X-Y, Y-Z): the Y-Z join leaves Y's motion in Y, none in Z
+        local function Trio()
+            local X = Part("X", 0, Vector3.new(2, 2, 2))
+            X.AssemblyLinearVelocity, X.AssemblyAngularVelocity = Vector3.new(1, 0, 0), Vector3.new(0, 1, 0)
+            local Y, Z = Part("Y", 2), Part("Z", 4)
+            return X, Y, Z, Weld(X, Y), Weld(Y, Z)
+        end
+        local Y2, Z2, XY, YZ
+        X, Y2, Z2, XY, YZ = Trio()
+        Is("joined", Z2, Vector3.new(1, 0, -4), Vector3.new(0, 1, 0))
+        YZ.Enabled = false
+        Is("split off", Z2, Vector3.zero, Vector3.zero)
+        assert(Z2.AssemblyLinearVelocity == Vector3.zero, "the piece's centre")
+        Is("the root's piece", X, Vector3.new(1, 0, 0), Vector3.new(0, 1, 0))
+        Is("the root's piece", Y2, Vector3.new(1, 0, -2), Vector3.new(0, 1, 0))
+        YZ.Enabled = true
+        Is("joined again", Z2, Vector3.new(1, 0, -4), Vector3.new(0, 1, 0))
+        Y2.Anchored = true
+        Is("re-rooted", X, Vector3.new(1, 0, 0), Vector3.new(0, 1, 0))
+        Is("re-rooted", Z2, Vector3.new(1, 0, -4), Vector3.new(0, 1, 0))
+        Y2.Anchored = false
+        Z2.Position += Vector3.new(2, 0, 0)
+        Is("moved within", Z2, Vector3.new(1, 0, -6), Vector3.new(0, 1, 0))
+        X:Destroy()
+        Y2:Destroy()
+        Z2:Destroy()
+        -- the trio's X-Y weld off: the piece {Y, Z} hangs from Z, which held no motion
+        X, Y2, Z2, XY, YZ = Trio()
+        XY.Enabled = false
+        Is("the piece's root", Z2, Vector3.zero, Vector3.zero)
+        Is("the piece's root", Y2, Vector3.zero, Vector3.zero)
+        "#,
+    );
+}
+
 /// Parts link only within one world as they move between worlds: a weld joins two parts in the Workspace, then neither when
 /// one is in a WorldModel, both again once the WorldModel holds both (wherever the WorldModel goes), the same from
 /// JointsService, nothing outside every world, and the same with the parts and the WorldModel at the bottom of chains of

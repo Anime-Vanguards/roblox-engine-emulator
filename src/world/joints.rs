@@ -250,6 +250,11 @@ pub struct Joints {
     batch: u32,
     batch_parts: Vec<(InstanceId, Affine3A)>,
     batch_seeds: Vec<InstanceId>,
+    /// While some part moves (world/gravity.rs `moving`: a velocity, a spin or its body's motion not zero), the parts whose assemblies a
+    /// change may have joined, split or rooted elsewhere since gravity last looked ([`Joints::regroup`]), which then take their roots'
+    /// motion (gravity::assemblies_changed, after each write: [`property_changed`], [`reparented`])
+    pub(crate) motion: bool,
+    pub(crate) regrouped: Vec<InstanceId>,
 }
 
 /// The joints indexed under one part (the rigid ones and WeldConstraints: [`link_in`]), in the order
@@ -1172,6 +1177,13 @@ impl Joints {
     }
 
     /// Forgets the kept component of `part`, for each of its parts.
+    /// Notes that `part`'s assembly may have changed, while a part moves ([`Joints::regrouped`]).
+    fn regroup(&mut self, part: InstanceId) {
+        if self.motion {
+            self.regrouped.push(part);
+        }
+    }
+
     fn drop_component(&mut self, part: InstanceId) {
         let Some(found) = self.components.remove(&part) else { return };
         self.unsettled = None;
@@ -2864,6 +2876,22 @@ pub fn assembly_frame(state: &mut State, reflection: &Reflection, part: Instance
     (members(state, reflection, &setup, &found, part), offset)
 }
 
+/// The parts of the assembly `part` is in, its root first ([`assembly_parts`]), and its centre of mass's offset from the root, worked
+/// out as [`assembly_body`] works it (the same sum, to the bit) without keeping anything in the component's memo: world/gravity.rs
+/// assemblies_changed reads the assemblies a write changed without moving what the reads after it keep or pay.
+pub fn assembly_offset(state: &mut State, reflection: &Reflection, part: InstanceId, point: impl Fn(&State, InstanceId) -> Point) -> (Rc<[InstanceId]>, glam::Vec3) {
+    let Some(setup) = setup_of(state) else { return (Rc::from([part]), glam::Vec3::ZERO) };
+    ensure_scanned(state, reflection, &setup);
+    let Some(found) = component(state, reflection, &setup, part) else { return (Rc::from([part]), glam::Vec3::ZERO) };
+    let order = members(state, reflection, &setup, &found, part);
+    let root = order[0];
+    let (_, offset) = mass_centre(order.iter().map(|&other| {
+        let point = point(state, other);
+        (point.0, counted(point, other == root))
+    }));
+    (order, offset)
+}
+
 /// Works out again the stale centres of mass of `found` read since its last move, up to [`REFRESHED_CENTRES`] of them, from the
 /// masses kept and where the parts are now: as [`assembly_body`] would at the next read, to the bit, so that read costs a lookup.
 /// The others are worked out when read.
@@ -2956,10 +2984,14 @@ pub fn assembly_size(state: &mut State, reflection: &Reflection, part: InstanceI
 #[inline]
 pub fn stored(state: &mut State, id: InstanceId, name: NameId) {
     let State { joints, dom, .. } = state;
+    let what = joints.watch.get(name as usize).copied().unwrap_or(0);
+    // (a part's mass or rank changes its assembly's centre or root: its motion is read again, gravity::assemblies_changed)
+    if joints.motion && (what == watch::MASS || what == watch::ROOTS) {
+        joints.regrouped.push(id);
+    }
     if joints.components.is_empty() {
         return;
     }
-    let what = joints.watch.get(name as usize).copied().unwrap_or(0);
     if what == 0 {
         return;
     }
@@ -3122,8 +3154,14 @@ fn settle_from_roots(state: &mut State, reflection: &Reflection, hooks: &Hooks, 
 
 /// A property changed through RawSet (instance::notify_changed; `old` its previous value, when
 /// known): a part's CFrame moves its assembly; a rigid joint's C0 / C1 / Part0 / Part1 / Enabled
-/// settle it; a part's Anchored splits or joins its assemblies; a Motor6D's Transform waits for the simulation step.
+/// settle it; a part's Anchored splits or joins its assemblies; a Motor6D's Transform waits for the simulation step. The assemblies
+/// it joined, split or rooted elsewhere then take their roots' motion (world/gravity.rs assemblies_changed).
 pub fn property_changed(state: &mut State, reflection: &Reflection, hooks: &Hooks, id: InstanceId, name: NameId, old: Option<&Value>) {
+    changed(state, reflection, hooks, id, name, old);
+    super::gravity::assemblies_changed(state, reflection);
+}
+
+fn changed(state: &mut State, reflection: &Reflection, hooks: &Hooks, id: InstanceId, name: NameId, old: Option<&Value>) {
     let Some(setup) = setup_of(state) else { return };
     if name == setup.cframe {
         if state.joints.quiet > 0 || !reflection.class(state.dom.at(id).class).is_a(setup.base_part) {
@@ -3144,6 +3182,14 @@ pub fn property_changed(state: &mut State, reflection: &Reflection, hooks: &Hook
             return;
         }
         ensure_scanned(state, reflection, &setup);
+        // (the assemblies of the parts it linked and links read their motion again once the write is done: a C0 or C1 moves the parts
+        // it places within their assembly too)
+        if state.joints.motion {
+            let old = state.joints.indexed.get(&id).map(|entry| entry.parts).unwrap_or_default();
+            for part in old.into_iter().chain(parts_of(state, &setup, id)).flatten() {
+                state.joints.regroup(part);
+            }
+        }
         // (a joint re-pointed to other parts: the link it made ends and the one it makes starts, as two link changes would)
         if (name == setup.part0 || name == setup.part1)
             && state.joints.quiet == 0
@@ -3202,6 +3248,14 @@ pub fn property_changed(state: &mut State, reflection: &Reflection, hooks: &Hook
         }
         ensure_scanned(state, reflection, &setup);
         reanchored(state, reflection, hooks, &setup, id, before, settled);
+        // (each of its component's assemblies may change: the part's, and of several anchored parts each one's, whose parts claims
+        // gives again)
+        if state.joints.motion {
+            state.joints.regroup(id);
+            if let Some(found) = component(state, reflection, &setup, id) {
+                state.joints.regrouped.extend(found.anchored.borrow().iter().copied());
+            }
+        }
     } else if name == setup.transform {
         let is_motor = setup.motor6d.is_some_and(|motor| reflection.class(state.dom.at(id).class).is_a(motor));
         if is_motor && !state.joints.pending.contains(&id) {
@@ -3229,7 +3283,7 @@ fn link_changed(state: &mut State, reflection: &Reflection, hooks: &Hooks, setup
     let places = state.joints.indexed[&joint].places;
     state.joints.unsettled = None;
     if on {
-        link_started(state, reflection, hooks, setup, joint, parts, &seeds);
+        link_started(state, reflection, hooks, setup, joint, parts, &seeds, true);
     } else {
         if state.joints.unlink(joint, parts, places).is_none() {
             drop_flipped(&mut state.joints, &[Some((parts[0], false)), Some((parts[1], false))]);
@@ -3244,7 +3298,7 @@ fn link_changed(state: &mut State, reflection: &Reflection, hooks: &Hooks, setup
 /// The link of `joint` between `parts` (Part0's first) started: their kept components join ([`Joints::join`]) and the side that
 /// hangs from the other's root is placed ([`attach`]), or, when the components are not kept or the join moves their roots, the
 /// assemblies of `seeds` settle from their roots.
-fn link_started(state: &mut State, reflection: &Reflection, hooks: &Hooks, setup: &Setup, joint: InstanceId, parts: [InstanceId; 2], seeds: &[InstanceId]) {
+fn link_started(state: &mut State, reflection: &Reflection, hooks: &Hooks, setup: &Setup, joint: InstanceId, parts: [InstanceId; 2], seeds: &[InstanceId], hold: bool) {
     let places = state.joints.indexed[&joint].places;
     let plan = attach_plan(state, reflection, setup, joint, parts);
     let anchored_parts = parts.map(|part| anchored(state, setup, part));
@@ -3260,6 +3314,28 @@ fn link_started(state: &mut State, reflection: &Reflection, hooks: &Hooks, setup
             settle_from_roots(state, reflection, hooks, setup, seeds);
         }
     }
+    // (a client works out the motion of the end the joined side hangs from, and keeps it in each part from the root to that end; a
+    // write that starts several links, as a model of welded parts entering, leaves none)
+    if hold && state.joints.motion {
+        let [first, second] = parts.map(|part| root_path(state, reflection, part));
+        if first.first().is_some() && first.first() == second.first() {
+            super::gravity::hold_path(state, if first.len() <= second.len() { &first } else { &second });
+        }
+    }
+}
+
+/// The parts from the root of `part`'s assembly down its tree to `part` (the root first, `part` last; `part` alone when it links no
+/// other part): the path a client works a part's motion out along (world/gravity.rs hold_path).
+pub(crate) fn root_path(state: &mut State, reflection: &Reflection, part: InstanceId) -> Vec<InstanceId> {
+    let Some(setup) = setup_of(state) else { return vec![part] };
+    let Some(found) = component(state, reflection, &setup, part) else { return vec![part] };
+    let path = match found.kept_path(part) {
+        Some(path) => path,
+        None => tree_path(&assemblies_of(state, reflection, &setup, &found, part, None, true), part).unwrap_or_default(),
+    };
+    let mut parts: Vec<InstanceId> = path.iter().map(|&(_, parent)| parent).collect();
+    parts.push(part);
+    parts
 }
 
 /// The links of `started` (each joint with its parts, from one Parent write into a world) but the one at `skip` (left for
@@ -3328,7 +3404,7 @@ fn repointed(state: &mut State, reflection: &Reflection, hooks: &Hooks, setup: &
     match started {
         Some(parts) => {
             let seeds: Vec<InstanceId> = parts_of(state, setup, joint).into_iter().flatten().collect();
-            link_started(state, reflection, hooks, setup, joint, parts, &seeds);
+            link_started(state, reflection, hooks, setup, joint, parts, &seeds, true);
         }
         None => {
             drop_flipped(&mut state.joints, &flips);
@@ -3906,7 +3982,40 @@ fn taken_up(state: &State, root: InstanceId, stop: impl Fn(&State, InstanceId) -
 /// - Out of the world or JointsService it was in: the links that ended with it end ([`left_world`]); out of every world, the
 ///   joints it carries, and those of the parts it carries, leave their parts' lists of active joints, in the walk's order
 ///   ([`left_every_world`]).
+/// - The assemblies it joined, split or rooted elsewhere then take their roots' motion (world/gravity.rs assemblies_changed).
 pub fn reparented(state: &mut State, reflection: &Reflection, hooks: &Hooks, id: InstanceId, old_parent: Option<InstanceId>, new_parent: Option<InstanceId>) {
+    moved_home(state, reflection, hooks, id, old_parent, new_parent);
+    if state.joints.motion
+        && let Some(setup) = setup_of(state)
+    {
+        moved_regroup(state, reflection, &setup, id);
+    }
+    super::gravity::assemblies_changed(state, reflection);
+}
+
+/// The parts whose assemblies a Parent write of `id` may have joined or split, while some part moves ([`Joints::regrouped`]): each
+/// part it carries and the parts its indexed joints name, and the parts of each joint it carries.
+fn moved_regroup(state: &mut State, reflection: &Reflection, setup: &Setup, id: InstanceId) {
+    let mut nodes = vec![id];
+    nodes.extend(state.dom.descendants(id));
+    let mut found = Vec::new();
+    for node in nodes {
+        let class = state.dom.at(node).class;
+        if setup.kind(class) != Kind::Other {
+            found.extend(parts_of(state, setup, node).into_iter().flatten());
+        } else if reflection.class(class).is_a(setup.base_part) {
+            found.push(node);
+            if let Some(list) = state.joints.by_part.get(&node) {
+                for &joint in list.slots.iter().flatten() {
+                    found.extend(parts_of(state, setup, joint).into_iter().flatten());
+                }
+            }
+        }
+    }
+    state.joints.regrouped.extend(found);
+}
+
+fn moved_home(state: &mut State, reflection: &Reflection, hooks: &Hooks, id: InstanceId, old_parent: Option<InstanceId>, new_parent: Option<InstanceId>) {
     let Some(setup) = setup_of(state) else { return };
     let home = |state: &State, node: InstanceId| {
         let class = state.dom.at(node).class;
@@ -3982,6 +4091,7 @@ pub fn reparented(state: &mut State, reflection: &Reflection, hooks: &Hooks, id:
     // or, when they touch that component too, the joined components settle; else their components are walked again, as a link joined
     // costs about what a part walked does, and a Model of welded parts brings its links in with it)
     let mut single = None;
+    let hold = started.len() == 1;
     match started.as_slice() {
         [] => {}
         &[link] => single = Some(link),
@@ -4028,7 +4138,7 @@ pub fn reparented(state: &mut State, reflection: &Reflection, hooks: &Hooks, id:
                 single = None;
                 // (settled from its roots when it cannot hang one side from the other's, from the part the write met first)
                 let ends: Vec<InstanceId> = std::iter::once(seed).chain(parts_of(state, &setup, joint).into_iter().flatten()).collect();
-                link_started(state, reflection, hooks, &setup, joint, parts, &ends);
+                link_started(state, reflection, hooks, &setup, joint, parts, &ends, hold);
                 finish(state, &mut done, parts[0]);
                 continue;
             }
@@ -4041,7 +4151,7 @@ pub fn reparented(state: &mut State, reflection: &Reflection, hooks: &Hooks, id:
     }
     if let Some((joint, parts)) = single {
         let ends: Vec<InstanceId> = parts_of(state, &setup, joint).into_iter().flatten().collect();
-        link_started(state, reflection, hooks, &setup, joint, parts, &ends);
+        link_started(state, reflection, hooks, &setup, joint, parts, &ends, hold);
     }
     entering_price(state, reflection, &setup, &moved, entered);
 }
@@ -4368,6 +4478,9 @@ pub fn move_alone(state: &mut State, reflection: &Reflection, hooks: &Hooks, par
         state.sched.charge(work);
         crate::boundary::add_cost(work);
     }
+    // (moved within its assembly, the part reads its velocity at its new place, and the assembly its centre's)
+    state.joints.regroup(part);
+    super::gravity::assemblies_changed(state, reflection);
 }
 
 /// Model:PivotTo / ScaleTo start moving many parts: nothing settles until [`end_batch`].

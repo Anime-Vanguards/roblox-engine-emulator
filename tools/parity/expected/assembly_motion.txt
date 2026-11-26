@@ -1,0 +1,57 @@
+# engine: Roblox Studio 0.747.0.7471481, a headless playing client (script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-26
+join x X root=X linear=1 0 -0.222222224 angular=0 0.5 0 velocity=1 0 0 rotvelocity=0 0.5 0
+join x Y root=X linear=1 0 -0.222222224 angular=0 0.5 0 velocity=1 0 -2 rotvelocity=0 0.5 0
+join x-part1 X root=X linear=1 0 -0.222222224 angular=0 0.5 0 velocity=1 0 0 rotvelocity=0 0.5 0
+join x-part1 Y root=X linear=1 0 -0.222222224 angular=0 0.5 0 velocity=1 0 -2 rotvelocity=0 0.5 0
+join y X root=Y linear=0 0 3.44444442 angular=0 1 0 velocity=0 0 7 rotvelocity=0 1 0
+join y Y root=Y linear=0 0 3.44444442 angular=0 1 0 velocity=0 0 3 rotvelocity=0 1 0
+join still-y X root=X linear=0 2 0 angular=0.25 0 0 velocity=0 2 0 rotvelocity=0.25 0 0
+join still-y Y root=X linear=0 2 0 angular=0.25 0 0 velocity=0 2 0 rotvelocity=0.25 0 0
+join still-x X root=X linear=0 0 0 angular=0 0 0 velocity=0 0 0 rotvelocity=0 0 0
+join still-x Y root=X linear=0 0 0 angular=0 0 0 velocity=0 0 0 rotvelocity=0 0 0
+conveyor welded X root=X linear=1 0 -0.222222224 angular=0 0.5 0 velocity=1 0 0 rotvelocity=0 0.5 0
+conveyor welded Y root=X linear=1 0 -0.222222224 angular=0 0.5 0 velocity=1 0 -2 rotvelocity=0 0.5 0
+conveyor freed X root=X linear=1 0 -0.222222224 angular=0 0.5 0 velocity=1 0 0 rotvelocity=0 0.5 0
+conveyor freed Y root=X linear=1 0 -0.222222224 angular=0 0.5 0 velocity=1 0 -2 rotvelocity=0 0.5 0
+conveyor anchored X root=X linear=1 0 -0.222222224 angular=0 0.5 0 velocity=1 0 0 rotvelocity=0 0.5 0
+conveyor anchored Y root=X linear=1 0 -0.222222224 angular=0 0.5 0 velocity=1 0 -2 rotvelocity=0 0.5 0
+pairs joined X1 root=X2 linear=0 -2.24999976 -2 angular=0 0 0.75 velocity=0 -4.5 -2 rotvelocity=0 0 0.75
+pairs joined Y1 root=X2 linear=0 -2.24999976 -2 angular=0 0 0.75 velocity=0 -3 -2 rotvelocity=0 0 0.75
+pairs joined X2 root=X2 linear=0 -2.24999976 -2 angular=0 0 0.75 velocity=0 0 -2 rotvelocity=0 0 0.75
+pairs joined Y2 root=X2 linear=0 -2.24999976 -2 angular=0 0 0.75 velocity=0 -1.5 -2 rotvelocity=0 0 0.75
+enter X root=X linear=1 0 0 angular=0 0 0 velocity=1 0 0 rotvelocity=0 0 0
+enter Y root=X linear=1 0 0 angular=0 0 0 velocity=1 0 0 rotvelocity=0 0 0
+split leaf X root=X linear=1 0 -0.222222224 angular=0 1 0 velocity=1 0 0 rotvelocity=0 1 0
+split leaf Y root=X linear=1 0 -0.222222224 angular=0 1 0 velocity=1 0 -2 rotvelocity=0 1 0
+split leaf Z root=Z linear=0 0 0 angular=0 0 0 velocity=0 0 0 rotvelocity=0 0 0
+split piece X root=X linear=1 0 0 angular=0 1 0 velocity=1 0 0 rotvelocity=0 1 0
+split piece Y root=Z linear=0 0 0 angular=0 0 0 velocity=0 0 0 rotvelocity=0 0 0
+split piece Z root=Z linear=0 0 0 angular=0 0 0 velocity=0 0 0 rotvelocity=0 0 0
+split rejoined X root=X linear=1 0 -0.600000024 angular=0 1 0 velocity=1 0 0 rotvelocity=0 1 0
+split rejoined Y root=X linear=1 0 -0.600000024 angular=0 1 0 velocity=1 0 -2 rotvelocity=0 1 0
+split rejoined Z root=X linear=1 0 -0.600000024 angular=0 1 0 velocity=1 0 -4 rotvelocity=0 1 0
+split own joined X root=X linear=1 0 -0.600000024 angular=0 1 0 velocity=1 0 0 rotvelocity=0 1 0
+split own joined Y root=X linear=1 0 -0.600000024 angular=0 1 0 velocity=1 0 -2 rotvelocity=0 1 0
+split own joined Z root=X linear=1 0 -0.600000024 angular=0 1 0 velocity=1 0 -4 rotvelocity=0 1 0
+split own X root=X linear=1 0 -0.222222224 angular=0 1 0 velocity=1 0 0 rotvelocity=0 1 0
+split own Y root=X linear=1 0 -0.222222224 angular=0 1 0 velocity=1 0 -2 rotvelocity=0 1 0
+split own Z root=Z linear=1 0 -4 angular=0 1 0 velocity=1 0 -4 rotvelocity=0 1 0
+split read X root=X linear=1 0 -0.222222224 angular=0 1 0 velocity=1 0 0 rotvelocity=0 1 0
+split read Y root=X linear=1 0 -0.222222224 angular=0 1 0 velocity=1 0 -2 rotvelocity=0 1 0
+split read Z root=Z linear=1 0 -4 angular=0 1 0 velocity=1 0 -4 rotvelocity=0 1 0
+reroot anchored X root=Y linear=1 0 -0.599999905 angular=0 1 0 velocity=1 0 0 rotvelocity=0 1 0
+reroot anchored Y root=Y linear=1 0 -0.599999905 angular=0 1 0 velocity=1 0 -2 rotvelocity=0 1 0
+reroot anchored Z root=Y linear=1 0 -0.599999905 angular=0 1 0 velocity=1 0 -4 rotvelocity=0 1 0
+reroot freed X root=X linear=1 0 -0.600000024 angular=0 1 0 velocity=1 0 0 rotvelocity=0 1 0
+reroot freed Y root=X linear=1 0 -0.600000024 angular=0 1 0 velocity=1 0 -2 rotvelocity=0 1 0
+reroot freed Z root=X linear=1 0 -0.600000024 angular=0 1 0 velocity=1 0 -4 rotvelocity=0 1 0
+reroot priority X root=Y linear=1 0 -0.599999905 angular=0 1 0 velocity=1 0 0 rotvelocity=0 1 0
+reroot priority Y root=Y linear=1 0 -0.599999905 angular=0 1 0 velocity=1 0 -2 rotvelocity=0 1 0
+reroot priority Z root=Y linear=1 0 -0.599999905 angular=0 1 0 velocity=1 0 -4 rotvelocity=0 1 0
+reroot read X root=Y linear=1 0 -0.599999905 angular=0 1 0 velocity=1 0 0 rotvelocity=0 1 0
+reroot read Y root=Y linear=1 0 -0.599999905 angular=0 1 0 velocity=1 0 -2 rotvelocity=0 1 0
+reroot read Z root=Y linear=1 0 -0.599999905 angular=0 1 0 velocity=1 0 -4 rotvelocity=0 1 0
+moved z X root=X linear=1 0 -0.600000024 angular=0 1 0 velocity=1 0 0 rotvelocity=0 1 0
+moved z Y root=X linear=1 0 -0.600000024 angular=0 1 0 velocity=1 0 -2 rotvelocity=0 1 0
+moved z Z root=X linear=1 0 -0.600000024 angular=0 1 0 velocity=1 0 -4 rotvelocity=0 1 0
