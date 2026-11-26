@@ -1135,7 +1135,7 @@ index 8cec57a..566674b 100644
  
  const BRICK_COLOR_DEFAULT: u16 = 194;
 diff --git a/crates/lune-roblox/src/datatypes/types/cframe.rs b/crates/lune-roblox/src/datatypes/types/cframe.rs
-index 5c5511e..bfcc798 100644
+index 5c5511e..f530d57 100644
 --- a/crates/lune-roblox/src/datatypes/types/cframe.rs
 +++ b/crates/lune-roblox/src/datatypes/types/cframe.rs
 @@ -3,26 +3,386 @@
@@ -1579,7 +1579,7 @@ index 5c5511e..bfcc798 100644
      }
  }
  
-@@ -48,126 +447,172 @@ impl LuaExportsTable for CFrame {
+@@ -48,126 +447,180 @@ impl LuaExportsTable for CFrame {
  
      #[allow(clippy::too_many_lines)]
      fn create_exports_table(lua: Lua) -> LuaResult<LuaTable> {
@@ -1679,8 +1679,16 @@ index 5c5511e..bfcc798 100644
 +            let ry = vector_arg(lua, &args, 3, "fromMatrix")?;
 +            let rz = if matches!(args.get(3), None | Some(LuaValue::Nil)) { None } else { Some(vector_arg(lua, &args, 4, "fromMatrix")?) };
 +            charge_host_nanos(lua, price::NEW_MATRIX);
-+            // (a missing Z column is X cross Y made a unit vector; not measured)
-+            let z = rz.map_or_else(|| f32m::unit3(f32m::cross3(array(rx), array(ry))), array);
++            // (a missing Z column is X cross Y, made a unit vector only when its square is above 1e-12: a shorter one,
++            // a zero one and a not-a-number one stay as they are; Studio 0.747, ree's tools/parity/probes/datatype_edges.luau
++            // and datatype_edges_more.luau `frommatrix`)
++            let z = rz.map_or_else(
++                || {
++                    let cross = f32m::cross3(array(rx), array(ry));
++                    if f32m::dot3(cross, cross) > 1e-12 { f32m::unit3(cross) } else { cross }
++                },
++                array,
++            );
 +            Ok(CFrame::from_parts(array(pos), f32m::from_columns(array(rx), array(ry), z)))
          };
  
@@ -1839,7 +1847,7 @@ index 5c5511e..bfcc798 100644
              .with_function("lookAt", cframe_look_at)?
              .with_function("new", cframe_new)?
              .build_readonly()
-@@ -176,8 +621,25 @@ impl LuaExportsTable for CFrame {
+@@ -176,8 +629,25 @@ impl LuaExportsTable for CFrame {
  
  impl LuaUserData for CFrame {
      fn add_fields<F: LuaUserDataFields<Self>>(fields: &mut F) {
@@ -1867,7 +1875,7 @@ index 5c5511e..bfcc798 100644
              Ok(CFrame(Mat4::from_cols(
                  this.0.x_axis,
                  this.0.y_axis,
-@@ -185,111 +647,185 @@ impl LuaUserData for CFrame {
+@@ -185,111 +655,185 @@ impl LuaUserData for CFrame {
                  Vec3::ZERO.extend(1.0),
              )))
          });
@@ -2151,7 +2159,7 @@ index 5c5511e..bfcc798 100644
              let pos = this.position();
              let transposed = this.orientation().transpose();
              Ok((
-@@ -299,78 +835,163 @@ impl LuaUserData for CFrame {
+@@ -299,78 +843,163 @@ impl LuaUserData for CFrame {
                  transposed.z_axis.x, transposed.z_axis.y,   transposed.z_axis.z,
              ))
          });
@@ -2220,7 +2228,7 @@ index 5c5511e..bfcc798 100644
 +                    return Ok(native_vector(
 +                        (*this * Vector3(Vec3::new(v.x(), v.y(), v.z()))).0,
 +                    ));
-                 }
++                }
 +                LuaValue::UserData(ud) => {
 +                    if let Ok(cf) = ud.borrow::<CFrame>() {
 +                        charge_host_nanos(lua, price::MUL_CFRAME);
@@ -2229,7 +2237,7 @@ index 5c5511e..bfcc798 100644
 +                        charge_host_nanos(lua, price::MUL_VECTOR);
 +                        return Ok(native_vector((*this * *vec).0));
 +                    }
-+                }
+                 }
 +                _ => {}
              }
 -            Err(LuaError::FromLuaConversionError {
@@ -2241,16 +2249,6 @@ index 5c5511e..bfcc798 100644
 -                )),
 -            })
 +            Err(invalid_argument(2, None, "Vector3", &rhs))
-+        });
-+        methods.add_meta_function(LuaMetaMethod::Add, |lua, (lhs, rhs): (LuaValue, LuaValue)| {
-+            let (this, vec) = translation(lua, &lhs, &rhs)?;
-+            charge_host_nanos(lua, price::ADD_VECTOR);
-+            Ok(this + Vector3(vec))
-+        });
-+        methods.add_meta_function(LuaMetaMethod::Sub, |lua, (lhs, rhs): (LuaValue, LuaValue)| {
-+            let (this, vec) = translation(lua, &lhs, &rhs)?;
-+            charge_host_nanos(lua, price::ADD_VECTOR);
-+            Ok(this - Vector3(vec))
          });
 -        methods.add_meta_method(
 -            LuaMetaMethod::Add,
@@ -2260,9 +2258,19 @@ index 5c5511e..bfcc798 100644
 -            LuaMetaMethod::Sub,
 -            |_, this, vec: LuaUserDataRef<Vector3>| Ok(*this - *vec),
 -        );
-     }
- }
- 
++        methods.add_meta_function(LuaMetaMethod::Add, |lua, (lhs, rhs): (LuaValue, LuaValue)| {
++            let (this, vec) = translation(lua, &lhs, &rhs)?;
++            charge_host_nanos(lua, price::ADD_VECTOR);
++            Ok(this + Vector3(vec))
++        });
++        methods.add_meta_function(LuaMetaMethod::Sub, |lua, (lhs, rhs): (LuaValue, LuaValue)| {
++            let (this, vec) = translation(lua, &lhs, &rhs)?;
++            charge_host_nanos(lua, price::ADD_VECTOR);
++            Ok(this - Vector3(vec))
++        });
++    }
++}
++
 +/// Argument `index` (1-based) of constructor `name` as a Vector3, checked as a client's Luau checks it.
 +fn vector_arg(lua: &Lua, args: &LuaMultiValue, index: usize, name: &str) -> LuaResult<Vec3> {
 +    match args.get(index - 1) {
@@ -2311,10 +2319,10 @@ index 5c5511e..bfcc798 100644
 +fn frames_of(args: &LuaMultiValue, name: &str) -> LuaResult<Vec<CFrame>> {
 +    if args.len() < 2 {
 +        return Ok(vec![CFrame::IDENTITY]);
-+    }
+     }
 +    (2..=args.len()).map(|index| luau_arg_named::<CFrame>(args, index, name, "CFrame").map(|cf| *cf)).collect()
-+}
-+
+ }
+ 
  impl fmt::Display for CFrame {
      fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 +        // the twelve components in GetComponents' order, 9 significant digits each ("0, 0, 0, -4.37113883e-08, ...";
@@ -2359,7 +2367,7 @@ index 5c5511e..bfcc798 100644
      }
  }
  
-@@ -424,23 +1045,10 @@ impl From<CFrame> for DomCFrame {
+@@ -424,23 +1053,10 @@ impl From<CFrame> for DomCFrame {
      }
  }
  
@@ -2832,10 +2840,10 @@ index 02ca893..da0122c 100644
      }
  }
 diff --git a/crates/lune-roblox/src/datatypes/types/mod.rs b/crates/lune-roblox/src/datatypes/types/mod.rs
-index 8c561eb..7c0409a 100644
+index 8c561eb..7784c6d 100644
 --- a/crates/lune-roblox/src/datatypes/types/mod.rs
 +++ b/crates/lune-roblox/src/datatypes/types/mod.rs
-@@ -51,5 +51,435 @@ pub use udim2::UDim2;
+@@ -51,5 +51,512 @@ pub use udim2::UDim2;
  pub use unique_id::UniqueId;
  pub use vector2::Vector2;
  pub use vector2int16::Vector2int16;
@@ -3018,17 +3026,88 @@ index 8c561eb..7c0409a 100644
 +        product.map(|row| row.map(term_value))
 +    }
 +
-+    /// ToEulerAngles(order) as (x, y, z): asinf of the middle axis's term and atan2f for the other two. A term at 1 or
-+    /// beyond (gimbal lock) is taken as 1 (not measured: the capture has no such rotation).
++    /// ToEulerAngles(order) as (x, y, z), G3D's Matrix3::toEulerAngles*: while the middle axis's term `m` is inside
++    /// (-1, 1), asinf of it and atan2f for the other two; at gimbal lock (`m` at or past 1 or -1, and not-a-number, which
++    /// fails `m < 1`), the middle angle is a quarter turn (the float of pi / 2, signed as asin would sign it), the last
++    /// axis's angle is +0 and the first axis's angle carries the whole free rotation, atan2f of two terms the lock leaves.
++    /// Measured to the bit for all six orders at both locks, exact quarter turns and a not-a-number matrix (Studio 0.747,
++    /// ree's tools/parity/probes/datatype_edges.luau `euler` and datatype_edges_more.luau `lock`, `quarter`).
 +    pub fn to_euler(order: &str, r: &Rot) -> (f32, f32, f32) {
-+        let asin = |v: f32| v.clamp(-1.0, 1.0).asin();
++        let half = std::f64::consts::FRAC_PI_2 as f32;
++        // (middle term, the open branch as (x, y, z), the branch at m <= -1, the branch at m >= 1 or not-a-number)
 +        match order {
-+            "XYZ" => ((-r[1][2]).atan2(r[2][2]), asin(r[0][2]), (-r[0][1]).atan2(r[0][0])),
-+            "YXZ" => (asin(-r[1][2]), r[0][2].atan2(r[2][2]), r[1][0].atan2(r[1][1])),
-+            "ZXY" => (asin(r[2][1]), (-r[2][0]).atan2(r[2][2]), (-r[0][1]).atan2(r[1][1])),
-+            "XZY" => (r[2][1].atan2(r[1][1]), r[0][2].atan2(r[0][0]), asin(-r[0][1])),
-+            "YZX" => ((-r[1][2]).atan2(r[1][1]), (-r[2][0]).atan2(r[0][0]), asin(r[1][0])),
-+            _ => (r[2][1].atan2(r[2][2]), asin(-r[2][0]), r[1][0].atan2(r[0][0])),
++            "XYZ" => {
++                let m = r[0][2];
++                if m < 1.0 {
++                    if m > -1.0 {
++                        ((-r[1][2]).atan2(r[2][2]), m.asin(), (-r[0][1]).atan2(r[0][0]))
++                    } else {
++                        (-r[1][0].atan2(r[1][1]), -half, 0.0)
++                    }
++                } else {
++                    (r[1][0].atan2(r[1][1]), half, 0.0)
++                }
++            }
++            "YXZ" => {
++                let m = r[1][2];
++                if m < 1.0 {
++                    if m > -1.0 {
++                        ((-m).asin(), r[0][2].atan2(r[2][2]), r[1][0].atan2(r[1][1]))
++                    } else {
++                        (half, r[0][1].atan2(r[0][0]), 0.0)
++                    }
++                } else {
++                    (-half, (-r[0][1]).atan2(r[0][0]), 0.0)
++                }
++            }
++            "ZXY" => {
++                let m = r[2][1];
++                if m < 1.0 {
++                    if m > -1.0 {
++                        (m.asin(), (-r[2][0]).atan2(r[2][2]), (-r[0][1]).atan2(r[1][1]))
++                    } else {
++                        (-half, 0.0, -r[0][2].atan2(r[0][0]))
++                    }
++                } else {
++                    (half, 0.0, r[0][2].atan2(r[0][0]))
++                }
++            }
++            "XZY" => {
++                let m = r[0][1];
++                if m < 1.0 {
++                    if m > -1.0 {
++                        (r[2][1].atan2(r[1][1]), r[0][2].atan2(r[0][0]), (-m).asin())
++                    } else {
++                        (r[2][0].atan2(r[2][2]), 0.0, half)
++                    }
++                } else {
++                    ((-r[2][0]).atan2(r[2][2]), 0.0, -half)
++                }
++            }
++            "YZX" => {
++                let m = r[1][0];
++                if m < 1.0 {
++                    if m > -1.0 {
++                        ((-r[1][2]).atan2(r[1][1]), (-r[2][0]).atan2(r[0][0]), m.asin())
++                    } else {
++                        (0.0, -r[2][1].atan2(r[2][2]), -half)
++                    }
++                } else {
++                    (0.0, r[2][1].atan2(r[2][2]), half)
++                }
++            }
++            _ => {
++                let m = r[2][0];
++                if m < 1.0 {
++                    if m > -1.0 {
++                        (r[2][1].atan2(r[2][2]), (-m).asin(), r[1][0].atan2(r[0][0]))
++                    } else {
++                        (0.0, half, -r[0][1].atan2(r[0][2]))
++                    }
++                } else {
++                    (0.0, -half, (-r[0][1]).atan2(-r[0][2]))
++                }
++            }
 +        }
 +    }
 +
@@ -3083,14 +3162,20 @@ index 8c561eb..7c0409a 100644
 +        (axis, angle)
 +    }
 +
-+    /// lookAt / lookAlong: `look = dir.Unit`, `right = (look x up).Unit`, or `(look x X).Unit` when `|look x up|^2`
-+    /// is below 1e-12 (measured to lie in (1e-14, 1e-12]), `up = right x look`; the columns right, up, -look. A zero
-+    /// direction gives not-a-number, as in Roblox. (Measured with the default up, Y.)
++    /// lookAt / lookAlong: `look = dir.Unit`, `up = up.Unit` (a zero or not-a-number up vector gives not-a-number in
++    /// the first two columns), `right = (look x up).Unit`; when `|look x up|^2` is below 2.5e-13 (|look x up| below 5e-7,
++    /// measured to the float step on both sides), `look x X` instead, and `look x Y` when that is below it too;
++    /// `up = right x look`; the columns right, up, -look. A zero direction gives not-a-number, as in Roblox (Studio 0.747,
++    /// ree's tools/parity/probes/cframe_order.luau, datatype_edges.luau `lookat` and datatype_edges_more.luau `lookat`).
 +    pub fn look_along(direction: Vec3, up: Vec3) -> Rot {
++        const PARALLEL: f32 = 2.5e-13;
 +        let look = unit3(direction);
-+        let mut c = cross3(look, up);
-+        if dot3(c, c) < 1e-12 {
++        let mut c = cross3(look, unit3(up));
++        if dot3(c, c) < PARALLEL {
 +            c = cross3(look, [1.0, 0.0, 0.0]);
++            if dot3(c, c) < PARALLEL {
++                c = cross3(look, [0.0, 1.0, 0.0]);
++            }
 +        }
 +        let right = unit3(c);
 +        let up = cross3(right, look);

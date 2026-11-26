@@ -229,17 +229,88 @@ pub mod float32 {
         product.map(|row| row.map(term_value))
     }
 
-    /// ToEulerAngles(order) as (x, y, z): asinf of the middle axis's term and atan2f for the other two. A term at 1 or
-    /// beyond (gimbal lock) is taken as 1 (not measured: the capture has no such rotation).
+    /// ToEulerAngles(order) as (x, y, z), G3D's Matrix3::toEulerAngles*: while the middle axis's term `m` is inside
+    /// (-1, 1), asinf of it and atan2f for the other two; at gimbal lock (`m` at or past 1 or -1, and not-a-number, which
+    /// fails `m < 1`), the middle angle is a quarter turn (the float of pi / 2, signed as asin would sign it), the last
+    /// axis's angle is +0 and the first axis's angle carries the whole free rotation, atan2f of two terms the lock leaves.
+    /// Measured to the bit for all six orders at both locks, exact quarter turns and a not-a-number matrix (Studio 0.747,
+    /// ree's tools/parity/probes/datatype_edges.luau `euler` and datatype_edges_more.luau `lock`, `quarter`).
     pub fn to_euler(order: &str, r: &Rot) -> (f32, f32, f32) {
-        let asin = |v: f32| v.clamp(-1.0, 1.0).asin();
+        let half = std::f64::consts::FRAC_PI_2 as f32;
+        // (middle term, the open branch as (x, y, z), the branch at m <= -1, the branch at m >= 1 or not-a-number)
         match order {
-            "XYZ" => ((-r[1][2]).atan2(r[2][2]), asin(r[0][2]), (-r[0][1]).atan2(r[0][0])),
-            "YXZ" => (asin(-r[1][2]), r[0][2].atan2(r[2][2]), r[1][0].atan2(r[1][1])),
-            "ZXY" => (asin(r[2][1]), (-r[2][0]).atan2(r[2][2]), (-r[0][1]).atan2(r[1][1])),
-            "XZY" => (r[2][1].atan2(r[1][1]), r[0][2].atan2(r[0][0]), asin(-r[0][1])),
-            "YZX" => ((-r[1][2]).atan2(r[1][1]), (-r[2][0]).atan2(r[0][0]), asin(r[1][0])),
-            _ => (r[2][1].atan2(r[2][2]), asin(-r[2][0]), r[1][0].atan2(r[0][0])),
+            "XYZ" => {
+                let m = r[0][2];
+                if m < 1.0 {
+                    if m > -1.0 {
+                        ((-r[1][2]).atan2(r[2][2]), m.asin(), (-r[0][1]).atan2(r[0][0]))
+                    } else {
+                        (-r[1][0].atan2(r[1][1]), -half, 0.0)
+                    }
+                } else {
+                    (r[1][0].atan2(r[1][1]), half, 0.0)
+                }
+            }
+            "YXZ" => {
+                let m = r[1][2];
+                if m < 1.0 {
+                    if m > -1.0 {
+                        ((-m).asin(), r[0][2].atan2(r[2][2]), r[1][0].atan2(r[1][1]))
+                    } else {
+                        (half, r[0][1].atan2(r[0][0]), 0.0)
+                    }
+                } else {
+                    (-half, (-r[0][1]).atan2(r[0][0]), 0.0)
+                }
+            }
+            "ZXY" => {
+                let m = r[2][1];
+                if m < 1.0 {
+                    if m > -1.0 {
+                        (m.asin(), (-r[2][0]).atan2(r[2][2]), (-r[0][1]).atan2(r[1][1]))
+                    } else {
+                        (-half, 0.0, -r[0][2].atan2(r[0][0]))
+                    }
+                } else {
+                    (half, 0.0, r[0][2].atan2(r[0][0]))
+                }
+            }
+            "XZY" => {
+                let m = r[0][1];
+                if m < 1.0 {
+                    if m > -1.0 {
+                        (r[2][1].atan2(r[1][1]), r[0][2].atan2(r[0][0]), (-m).asin())
+                    } else {
+                        (r[2][0].atan2(r[2][2]), 0.0, half)
+                    }
+                } else {
+                    ((-r[2][0]).atan2(r[2][2]), 0.0, -half)
+                }
+            }
+            "YZX" => {
+                let m = r[1][0];
+                if m < 1.0 {
+                    if m > -1.0 {
+                        ((-r[1][2]).atan2(r[1][1]), (-r[2][0]).atan2(r[0][0]), m.asin())
+                    } else {
+                        (0.0, -r[2][1].atan2(r[2][2]), -half)
+                    }
+                } else {
+                    (0.0, r[2][1].atan2(r[2][2]), half)
+                }
+            }
+            _ => {
+                let m = r[2][0];
+                if m < 1.0 {
+                    if m > -1.0 {
+                        (r[2][1].atan2(r[2][2]), (-m).asin(), r[1][0].atan2(r[0][0]))
+                    } else {
+                        (0.0, half, -r[0][1].atan2(r[0][2]))
+                    }
+                } else {
+                    (0.0, -half, (-r[0][1]).atan2(-r[0][2]))
+                }
+            }
         }
     }
 
@@ -294,14 +365,20 @@ pub mod float32 {
         (axis, angle)
     }
 
-    /// lookAt / lookAlong: `look = dir.Unit`, `right = (look x up).Unit`, or `(look x X).Unit` when `|look x up|^2`
-    /// is below 1e-12 (measured to lie in (1e-14, 1e-12]), `up = right x look`; the columns right, up, -look. A zero
-    /// direction gives not-a-number, as in Roblox. (Measured with the default up, Y.)
+    /// lookAt / lookAlong: `look = dir.Unit`, `up = up.Unit` (a zero or not-a-number up vector gives not-a-number in
+    /// the first two columns), `right = (look x up).Unit`; when `|look x up|^2` is below 2.5e-13 (|look x up| below 5e-7,
+    /// measured to the float step on both sides), `look x X` instead, and `look x Y` when that is below it too;
+    /// `up = right x look`; the columns right, up, -look. A zero direction gives not-a-number, as in Roblox (Studio 0.747,
+    /// ree's tools/parity/probes/cframe_order.luau, datatype_edges.luau `lookat` and datatype_edges_more.luau `lookat`).
     pub fn look_along(direction: Vec3, up: Vec3) -> Rot {
+        const PARALLEL: f32 = 2.5e-13;
         let look = unit3(direction);
-        let mut c = cross3(look, up);
-        if dot3(c, c) < 1e-12 {
+        let mut c = cross3(look, unit3(up));
+        if dot3(c, c) < PARALLEL {
             c = cross3(look, [1.0, 0.0, 0.0]);
+            if dot3(c, c) < PARALLEL {
+                c = cross3(look, [0.0, 1.0, 0.0]);
+            }
         }
         let right = unit3(c);
         let up = cross3(right, look);

@@ -508,8 +508,16 @@ impl LuaExportsTable for CFrame {
             let ry = vector_arg(lua, &args, 3, "fromMatrix")?;
             let rz = if matches!(args.get(3), None | Some(LuaValue::Nil)) { None } else { Some(vector_arg(lua, &args, 4, "fromMatrix")?) };
             charge_host_nanos(lua, price::NEW_MATRIX);
-            // (a missing Z column is X cross Y made a unit vector; not measured)
-            let z = rz.map_or_else(|| f32m::unit3(f32m::cross3(array(rx), array(ry))), array);
+            // (a missing Z column is X cross Y, made a unit vector only when its square is above 1e-12: a shorter one,
+            // a zero one and a not-a-number one stay as they are; Studio 0.747, ree's tools/parity/probes/datatype_edges.luau
+            // and datatype_edges_more.luau `frommatrix`)
+            let z = rz.map_or_else(
+                || {
+                    let cross = f32m::cross3(array(rx), array(ry));
+                    if f32m::dot3(cross, cross) > 1e-12 { f32m::unit3(cross) } else { cross }
+                },
+                array,
+            );
             Ok(CFrame::from_parts(array(pos), f32m::from_columns(array(rx), array(ry), z)))
         };
 

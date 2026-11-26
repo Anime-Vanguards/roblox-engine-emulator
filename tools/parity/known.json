@@ -273,18 +273,6 @@
 			"why": "DateTime.fromIsoDate in a client: text after a complete time is ignored (\"...Zjunk\", a trailing space), hours, minutes and seconds past their range roll over (25:00, 99:00, 23:60, 23:59:61), an offset that takes the time out of 1400-9999 gives nil, and an offset of +24:00 or more gives nil; ree differs on each"
 		},
 		{
-			"line": "euler ",
-			"why": "Euler angles at gimbal lock: a client's ToEulerAnglesXYZ / YXZ / ToOrientation put the whole free rotation in the first angle and 0 in the last (0.5 1.5707964 0), an exact lock keeps +0; ree splits it (-2.84 1.57 -2.94) and gives -0"
-		},
-		{
-			"line": "lookat ",
-			"why": "CFrame.lookAt with an up vector other than Y: a client normalises in another float order (last digits differ), falls back to an axis when looking along the up vector and gives not-a-number for a zero up vector; ree gives not-a-number for the first and a frame for the second"
-		},
-		{
-			"line": "frommatrix ",
-			"why": "CFrame.fromMatrix without a Z column: a client's Z is the normalised cross product, or zero when it is zero (parallel or zero columns); ree gives not-a-number"
-		},
-		{
 			"line": "font-unknown",
 			"why": "Font.fromEnum(Enum.Font.Unknown) raises `Enum.Font.Unknown can't be passed to Font.fromEnum` with the caller's position in a client; ree words it otherwise, without a position"
 		},
