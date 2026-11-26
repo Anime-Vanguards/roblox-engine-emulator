@@ -2902,3 +2902,67 @@ return {
     }
     assert!(lines.iter().any(|line| line.starts_with("server print: destroyed 0.9") || line.starts_with("server print: destroyed 1.0")), "{lines:?}");
 }
+
+/// What the other side sent runs at the receiving side's frame start, before PreAnimation, and reads that side's last frame's
+/// time() (the time() of its Heartbeat before), equal to its DistributedGameTime: a RemoteEvent's handlers, a RemoteFunction's
+/// callback and the call's return, on both sides (Studio 0.747, tools/parity/probes/loopback/remote_time.luau); ree read the
+/// frame's time() there
+#[test]
+fn remote_handlers_read_the_last_frames_time() {
+    let harness = r##"
+local Storage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local function Watch()
+	local Beat
+	RunService.Heartbeat:Connect(function()
+		Beat = time()
+	end)
+	return function(Kind)
+		print(Kind, time() == Beat, workspace.DistributedGameTime == time())
+	end
+end
+return {
+	Server = function(Context)
+		local Note = Watch()
+		local Call = Instance.new("RemoteFunction")
+		Call.Name = "Call"
+		Call.OnServerInvoke = function()
+			Note("OnServerInvoke")
+			return true
+		end
+		Call.Parent = Storage
+		local Echo = Instance.new("RemoteEvent")
+		Echo.Name = "Echo"
+		Echo.OnServerEvent:Connect(function(Player)
+			Note("OnServerEvent")
+			Echo:FireClient(Player)
+			Call:InvokeClient(Player)
+			Note("InvokeClient returned")
+		end)
+		Echo.Parent = Storage
+	end,
+	Client = function(Context)
+		local Note = Watch()
+		local Echo = Storage:WaitForChild("Echo")
+		local Call = Storage:WaitForChild("Call")
+		Call.OnClientInvoke = function()
+			Note("OnClientInvoke")
+			return true
+		end
+		Echo.OnClientEvent:Connect(function()
+			Note("OnClientEvent")
+		end)
+		RunService.Heartbeat:Wait()
+		Echo:FireServer()
+		Call:InvokeServer()
+		Note("InvokeServer returned")
+		task.wait(0.2)
+		print("@done")
+	end,
+}
+"##;
+    let lines = lines(&run_pair("remote-time", harness, None, &[]));
+    for kind in ["server print: OnServerEvent", "server print: OnServerInvoke", "server print: InvokeClient returned", "client print: OnClientEvent", "client print: OnClientInvoke", "client print: InvokeServer returned"] {
+        assert!(has(&lines, &format!("{kind} true true")), "{kind}: {lines:?}");
+    }
+}

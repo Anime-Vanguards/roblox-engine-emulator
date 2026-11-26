@@ -1,5 +1,5 @@
 -- Workspace.DistributedGameTime in a running game, a playing client's and a server's alike: the game time as of the frame's
--- simulation step. time() moves at the frame's start, DistributedGameTime after PreSimulation (PreAnimation, Stepped and
+-- simulation step. time() moves at PreAnimation, DistributedGameTime after PreSimulation (PreAnimation, Stepped and
 -- PreSimulation read the last frame's game time; PostSimulation, the task.wait resumptions and Heartbeat the frame's, equal to
 -- time()). A script may write it, with a number property's coercion; what it wrote holds until the next simulation step. A server
 -- fires Changed for every step, a client only for a script's write. Read through the global (an import) and through a local.

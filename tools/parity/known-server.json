@@ -355,6 +355,16 @@
 			"why": "chunk names: modules with identical source share the first compiled one's chunk name in a client; ree names each module by its own path"
 		}
 	],
+	"resumption_time": [
+		{
+			"line": "delay's function got 2 number number true",
+			"why": "a legacy delay() or spawn() function gets two numbers in Roblox, the time it waited and a clock, as wait() returns them; ree calls it with none"
+		},
+		{
+			"line": "spawn's function got 2 number number true",
+			"why": "a legacy delay() or spawn() function gets two numbers in Roblox, the time it waited and a clock, as wait() returns them; ree calls it with none"
+		}
+	],
 	"string_parameter_methods": [
 		{
 			"line": "CS.HasTag none ok",

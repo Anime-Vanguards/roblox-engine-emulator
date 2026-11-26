@@ -1120,7 +1120,7 @@ fn build_shared(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<LuaTable> {
     let edit = engine.options.edit_mode();
     shared.raw_set(
         "time",
-        named(lua, "time", Library, super::create_boxed_unit(lua, Box::new(move |_| Ok(LuaValue::Number(if edit { 0.0 } else { e.state.borrow().sched.now }))))?)?,
+        named(lua, "time", Library, super::create_boxed_unit(lua, Box::new(move |_| Ok(LuaValue::Number(if edit { 0.0 } else { e.state.borrow().sched.time() }))))?)?,
     )?;
     let e = engine.clone();
     let elapsed = super::create_boxed_unit(lua, Box::new(move |_| Ok(LuaValue::Number(e.state.borrow_mut().sched.elapsed_time()))))?;

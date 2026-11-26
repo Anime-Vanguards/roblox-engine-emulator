@@ -63,10 +63,6 @@
 		{
 			"line": "client: server time now: client minus server within a second true, not behind true",
 			"why": "ree's server and client start at the same virtual time and a message arrives in the client frame stepped after the server's, at the same frame time: the client's clocks are not later than the server's, as a real client's are"
-		},
-		{
-			"line": "client: time(): client below the server's true",
-			"why": "ree's server and client start at the same virtual time and a message arrives in the client frame stepped after the server's, at the same frame time: the client's clocks are not later than the server's, as a real client's are"
 		}
 	]
 }

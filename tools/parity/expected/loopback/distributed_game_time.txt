@@ -4,6 +4,6 @@
 server: sent its own time() true
 server: sent its own time() true
 server: sent its own time() true
-client: the client's is its own last step's true, the server's sent its time() true
-client: the client's is its own last step's true, the server's sent its time() true
-client: the client's is its own last step's true, the server's sent its time() true
+client: the client's is its own time() true, the server's sent its time() true
+client: the client's is its own time() true, the server's sent its time() true
+client: the client's is its own time() true, the server's sent its time() true

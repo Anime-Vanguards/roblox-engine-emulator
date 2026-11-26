@@ -1,0 +1,16 @@
+# engine: Roblox Studio 0.747.0.7471481, the server of a headless play session (a Script in ServerScriptService, script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-26
+wait: between Heartbeat > PreAnimation; time() of the Heartbeat before true, of the Heartbeat after false; DistributedGameTime equal true
+delay: between Heartbeat > PreAnimation; time() of the Heartbeat before true, of the Heartbeat after false; DistributedGameTime equal true
+spawn: between Heartbeat > PreAnimation; time() of the Heartbeat before true, of the Heartbeat after false; DistributedGameTime equal true
+task.wait: between PostSimulation > Heartbeat; time() of the Heartbeat before false, of the Heartbeat after true; DistributedGameTime equal true
+task.delay: between PostSimulation > Heartbeat; time() of the Heartbeat before false, of the Heartbeat after true; DistributedGameTime equal true
+wait: task.defer: between Heartbeat > PreAnimation; time() of the Heartbeat before true, of the Heartbeat after false; DistributedGameTime equal true
+wait: BindableEvent: between Heartbeat > PreAnimation; time() of the Heartbeat before true, of the Heartbeat after false; DistributedGameTime equal true
+wait: BindableFunction: between Heartbeat > PreAnimation; time() of the Heartbeat before true, of the Heartbeat after false; DistributedGameTime equal true
+wait: Changed: between Heartbeat > PreAnimation; time() of the Heartbeat before true, of the Heartbeat after false; DistributedGameTime equal true
+task.wait: BindableEvent: between PostSimulation > Heartbeat; time() of the Heartbeat before false, of the Heartbeat after true; DistributedGameTime equal true
+Heartbeat: task.defer: between Heartbeat > PreAnimation; time() of the Heartbeat before true, of the Heartbeat after false; DistributedGameTime equal true
+wait() returned number number true
+delay's function got 2 number number true
+spawn's function got 2 number number true

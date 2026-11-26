@@ -701,7 +701,7 @@ fn install_workspace_and_camera(behaviors: &mut Behaviors, reflection: &Reflecti
         // time again (scheduler.rs Scheduler::game_time; the step: install_run_service)
         behaviors.add_getter(workspace, K::DistributedGameTime as NameId, getter(move |_, engine, _| {
             let state = engine.state.borrow();
-            Ok(LuaValue::Number(if edit { 0.0 } else { state.sched.game_time.unwrap_or(state.sched.now) }))
+            Ok(LuaValue::Number(if edit { 0.0 } else { state.sched.game_time.unwrap_or_else(|| state.sched.time()) }))
         }));
         if !edit {
             // (a write takes any value a number property takes, "x" as 0, and fires Changed when it changes the value; edit mode
@@ -751,7 +751,7 @@ fn install_workspace_and_camera(behaviors: &mut Behaviors, reflection: &Reflecti
 /// property's own signal fire when the value changes and `signal` asks for them (a script's write, a server's step).
 fn set_game_time(engine: &Engine, workspace: InstanceId, time: f64, signal: bool) {
     let mut state = engine.state.borrow_mut();
-    let old = state.sched.game_time.unwrap_or(state.sched.now);
+    let old = state.sched.game_time.unwrap_or_else(|| state.sched.time());
     state.sched.game_time = Some(time);
     if signal && old.to_bits() != time.to_bits() {
         core::fire_computed_changed(&mut state, &engine.reflection, workspace, K::DistributedGameTime as NameId);

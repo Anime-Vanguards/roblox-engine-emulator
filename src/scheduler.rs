@@ -223,8 +223,11 @@ pub struct ReplayStatus {
 
 pub struct Scheduler {
     pub now: f64,
+    /// What time() reads from a running game's frame start to its simulation step (PreAnimation): the last frame's time, while
+    /// `now`, the frame's clock (os.clock, the timers' deadlines), is already the frame's; None elsewhere ([`Scheduler::time`])
+    time_behind: Option<f64>,
     /// Workspace.DistributedGameTime in a running game: `now` as of the last simulation step, or what a script wrote since; None
-    /// before the first step, where it reads `now` (services/mod.rs install_workspace_and_camera)
+    /// before the first step, where it reads time() (services/mod.rs install_workspace_and_camera)
     pub game_time: Option<f64>,
     pub frame: u64,
     /// A playing client's or a server's output lines waiting for LogService.MessageOut: it gets them after the frame's
@@ -399,6 +402,7 @@ impl Scheduler {
         let muted = Rc::new(std::cell::Cell::new(0));
         let mut scheduler = Scheduler {
             now: 0.0,
+            time_behind: None,
             game_time: None,
             frame: 0,
             log_queue: Vec::new(),
@@ -688,6 +692,14 @@ impl Scheduler {
             self.epoch_millis = FROZEN_EPOCH_MILLIS;
             self.epoch_pinned = true;
         }
+    }
+
+    /// time() in a running game: the time of the frame's simulation step, which moves at PreAnimation. Until then (the frame's
+    /// start: what the other side sent, the legacy wait / delay / spawn resumptions and the deferred work they leave) it reads the
+    /// last frame's, as a playing client and a server do (Studio 0.747, tools/parity/probes/resumption_time.luau and
+    /// probes/loopback/remote_time.luau), equal to Workspace.DistributedGameTime there; the frame's clock is `now` all along
+    pub fn time(&self) -> f64 {
+        self.time_behind.unwrap_or(self.now)
     }
 
     /// os.clock()
@@ -1780,24 +1792,38 @@ pub fn use_recorded_clock(engine: &Rc<Engine>, clock: Option<&Json>) -> LuaResul
 fn heartbeat_timers(lua: &Lua, engine: &Rc<Engine>, at: f64, delta: f64, limit: Option<f64>) -> LuaResult<()> {
     let edit_mode = {
         let mut state = engine.state.borrow_mut();
+        // (a running game's time() reads the last frame's until the simulation step: Scheduler::time)
+        if !state.sched.edit_mode {
+            state.sched.time_behind = Some(state.sched.now);
+        }
         state.sched.now = at;
         state.sched.heartbeat_count += 1;
         state.sched.begin_phase();
         profile::count("heartbeats", 1);
         state.sched.edit_mode
     };
-    flush_deferred(lua, engine)?;
-    // A loopback run's receive point (loopback.rs): what the other side sent last frame applies before the legacy
-    // resumptions, its events queued for their flush (measured: a remote's handlers run after the legacy wait() resumptions
-    // and before PreAnimation; a RemoteFunction's callback and an answered call before those resumptions)
-    crate::loopback::receive(lua, engine)?;
+    let start = (|| -> LuaResult<()> {
+        flush_deferred(lua, engine)?;
+        // A loopback run's receive point (loopback.rs): what the other side sent last frame applies before the legacy
+        // resumptions, its events queued for their flush (measured: a remote's handlers run after the legacy wait() resumptions
+        // and before PreAnimation; a RemoteFunction's callback and an answered call before those resumptions)
+        crate::loopback::receive(lua, engine)?;
+        if !edit_mode {
+            // A playing client (measured, Studio 0.744: tools/parity/probes/deferred_points.luau and a wait / spawn
+            // chain probe) resumes wait / delay / spawn threads after the render step's PreRender handlers and before
+            // PreAnimation, every due one first and then a full flush; then the simulation events; then every due
+            // task.wait / task.delay thread, in the order they were scheduled, and one pass over the deferred queue
+            // before the Heartbeat handlers. A server resumes them at its frame's start as well (Studio 0.747,
+            // tools/parity/probes/resumption_time.luau). All of this reads the last frame's time(), and the deadlines the
+            // frame's own time: a wait() that took two frames returns their length
+            run_timers(lua, engine, true, None, TimerFlush::AfterAll)?;
+        }
+        Ok(())
+    })();
+    // time() moves here, at PreAnimation
+    engine.state.borrow_mut().sched.time_behind = None;
+    start?;
     if !edit_mode {
-        // A playing client (measured, Studio 0.744: tools/parity/probes/deferred_points.luau and a wait / spawn
-        // chain probe) resumes wait / delay / spawn threads after the render step's PreRender handlers and before
-        // PreAnimation, every due one first and then a full flush; then the simulation events; then every due
-        // task.wait / task.delay thread, in the order they were scheduled, and one pass over the deferred queue
-        // before the Heartbeat handlers.
-        run_timers(lua, engine, true, None, TimerFlush::AfterAll)?;
         run_hooks(lua, engine, Phase::Simulation, delta)?;
         // (departed players' characters and Players whose time came, destroyed where task.delay threads resume: services/players.rs)
         crate::services::players::destroy_due(lua, engine, at)?;

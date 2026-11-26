@@ -15035,3 +15035,56 @@ fn distributed_game_time_is_the_game_time_of_the_last_simulation_step() {
     let output = run(&lua, &engine, "task.wait(1) print(workspace.DistributedGameTime, time())");
     assert_eq!(output, ["print: 0 0"]);
 }
+
+/// A thread wait(), delay() or spawn() resumes, and what it defers or fires, run at a running game's frame start, before
+/// PreAnimation, and read the last frame's time() (the time() of the Heartbeat before them), equal to DistributedGameTime there;
+/// time() moves at PreAnimation, so a task.wait thread reads the frame's. A playing client's and a server's alike (Studio 0.747,
+/// tools/parity/probes/resumption_time.luau); ree read the frame's time() there. The frame's own clock has moved on at its
+/// start: os.clock there is a frame past the last Heartbeat's, and a wait() that took two frames returns their length.
+#[test]
+fn legacy_resumptions_read_the_last_frames_time() {
+    use super::RunContext;
+    let script = r#"
+        local RunService = game:GetService("RunService")
+        local Beat, BeatClock = nil, nil
+        local Connection = RunService.Heartbeat:Connect(function()
+            Beat, BeatClock = time(), os.clock()
+        end)
+        local Lines = {}
+        local function Note(Kind)
+            table.insert(Lines, `{Kind} {time() == Beat} {workspace.DistributedGameTime == time()}`)
+        end
+        local Bindable = Instance.new("BindableEvent")
+        Bindable.Event:Connect(Note)
+        RunService.Heartbeat:Wait()
+        local Elapsed = wait()
+        Note("wait")
+        local Ahead = os.clock() - BeatClock > 0.01
+        task.defer(Note, "deferred")
+        Bindable:Fire("fired")
+        delay(0, function()
+            Note("delay")
+        end)
+        spawn(function()
+            Note("spawn")
+        end)
+        task.wait()
+        Note("task.wait")
+        task.wait(0.1)
+        Connection:Disconnect()
+        print(table.concat(Lines, ", "))
+        print("clock ahead", Ahead, "elapsed frames", math.round(Elapsed * 60))
+    "#;
+    for run_context in [RunContext::Client, RunContext::Server] {
+        let (lua, engine) = start_with(Options { mode: "play".into(), run_context, ..Options::default() });
+        let output = run(&lua, &engine, script);
+        assert_eq!(
+            output,
+            [
+                "print: wait true true, deferred true true, fired true true, task.wait false true, delay true true, spawn true true",
+                "print: clock ahead true elapsed frames 2",
+            ],
+            "{run_context:?}"
+        );
+    }
+}
