@@ -152,7 +152,9 @@ fn a_modules_main_chunk_is_a_function_of_the_profile() {
 }
 
 /// A recording's host time stays where it was spent: the recorder's walk of 12,000 parts and its samples each frame are the
-/// recorder's frame (`(ree engine step: recorder)`), not the first handler's loop line after them
+/// recorder's frame (`(ree engine step: recorder)`), not the first handler's loop line after them. The handler's own time is
+/// ~0.05 ms, also with every CPU busy: there a ticker that came late gave it the first frame's 3-5 ms of engine work
+/// (luau_profile::start_suite_ticker)
 #[test]
 fn a_recorders_host_time_is_its_own() {
     let root = scratch("recorder");

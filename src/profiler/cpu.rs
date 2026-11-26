@@ -183,6 +183,7 @@ mod sys {
         pub fn GetCurrentThread() -> *mut c_void;
         pub fn GetCurrentProcess() -> *mut c_void;
         pub fn QueryThreadCycleTime(thread: *mut c_void, cycles: *mut u64) -> i32;
+        pub fn SetThreadPriority(thread: *mut c_void, priority: i32) -> i32;
         // (FILETIMEs as u64, as watchdog.rs declares it)
         pub fn GetProcessTimes(process: *mut c_void, creation: *mut u64, exit: *mut u64, kernel: *mut u64, user: *mut u64) -> i32;
         pub fn K32GetProcessMemoryInfo(process: *mut c_void, counters: *mut MemoryCounters, size: u32) -> i32;
@@ -207,6 +208,17 @@ pub fn thread_cycles() -> u64 {
         }
     }
     0
+}
+
+/// Raises the calling thread to the time-critical priority (Windows; elsewhere nothing), for a thread that sleeps a millisecond
+/// at a time: when its sleep ends it runs at once, even while every CPU the process may use is busy, instead of waiting for
+/// one while the threads it times go on
+pub fn time_critical() {
+    #[cfg(windows)]
+    unsafe {
+        const THREAD_PRIORITY_TIME_CRITICAL: i32 = 15;
+        sys::SetThreadPriority(sys::GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
+    }
 }
 
 fn process_times() -> Option<(f64, f64)> {

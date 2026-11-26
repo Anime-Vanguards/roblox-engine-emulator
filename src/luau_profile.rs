@@ -293,6 +293,11 @@ pub(crate) fn start_suite_ticker() -> u64 {
             let ticker_stop = stop.clone();
             let (start_ticks, started) = (TICKS.load(Ordering::Relaxed), Instant::now());
             let spawned = thread::Builder::new().name("ree-profile-ticker".into()).spawn(move || {
+                // a tick that comes late leaves the booking points it should have woken asleep, and the first one after it books all
+                // the time since the last booking to itself: with every CPU busy (8 recordings at once on 4 CPUs) a ticker at the
+                // normal priority slept through the first frame's 3-5 ms of engine work, and a Heartbeat handler's loop line took
+                // 4-6 ms in most runs where its own time is ~0.05 ms; at the time-critical priority its ticks come on time
+                crate::profiler::cpu::time_critical();
                 while !ticker_stop.load(Ordering::Relaxed) {
                     thread::sleep(Duration::from_millis(1));
                     TICKS.fetch_max(start_ticks + started.elapsed().as_millis() as u64, Ordering::Relaxed);
@@ -403,7 +408,9 @@ pub(crate) fn begin_time_at(path: PathBuf, work_clock: bool, microseconds: bool)
         let ticker = thread::Builder::new().name("rur-luau-profile".into()).spawn(move || {
             // a tick is a millisecond since the profile began, read from the clock: a sleep of 1 ms lasts up to
             // 15.6 ms on Windows unless some process raised the timer resolution, which made 100 ms of native time
-            // count 6 ticks (the host-time test failed 1 run in 4 here)
+            // count 6 ticks (the host-time test failed 1 run in 4 here); it runs at a priority of its own so that a busy machine
+            // does not make its ticks late either (start_suite_ticker)
+            crate::profiler::cpu::time_critical();
             while !ticker_stop.load(Ordering::Relaxed) {
                 thread::sleep(Duration::from_millis(1));
                 TICKS.fetch_max(base + started.elapsed().as_millis() as u64, Ordering::Relaxed);
