@@ -1690,7 +1690,8 @@ fn context_table(lua: &Lua, engine: &Rc<Engine>, checkpoint: &Rc<Checkpoint>, sp
     // profile's JSON format, a new copy each call. Context.SetClientProfile(Patch): Patch (a table, or JSON text) merged over
     // it as a JSON Merge Patch for what this side's engine reads at call time from then on: policy, ownership, social and
     // localization.countryRegion. What the run set up from the profile when it started (the player, the device, the game,
-    // the stores' contents) is refused, naming the field.
+    // the stores' contents) is refused, naming the field. In a table, an empty table is an empty object (or an empty list
+    // where the format has a list) and Context.Null removes a field, as JSON's null does.
     let e = engine.clone();
     context.set(
         "ClientProfile",
@@ -1704,10 +1705,11 @@ fn context_table(lua: &Lua, engine: &Rc<Engine>, checkpoint: &Rc<Checkpoint>, sp
     let set_profile = crate::lua::lua_fn(lua, move |lua, patch: LuaValue| {
         let patch: Result<Json, String> = match &patch {
             LuaValue::String(text) => serde_json::from_slice(&text.as_bytes()).map_err(|error| error.to_string()),
-            LuaValue::Table(_) => lua.from_value_with(patch, LuaDeserializeOptions::new().encode_empty_tables_as_array(true)).map_err(|error| error.to_string()),
+            LuaValue::Table(_) => lua.from_value::<Json>(patch).map(crate::client_profile::empty_lists).map_err(|error| error.to_string()),
             _ => Err("a table or JSON text expected".into()),
         };
-        let profile = patch.and_then(|patch| crate::client_profile::live_patch(&patch)).and_then(|patch| e.profile().patched(&patch));
+        let current = e.profile();
+        let profile = patch.and_then(|patch| crate::client_profile::live_patch(&patch, &current.to_json())).and_then(|patch| current.patched(&patch));
         match profile {
             Ok(profile) => crate::lua::stubs::set_profile(lua, &e, profile).map(|()| None),
             Err(problem) => Ok(Some(format!("Context.SetClientProfile: {problem}"))),
@@ -1718,6 +1720,7 @@ fn context_table(lua: &Lua, engine: &Rc<Engine>, checkpoint: &Rc<Checkpoint>, sp
         .set_name("=ree.setclientprofile")
         .into_function()?;
     context.set("SetClientProfile", crate::cost::engine_luau(lua, chunk)?.call::<LuaFunction>(set_profile)?)?;
+    context.set("Null", LuaValue::NULL)?;
     // Context.FireEvent(Instance, Event, ...): fires an engine event the emulator does not raise itself, to the
     // connections made to it (Humanoid.Running while a harness walks a character, which nothing simulates here);
     // nil, booleans, numbers, strings, instances and buffers, as a remote carries them (a buffer arrives as a copy, as a

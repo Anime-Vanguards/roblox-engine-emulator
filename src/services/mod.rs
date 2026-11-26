@@ -754,7 +754,7 @@ fn install_players(engine: &Rc<Engine>, behaviors: &mut Behaviors, reflection: &
                 let wanted = args.string(1).map(|name| name.to_string_lossy());
                 let id = wanted.and_then(|wanted| {
                     let identity = &profile.identity;
-                    if identity.name.as_deref() == Some(wanted.as_str()) {
+                    if identity.name() == wanted {
                         return Some(identity.user_id());
                     }
                     let friends = profile.social.as_ref()?.get("friends")?.as_array()?;

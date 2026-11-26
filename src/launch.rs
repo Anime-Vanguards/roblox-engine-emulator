@@ -414,8 +414,9 @@ fn at_path(path: &str, value: serde_json::Value) -> serde_json::Value {
 /// 3. the command line's `--client-profile` layers, in their order;
 /// 4. the command line's flags ([`PROFILE_FLAGS`]: --player, --device, --viewport, --camera, --place-id, --streaming).
 ///
-/// The command line wins over the environment. A flag that sets a field a `--client-profile` layer sets to another value is
-/// refused, naming both: one command line saying two things of one field is a mistake. Fields still unset then take the
+/// The command line wins over the environment. A flag that sets a field a `--client-profile` file or inline JSON sets to
+/// another value is refused, naming both: one command line saying two things of one field is a mistake. A preset is a
+/// default the flags go over (`--client-profile phone --viewport 1170x2532` is a phone of that screen). Fields still unset then take the
 /// project's: the place id (rur.json `placeIds`, a declared place id) and the streaming radius (rur.json
 /// `streamingTargetRadius`).
 pub fn client_profile(args: &Args, place_roots: &[String]) -> Result<(crate::client_profile::ClientProfile, bool), String> {
@@ -454,16 +455,21 @@ pub fn client_profile(args: &Args, place_roots: &[String]) -> Result<(crate::cli
     if !named.is_empty() {
         layers.add(shorthands, &named.join(", "))?;
     }
-    // (the command line's layers on their own too, to find what a flag disagrees with)
+    // (the command line's layers on their own too, for the player it names, and its files and inline JSON, which a flag may
+    // not disagree with: a preset is a default the flags go over)
     let mut command_line = Layers::default();
+    let mut given = Layers::default();
     for spec in &args.client_profiles {
         for (value, source) in crate::client_profile::read_spec(spec)? {
+            if crate::client_profile::preset(&source).is_none() {
+                given.add(value.clone(), &source)?;
+            }
             command_line.add(value.clone(), &source)?;
             layers.add(value, &source)?;
         }
     }
     sources.extend(command_line.sources().iter().cloned());
-    let profiled = command_line.json();
+    let profiled = given.json();
     let mut flags = Json::Object(Default::default());
     let mut set = Vec::new();
     for (flag, path) in PROFILE_FLAGS {
@@ -500,7 +506,7 @@ pub fn client_profile(args: &Args, place_roots: &[String]) -> Result<(crate::cli
     if profile.game.streaming_target_radius.is_none() {
         profile.game.streaming_target_radius = project::project_setting(place_roots, "streamingTargetRadius").and_then(|v| v.as_f64());
     }
-    let names_player = args.player.is_some() || get(&profiled, "identity.name").is_some();
+    let names_player = args.player.is_some() || get(&command_line.json(), "identity.name").is_some();
     Ok((profile, names_player))
 }
 

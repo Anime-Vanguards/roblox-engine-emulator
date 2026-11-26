@@ -236,7 +236,9 @@ end"#;
     let same = run_harness("flags-same", harness, &["--client-profile", r#"{"identity":{"name":"Bob"}}"#, "--player", "Bob"]);
     assert_eq!(printed(&same)[0], "Bob 1 0 false 1920, 1080");
     let refused = |extra: &[&str]| try_run("conflict", harness, extra).err().unwrap_or_default();
-    assert_eq!(refused(&["--client-profile", "phone", "--device", "desktop"]), "--device desktop and --client-profile (which sets device.kind to \"phone\") both set device.kind: pass one");
+    assert_eq!(refused(&["--client-profile", r#"{"device":{"kind":"phone"}}"#, "--device", "desktop"]), "--device desktop and --client-profile (which sets device.kind to \"phone\") both set device.kind: pass one");
+    // (a preset is a default: the flag goes over it)
+    assert_eq!(printed(&run_harness("preset-device", harness, &["--client-profile", "phone", "--device", "desktop"]))[0], "Player 1 0 false 844, 390");
     assert_eq!(refused(&["--client-profile", r#"{"identity":{"name":"Ann"}}"#, "--player", "Bob"]), "--player Bob and --client-profile (which sets identity.name to \"Ann\") both set identity.name: pass one");
     assert!(refused(&["--client-profile", r#"{"identity":{"userId":"x"}}"#]).contains("identity.userId: expected a number, got \"x\""));
     assert!(refused(&["--client-profile", "no-such-preset"]).contains("the presets: default, desktop-us, phone, console"));
@@ -382,4 +384,96 @@ fn prepared_runs_are_keyed_by_the_profile() {
     std::fs::write(&file, r#"{"identity":{"userId":2}}"#).unwrap();
     assert!(noted.changed().is_some(), "a changed profile file makes the prepared run stale");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `--device` (and REE_DEVICE) now gives PreferredInput what a client of that device reports: Touch on a touch device or a
+/// phone, Gamepad on a gamepad (the sim's 0.747 clients read the same); a desktop keeps KeyboardAndMouse. Main read
+/// KeyboardAndMouse for every device: such runs are not byte-identical to main (review finding 1)
+#[test]
+fn a_device_flag_gives_its_preferred_input() {
+    let harness = r#"return function()
+	local UIS = game:GetService("UserInputService")
+	print(UIS.PreferredInput.Name, UIS:GetLastInputType().Name, UIS.TouchEnabled, UIS.GamepadEnabled)
+end"#;
+    let device = |kind: &str| printed(&run_harness("device", harness, &["--device", kind]));
+    assert_eq!(device("touch"), ["Touch Touch true false"]);
+    assert_eq!(device("phone"), ["Touch Touch true false"]);
+    assert_eq!(device("gamepad"), ["Gamepad Gamepad1 false true"]);
+    assert_eq!(device("desktop"), ["KeyboardAndMouse MouseMovement false false"]);
+}
+
+/// A preset is a default the flags go over; a flag still may not disagree with a file or inline JSON (review finding 6)
+#[test]
+fn a_flag_goes_over_a_preset() {
+    let harness = r#"return function()
+	print(workspace.CurrentCamera.ViewportSize, game:GetService("UserInputService").TouchEnabled, game:GetService("Players").LocalPlayer.Name)
+end"#;
+    assert_eq!(printed(&run_harness("preset-flag", harness, &["--client-profile", "phone", "--viewport", "1170x2532"])), ["1170, 2532 true Player"]);
+    assert_eq!(printed(&run_harness("preset-flag", harness, &["--client-profile", "new-account", "--player", "Flagged"])), ["1920, 1080 false Flagged"]);
+    let refused = try_run("inline-flag", harness, &["--client-profile", r#"{"device":{"viewport":[844,390]}}"#, "--viewport", "1170x2532"]).err().unwrap_or_default();
+    assert_eq!(refused, "--viewport 1170x2532 and --client-profile (which sets device.viewport to [844,390]) both set device.viewport: pass one");
+}
+
+/// Players:GetUserIdFromNameAsync knows the player's own name when the profile leaves it to the engine's "Player" (review
+/// finding 4)
+#[test]
+fn the_players_default_name_finds_its_user_id() {
+    let harness = r#"return function()
+	local Players = game:GetService("Players")
+	print(Players:GetUserIdFromNameAsync(Players.LocalPlayer.Name), Players:GetUserIdFromNameAsync("Someone"))
+end"#;
+    assert_eq!(printed(&run_harness("own-name", harness, &["--client-profile", r#"{"identity":{"userId":42}}"#])), ["42 1"]);
+    assert_eq!(printed(&run_harness("own-name-flag", harness, &["--player", "Bob", "--client-profile", r#"{"identity":{"userId":43}}"#])), ["43 1"]);
+}
+
+/// A server answers the name lookups for the profile's player by its UserId, as its client does (review finding 5): a
+/// loopback pair whose profile sets only the user id, and one that names the player
+#[test]
+fn a_server_looks_up_the_profiles_player_by_name() {
+    let lines = |profile: &str| printed(&crate::loopback_tests::run_pair("names", include_str!("client_profile_tests/names.luau"), None, &["--client-profile", profile]));
+    let id_only = lines(r#"{"identity":{"userId":5}}"#);
+    assert!(id_only.contains(&"server: names Player Player Player false 5".to_string()), "{id_only:#?}");
+    assert!(id_only.contains(&"client: names Player Player Player false 5".to_string()), "{id_only:#?}");
+    let named = lines(r#"{"identity":{"userId":5,"name":"Ada","displayName":"Ada L","hasVerifiedBadge":true}}"#);
+    assert!(named.contains(&"server: names Ada Ada Ada L true 5".to_string()), "{named:#?}");
+    assert!(named.contains(&"client: names Ada Ada Ada L true 5".to_string()), "{named:#?}");
+}
+
+/// Context.SetClientProfile: a null that would remove a field set at the start is refused (review finding 2); removing
+/// ownership leaves its members as with no profile, the ones it added reporting themselves again; an empty table is an
+/// empty object or list, and Context.Null removes (review 7)
+#[test]
+fn a_harness_patch_removes_and_empties_as_json_does() {
+    let summary = run_harness("patches", include_str!("client_profile_tests/patches.luau"), &["--client-profile", r#"{"localization":{"localeId":"de-de"},"ownership":{"assets":[3],"gamePasses":[11]}}"#]);
+    assert_eq!(summary["status"], "ok", "{summary}");
+    let lines = every_line(&summary);
+    assert_eq!(
+        lines,
+        [
+            "print null false Context.SetClientProfile: localization.localeId is set when the run starts (pass it with --client-profile); a harness changes policy, ownership, social and localization.countryRegion",
+            "print owned true true",
+            "missing MarketplaceService.PlayerOwnsAssetAsync is not emulated",
+            "print removed false nil",
+            // (an empty policy sets nothing: the profile has none)
+            "print empty true [] null",
+            "print listed true 0 []",
+            "print @done",
+        ]
+    );
+}
+
+/// The engine Luau's lines as warnings' traces name them stay where main has them (string casts through services.luau's
+/// StringParam, LogService's lines, the prelude's harness call): the profile's code adds no line above them
+#[test]
+fn engine_luau_trace_lines_stay_where_they_were() {
+    let summary = run_harness("Traces", include_str!("client_profile_tests/traces.luau"), &[]);
+    let traces: Vec<&str> = summary["output"].as_array().unwrap().iter().filter_map(|line| line["trace"].as_str()).collect();
+    assert_eq!(
+        traces,
+        [
+            "rur.services:32 function Read\nrur.services:1147 function RegistryName\nrur.services:1175\nReplicatedStorage.RURFixtures.Traces:3\nrur.record:1\nrur.prelude:680 function CallBody\n",
+            "rur.services:32 function Read\nrur.services:1147 function RegistryName\nrur.services:1192\nReplicatedStorage.RURFixtures.Traces:4\nrur.record:1\nrur.prelude:680 function CallBody\n",
+            "rur.services:32 function Read\nrur.services:1455 function LogLine\nrur.services:1509\nrur.services:45\nReplicatedStorage.RURFixtures.Traces:7\nReplicatedStorage.RURFixtures.Traces:6\nrur.record:1\nrur.prelude:680 function CallBody\n",
+        ]
+    );
 }

@@ -17,7 +17,7 @@ fn refused(value: Json) -> String {
 #[test]
 fn the_empty_profile_is_the_engine_as_it_was() {
     let empty = profile(json!({}));
-    assert!(empty.is_empty() && !empty.read_by_luau());
+    assert!(empty.is_empty() && !empty.read_by_luau(false) && !empty.read_by_luau(true));
     assert_eq!(empty.to_json(), json!({}));
     assert_eq!((empty.identity.name(), empty.identity.display_name(), empty.identity.user_id()), ("Player", "Player", 1.0));
     assert_eq!((empty.device.kind(), empty.device.viewport(), empty.device.topbar_inset()), (DeviceKind::Desktop, (1920.0, 1080.0), 0.0));
@@ -59,7 +59,9 @@ fn every_field_reads_back() {
     expected["device"]["viewport"] = json!([844.0, 390.0]);
     expected["device"]["camera"] = json!([844.0, 390.0]);
     assert_eq!(read.to_json(), expected);
-    assert!(read.read_by_luau());
+    assert!(read.read_by_luau(false));
+    // (a server reads the identity: its name lookups answer for the profile's player)
+    assert!(!profile(json!({ "identity": { "userId": 3 } })).read_by_luau(false) && profile(json!({ "identity": { "userId": 3 } })).read_by_luau(true));
     assert_eq!(profile(read.to_json()).to_json(), read.to_json(), "to_json reads back the same");
     assert_eq!(read.identity.user_id(), 9000000001.0);
     assert_eq!(profile(json!({ "device": { "viewport": "800x600" } })).device.viewport(), (800.0, 600.0));
@@ -169,12 +171,12 @@ fn layers_are_presets_files_or_inline_json() {
 /// What a running harness may change, and the error naming what it may not
 #[test]
 fn a_harness_changes_only_what_is_read_at_call_time() {
-    assert!(live_patch(&json!({ "policy": { "AreAdsAllowed": false }, "ownership": { "gamePasses": [1] }, "social": { "blocked": [] }, "localization": { "countryRegion": "DE" } })).is_ok());
+    assert!(live_patch(&json!({ "policy": { "AreAdsAllowed": false }, "ownership": { "gamePasses": [1] }, "social": { "blocked": [] }, "localization": { "countryRegion": "DE" } }), &json!({})).is_ok());
     assert_eq!(
-        live_patch(&json!({ "identity": { "name": "X" } })).unwrap_err(),
+        live_patch(&json!({ "identity": { "name": "X" } }), &json!({})).unwrap_err(),
         "identity is set when the run starts (pass it with --client-profile); a harness changes policy, ownership, social and localization.countryRegion"
     );
-    assert!(live_patch(&json!({ "localization": { "localeId": "de-de" } })).unwrap_err().starts_with("localization.localeId is set when the run starts"));
+    assert!(live_patch(&json!({ "localization": { "localeId": "de-de" } }), &json!({})).unwrap_err().starts_with("localization.localeId is set when the run starts"));
     let base = profile(json!({ "identity": { "userId": 5 }, "ownership": { "gamePasses": [1] } }));
     let patched = base.patched(&json!({ "ownership": { "gamePasses": [1, 2] }, "policy": { "AreAdsAllowed": false } })).unwrap();
     assert_eq!(patched.to_json(), json!({ "identity": { "userId": 5 }, "ownership": { "gamePasses": [1, 2] }, "policy": { "AreAdsAllowed": false } }));
@@ -220,4 +222,93 @@ fn the_schema_lists_every_field() {
     let mut sections = sections;
     sections.sort();
     assert_eq!(sections, expected);
+}
+
+/// A null that would remove a field set when the run started is refused like a value, in every section (review: a
+/// `"localization": null` patch got past the check that only looked at an object's keys)
+#[test]
+fn a_null_that_removes_a_start_field_is_refused() {
+    let current = json!({ "localization": { "localeId": "de-de", "countryRegion": "DE" }, "ownership": { "gamePasses": [1] } });
+    let refused = |patch: Json| live_patch(&patch, &current).unwrap_err();
+    assert!(refused(json!({ "localization": null })).starts_with("localization.localeId is set when the run starts"));
+    for section in ["identity", "device", "settings", "game", "data"] {
+        assert!(refused(json!({ section: null })).starts_with(&format!("{section} is set when the run starts")), "{section}");
+    }
+    assert!(refused(json!({ "localization": { "localeId": null } })).starts_with("localization.localeId is set"));
+    assert!(refused(json!({ "localization": "x" })).starts_with("localization is set"));
+    // (what a harness may change, null included; a null localization where only the country is set)
+    assert!(live_patch(&json!({ "ownership": null, "policy": null, "social": null, "localization": { "countryRegion": null } }), &current).is_ok());
+    assert!(live_patch(&json!({ "localization": null }), &json!({ "localization": { "countryRegion": "DE" } })).is_ok());
+}
+
+/// A spec's parts: presets, files and inline JSON mixed, the JSON's own `;` kept; a service is given the files absolute and
+/// the rest as it is (review: `phone;{...}` made its JSON a path through a service)
+#[test]
+fn inline_json_mixes_with_presets_and_files() {
+    let json = r#"{"identity":{"name":"a;b","userId":3}}"#;
+    assert_eq!(split_spec(&format!("phone; {json} ;me.json;")), ["phone", json, "me.json"]);
+    assert_eq!(split_spec(json), [json]);
+    assert_eq!(split_spec(r#"{"x":"}"} ; console"#), [r#"{"x":"}"}"#, "console"]);
+    assert_eq!(split_spec(r#"{"x":"\"};"} ; console"#), [r#"{"x":"\"};"}"#, "console"]);
+    let given = absolute_spec(&format!("phone;{json};me.json"));
+    let parts = split_spec(&given);
+    assert_eq!(&parts[..2], ["phone", json]);
+    assert!(std::path::Path::new(parts[2]).is_absolute() && parts[2].ends_with("me.json"), "{given}");
+    let read = read_spec(&format!("phone;{json}")).unwrap();
+    assert_eq!(read.len(), 2);
+    assert_eq!((read[0].1.as_str(), read[1].1.as_str(), read[1].0["identity"]["name"].as_str()), ("phone", "inline", Some("a;b")));
+}
+
+/// The stores' limits as server.luau enforces them: data store names, scopes and keys up to 50 bytes and values up to 4 MB
+/// as JSON; memory store keys up to 128 bytes and items up to 32 KB (review: memory keys were held to 50)
+#[test]
+fn seeded_data_keeps_to_the_stores_limits() {
+    let key = |length: usize| "k".repeat(length);
+    let memory = |kind: &str, key: &str, value: Json| json!({ "data": { "memoryStores": { kind: { "M": { key: value } } } } });
+    assert!(ClientProfile::from_json(&memory("hashMaps", &key(128), json!(1))).is_ok());
+    assert_eq!(refused(memory("hashMaps", &key(129), json!(1))), format!("data.memoryStores.hashMaps.M: {:?} is no key (1 to 128 bytes)", key(129)));
+    assert!(ClientProfile::from_json(&memory("sortedMaps", &key(128), json!({ "value": 1 }))).is_ok());
+    let big = json!("x".repeat(32 * 1024));
+    assert_eq!(refused(memory("hashMaps", "k", big)), "data.memoryStores.hashMaps.M.k: 32770 bytes as JSON, more than the store takes (32768)");
+    let queue = json!({ "data": { "memoryStores": { "queues": { "Q": [ "x".repeat(32 * 1024) ] } } } });
+    assert!(refused(queue).starts_with("data.memoryStores.queues.Q[0]: 32770 bytes as JSON"));
+    let store = |key: &str, value: Json| json!({ "data": { "dataStores": { "S": { "global": { key: value } } } } });
+    assert!(ClientProfile::from_json(&store(&key(50), json!(1))).is_ok());
+    assert_eq!(refused(store(&key(51), json!(1))), format!("data.dataStores.S.global: {:?} is no key (1 to 50 bytes)", key(51)));
+    assert!(ClientProfile::from_json(&store("k", json!("x".repeat(40_000)))).is_ok(), "a data store takes more than a memory store");
+    assert!(refused(store("k", json!("x".repeat(4 * 1024 * 1024)))).starts_with("data.dataStores.S.global.k: 4194306 bytes as JSON"));
+    let long = key(51);
+    assert_eq!(refused(json!({ "data": { "dataStores": { long.clone(): {} } } })), format!("data.dataStores: {long:?} is no store name (1 to 50 bytes)"));
+}
+
+/// A summary names the data section's stores and keys without their values; the digest still covers them
+#[test]
+fn a_summary_outlines_the_data_without_values() {
+    let data = json!({ "data": {
+        "dataStores": { "PlayerData": { "global": { "Player_5": { "Coins": 120 } } } },
+        "orderedDataStores": { "Wins": { "global": { "5": 30 } } },
+        "globalDataStore": { "Motd": "hi" },
+        "memoryStores": { "hashMaps": { "H": { "k": 1 } }, "sortedMaps": { "S": { "a": { "value": 1 } } }, "queues": { "Q": [1, 2, 3] } }
+    }, "identity": { "userId": 5 } });
+    let summary = profile(data.clone()).summary();
+    assert_eq!(summary["profile"]["data"], json!({
+        "dataStores": { "PlayerData": { "global": ["Player_5"] } },
+        "orderedDataStores": { "Wins": { "global": ["5"] } },
+        "globalDataStore": ["Motd"],
+        "memoryStores": { "hashMaps": { "H": ["k"] }, "sortedMaps": { "S": ["a"] }, "queues": { "Q": 3 } }
+    }));
+    assert_eq!(summary["profile"]["identity"], json!({ "userId": 5 }));
+    let mut other = data;
+    other["data"]["dataStores"]["PlayerData"]["global"]["Player_5"]["Coins"] = json!(121);
+    assert_ne!(profile(other).digest(), summary["digest"].as_str().unwrap());
+}
+
+/// A table patch's empty tables: an empty list where the format has a list (ownership, social, a policy key's value), an
+/// empty object elsewhere (review: `{policy = {}}` became a list)
+#[test]
+fn empty_tables_in_a_patch_become_what_the_format_has_there() {
+    let patch = empty_lists(json!({ "policy": { "AllowedExternalLinkReferences": {} }, "ownership": { "badges": {} }, "social": { "blocked": {}, "friends": {} }, "localization": {} }));
+    assert_eq!(patch, json!({ "policy": { "AllowedExternalLinkReferences": [] }, "ownership": { "badges": [] }, "social": { "blocked": [], "friends": [] }, "localization": {} }));
+    assert_eq!(empty_lists(json!({ "policy": {} })), json!({ "policy": {} }));
+    assert!(profile(json!({})).patched(&empty_lists(json!({ "policy": {}, "ownership": {} }))).is_ok());
 }

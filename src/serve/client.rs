@@ -428,7 +428,7 @@ mod tests {
 
     #[test]
     fn paths_are_made_absolute_and_other_arguments_kept() {
-        let args: Vec<String> = ["--harness", "h.luau", "--seconds", "2", "--context", "{\"A\":1}", "--roots", "a;b", "--mount", "ReplicatedStorage/X=dir", "--verbose", "--animations", "anims", "--out", "o", "--rojo", "game.project.json", "--rojo-at", "ServerStorage/Game", "--client-profile", "phone;me.json", "--client-profile", "{\"device\":{\"kind\":\"touch\"}}"]
+        let args: Vec<String> = ["--harness", "h.luau", "--seconds", "2", "--context", "{\"A\":1}", "--roots", "a;b", "--mount", "ReplicatedStorage/X=dir", "--verbose", "--animations", "anims", "--out", "o", "--rojo", "game.project.json", "--rojo-at", "ServerStorage/Game", "--client-profile", "phone;me.json", "--client-profile", "{\"device\":{\"kind\":\"touch\"}}", "--client-profile", "console;{\"identity\":{\"name\":\"a;b\"}};you.json"]
             .iter()
             .map(|s| s.to_string())
             .collect();
@@ -448,6 +448,10 @@ mod tests {
         let (preset, file) = profiles[0].split_once(';').unwrap();
         assert!(preset == "phone" && Path::new(file).is_absolute(), "{}", profiles[0]);
         assert_eq!(profiles[1], "{\"device\":{\"kind\":\"touch\"}}");
+        // (a preset and inline JSON beside a file: only the file made absolute, the JSON's own `;` kept)
+        let (head, file) = profiles[2].rsplit_once(';').unwrap();
+        assert_eq!(head, "console;{\"identity\":{\"name\":\"a;b\"}}");
+        assert!(Path::new(file).is_absolute() && file.ends_with("you.json"), "{}", profiles[2]);
         assert!(converted.contains(&"--verbose".to_string()));
         assert_eq!(converted.len(), args.len());
     }

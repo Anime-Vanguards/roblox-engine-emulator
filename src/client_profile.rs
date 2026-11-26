@@ -32,8 +32,8 @@ pub const PRESETS: &[(&str, &str)] = &[
 /// The JSON schema of the format (`data/client-profile.schema.json`)
 pub const SCHEMA: &str = include_str!("../data/client-profile.schema.json");
 
-/// The environment variable naming the default profile: layers as `--client-profile` takes them, separated by `;` (or one
-/// inline JSON object). The command line's `--client-profile` layers go over it.
+/// The environment variable naming the default profile: layers as `--client-profile` takes them, separated by `;` (inline
+/// JSON may hold `;`: [`split_spec`]). The command line's `--client-profile` layers go over it.
 pub const ENV: &str = "REE_CLIENT_PROFILE";
 
 /// What a client is played on: its inputs' defaults ([`Device`]), and for a phone the work clock's phone prices
@@ -449,15 +449,34 @@ fn storable(value: &Json, name: &str) -> Result<(), String> {
     }
 }
 
-/// name -> (map of `inner`)
-fn named<'a>(value: &'a Json, path: &str) -> Result<&'a Map<String, Json>, String> {
+/// The stores' limits as server.luau enforces them (Roblox's data store and memory store documentation): a data store's
+/// names, scopes and keys 1 to 50 bytes and its values up to 4 MB as JSON; a memory store's keys 1 to 128 bytes and its
+/// items up to 32 KB as JSON (its structures' names only not empty)
+const STORE_NAME: usize = 50;
+const MEMORY_KEY: usize = 128;
+const STORE_VALUE: usize = 4 * 1024 * 1024;
+const MEMORY_ITEM: usize = 32 * 1024;
+
+/// An object whose keys are `what`s of 1 to `most` bytes
+fn named<'a>(value: &'a Json, path: &str, what: &str, most: usize) -> Result<&'a Map<String, Json>, String> {
     let map = object(value, path)?;
     for name in map.keys() {
-        if name.is_empty() || name.len() > 50 {
-            return Err(format!("{path}: {name:?} is no store name (1 to 50 characters)"));
+        if name.is_empty() || name.len() > most {
+            let limit = if most == usize::MAX { "not empty".to_string() } else { format!("1 to {most} bytes") };
+            return Err(format!("{path}: {name:?} is no {what} ({limit})"));
         }
     }
     Ok(map)
+}
+
+/// [`storable`], and no longer as JSON than a store takes (`most` bytes)
+fn stored(value: &Json, name: &str, most: usize) -> Result<(), String> {
+    storable(value, name)?;
+    let size = serde_json::to_string(value).map_or(0, |text| text.len());
+    if size > most {
+        return Err(format!("{name}: {size} bytes as JSON, more than the store takes ({most})"));
+    }
+    Ok(())
 }
 
 pub const SECTIONS: [&str; 9] = ["identity", "device", "settings", "localization", "policy", "ownership", "social", "game", "data"];
@@ -698,26 +717,26 @@ impl ClientProfile {
             for kind in ["dataStores", "orderedDataStores"] {
                 let Some(stores) = map.get(kind) else { continue };
                 let path = format!("data.{kind}");
-                for (name, scopes) in named(stores, &path)? {
+                for (name, scopes) in named(stores, &path, "store name", STORE_NAME)? {
                     let path = format!("{path}.{name}");
-                    for (scope, keys) in named(scopes, &path)? {
+                    for (scope, keys) in named(scopes, &path, "scope", STORE_NAME)? {
                         let path = format!("{path}.{scope}");
-                        for (key, item) in named(keys, &path)? {
+                        for (key, item) in named(keys, &path, "key", STORE_NAME)? {
                             let path = format!("{path}.{key}");
                             if kind == "orderedDataStores" {
                                 if !item.as_f64().is_some_and(|value| value.fract() == 0.0) {
                                     return Err(format!("{path}: an ordered data store holds whole numbers, got {}", kind_of(item)));
                                 }
                             } else {
-                                storable(item, &path)?;
+                                stored(item, &path, STORE_VALUE)?;
                             }
                         }
                     }
                 }
             }
             if let Some(keys) = map.get("globalDataStore") {
-                for (key, item) in named(keys, "data.globalDataStore")? {
-                    storable(item, &format!("data.globalDataStore.{key}"))?;
+                for (key, item) in named(keys, "data.globalDataStore", "key", STORE_NAME)? {
+                    stored(item, &format!("data.globalDataStore.{key}"), STORE_VALUE)?;
                 }
             }
             if let Some(memory) = map.get("memoryStores") {
@@ -726,21 +745,21 @@ impl ClientProfile {
                 for kind in MEMORY {
                     let Some(structures) = memory.get(kind) else { continue };
                     let path = format!("data.memoryStores.{kind}");
-                    for (name, contents) in named(structures, &path)? {
+                    for (name, contents) in named(structures, &path, "structure name", usize::MAX)? {
                         let path = format!("{path}.{name}");
                         match kind {
                             "queues" => {
                                 let items = contents.as_array().ok_or_else(|| format!("{path}: a queue is a list of items, got {}", kind_of(contents)))?;
                                 for (index, item) in items.iter().enumerate() {
-                                    storable(item, &format!("{path}[{index}]"))?;
+                                    stored(item, &format!("{path}[{index}]"), MEMORY_ITEM)?;
                                 }
                             }
                             "sortedMaps" => {
-                                for (key, entry) in named(contents, &path)? {
+                                for (key, entry) in named(contents, &path, "key", MEMORY_KEY)? {
                                     let path = format!("{path}.{key}");
                                     let entry = object(entry, &path)?;
                                     known(entry, &path, &["value", "sortKey"])?;
-                                    storable(entry.get("value").ok_or_else(|| format!("{path}.value: a sorted map's item needs its value"))?, &format!("{path}.value"))?;
+                                    stored(entry.get("value").ok_or_else(|| format!("{path}.value: a sorted map's item needs its value"))?, &format!("{path}.value"), MEMORY_ITEM)?;
                                     match entry.get("sortKey") {
                                         None | Some(Json::String(_)) | Some(Json::Number(_)) => {}
                                         Some(other) => return Err(format!("{path}.sortKey: expected a string or a number, got {}", kind_of(other))),
@@ -748,8 +767,8 @@ impl ClientProfile {
                                 }
                             }
                             _ => {
-                                for (key, item) in named(contents, &path)? {
-                                    storable(item, &format!("{path}.{key}"))?;
+                                for (key, item) in named(contents, &path, "key", MEMORY_KEY)? {
+                                    stored(item, &format!("{path}.{key}"), MEMORY_ITEM)?;
                                 }
                             }
                         }
@@ -876,15 +895,23 @@ impl ClientProfile {
         format!("{hash:016x}")
     }
 
-    /// What a run's summary says of its profile (`clientProfile`): its layers, digest and set fields
+    /// What a run's summary says of its profile (`clientProfile`): its layers, digest and set fields, the data section by
+    /// its stores' names and keys only (a saved player's data can be large, and the digest covers its values)
     pub fn summary(&self) -> Json {
-        json!({ "sources": self.sources, "digest": self.digest(), "profile": self.to_json() })
+        let mut profile = self.to_json();
+        if let (Some(data), Some(map)) = (&self.data, profile.as_object_mut()) {
+            map.insert("data".into(), data_outline(data));
+        }
+        json!({ "sources": self.sources, "digest": self.digest(), "profile": profile })
     }
 
-    /// Whether the engine's Luau (services.luau, server.luau) reads any of the set fields: they then get the profile's
-    /// JSON (R.Profile). A profile that sets none leaves that Luau as it was.
-    pub fn read_by_luau(&self) -> bool {
-        self.policy.is_some()
+    /// Whether the engine's Luau (services.luau, server.luau, profile.luau) reads any of the set fields, on a `server` or a
+    /// client: it then gets the profile's JSON (R.Profile). A profile that sets none leaves that Luau as it was. (A server
+    /// answers the name lookups for the profile's player from it; a client finds its own player.)
+    pub fn read_by_luau(&self, server: bool) -> bool {
+        let identity = &self.identity;
+        (server && (identity.name.is_some() || identity.user_id.is_some() || identity.display_name.is_some()))
+            || self.policy.is_some()
             || self.ownership.is_some()
             || self.social.is_some()
             || self.data.is_some()
@@ -925,29 +952,88 @@ pub fn merge_patch(target: &mut Json, patch: &Json) {
     }
 }
 
+/// The data section by its stores' names, scopes and keys, without the values (a queue by its number of items)
+fn data_outline(data: &Map<String, Json>) -> Json {
+    fn keys(value: &Json) -> Json {
+        Json::Array(value.as_object().map(|map| map.keys().map(|key| json!(key)).collect()).unwrap_or_default())
+    }
+    fn each(value: &Json, inner: fn(&Json) -> Json) -> Json {
+        Json::Object(value.as_object().map(|map| map.iter().map(|(name, item)| (name.clone(), inner(item))).collect()).unwrap_or_default())
+    }
+    fn count(items: &Json) -> Json {
+        json!(items.as_array().map_or(0, Vec::len))
+    }
+    fn scopes(value: &Json) -> Json {
+        each(value, keys)
+    }
+    let mut outline = Map::new();
+    for (kind, value) in data {
+        let outlined = match kind.as_str() {
+            "dataStores" | "orderedDataStores" => each(value, scopes),
+            "globalDataStore" => keys(value),
+            _ => {
+                let memory = value.as_object().cloned().unwrap_or_default();
+                Json::Object(memory.iter().map(|(kind, structures)| (kind.clone(), each(structures, if kind == "queues" { count } else { keys }))).collect())
+            }
+        };
+        outline.insert(kind.clone(), outlined);
+    }
+    Json::Object(outline)
+}
+
 /// The sections a running harness may change (Context.SetClientProfile): what the engine reads at call time. The rest (the
 /// player's properties, the device, the settings, the game and the stores' contents) was set up when the run started.
 pub const LIVE_SECTIONS: [&str; 3] = ["policy", "ownership", "social"];
 
-/// `patch` when it changes only what a running harness may change ([`LIVE_SECTIONS`] and localization.countryRegion); else
-/// an error naming the first field it may not
-pub fn live_patch(patch: &Json) -> Result<Json, String> {
+/// `patch` when it changes only what a running harness may change ([`LIVE_SECTIONS`] and localization.countryRegion) of the
+/// profile whose set fields are `current`; else an error naming the first field it may not. A null that would remove a
+/// field set at the start (`"localization": null` while localeId is set) is refused like a value.
+pub fn live_patch(patch: &Json, current: &Json) -> Result<Json, String> {
+    let refuse = |field: &str| -> Result<Json, String> {
+        Err(format!("{field} is set when the run starts (pass it with --client-profile); a harness changes policy, ownership, social and localization.countryRegion"))
+    };
     let map = object(patch, "the patch")?;
     for (key, value) in map {
         if LIVE_SECTIONS.contains(&key.as_str()) {
             continue;
         }
-        if key == "localization"
-            && let Some(fields) = value.as_object()
-            && let Some(field) = fields.keys().find(|field| *field != "countryRegion")
-        {
-            return Err(format!("localization.{field} is set when the run starts (pass it with --client-profile); a harness changes policy, ownership, social and localization.countryRegion"));
-        } else if key == "localization" {
-            continue;
+        if key != "localization" {
+            return refuse(key);
         }
-        return Err(format!("{key} is set when the run starts (pass it with --client-profile); a harness changes policy, ownership, social and localization.countryRegion"));
+        let fixed = |fields: &Map<String, Json>| fields.keys().find(|field| *field != "countryRegion").map(|field| format!("localization.{field}"));
+        let found = match value {
+            Json::Object(fields) => fixed(fields),
+            Json::Null => current.get("localization").and_then(Json::as_object).and_then(fixed),
+            _ => Some("localization".to_string()),
+        };
+        if let Some(field) = found {
+            return refuse(&field);
+        }
     }
     Ok(patch.clone())
+}
+
+/// `patch` (a table a harness wrote, read as JSON) with each empty object where the format has a list made an empty list:
+/// ownership's lists, social's, and a policy key's value (a Luau table cannot tell `{}` the list from `{}` the object)
+pub fn empty_lists(mut patch: Json) -> Json {
+    let empty = |value: &mut Json| {
+        if value.as_object().is_some_and(Map::is_empty) {
+            *value = Json::Array(Vec::new());
+        }
+    };
+    for (section, fields) in [("ownership", &OWNERSHIP[..]), ("social", &SOCIAL[..])] {
+        if let Some(map) = patch.get_mut(section).and_then(Json::as_object_mut) {
+            for field in fields {
+                if let Some(value) = map.get_mut(*field) {
+                    empty(value);
+                }
+            }
+        }
+    }
+    if let Some(map) = patch.get_mut("policy").and_then(Json::as_object_mut) {
+        map.values_mut().for_each(empty);
+    }
+    patch
 }
 
 /// A preset's JSON by name
@@ -977,25 +1063,73 @@ pub fn read_layer(spec: &str) -> Result<(Json, String), String> {
     Ok((value, crate::launch::absolute(spec)))
 }
 
-/// The layers `spec` names, each read once ([`read_layer`]; several separated by `;` unless it is inline JSON)
-pub fn read_spec(spec: &str) -> Result<Vec<(Json, String)>, String> {
-    let spec = spec.trim();
-    let specs: Vec<&str> = if spec.starts_with('{') { vec![spec] } else { spec.split(';').map(str::trim).filter(|part| !part.is_empty()).collect() };
-    specs.into_iter().map(read_layer).collect()
+/// Where the JSON value `text` starts with ends: past the bracket that closes its first one (brackets in strings left out),
+/// else the text's end
+fn json_end(text: &str) -> usize {
+    let (mut depth, mut string, mut escaped) = (0usize, false, false);
+    for (index, byte) in text.bytes().enumerate() {
+        if string {
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == b'"' {
+                string = false;
+            }
+            continue;
+        }
+        match byte {
+            b'"' => string = true,
+            b'{' | b'[' => depth += 1,
+            b'}' | b']' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return index + 1;
+                }
+            }
+            _ => {}
+        }
+    }
+    text.len()
 }
 
-/// `spec` (layers as `--client-profile` and [`ENV`] take them) with each file made absolute from the current directory:
-/// what a service or a worker, which runs in another folder, is given. Presets and inline JSON stay as they are.
-pub fn absolute_spec(spec: &str) -> String {
-    let trimmed = spec.trim();
-    if trimmed.starts_with('{') {
-        return spec.to_string();
+/// The layers of a spec as `--client-profile` and [`ENV`] take them: parts separated by `;`, a part that starts with `{`
+/// running to its closing brace first (inline JSON may hold `;`), each trimmed, empty ones left out
+pub fn split_spec(spec: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let mut rest = spec;
+    loop {
+        let part = rest.trim_start();
+        if part.is_empty() {
+            break;
+        }
+        let from = if part.starts_with('{') { json_end(part) } else { 0 };
+        match part[from..].find(';') {
+            Some(at) => {
+                parts.push(part[..from + at].trim());
+                rest = &part[from + at + 1..];
+            }
+            None => {
+                parts.push(part.trim());
+                break;
+            }
+        }
     }
-    trimmed
-        .split(';')
-        .map(str::trim)
-        .filter(|part| !part.is_empty())
-        .map(|part| if preset(part).is_some() { part.to_string() } else { crate::launch::absolute(part) })
+    parts.retain(|part| !part.is_empty());
+    parts
+}
+
+/// The layers `spec` names ([`split_spec`]), each read once ([`read_layer`])
+pub fn read_spec(spec: &str) -> Result<Vec<(Json, String)>, String> {
+    split_spec(spec).into_iter().map(read_layer).collect()
+}
+
+/// `spec` ([`split_spec`]) with each file made absolute from the current directory: what a service or a worker, which runs
+/// in another folder, is given. Presets and inline JSON stay as they are.
+pub fn absolute_spec(spec: &str) -> String {
+    split_spec(spec)
+        .into_iter()
+        .map(|part| if part.starts_with('{') || preset(part).is_some() { part.to_string() } else { crate::launch::absolute(part) })
         .collect::<Vec<_>>()
         .join(";")
 }

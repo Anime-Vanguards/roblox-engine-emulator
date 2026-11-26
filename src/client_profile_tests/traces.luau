@@ -1,0 +1,10 @@
+return function()
+	local Registry = game:GetService("SharedTableRegistry")
+	Registry:GetSharedTable({})
+	Registry:SetSharedTable({}, SharedTable.new())
+	local LogService = game:GetService("LogService")
+	pcall(function()
+		LogService:Info({}, {})
+	end)
+	print("@done")
+end

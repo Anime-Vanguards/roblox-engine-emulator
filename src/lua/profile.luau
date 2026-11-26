@@ -5,8 +5,9 @@
 -- the stub it replaces (Original): it answers from R.Profile for the profile's player and leaves everything else (another
 -- player, an unset field, the argument checks and yields) to the stub.
 --
--- R.Profile is the profile's set fields in its JSON format, and UserId its player's id (identity.userId, else 1). It is read
--- at each call: Context.SetClientProfile replaces it.
+-- R.Profile is the profile's set fields in its JSON format, its player's UserId as the engine gives it (set or not), and where
+-- the profile sets its identity its Name, DisplayName and HasVerifiedBadge. It is read at each call: Context.SetClientProfile
+-- replaces it.
 
 local R, Original = ...
 local Method = R.Method
@@ -86,7 +87,8 @@ local function ListPages(Items, Size)
 	return Pages
 end
 
--- Identity: the player's verified state, its friends' names, and its own UserService entry
+-- Identity: the player's verified state, and its name and its friends' (the profile's player by its UserId, on a server as on
+-- its client, where the local player is the same)
 Wrap("Player", "IsVerified", function(Stub, Self, ...)
 	local Verified = Field(ProfileOf(Self), "identity", "verified")
 	if Verified ~= nil then
@@ -95,21 +97,23 @@ Wrap("Player", "IsVerified", function(Stub, Self, ...)
 	return Stub(Self, ...)
 end)
 Wrap("Players", "GetNameFromUserIdAsync", function(Stub, Self, UserId, ...)
-	local Player = R.LocalPlayer()
-	local Found = not (Player and RawGet(Player, "UserId") == UserId) and Friend(UserId)
+	local Profile = ProfileOfUser(UserId)
+	if Profile and Profile.Name then
+		return Profile.Name
+	end
+	local Found = Friend(UserId)
 	if Found then
 		return Found.name
 	end
 	return Stub(Self, UserId, ...)
 end)
 Wrap("UserService", "GetUserInfosByUserIdsAsync", function(Stub, Self, UserIds, ...)
-	local Player = R.LocalPlayer()
 	local Result = {}
 	for _, UserId in UserIds or {} do
+		local Profile = ProfileOfUser(UserId)
 		local Found = Friend(UserId)
-		if Player and RawGet(Player, "UserId") == UserId then
-			local Verified = Field(ProfileOf(Player), "identity", "hasVerifiedBadge")
-			table.insert(Result, { Id = UserId, Username = RawGet(Player, "Name"), DisplayName = RawGet(Player, "DisplayName"), HasVerifiedBadge = Verified == true })
+		if Profile and Profile.Name then
+			table.insert(Result, { Id = UserId, Username = Profile.Name, DisplayName = Profile.DisplayName, HasVerifiedBadge = Profile.HasVerifiedBadge })
 		elseif Found then
 			table.insert(Result, { Id = UserId, Username = Found.name, DisplayName = Found.displayName or Found.name, HasVerifiedBadge = false })
 		else
@@ -185,8 +189,19 @@ Wrap("BadgeService", "UserHasBadgeAsync", function(Stub, Self, UserId, BadgeId, 
 end)
 
 -- Members the stubs leave unemulated that answer once the profile gives what they read: each is added the first time the
--- profile sets its field (now, or after Context.SetClientProfile: R.ProfileMethods), and until then a call reports itself
+-- profile sets its field (now, or after Context.SetClientProfile: R.ProfileMethods). Without its field (before, or after a
+-- patch removed it) a call reports itself and returns nothing, as with no profile.
 local Added = {}
+local function Answering(Class, Name, Kind, Answer)
+	Method(Class, Name, function(...)
+		local Ownership = R.Profile and R.Profile.ownership
+		if not Ownership or Ownership[Kind] == nil then
+			R.Missing(Class, Name)
+			return
+		end
+		return Answer(...)
+	end)
+end
 R.ProfileMethods = function()
 	local Ownership = R.Profile and R.Profile.ownership
 	if not Ownership then
@@ -194,14 +209,14 @@ R.ProfileMethods = function()
 	end
 	if Ownership.assets ~= nil and not Added.PlayerOwnsAssetAsync then
 		Added.PlayerOwnsAssetAsync = true
-		Method("MarketplaceService", "PlayerOwnsAssetAsync", function(_, Player, AssetId)
+		Answering("MarketplaceService", "PlayerOwnsAssetAsync", "assets", function(_, Player, AssetId)
 			return Owned("assets", ProfileOf(Player), AssetId) == true
 		end)
 	end
 	-- (an answer as Roblox's documentation gives it: IsSubscribed, IsRenewing; a listed subscription renews)
 	if Ownership.subscriptions ~= nil and not Added.GetUserSubscriptionStatusAsync then
 		Added.GetUserSubscriptionStatusAsync = true
-		Method("MarketplaceService", "GetUserSubscriptionStatusAsync", function(_, Player, SubscriptionId)
+		Answering("MarketplaceService", "GetUserSubscriptionStatusAsync", "subscriptions", function(_, Player, SubscriptionId)
 			local Subscribed = Owned("subscriptions", ProfileOf(Player), SubscriptionId) == true
 			return { IsSubscribed = Subscribed, IsRenewing = Subscribed }
 		end)
@@ -209,7 +224,7 @@ R.ProfileMethods = function()
 	-- (the ids of BadgeIds the user has, in their order: Roblox's documentation)
 	if Ownership.badges ~= nil and not Added.CheckUserBadgesAsync then
 		Added.CheckUserBadgesAsync = true
-		Method("BadgeService", "CheckUserBadgesAsync", function(_, UserId, BadgeIds)
+		Answering("BadgeService", "CheckUserBadgesAsync", "badges", function(_, UserId, BadgeIds)
 			local Profile = ProfileOfUser(UserId)
 			local Has = {}
 			for _, BadgeId in BadgeIds or {} do

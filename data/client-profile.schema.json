@@ -22,7 +22,9 @@
 			"description": "What a data store holds: JSON-like data without null",
 			"type": ["boolean", "number", "string", "array", "object"]
 		},
-		"storeName": { "type": "string", "minLength": 1, "maxLength": 50 }
+		"storeName": { "description": "A data store's name, scope or key: 1 to 50 bytes", "type": "string", "minLength": 1, "maxLength": 50 },
+		"memoryKey": { "description": "A memory store item's key: 1 to 128 bytes", "type": "string", "minLength": 1, "maxLength": 128 },
+		"structureName": { "description": "A memory store structure's name", "type": "string", "minLength": 1 }
 	},
 	"properties": {
 		"$schema": { "type": "string" },
@@ -171,7 +173,7 @@
 			}
 		},
 		"data": {
-			"description": "What a server's stores hold when the run starts",
+			"description": "What a server's stores hold when the run starts. A data store value takes up to 4 MB as JSON, a memory store item up to 32 KB (the stores' own limits)",
 			"type": "object",
 			"additionalProperties": false,
 			"properties": {
@@ -208,14 +210,15 @@
 					"properties": {
 						"hashMaps": {
 							"type": "object",
-							"propertyNames": { "$ref": "#/$defs/storeName" },
-							"additionalProperties": { "type": "object", "additionalProperties": { "$ref": "#/$defs/storable" } }
+							"propertyNames": { "$ref": "#/$defs/structureName" },
+							"additionalProperties": { "type": "object", "propertyNames": { "$ref": "#/$defs/memoryKey" }, "additionalProperties": { "$ref": "#/$defs/storable" } }
 						},
 						"sortedMaps": {
 							"type": "object",
-							"propertyNames": { "$ref": "#/$defs/storeName" },
+							"propertyNames": { "$ref": "#/$defs/structureName" },
 							"additionalProperties": {
 								"type": "object",
+								"propertyNames": { "$ref": "#/$defs/memoryKey" },
 								"additionalProperties": {
 									"type": "object",
 									"additionalProperties": false,
@@ -226,7 +229,7 @@
 						},
 						"queues": {
 							"type": "object",
-							"propertyNames": { "$ref": "#/$defs/storeName" },
+							"propertyNames": { "$ref": "#/$defs/structureName" },
 							"additionalProperties": { "type": "array", "items": { "$ref": "#/$defs/storable" } }
 						}
 					}

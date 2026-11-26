@@ -24,14 +24,22 @@ const STUBS: &str = "ree.stubs";
 
 /// R.Profile: the client profile's set fields as Luau tables, with its player's `UserId`, when it sets a field the service
 /// stubs read ([`crate::client_profile::ClientProfile::read_by_luau`]); else nil, and the stubs answer as without a profile.
-fn profile_table(lua: &Lua, profile: &crate::client_profile::ClientProfile) -> LuaResult<LuaValue> {
-    if !profile.read_by_luau() {
+fn profile_table(lua: &Lua, engine: &Engine, profile: &crate::client_profile::ClientProfile) -> LuaResult<LuaValue> {
+    if !profile.read_by_luau(engine.options.server()) {
         return Ok(LuaValue::Nil);
     }
     let options = LuaSerializeOptions::new().set_array_metatable(false).serialize_none_to_null(false).serialize_unit_to_null(false);
     let value = lua.to_value_with(&profile.to_json(), options)?;
     if let LuaValue::Table(table) = &value {
-        table.raw_set("UserId", profile.identity.user_id())?;
+        // (its player's id as the engine gives it, set or not; its name too where the profile sets its identity, which the
+        // name lookups then answer for it)
+        let identity = &profile.identity;
+        table.raw_set("UserId", identity.user_id())?;
+        if identity != &crate::client_profile::Identity::default() {
+            table.raw_set("Name", identity.name())?;
+            table.raw_set("DisplayName", identity.display_name())?;
+            table.raw_set("HasVerifiedBadge", identity.has_verified_badge == Some(true))?;
+        }
     }
     Ok(value)
 }
@@ -59,7 +67,7 @@ fn load_profile(lua: &Lua, engine: &Rc<Engine>, r: &LuaTable) -> LuaResult<()> {
 /// answers loaded the first time it sets what they read (profile.luau), and the members it lets answer added
 /// (R.ProfileMethods)
 pub fn set_profile(lua: &Lua, engine: &Rc<Engine>, profile: crate::client_profile::ClientProfile) -> LuaResult<()> {
-    let table = profile_table(lua, &profile)?;
+    let table = profile_table(lua, engine, &profile)?;
     engine.set_profile(profile);
     if let Ok(r) = lua.named_registry_value::<LuaTable>(STUBS) {
         let read = !table.is_nil();
@@ -607,7 +615,7 @@ pub fn load(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     options.set("ViewportHeight", device.viewport().1)?;
     r.set("Options", options)?;
     // R.Profile: the client profile's JSON where it sets a field the service stubs read (client_profile.rs), else nil
-    let profile = profile_table(lua, &engine.profile())?;
+    let profile = profile_table(lua, engine, &engine.profile())?;
     if !profile.is_nil() {
         r.set("Profile", profile)?;
     }
