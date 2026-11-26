@@ -1,0 +1,308 @@
+# engine: Roblox Studio 0.747.0.7471481, a headless playing client (script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-26
+current CFrame nan x ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+current CFrame nan z ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+current CFrame inf x ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+current CFrame -inf y ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+current CFrame 1e39 x (inf as a float) ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+current CFrame 3e38 x ok 3.00000001e+38 2 3 1 0 0 0 1 0 0 0 1 fired CFrame,CoordinateFrame
+current CFrame angles nan ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+current CFrame r00 nan ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+current CFrame r01 nan ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+current CFrame r22 inf ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+current CFrame zero rotation ok 1 2 3 0 0 0 0 0 0 0 0 0 fired CFrame,CoordinateFrame
+current CFrame mirror ok 1 2 3 -1 0 0 0 1 0 0 0 1 fired CFrame,CoordinateFrame
+current CFrame turned ok 1 2 3 0.975170374 -0.0978434011 0.198669329 0.153792009 0.944702566 -0.289629489 -0.159345075 0.312991828 0.936293423 fired CFrame,CoordinateFrame
+current CFrame lean 1e-6 ok 1 2 3 1 9.99999997e-07 0 0 1 0 0 0 1 fired CFrame,CoordinateFrame
+current CFrame all ones ok 1 2 3 1 1 1 1 1 1 1 1 1 fired CFrame,CoordinateFrame
+current CFrame r00 1.1 ok 1 2 3 1.10000002 0 0 0 1 0 0 0 1 fired CFrame,CoordinateFrame
+current CFrame r00 1.199 ok 1 2 3 1.199 0 0 0 1 0 0 0 1 fired CFrame,CoordinateFrame
+current CFrame r00 1.19999993 ok 1 2 3 1.19999993 0 0 0 1 0 0 0 1 fired CFrame,CoordinateFrame
+current CFrame r00 1.2 ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+current CFrame r00 1.5 ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+current CFrame r00 2 ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+current CFrame r00 -1.19999993 ok 1 2 3 -1.19999993 0 0 0 1 0 0 0 1 fired CFrame,CoordinateFrame
+current CFrame r00 -1.2 ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+current CFrame entry 1 1.2 ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+current CFrame entry 2 -1.2 ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+current CFrame entry 3 1.2 ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+current CFrame entry 4 -1.2 ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+current CFrame entry 5 1.2 ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+current CFrame entry 6 -1.2 ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+current CFrame entry 7 1.2 ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+current CFrame entry 8 -1.2 ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+current CFrame entry 9 1.2 ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+current CoordinateFrame nan x ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+current CoordinateFrame nan z ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+current CoordinateFrame inf x ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+current CoordinateFrame -inf y ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+current CoordinateFrame 1e39 x (inf as a float) ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+current CoordinateFrame 3e38 x ok 3.00000001e+38 2 3 1 0 0 0 1 0 0 0 1 fired CFrame,CoordinateFrame
+current CoordinateFrame angles nan ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+current CoordinateFrame r00 nan ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+current CoordinateFrame r01 nan ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+current CoordinateFrame r22 inf ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+current CoordinateFrame zero rotation ok 1 2 3 0 0 0 0 0 0 0 0 0 fired CFrame,CoordinateFrame
+current CoordinateFrame mirror ok 1 2 3 -1 0 0 0 1 0 0 0 1 fired CFrame,CoordinateFrame
+current CoordinateFrame turned ok 1 2 3 0.975170374 -0.0978434011 0.198669329 0.153792009 0.944702566 -0.289629489 -0.159345075 0.312991828 0.936293423 fired CFrame,CoordinateFrame
+current CoordinateFrame lean 1e-6 ok 1 2 3 1 9.99999997e-07 0 0 1 0 0 0 1 fired CFrame,CoordinateFrame
+current CoordinateFrame all ones ok 1 2 3 1 1 1 1 1 1 1 1 1 fired CFrame,CoordinateFrame
+current CoordinateFrame r00 1.1 ok 1 2 3 1.10000002 0 0 0 1 0 0 0 1 fired CFrame,CoordinateFrame
+current CoordinateFrame r00 1.199 ok 1 2 3 1.199 0 0 0 1 0 0 0 1 fired CFrame,CoordinateFrame
+current CoordinateFrame r00 1.19999993 ok 1 2 3 1.19999993 0 0 0 1 0 0 0 1 fired CFrame,CoordinateFrame
+current CoordinateFrame r00 1.2 ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+current CoordinateFrame r00 1.5 ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+current CoordinateFrame r00 2 ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+current CoordinateFrame r00 -1.19999993 ok 1 2 3 -1.19999993 0 0 0 1 0 0 0 1 fired CFrame,CoordinateFrame
+current CoordinateFrame r00 -1.2 ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+current CoordinateFrame entry 1 1.2 ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+current CoordinateFrame entry 2 -1.2 ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+current CoordinateFrame entry 3 1.2 ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+current CoordinateFrame entry 4 -1.2 ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+current CoordinateFrame entry 5 1.2 ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+current CoordinateFrame entry 6 -1.2 ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+current CoordinateFrame entry 7 1.2 ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+current CoordinateFrame entry 8 -1.2 ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+current CoordinateFrame entry 9 1.2 ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+current Focus nan x ok nan 2 3 1 0 0 0 1 0 0 0 1 fired Focus
+current Focus nan z ok 1 2 nan 1 0 0 0 1 0 0 0 1 fired Focus
+current Focus inf x ok inf 2 3 1 0 0 0 1 0 0 0 1 fired Focus
+current Focus -inf y ok 1 -inf 3 1 0 0 0 1 0 0 0 1 fired Focus
+current Focus 1e39 x (inf as a float) ok inf 2 3 1 0 0 0 1 0 0 0 1 fired Focus
+current Focus 3e38 x ok 3.00000001e+38 2 3 1 0 0 0 1 0 0 0 1 fired Focus
+current Focus angles nan ok 1 2 3 nan nan nan nan nan nan nan nan nan fired Focus
+current Focus r00 nan ok 1 2 3 nan 0 0 0 1 0 0 0 1 fired Focus
+current Focus r01 nan ok 1 2 3 1 nan 0 0 1 0 0 0 1 fired Focus
+current Focus r22 inf ok 1 2 3 1 0 0 0 1 0 0 0 inf fired Focus
+current Focus zero rotation ok 1 2 3 0 0 0 0 0 0 0 0 0 fired Focus
+current Focus mirror ok 1 2 3 -1 0 0 0 1 0 0 0 1 fired Focus
+current Focus turned ok 1 2 3 0.975170374 -0.0978434011 0.198669329 0.153792009 0.944702566 -0.289629489 -0.159345075 0.312991828 0.936293423 fired Focus
+current Focus lean 1e-6 ok 1 2 3 1 9.99999997e-07 0 0 1 0 0 0 1 fired Focus
+current Focus all ones ok 1 2 3 1 1 1 1 1 1 1 1 1 fired Focus
+current Focus r00 1.1 ok 1 2 3 1.10000002 0 0 0 1 0 0 0 1 fired Focus
+current Focus r00 1.199 ok 1 2 3 1.199 0 0 0 1 0 0 0 1 fired Focus
+current Focus r00 1.19999993 ok 1 2 3 1.19999993 0 0 0 1 0 0 0 1 fired Focus
+current Focus r00 1.2 ok 1 2 3 1.20000005 0 0 0 1 0 0 0 1 fired Focus
+current Focus r00 1.5 ok 1 2 3 1.5 0 0 0 1 0 0 0 1 fired Focus
+current Focus r00 2 ok 1 2 3 2 0 0 0 1 0 0 0 1 fired Focus
+current Focus r00 -1.19999993 ok 1 2 3 -1.19999993 0 0 0 1 0 0 0 1 fired Focus
+current Focus r00 -1.2 ok 1 2 3 -1.20000005 0 0 0 1 0 0 0 1 fired Focus
+current Focus entry 1 1.2 ok 1 2 3 1.20000005 0 0 0 1 0 0 0 1 fired Focus
+current Focus entry 2 -1.2 ok 1 2 3 1 -1.20000005 0 0 1 0 0 0 1 fired Focus
+current Focus entry 3 1.2 ok 1 2 3 1 0 1.20000005 0 1 0 0 0 1 fired Focus
+current Focus entry 4 -1.2 ok 1 2 3 1 0 0 -1.20000005 1 0 0 0 1 fired Focus
+current Focus entry 5 1.2 ok 1 2 3 1 0 0 0 1.20000005 0 0 0 1 fired Focus
+current Focus entry 6 -1.2 ok 1 2 3 1 0 0 0 1 -1.20000005 0 0 1 fired Focus
+current Focus entry 7 1.2 ok 1 2 3 1 0 0 0 1 0 1.20000005 0 1 fired Focus
+current Focus entry 8 -1.2 ok 1 2 3 1 0 0 0 1 0 0 -1.20000005 1 fired Focus
+current Focus entry 9 1.2 ok 1 2 3 1 0 0 0 1 0 0 0 1.20000005 fired Focus
+current PanUnits about a NaN focus 5 6 7 1 0 0 0 1 0 0 0 1
+current TiltUnits about an infinite focus true 5 6 7 1 0 0 0 1 0 0 0 1
+current ZoomToExtents NaN centre 5 6 7 1 0 0 0 1 0 0 0 1 nan 0 0 1 0 0 0 1 0 0 0 1
+current ZoomToExtents infinite size 5 6 7 1 0 0 0 1 0 0 0 1 nan nan nan 1 0 0 0 1 0 0 0 1
+current ZoomToExtents NaN size 5 6 7 1 0 0 0 1 0 0 0 1 nan nan nan 1 0 0 0 1 0 0 0 1
+current ZoomToExtents huge size 5 6 7 1 0 0 0 1 0 0 0 1 0 0 0 1 0 0 0 1 0 0 0 1
+new CFrame nan x ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+new CFrame nan z ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+new CFrame inf x ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+new CFrame -inf y ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+new CFrame 1e39 x (inf as a float) ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+new CFrame 3e38 x ok 3.00000001e+38 2 3 1 0 0 0 1 0 0 0 1 fired CFrame,CoordinateFrame
+new CFrame angles nan ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+new CFrame r00 nan ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+new CFrame r01 nan ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+new CFrame r22 inf ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+new CFrame zero rotation ok 1 2 3 0 0 0 0 0 0 0 0 0 fired CFrame,CoordinateFrame
+new CFrame mirror ok 1 2 3 -1 0 0 0 1 0 0 0 1 fired CFrame,CoordinateFrame
+new CFrame turned ok 1 2 3 0.975170374 -0.0978434011 0.198669329 0.153792009 0.944702566 -0.289629489 -0.159345075 0.312991828 0.936293423 fired CFrame,CoordinateFrame
+new CFrame lean 1e-6 ok 1 2 3 1 9.99999997e-07 0 0 1 0 0 0 1 fired CFrame,CoordinateFrame
+new CFrame all ones ok 1 2 3 1 1 1 1 1 1 1 1 1 fired CFrame,CoordinateFrame
+new CFrame r00 1.1 ok 1 2 3 1.10000002 0 0 0 1 0 0 0 1 fired CFrame,CoordinateFrame
+new CFrame r00 1.199 ok 1 2 3 1.199 0 0 0 1 0 0 0 1 fired CFrame,CoordinateFrame
+new CFrame r00 1.19999993 ok 1 2 3 1.19999993 0 0 0 1 0 0 0 1 fired CFrame,CoordinateFrame
+new CFrame r00 1.2 ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+new CFrame r00 1.5 ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+new CFrame r00 2 ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+new CFrame r00 -1.19999993 ok 1 2 3 -1.19999993 0 0 0 1 0 0 0 1 fired CFrame,CoordinateFrame
+new CFrame r00 -1.2 ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+new CFrame entry 1 1.2 ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+new CFrame entry 2 -1.2 ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+new CFrame entry 3 1.2 ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+new CFrame entry 4 -1.2 ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+new CFrame entry 5 1.2 ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+new CFrame entry 6 -1.2 ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+new CFrame entry 7 1.2 ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+new CFrame entry 8 -1.2 ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+new CFrame entry 9 1.2 ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+new CoordinateFrame nan x ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+new CoordinateFrame nan z ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+new CoordinateFrame inf x ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+new CoordinateFrame -inf y ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+new CoordinateFrame 1e39 x (inf as a float) ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+new CoordinateFrame 3e38 x ok 3.00000001e+38 2 3 1 0 0 0 1 0 0 0 1 fired CFrame,CoordinateFrame
+new CoordinateFrame angles nan ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+new CoordinateFrame r00 nan ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+new CoordinateFrame r01 nan ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+new CoordinateFrame r22 inf ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+new CoordinateFrame zero rotation ok 1 2 3 0 0 0 0 0 0 0 0 0 fired CFrame,CoordinateFrame
+new CoordinateFrame mirror ok 1 2 3 -1 0 0 0 1 0 0 0 1 fired CFrame,CoordinateFrame
+new CoordinateFrame turned ok 1 2 3 0.975170374 -0.0978434011 0.198669329 0.153792009 0.944702566 -0.289629489 -0.159345075 0.312991828 0.936293423 fired CFrame,CoordinateFrame
+new CoordinateFrame lean 1e-6 ok 1 2 3 1 9.99999997e-07 0 0 1 0 0 0 1 fired CFrame,CoordinateFrame
+new CoordinateFrame all ones ok 1 2 3 1 1 1 1 1 1 1 1 1 fired CFrame,CoordinateFrame
+new CoordinateFrame r00 1.1 ok 1 2 3 1.10000002 0 0 0 1 0 0 0 1 fired CFrame,CoordinateFrame
+new CoordinateFrame r00 1.199 ok 1 2 3 1.199 0 0 0 1 0 0 0 1 fired CFrame,CoordinateFrame
+new CoordinateFrame r00 1.19999993 ok 1 2 3 1.19999993 0 0 0 1 0 0 0 1 fired CFrame,CoordinateFrame
+new CoordinateFrame r00 1.2 ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+new CoordinateFrame r00 1.5 ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+new CoordinateFrame r00 2 ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+new CoordinateFrame r00 -1.19999993 ok 1 2 3 -1.19999993 0 0 0 1 0 0 0 1 fired CFrame,CoordinateFrame
+new CoordinateFrame r00 -1.2 ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+new CoordinateFrame entry 1 1.2 ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+new CoordinateFrame entry 2 -1.2 ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+new CoordinateFrame entry 3 1.2 ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+new CoordinateFrame entry 4 -1.2 ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+new CoordinateFrame entry 5 1.2 ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+new CoordinateFrame entry 6 -1.2 ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+new CoordinateFrame entry 7 1.2 ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+new CoordinateFrame entry 8 -1.2 ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+new CoordinateFrame entry 9 1.2 ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+new Focus nan x ok nan 2 3 1 0 0 0 1 0 0 0 1 fired Focus
+new Focus nan z ok 1 2 nan 1 0 0 0 1 0 0 0 1 fired Focus
+new Focus inf x ok inf 2 3 1 0 0 0 1 0 0 0 1 fired Focus
+new Focus -inf y ok 1 -inf 3 1 0 0 0 1 0 0 0 1 fired Focus
+new Focus 1e39 x (inf as a float) ok inf 2 3 1 0 0 0 1 0 0 0 1 fired Focus
+new Focus 3e38 x ok 3.00000001e+38 2 3 1 0 0 0 1 0 0 0 1 fired Focus
+new Focus angles nan ok 1 2 3 nan nan nan nan nan nan nan nan nan fired Focus
+new Focus r00 nan ok 1 2 3 nan 0 0 0 1 0 0 0 1 fired Focus
+new Focus r01 nan ok 1 2 3 1 nan 0 0 1 0 0 0 1 fired Focus
+new Focus r22 inf ok 1 2 3 1 0 0 0 1 0 0 0 inf fired Focus
+new Focus zero rotation ok 1 2 3 0 0 0 0 0 0 0 0 0 fired Focus
+new Focus mirror ok 1 2 3 -1 0 0 0 1 0 0 0 1 fired Focus
+new Focus turned ok 1 2 3 0.975170374 -0.0978434011 0.198669329 0.153792009 0.944702566 -0.289629489 -0.159345075 0.312991828 0.936293423 fired Focus
+new Focus lean 1e-6 ok 1 2 3 1 9.99999997e-07 0 0 1 0 0 0 1 fired Focus
+new Focus all ones ok 1 2 3 1 1 1 1 1 1 1 1 1 fired Focus
+new Focus r00 1.1 ok 1 2 3 1.10000002 0 0 0 1 0 0 0 1 fired Focus
+new Focus r00 1.199 ok 1 2 3 1.199 0 0 0 1 0 0 0 1 fired Focus
+new Focus r00 1.19999993 ok 1 2 3 1.19999993 0 0 0 1 0 0 0 1 fired Focus
+new Focus r00 1.2 ok 1 2 3 1.20000005 0 0 0 1 0 0 0 1 fired Focus
+new Focus r00 1.5 ok 1 2 3 1.5 0 0 0 1 0 0 0 1 fired Focus
+new Focus r00 2 ok 1 2 3 2 0 0 0 1 0 0 0 1 fired Focus
+new Focus r00 -1.19999993 ok 1 2 3 -1.19999993 0 0 0 1 0 0 0 1 fired Focus
+new Focus r00 -1.2 ok 1 2 3 -1.20000005 0 0 0 1 0 0 0 1 fired Focus
+new Focus entry 1 1.2 ok 1 2 3 1.20000005 0 0 0 1 0 0 0 1 fired Focus
+new Focus entry 2 -1.2 ok 1 2 3 1 -1.20000005 0 0 1 0 0 0 1 fired Focus
+new Focus entry 3 1.2 ok 1 2 3 1 0 1.20000005 0 1 0 0 0 1 fired Focus
+new Focus entry 4 -1.2 ok 1 2 3 1 0 0 -1.20000005 1 0 0 0 1 fired Focus
+new Focus entry 5 1.2 ok 1 2 3 1 0 0 0 1.20000005 0 0 0 1 fired Focus
+new Focus entry 6 -1.2 ok 1 2 3 1 0 0 0 1 -1.20000005 0 0 1 fired Focus
+new Focus entry 7 1.2 ok 1 2 3 1 0 0 0 1 0 1.20000005 0 1 fired Focus
+new Focus entry 8 -1.2 ok 1 2 3 1 0 0 0 1 0 0 -1.20000005 1 fired Focus
+new Focus entry 9 1.2 ok 1 2 3 1 0 0 0 1 0 0 0 1.20000005 fired Focus
+new PanUnits about a NaN focus 5 6 7 1 0 0 0 1 0 0 0 1
+new TiltUnits about an infinite focus true 5 6 7 1 0 0 0 1 0 0 0 1
+new ZoomToExtents NaN centre 5 6 7 1 0 0 0 1 0 0 0 1 nan 0 0 1 0 0 0 1 0 0 0 1
+new ZoomToExtents infinite size 5 6 7 1 0 0 0 1 0 0 0 1 nan nan nan 1 0 0 0 1 0 0 0 1
+new ZoomToExtents NaN size 5 6 7 1 0 0 0 1 0 0 0 1 nan nan nan 1 0 0 0 1 0 0 0 1
+new ZoomToExtents huge size 5 6 7 1 0 0 0 1 0 0 0 1 0 0 0 1 0 0 0 1 0 0 0 1
+loose CFrame nan x ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+loose CFrame nan z ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+loose CFrame inf x ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+loose CFrame -inf y ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+loose CFrame 1e39 x (inf as a float) ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+loose CFrame 3e38 x ok 3.00000001e+38 2 3 1 0 0 0 1 0 0 0 1 fired CFrame,CoordinateFrame
+loose CFrame angles nan ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+loose CFrame r00 nan ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+loose CFrame r01 nan ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+loose CFrame r22 inf ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+loose CFrame zero rotation ok 1 2 3 0 0 0 0 0 0 0 0 0 fired CFrame,CoordinateFrame
+loose CFrame mirror ok 1 2 3 -1 0 0 0 1 0 0 0 1 fired CFrame,CoordinateFrame
+loose CFrame turned ok 1 2 3 0.975170374 -0.0978434011 0.198669329 0.153792009 0.944702566 -0.289629489 -0.159345075 0.312991828 0.936293423 fired CFrame,CoordinateFrame
+loose CFrame lean 1e-6 ok 1 2 3 1 9.99999997e-07 0 0 1 0 0 0 1 fired CFrame,CoordinateFrame
+loose CFrame all ones ok 1 2 3 1 1 1 1 1 1 1 1 1 fired CFrame,CoordinateFrame
+loose CFrame r00 1.1 ok 1 2 3 1.10000002 0 0 0 1 0 0 0 1 fired CFrame,CoordinateFrame
+loose CFrame r00 1.199 ok 1 2 3 1.199 0 0 0 1 0 0 0 1 fired CFrame,CoordinateFrame
+loose CFrame r00 1.19999993 ok 1 2 3 1.19999993 0 0 0 1 0 0 0 1 fired CFrame,CoordinateFrame
+loose CFrame r00 1.2 ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+loose CFrame r00 1.5 ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+loose CFrame r00 2 ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+loose CFrame r00 -1.19999993 ok 1 2 3 -1.19999993 0 0 0 1 0 0 0 1 fired CFrame,CoordinateFrame
+loose CFrame r00 -1.2 ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+loose CFrame entry 1 1.2 ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+loose CFrame entry 2 -1.2 ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+loose CFrame entry 3 1.2 ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+loose CFrame entry 4 -1.2 ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+loose CFrame entry 5 1.2 ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+loose CFrame entry 6 -1.2 ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+loose CFrame entry 7 1.2 ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+loose CFrame entry 8 -1.2 ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+loose CFrame entry 9 1.2 ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+loose CoordinateFrame nan x ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+loose CoordinateFrame nan z ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+loose CoordinateFrame inf x ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+loose CoordinateFrame -inf y ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+loose CoordinateFrame 1e39 x (inf as a float) ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+loose CoordinateFrame 3e38 x ok 3.00000001e+38 2 3 1 0 0 0 1 0 0 0 1 fired CFrame,CoordinateFrame
+loose CoordinateFrame angles nan ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+loose CoordinateFrame r00 nan ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+loose CoordinateFrame r01 nan ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+loose CoordinateFrame r22 inf ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+loose CoordinateFrame zero rotation ok 1 2 3 0 0 0 0 0 0 0 0 0 fired CFrame,CoordinateFrame
+loose CoordinateFrame mirror ok 1 2 3 -1 0 0 0 1 0 0 0 1 fired CFrame,CoordinateFrame
+loose CoordinateFrame turned ok 1 2 3 0.975170374 -0.0978434011 0.198669329 0.153792009 0.944702566 -0.289629489 -0.159345075 0.312991828 0.936293423 fired CFrame,CoordinateFrame
+loose CoordinateFrame lean 1e-6 ok 1 2 3 1 9.99999997e-07 0 0 1 0 0 0 1 fired CFrame,CoordinateFrame
+loose CoordinateFrame all ones ok 1 2 3 1 1 1 1 1 1 1 1 1 fired CFrame,CoordinateFrame
+loose CoordinateFrame r00 1.1 ok 1 2 3 1.10000002 0 0 0 1 0 0 0 1 fired CFrame,CoordinateFrame
+loose CoordinateFrame r00 1.199 ok 1 2 3 1.199 0 0 0 1 0 0 0 1 fired CFrame,CoordinateFrame
+loose CoordinateFrame r00 1.19999993 ok 1 2 3 1.19999993 0 0 0 1 0 0 0 1 fired CFrame,CoordinateFrame
+loose CoordinateFrame r00 1.2 ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+loose CoordinateFrame r00 1.5 ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+loose CoordinateFrame r00 2 ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+loose CoordinateFrame r00 -1.19999993 ok 1 2 3 -1.19999993 0 0 0 1 0 0 0 1 fired CFrame,CoordinateFrame
+loose CoordinateFrame r00 -1.2 ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+loose CoordinateFrame entry 1 1.2 ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+loose CoordinateFrame entry 2 -1.2 ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+loose CoordinateFrame entry 3 1.2 ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+loose CoordinateFrame entry 4 -1.2 ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+loose CoordinateFrame entry 5 1.2 ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+loose CoordinateFrame entry 6 -1.2 ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+loose CoordinateFrame entry 7 1.2 ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+loose CoordinateFrame entry 8 -1.2 ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+loose CoordinateFrame entry 9 1.2 ok 5 6 7 1 0 0 0 1 0 0 0 1 fired 
+loose Focus nan x ok nan 2 3 1 0 0 0 1 0 0 0 1 fired Focus
+loose Focus nan z ok 1 2 nan 1 0 0 0 1 0 0 0 1 fired Focus
+loose Focus inf x ok inf 2 3 1 0 0 0 1 0 0 0 1 fired Focus
+loose Focus -inf y ok 1 -inf 3 1 0 0 0 1 0 0 0 1 fired Focus
+loose Focus 1e39 x (inf as a float) ok inf 2 3 1 0 0 0 1 0 0 0 1 fired Focus
+loose Focus 3e38 x ok 3.00000001e+38 2 3 1 0 0 0 1 0 0 0 1 fired Focus
+loose Focus angles nan ok 1 2 3 nan nan nan nan nan nan nan nan nan fired Focus
+loose Focus r00 nan ok 1 2 3 nan 0 0 0 1 0 0 0 1 fired Focus
+loose Focus r01 nan ok 1 2 3 1 nan 0 0 1 0 0 0 1 fired Focus
+loose Focus r22 inf ok 1 2 3 1 0 0 0 1 0 0 0 inf fired Focus
+loose Focus zero rotation ok 1 2 3 0 0 0 0 0 0 0 0 0 fired Focus
+loose Focus mirror ok 1 2 3 -1 0 0 0 1 0 0 0 1 fired Focus
+loose Focus turned ok 1 2 3 0.975170374 -0.0978434011 0.198669329 0.153792009 0.944702566 -0.289629489 -0.159345075 0.312991828 0.936293423 fired Focus
+loose Focus lean 1e-6 ok 1 2 3 1 9.99999997e-07 0 0 1 0 0 0 1 fired Focus
+loose Focus all ones ok 1 2 3 1 1 1 1 1 1 1 1 1 fired Focus
+loose Focus r00 1.1 ok 1 2 3 1.10000002 0 0 0 1 0 0 0 1 fired Focus
+loose Focus r00 1.199 ok 1 2 3 1.199 0 0 0 1 0 0 0 1 fired Focus
+loose Focus r00 1.19999993 ok 1 2 3 1.19999993 0 0 0 1 0 0 0 1 fired Focus
+loose Focus r00 1.2 ok 1 2 3 1.20000005 0 0 0 1 0 0 0 1 fired Focus
+loose Focus r00 1.5 ok 1 2 3 1.5 0 0 0 1 0 0 0 1 fired Focus
+loose Focus r00 2 ok 1 2 3 2 0 0 0 1 0 0 0 1 fired Focus
+loose Focus r00 -1.19999993 ok 1 2 3 -1.19999993 0 0 0 1 0 0 0 1 fired Focus
+loose Focus r00 -1.2 ok 1 2 3 -1.20000005 0 0 0 1 0 0 0 1 fired Focus
+loose Focus entry 1 1.2 ok 1 2 3 1.20000005 0 0 0 1 0 0 0 1 fired Focus
+loose Focus entry 2 -1.2 ok 1 2 3 1 -1.20000005 0 0 1 0 0 0 1 fired Focus
+loose Focus entry 3 1.2 ok 1 2 3 1 0 1.20000005 0 1 0 0 0 1 fired Focus
+loose Focus entry 4 -1.2 ok 1 2 3 1 0 0 -1.20000005 1 0 0 0 1 fired Focus
+loose Focus entry 5 1.2 ok 1 2 3 1 0 0 0 1.20000005 0 0 0 1 fired Focus
+loose Focus entry 6 -1.2 ok 1 2 3 1 0 0 0 1 -1.20000005 0 0 1 fired Focus
+loose Focus entry 7 1.2 ok 1 2 3 1 0 0 0 1 0 1.20000005 0 1 fired Focus
+loose Focus entry 8 -1.2 ok 1 2 3 1 0 0 0 1 0 0 -1.20000005 1 fired Focus
+loose Focus entry 9 1.2 ok 1 2 3 1 0 0 0 1 0 0 0 1.20000005 fired Focus
+loose PanUnits about a NaN focus 5 6 7 1 0 0 0 1 0 0 0 1
+loose TiltUnits about an infinite focus true 5 6 7 1 0 0 0 1 0 0 0 1
+loose ZoomToExtents NaN centre 5 6 7 1 0 0 0 1 0 0 0 1 nan 0 0 1 0 0 0 1 0 0 0 1
+loose ZoomToExtents infinite size 5 6 7 1 0 0 0 1 0 0 0 1 nan nan nan 1 0 0 0 1 0 0 0 1
+loose ZoomToExtents NaN size 5 6 7 1 0 0 0 1 0 0 0 1 nan nan nan 1 0 0 0 1 0 0 0 1
+loose ZoomToExtents huge size 5 6 7 1 0 0 0 1 0 0 0 1 0 0 0 1 0 0 0 1 0 0 0 1

@@ -627,6 +627,10 @@ fn cframe_as_stored(engine: &Engine, id: InstanceId, name: NameId, value: Value)
     let o = &cframe.orientation;
     let rows = [[o.x.x, o.x.y, o.x.z], [o.y.x, o.y.y, o.y.z], [o.z.x, o.z.y, o.z.z]];
     let row = |r: [f32; 3]| dom::Vector3::new(r[0], r[1], r[2]);
+    // (a Camera refuses a CFrame that is not finite or has a rotation entry of 1.2 or more: the write keeps what it holds, world/camera.rs)
+    if name == crate::world::cframe_name(engine) && engine.reflection.is_a(class, "Camera") && !crate::world::camera::takes_cframe(cframe) {
+        return engine.state.borrow().dom.raw_get(id, name).cloned().unwrap_or(value);
+    }
     if name == crate::world::cframe_name(engine) && engine.reflection.is_a(class, "Attachment") {
         let stored = attachment_rotation(rows);
         return Value::Dom(Rc::new(Variant::CFrame(dom::CFrame::new(cframe.position, dom::Matrix3::new(row(stored[0]), row(stored[1]), row(stored[2]))))));

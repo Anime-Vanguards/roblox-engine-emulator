@@ -14,8 +14,11 @@
 //!   MaxAxisFieldOfView `2 * atan(tan(m / 2) * (h / w))` on a wide viewport and `2 * atan(tan(m / 2))` otherwise, held
 //!   within 1 and 120 degrees (180 reads 1 through MaxAxisFieldOfView: tan of a float32 right angle is negative; 180
 //!   through DiagonalFieldOfView and infinity through either read not-a-number). A NaN is ignored; a numeric string is its
-//!   number and anything else (a boolean, a table, a Vector3) is 0, with no error. 98 of 100 writes are to the bit; two
-//!   DiagonalFieldOfView writes on the wide viewport (90 and 120) read FieldOfView 2 and 1 float32 steps off.
+//!   number and anything else (a boolean, a table, a Vector3) is 0, with no error. Of 382 writes of each view (189 angles
+//!   from 0.5 to 179 on the 1920 x 1080 and the 1 x 1 viewport: tools/parity/probes/camera_float_steps.luau), 367
+//!   DiagonalFieldOfView and 375 MaxAxisFieldOfView writes read FieldOfView to the bit; the rest are one to three float32
+//!   steps off (MaxAxisFieldOfView's only on the wide viewport). No order of about 150 tried fits more, and the projection's
+//!   `tan` is a correctly rounded float tan (130 of 130 fields of view read to the bit through WorldToViewportPoint).
 //! - Changed fires for the member written, then FieldOfView, then the third (a FieldOfView write: FieldOfView,
 //!   DiagonalFieldOfView, MaxAxisFieldOfView), each Changed before its property signal; a write that leaves the radians as
 //!   they were fires nothing. FieldOfViewMode changes none of this in a client.

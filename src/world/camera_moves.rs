@@ -10,12 +10,16 @@
 //!   number past the int's range (or NaN, an infinity) is the int's least, a numeric string or a boolean is taken, another
 //!   value raises "Unable to cast <type> to int" (an Instance "Instance", an EnumItem its enum's name), none "Argument 1
 //!   missing or nil". The angles are a client's to about 1e-6: its float steps were not worked out (positions within a few
-//!   float32 steps, rotation entries within 1e-6).
+//!   float32 steps, rotation entries within 1e-6). A client's snapped rotation holds exact zeros at multiples of 90 degrees
+//!   and 0.70710683 at 45 (the float nearest sqrt(0.5) is 0.70710677), so its directions are not sin and cos of a float
+//!   angle (measured on 120 rotations, every one off in its last bits here).
 //! - ZoomToExtents(cframe, size), size checked first: the rotation kept, the camera backed off from the box's centre along
-//!   its look until the sphere around the box's world-aligned bounds (`|R| * size / 2`, the size's sign kept) fits the wider
-//!   half angle of the view, `radius / sin(half angle)` (the horizontal one on a wide viewport); a radius under 0.5 counts
-//!   as 0.5. Focus becomes the centre, unrotated. 37 of 54 measured positions to the bit, the rest one or two float32 steps
-//!   off.
+//!   its look until the sphere around the box's world-aligned bounds fits the wider half angle of the view, `radius /
+//!   sin(half angle)` (the horizontal one on a wide viewport); a radius under 0.5 counts as 0.5. The bounds are their low and
+//!   high corners, `centre -+ |R| * size / 2` (the size's sign kept), the centre their middle `(low + high) / 2` and the radius
+//!   the length of `(high - low) / 2`, all float32; Focus becomes that middle, unrotated (80 of 80 positions and Focuses to
+//!   the bit: camera_float_steps.luau). A CFrame that is not finite is refused (camera.rs), so a NaN or huge size leaves the
+//!   CFrame and reads Focus at the corners' middle (NaN, or (0, 0, 0) for a box at (1, 2, 3) 1e38 wide).
 //! - GetLargestCutoffDistance(ignore): five parallel rays, from Focus and from Focus moved by each near-plane corner's offset,
 //!   to the near plane's centre and corners; against parts that can collide and are at most 0.95 transparent, the ignore
 //!   list (nil holes in it skipped) and its descendants left out. The largest `length - distance to the first hit`, or 0. A
@@ -101,10 +105,17 @@ fn frames(engine: &Engine, names: &Names, camera: InstanceId) -> (Affine3A, Affi
     (frame::affine_of(state.dom.raw_get(camera, names.cframe)), frame::affine_of(state.dom.raw_get(camera, names.focus)))
 }
 
+/// A method's write of the camera's CFrame or Focus: a CFrame the camera does not take is refused, as a script's (camera.rs
+/// takes: measured, a PanUnits or TiltUnits about a Focus that is not finite and a ZoomToExtents to a centre or size that is
+/// not leave the CFrame as it was; TiltUnits still returns true)
 fn write(engine: &Engine, camera: InstanceId, name: NameId, transform: &Affine3A) {
+    let value = frame::cframe_value(transform);
+    if name == cframe_name(engine) && !camera::takes(&value) {
+        return;
+    }
     let hooks = engine.hooks.borrow();
     let mut state = engine.state.borrow_mut();
-    core::raw_set(&mut state, &engine.reflection, &hooks, camera, name, frame::cframe_value(transform));
+    core::raw_set(&mut state, &engine.reflection, &hooks, camera, name, value);
 }
 
 // PanUnits / TiltUnits
@@ -172,8 +183,18 @@ fn zoom_to_extents(engine: &Engine, names: &Names, camera: InstanceId, center: &
     let r = rows_of(center);
     let half = [size.x * 0.5, size.y * 0.5, size.z * 0.5];
     let reach = |row: [f32; 3]| (row[0].abs() * half[0] + row[1].abs() * half[1]) + row[2].abs() * half[2];
-    let bounds = [reach(r[0]), reach(r[1]), reach(r[2])];
-    let mut radius = f32m::dot3(bounds, bounds).sqrt();
+    // (the box's world-aligned bounds as their low and high corners, then their middle and half extents from those, as a client
+    // computes them: 80 of 80 positions and Focuses to the bit, where the centre and the reach alone gave 57 and 76; a size whose
+    // radius overflows leaves the CFrame as it was and reads Focus at the corners' middle, (0, 0, 0) for a box at (1, 2, 3))
+    let centre = frame::translation(center).to_array();
+    let (mut middle, mut extent) = ([0.0f32; 3], [0.0f32; 3]);
+    for axis in 0..3 {
+        let bound = reach(r[axis]);
+        let (low, high) = (centre[axis] - bound, centre[axis] + bound);
+        middle[axis] = (low + high) * 0.5;
+        extent[axis] = (high - low) * 0.5;
+    }
+    let mut radius = f32m::dot3(extent, extent).sqrt();
     if radius < 0.5 {
         radius = 0.5;
     }
@@ -184,9 +205,8 @@ fn zoom_to_extents(engine: &Engine, names: &Names, camera: InstanceId, center: &
     let distance = radius / horizontal.max(vertical).sin();
     let (transform, _) = frames(engine, names, camera);
     let rows = rows_of(&transform);
-    let centre = frame::translation(center).to_array();
-    write(engine, camera, names.cframe, &affine(&rows, add(centre, scale(f32m::column(&rows, 2), distance))));
-    write(engine, camera, names.focus, &Affine3A::from_translation(Vec3::from_array(centre)));
+    write(engine, camera, names.cframe, &affine(&rows, add(middle, scale(f32m::column(&rows, 2), distance))));
+    write(engine, camera, names.focus, &Affine3A::from_translation(Vec3::from_array(middle)));
 }
 
 // GetLargestCutoffDistance and the spatial index's lag
@@ -438,8 +458,12 @@ pub(super) fn install_aliases(engine: &Rc<Engine>) {
     for (alias, source, events) in [("CoordinateFrame", "CFrame", crate::derived::ViewEvents::After), ("focus", "Focus", crate::derived::ViewEvents::None)] {
         let Some(target) = engine.reflection.name_id(source) else { continue };
         let read: crate::derived::ReadFn = Rc::new(|value| value.cloned().unwrap_or_else(|| frame::cframe_value(&Affine3A::IDENTITY)));
+        // (CoordinateFrame refuses what CFrame refuses: camera.rs takes; focus takes anything, as Focus does)
+        let refusing = source == "CFrame";
         let write: crate::derived::WriteFn = Rc::new(move |state, reflection, hooks, id, value| {
-            core::raw_set(state, reflection, hooks, id, target, value);
+            if !refusing || camera::takes(&value) {
+                core::raw_set(state, reflection, hooks, id, target, value);
+            }
         });
         crate::derived::add_view(engine, "Camera", alias, source, events, read, write);
     }

@@ -73,6 +73,96 @@
 			"why": "a fractional number cast to an enum takes the item it truncates to (0.5, 1.99 and -0.99 cast; 2.5 to CameraPanMode does not); the engine's enum casts take whole numbers only"
 		}
 	],
+	"camera_float_steps": [
+		{
+			"line": "write start 19 22.680875778198242 10.754839897155762",
+			"why": "a view written on a camera: the inverse reads FieldOfView one to three float32 steps off a client's (15 of 382 DiagonalFieldOfView writes, 7 of 191 MaxAxisFieldOfView writes on the wide viewport; no operation order fitted)"
+		},
+		{
+			"line": "write start 31 28.952939987182617 17.73280143737793",
+			"why": "a view written on a camera: the inverse reads FieldOfView one to three float32 steps off a client's (15 of 382 DiagonalFieldOfView writes, 7 of 191 MaxAxisFieldOfView writes on the wide viewport; no operation order fitted)"
+		},
+		{
+			"line": "write start 33 29.879999160766602 18.919454574584961",
+			"why": "a view written on a camera: the inverse reads FieldOfView one to three float32 steps off a client's (15 of 382 DiagonalFieldOfView writes, 7 of 191 MaxAxisFieldOfView writes on the wide viewport; no operation order fitted)"
+		},
+		{
+			"line": "write start 34 30.334440231323242 19.515817642211914",
+			"why": "a view written on a camera: the inverse reads FieldOfView one to three float32 steps off a client's (15 of 382 DiagonalFieldOfView writes, 7 of 191 MaxAxisFieldOfView writes on the wide viewport; no operation order fitted)"
+		},
+		{
+			"line": "write start 59 40.484317779541016 35.307056427001953",
+			"why": "a view written on a camera: the inverse reads FieldOfView one to three float32 steps off a client's (15 of 382 DiagonalFieldOfView writes, 7 of 191 MaxAxisFieldOfView writes on the wide viewport; no operation order fitted)"
+		},
+		{
+			"line": "write start 74 46.10760498046875 45.941673278808594",
+			"why": "a view written on a camera: the inverse reads FieldOfView one to three float32 steps off a client's (15 of 382 DiagonalFieldOfView writes, 7 of 191 MaxAxisFieldOfView writes on the wide viewport; no operation order fitted)"
+		},
+		{
+			"line": "write start 83 49.512535095214844 52.915191650390625",
+			"why": "a view written on a camera: the inverse reads FieldOfView one to three float32 steps off a client's (15 of 382 DiagonalFieldOfView writes, 7 of 191 MaxAxisFieldOfView writes on the wide viewport; no operation order fitted)"
+		},
+		{
+			"line": "write start 90 52.233852386474609 58.715511322021484",
+			"why": "a view written on a camera: the inverse reads FieldOfView one to three float32 steps off a client's (15 of 382 DiagonalFieldOfView writes, 7 of 191 MaxAxisFieldOfView writes on the wide viewport; no operation order fitted)"
+		},
+		{
+			"line": "write start 91 52.630176544189453 59.574008941650391",
+			"why": "a view written on a camera: the inverse reads FieldOfView one to three float32 steps off a client's (15 of 382 DiagonalFieldOfView writes, 7 of 191 MaxAxisFieldOfView writes on the wide viewport; no operation order fitted)"
+		},
+		{
+			"line": "write start 95 54.23895263671875 63.088287353515625",
+			"why": "a view written on a camera: the inverse reads FieldOfView one to three float32 steps off a client's (15 of 382 DiagonalFieldOfView writes, 7 of 191 MaxAxisFieldOfView writes on the wide viewport; no operation order fitted)"
+		},
+		{
+			"line": "write start 117 64.116096496582031 85.098678588867188",
+			"why": "a view written on a camera: the inverse reads FieldOfView one to three float32 steps off a client's (15 of 382 DiagonalFieldOfView writes, 7 of 191 MaxAxisFieldOfView writes on the wide viewport; no operation order fitted)"
+		},
+		{
+			"line": "write start 120 65.661827087402344 88.507156372070312",
+			"why": "a view written on a camera: the inverse reads FieldOfView one to three float32 steps off a client's (15 of 382 DiagonalFieldOfView writes, 7 of 191 MaxAxisFieldOfView writes on the wide viewport; no operation order fitted)"
+		},
+		{
+			"line": "write start 132 72.612709045410156 103.27552795410156",
+			"why": "a view written on a camera: the inverse reads FieldOfView one to three float32 steps off a client's (15 of 382 DiagonalFieldOfView writes, 7 of 191 MaxAxisFieldOfView writes on the wide viewport; no operation order fitted)"
+		},
+		{
+			"line": "write start 139 77.444320678710938 112.77731323242188",
+			"why": "a view written on a camera: the inverse reads FieldOfView one to three float32 steps off a client's (15 of 382 DiagonalFieldOfView writes, 7 of 191 MaxAxisFieldOfView writes on the wide viewport; no operation order fitted)"
+		},
+		{
+			"line": "write start 141 78.967475891113281 115.61555480957031",
+			"why": "a view written on a camera: the inverse reads FieldOfView one to three float32 steps off a client's (15 of 382 DiagonalFieldOfView writes, 7 of 191 MaxAxisFieldOfView writes on the wide viewport; no operation order fitted)"
+		},
+		{
+			"line": "write new 45 48.939605712890625 45",
+			"why": "a view written on a camera: the inverse reads FieldOfView one to three float32 steps off a client's (15 of 382 DiagonalFieldOfView writes, 7 of 191 MaxAxisFieldOfView writes on the wide viewport; no operation order fitted)"
+		},
+		{
+			"line": "write new 59 56.014408111572266 59",
+			"why": "a view written on a camera: the inverse reads FieldOfView one to three float32 steps off a client's (15 of 382 DiagonalFieldOfView writes, 7 of 191 MaxAxisFieldOfView writes on the wide viewport; no operation order fitted)"
+		},
+		{
+			"line": "write new 95 72.905380249023438 95.000007629394531",
+			"why": "a view written on a camera: the inverse reads FieldOfView one to three float32 steps off a client's (15 of 382 DiagonalFieldOfView writes, 7 of 191 MaxAxisFieldOfView writes on the wide viewport; no operation order fitted)"
+		},
+		{
+			"line": "write new 121 86.461822509765625 120",
+			"why": "a view written on a camera: the inverse reads FieldOfView one to three float32 steps off a client's (15 of 382 DiagonalFieldOfView writes, 7 of 191 MaxAxisFieldOfView writes on the wide viewport; no operation order fitted)"
+		},
+		{
+			"line": "write new 128 90.711601257324219 120",
+			"why": "a view written on a camera: the inverse reads FieldOfView one to three float32 steps off a client's (15 of 382 DiagonalFieldOfView writes, 7 of 191 MaxAxisFieldOfView writes on the wide viewport; no operation order fitted)"
+		},
+		{
+			"line": "write new 158 116.11239624023438 120",
+			"why": "a view written on a camera: the inverse reads FieldOfView one to three float32 steps off a client's (15 of 382 DiagonalFieldOfView writes, 7 of 191 MaxAxisFieldOfView writes on the wide viewport; no operation order fitted)"
+		},
+		{
+			"line": "write new 159 117.33106994628906 120",
+			"why": "a view written on a camera: the inverse reads FieldOfView one to three float32 steps off a client's (15 of 382 DiagonalFieldOfView writes, 7 of 191 MaxAxisFieldOfView writes on the wide viewport; no operation order fitted)"
+		}
+	],
 	"camera_fov_wide": [
 		{
 			"line": "write DiagonalFieldOfView 90 52.233852386474609",

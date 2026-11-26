@@ -12,6 +12,10 @@
 //!   values when it is no longer current). A camera made the CurrentCamera reads 1 x 1 until the render step after the
 //!   PreRender handlers, which gives it the window and a near plane 0.1 out (both Changed fire) for good. Not emulated: here a
 //!   script's write of Workspace.CurrentCamera does not take, so the start camera stays the current one.
+//! - A Camera refuses a CFrame (or CoordinateFrame) written to it that is not finite or has a rotation entry of 1.2 or more
+//!   either way, whether a script or one of its methods writes it: the write leaves it as it was and fires nothing, and
+//!   costs what an unchanged write does (measured, a client and a server alike: an entry of 1.199 is kept, scaled rotations
+//!   too; tools/parity/probes/camera_finite.luau). Focus takes any CFrame.
 //! - The projections use the viewport rounded to whole pixels (908.8 x 895.2 projects as 909 x 895: the centre is 454.5, 447.5).
 //! - A ray starts on the near plane (its point under the pixel, `-NearPlaneZ` along the look vector), `depth` studs further along
 //!   it; the point at the camera itself projects to NaN, NaN at depth 0.
@@ -272,6 +276,25 @@ fn render_cframe(engine: &Engine, camera: InstanceId) -> Affine3A {
 
 fn number(number: f32) -> Result<LuaMultiValue, Flow> {
     Ok(values([LuaValue::Number(f64::from(number))]))
+}
+
+// The CFrames a camera takes (module notes)
+
+/// Whether a Camera takes a CFrame written to it: every component finite and every rotation entry under 1.2 either way.
+pub fn takes_cframe(cframe: &dom::CFrame) -> bool {
+    let (p, o) = (&cframe.position, &cframe.orientation);
+    [p.x, p.y, p.z].iter().all(|v| v.is_finite()) && [o.x, o.y, o.z].iter().all(|row| [row.x, row.y, row.z].iter().all(|v| v.abs() < 1.2))
+}
+
+/// [`takes_cframe`] of a stored value (any value that is no CFrame is taken).
+pub fn takes(value: &Value) -> bool {
+    match value {
+        Value::Dom(variant) => match &**variant {
+            rbx_dom_weak::types::Variant::CFrame(cframe) => takes_cframe(cframe),
+            _ => true,
+        },
+        _ => true,
+    }
 }
 
 /// How a client's check of `part` against GetPartsObscuringTarget's ignore list goes: the first instance of the list, in its

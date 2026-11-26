@@ -1193,6 +1193,80 @@ fn only_the_start_camera_has_the_viewport_and_its_near_plane() {
     );
 }
 
+/// A Camera refuses a CFrame write that is not finite or has a rotation entry of 1.2 or more (Studio 0.747, a client and a server:
+/// tools/parity/probes/camera_finite.luau): CFrame and CoordinateFrame keep what they hold and fire nothing, and the write costs
+/// what an unchanged one does; Focus takes anything; PanUnits, TiltUnits and ZoomToExtents leave the CFrame as it was when theirs
+/// is refused, and ZoomToExtents' Focus is the middle of the box's bounds (NaN for an infinite size, (0, 0, 0) for a huge one).
+#[test]
+fn a_camera_refuses_a_cframe_that_is_not_finite_or_far_from_a_rotation() {
+    let (lua, engine) = start_play();
+    run(
+        &lua,
+        &engine,
+        r##"
+        local NaN, Inf = 0 / 0, math.huge
+        local Cam = Instance.new("Camera")
+        Cam.Parent = workspace
+        Cam.CameraType = Enum.CameraType.Scriptable
+        local Fired = 0
+        Cam.Changed:Connect(function(Prop)
+            if Prop == "CFrame" or Prop == "CoordinateFrame" then
+                Fired += 1
+            end
+        end)
+        local Kept = CFrame.new(5, 6, 7)
+        Cam.CFrame = Kept
+        task.wait()
+        Fired = 0
+        for _, Refused in { CFrame.new(NaN, 0, 0), CFrame.new(0, Inf, 0), CFrame.new(1e39, 0, 0), CFrame.new(1, 2, 3, 1.2, 0, 0, 0, 1, 0, 0, 0, 1), CFrame.new(1, 2, 3, 1, 0, 0, 0, 1, 0, 0, -1.5, 1), CFrame.new(1, 2, 3) * CFrame.Angles(NaN, 0, 0) } do
+            Cam.CFrame = Refused
+            assert(Cam.CFrame == Kept, tostring(Refused))
+            Cam.CoordinateFrame = Refused
+            assert(Cam.CFrame == Kept, tostring(Refused))
+        end
+        task.wait()
+        assert(Fired == 0, Fired)
+        for _, Taken in { CFrame.new(1, 2, 3, 1.199, 0, 0, 0, 1, 0, 0, 0, 1), CFrame.new(1, 2, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0), CFrame.new(3e38, 0, 0) } do
+            Cam.CFrame = Taken
+            assert(Cam.CFrame == Taken, tostring(Taken))
+        end
+        Cam.Focus = CFrame.new(NaN, 0, 0)
+        assert(Cam.Focus.X ~= Cam.Focus.X)
+        Cam.Focus = CFrame.new()
+        ;(Cam :: any).focus = CFrame.new(NaN, 0, 0)
+        assert(Cam.Focus.X ~= Cam.Focus.X)
+        Cam.CFrame = Kept
+        Cam:PanUnits(1)
+        assert(Cam.CFrame == Kept)
+        Cam.Focus = CFrame.new(Inf, 0, 0)
+        assert(Cam:TiltUnits(1) == true and Cam.CFrame == Kept)
+        Cam.Focus = CFrame.new()
+        Cam:ZoomToExtents(CFrame.new(1, 2, 3), Vector3.new(Inf, 4, 4))
+        local F = Cam.Focus.Position
+        assert(Cam.CFrame == Kept and F.X ~= F.X and F.Y ~= F.Y and F.Z ~= F.Z)
+        Cam:ZoomToExtents(CFrame.new(NaN, 2, 3), Vector3.new(4, 4, 4))
+        F = Cam.Focus.Position
+        assert(Cam.CFrame == Kept and F.X ~= F.X and F.Y == 2 and F.Z == 3)
+        Cam:ZoomToExtents(CFrame.new(1, 2, 3), Vector3.new(1e38, 1e38, 1e38))
+        assert(Cam.CFrame == Kept and Cam.Focus.Position == Vector3.zero, tostring(Cam.Focus))
+        -- a refused write costs what an unchanged one does (after the frame's first write, which runs the engine's code cold)
+        task.wait()
+        Cam.CFrame = Kept
+        local T0 = os.clock()
+        for _ = 1, 200 do
+            Cam.CFrame = Kept
+        end
+        local T1 = os.clock()
+        local Bad = CFrame.new(NaN, 0, 0)
+        for _ = 1, 200 do
+            Cam.CFrame = Bad
+        end
+        local T2 = os.clock()
+        assert(math.abs((T2 - T1) - (T1 - T0)) < 0.05 * (T1 - T0), `{T1 - T0} {T2 - T1}`)
+        "##,
+    );
+}
+
 /// The projections as a playing client computes them, to the bit (Studio 0.748, its start camera at (0, 500, 0) looking down -Z
 /// with a 70-degree field of view in a 908.8 x 895.2 window under a 58-pixel inset): the viewport rounded to whole pixels, one
 /// float projection-view matrix, rays from the near plane; a camera that is not current in its 1 x 1 viewport; the arguments.
