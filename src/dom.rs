@@ -40,7 +40,8 @@ pub mod flags {
     pub const LAZY_REGION: u16 = 1 << 7;
     /// Its plan children are not made yet (they are made before anything lists or finds them)
     pub const LAZY_PENDING: u16 = 1 << 8;
-    /// A lazily imported plan's roots are below it (a bundle folder or one of its ancestors)
+    /// A lazily imported plan's roots are below it (a bundle folder or one of its ancestors), or a manifest bundle waits at it
+    /// or below it (project::model_assets `mark_above`: a move into a world imports it first)
     pub const LAZY_ABOVE: u16 = 1 << 9;
     /// Stands where a manifest bundle's root goes and is not that root yet: it becomes it (class,
     /// properties, attributes, tags) before a script finds, tests, touches or looks inside it

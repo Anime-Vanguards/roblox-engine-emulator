@@ -124,6 +124,7 @@ pub fn call_function(lua: &Lua, engine: &Rc<Engine>, class: ClassId, name: NameI
         let outcome = match args.instance(0) {
             Some(id) => {
                 project::before_method(&mut e.state.borrow_mut(), &e.reflection, id, name);
+                reveal_arguments(&e, &args);
                 method(lua, &e, id, &args)
             }
             None => raise(format!("Expected ':' not '.' calling member function {method_name}")),
@@ -239,6 +240,19 @@ pub fn reveal_bundle(engine: &Engine, id: InstanceId) {
     project::model_assets::reveal(engine, id);
     #[cfg(not(feature = "bundles"))]
     let _ = (engine, id);
+}
+
+/// The bundle placeholders ([`flags::BUNDLE_ROOT`]) among an engine method's arguments become their bundles' instances first, as
+/// a script's touch makes them: the method reads or writes the instance the game has there (CollectionService:AddTag,
+/// TweenService:Create, ...)
+fn reveal_arguments(engine: &Engine, args: &Args) {
+    for value in args.0.iter().skip(1) {
+        if let Some(id) = raw::instance_id(value)
+            && engine.state.borrow().dom.get(id).is_some_and(|instance| instance.has(flags::BUNDLE_ROOT))
+        {
+            reveal_bundle(engine, id);
+        }
+    }
 }
 
 /// A child a script looked up by name and did not find that a bundle mount makes when asked for: a manifest alias's copy
@@ -690,6 +704,11 @@ pub fn set_attribute(engine: &Engine, id: InstanceId, name: Str, value: Value) {
 /// SetParent on an engine handle: a part's move pays the WorldModels above it where it went, as its other changes do
 /// ([`changed_levels`]), beyond the reparenting's price.
 pub fn set_parent(engine: &Engine, id: InstanceId, parent: Option<InstanceId>) -> Result<(), Flow> {
+    // (a bundle's placeholder that is to hold `id`, or bundles waiting in a subtree that enters a world, import first)
+    #[cfg(feature = "bundles")]
+    if let Some(parent) = parent {
+        project::model_assets::before_parent(engine, id, parent);
+    }
     let hooks = engine.hooks.borrow();
     let mut state = engine.state.borrow_mut();
     let moved = state.dom.get(id).is_some_and(|instance| instance.parent != parent);

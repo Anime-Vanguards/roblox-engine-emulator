@@ -1075,6 +1075,22 @@ impl ModelPlan {
         &self.text[span.range()]
     }
 
+    /// The distinct tags its instances carry, in the order first met (what a bundle not imported yet holds for CollectionService:
+    /// project::model_assets `import_tagged`)
+    pub fn tag_names(&self) -> Vec<&[u8]> {
+        let mut out: Vec<&[u8]> = Vec::new();
+        for &node in self.tagged.iter() {
+            let Some(extra) = self.extra(&self.nodes[node as usize]) else { continue };
+            for &tag in &self.tags[extra.tags.range()] {
+                let name = self.bytes(tag);
+                if !out.contains(&name) {
+                    out.push(name);
+                }
+            }
+        }
+        out
+    }
+
     fn extra(&self, node: &PlanNode) -> Option<&PlanExtra> {
         (node.extra != NO_EXTRA).then(|| &self.extras[node.extra as usize])
     }

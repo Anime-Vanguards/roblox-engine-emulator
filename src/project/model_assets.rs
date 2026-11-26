@@ -105,6 +105,8 @@ pub struct ModelAssets {
     /// A loopback client's copies of the server's instances where bundles wait (the server's mount's, sent at the join or in a
     /// tree): its server imports them when the client looks, and the copy takes what that made (src/loopback/lazy.rs)
     remote: FxHashSet<InstanceId>,
+    /// The tags of the bundles' instances (CollectionService: [`import_tagged`]), read when first asked for
+    tags: Option<Box<TagIndex>>,
 }
 
 fn folder(engine: &Engine, parent: InstanceId, name: &str) -> InstanceId {
@@ -164,7 +166,7 @@ pub fn mount(engine: &Engine, roots: &[String], chosen: &ModelAssetsOverride) {
             .collect();
         Decoding::start(files, reflection)
     });
-    engine.state.borrow_mut().project.model_assets = ModelAssets { source: Some(source), shape, project: project.into(), pending, decoding, recent, scene, imported: Vec::new(), root: Some(parent), aliases, remote: FxHashSet::default() };
+    engine.state.borrow_mut().project.model_assets = ModelAssets { source: Some(source), shape, project: project.into(), pending, decoding, recent, scene, imported: Vec::new(), root: Some(parent), aliases, remote: FxHashSet::default(), tags: None };
 }
 
 /// The folders of bundles `keys` below `parent` (as a game's installer makes a path's folders), with
@@ -178,12 +180,28 @@ fn place_all<'a>(engine: &Engine, parent: InstanceId, keys: impl Iterator<Item =
         for name in key.split('/').filter(|name| *name != LOOSE) {
             target = folder(engine, target, name);
         }
+        let mut state = engine.state.borrow_mut();
         if shape == BundleShape::Uploaded && !is_loose(key) {
-            engine.state.borrow_mut().dom.at_mut(target).set_flag(flags::BUNDLE_ROOT, true);
+            state.dom.at_mut(target).set_flag(flags::BUNDLE_ROOT, true);
         }
+        mark_above(&mut state, target);
         pending.entry(target).or_default().push(key.to_owned());
     }
     pending
+}
+
+/// Marks `id` and its ancestors [`flags::LAZY_ABOVE`], up to the first marked already: bundles wait below them, so a move of one
+/// into a world imports them first ([`before_parent`]), as a lazily imported plan's roots are made whole first
+fn mark_above(state: &mut State, id: InstanceId) {
+    let mut current = Some(id);
+    while let Some(node) = current {
+        let instance = state.dom.at_mut(node);
+        if instance.has(flags::LAZY_ABOVE) {
+            break;
+        }
+        instance.set_flag(flags::LAZY_ABOVE, true);
+        current = instance.parent;
+    }
 }
 
 /// `ree serve --warm`: the plans of the bundles the last recordings of this mount imported
@@ -241,6 +259,12 @@ impl ModelAssets {
     #[inline]
     pub(crate) fn waits_remotely(&self, id: InstanceId) -> bool {
         !self.remote.is_empty() && self.remote.contains(&id)
+    }
+
+    /// No bundle waits here, nor on a loopback client's server for a copy it holds
+    #[inline]
+    fn idle(&self) -> bool {
+        self.pending.is_empty() && self.remote.is_empty()
     }
 
     /// Notes whether bundles wait on a loopback client's server at the instance the client's `id` is a copy of
@@ -309,6 +333,8 @@ fn import(engine: &Engine, id: InstanceId, own_only: bool) {
         assets.imported.extend(keys.iter().cloned());
         (keys, source, assets.project.clone(), assets.decoding.clone(), assets.shape)
     };
+    // (a loopback server: the children `id` had, so its client's copy takes what the import made and took out, and nothing else)
+    let before: Option<Vec<InstanceId>> = engine.loopback.borrow().is_some().then(|| engine.state.borrow().dom.at(id).children.to_vec());
     for key in keys {
         let ahead = crate::timing::time("bundles: decoded ahead", || decoding.as_ref().and_then(|decoding| decoding.take(&key)));
         let result = match ahead {
@@ -330,8 +356,183 @@ fn import(engine: &Engine, id: InstanceId, own_only: bool) {
     }
     engine.state.borrow_mut().project.model_assets.source = Some(source);
     // (a loopback server's instance its client holds a copy of: the copy takes what the import made)
-    if engine.loopback.borrow().is_some() {
-        crate::loopback::lazy::bundle_imported(engine, id);
+    if let Some(before) = before {
+        crate::loopback::lazy::bundle_imported(engine, id, &before);
+    }
+}
+
+/// Before `id` moves under `parent` (lua/instance.rs set_parent): the bundles waiting at `parent` (its own, when it is a
+/// placeholder, and the loose ones whose members go into it) import first, so they come before `id`, as in the game, where they
+/// are in place (and a placeholder is the bundle's instance before it holds anything); and a subtree in
+/// which bundles wait that enters a world (the Workspace, a WorldModel, JointsService) imports them first, as the world's walks,
+/// its queries and the recorder read it whole with no script looking (its events then include them, as a plan region's do: the
+/// move makes it whole first). The folders above where it goes are marked as holding them ([`mark_above`]).
+pub fn before_parent(engine: &Engine, id: InstanceId, parent: InstanceId) {
+    let (waiting, enters) = {
+        let mut state = engine.state.borrow_mut();
+        if state.project.model_assets.idle() {
+            return;
+        }
+        let (Some(moving), Some(target)) = (state.dom.get(id), state.dom.get(parent)) else { return };
+        let holds = moving.flags & (flags::LAZY_ABOVE | flags::BUNDLE_ROOT) != 0;
+        let assets = &state.project.model_assets;
+        let waiting = target.has(flags::BUNDLE_ROOT) || assets.waits_at(parent) || assets.waits_remotely(parent);
+        let enters = holds && (state.dom.is_home(parent) || state.dom.home(parent).is_some());
+        if holds {
+            mark_above(&mut state, parent);
+        }
+        (waiting, enters)
+    };
+    if waiting {
+        materialize(engine, parent);
+    }
+    if enters {
+        entering_world(engine, id);
+    }
+}
+
+/// The bundles waiting in `id`'s subtree, imported (on a loopback client, by its server), each before what is below it, in the
+/// tree's order: the walk follows the instances marked as holding them ([`mark_above`])
+fn entering_world(engine: &Engine, id: InstanceId) {
+    let mut stack = vec![id];
+    while let Some(node) = stack.pop() {
+        if engine.state.borrow().dom.get(node).is_none() {
+            continue;
+        }
+        materialize(engine, node);
+        let state = engine.state.borrow();
+        let dom = &state.dom;
+        stack.extend(dom.at(node).children.iter().rev().copied().filter(|&child| dom.at(child).flags & (flags::LAZY_ABOVE | flags::BUNDLE_ROOT) != 0));
+    }
+}
+
+/// The tags each bundle file's instances carry, read from its plan once and kept in the state dir (`model-bundles/tags.json`,
+/// by the file's path, length and time), so CollectionService finds what waiting bundles hold without importing every one
+/// ([`import_tagged`])
+#[derive(Default)]
+struct TagIndex {
+    file: Option<PathBuf>,
+    /// By bundle file (path, length, time): its instances' tags
+    files: FxHashMap<String, Vec<String>>,
+    /// By key, in this engine: its instances' tags (none for a bundle that does not load)
+    keys: FxHashMap<String, Vec<String>>,
+    /// Files read in this engine: the state dir's index is written again
+    learned: bool,
+}
+
+impl TagIndex {
+    fn load(repo: &Path) -> TagIndex {
+        // (a cache of what the bundle files hold, which runs note themselves: the index is not)
+        let file = crate::state_dir(repo).join("model-bundles").join("tags.json");
+        let files = std::fs::read(&file).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_default();
+        TagIndex { file: Some(file), files, ..Default::default() }
+    }
+
+    /// Writes what it learned into the state dir's index (with what another run wrote there since)
+    fn save(&self) {
+        let Some(file) = self.file.as_ref().filter(|_| self.learned) else { return };
+        let mut files: FxHashMap<String, Vec<String>> = std::fs::read(file).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_default();
+        files.extend(self.files.iter().map(|(entry, tags)| (entry.clone(), tags.clone())));
+        // (an entry whose file is gone goes: a file's entry is its path, length and time)
+        files.retain(|entry, _| entry.rsplitn(3, '|').nth(2).is_some_and(|path| Path::new(path).is_file()));
+        let mut sorted: Vec<(&String, &Vec<String>)> = files.iter().collect();
+        crate::sort::by_key(&mut sorted, |(entry, _)| (*entry).clone());
+        let map: serde_json::Map<String, serde_json::Value> = sorted.into_iter().map(|(entry, tags)| (entry.clone(), json!(tags))).collect();
+        if let Some(directory) = file.parent() {
+            let _ = std::fs::create_dir_all(directory);
+        }
+        if let Ok(bytes) = serde_json::to_vec(&map) {
+            let _ = crate::files::write_atomic(file, &bytes);
+        }
+    }
+}
+
+/// The tags the instances of bundle `key` carry: from the index when its file is known there, else read from its plan (and
+/// kept); none when it does not load
+fn tags_of(engine: &Engine, key: &str) -> Vec<String> {
+    let (source, project) = {
+        let mut state = engine.state.borrow_mut();
+        let assets = &mut state.project.model_assets;
+        let index = assets.tags.get_or_insert_with(|| Box::new(TagIndex::load(&engine.options.repo)));
+        if let Some(tags) = index.keys.get(key) {
+            return tags.clone();
+        }
+        (assets.source.take(), assets.project.clone())
+    };
+    // (an import under way holds the source: this answers none, as the bundle is not in place yet)
+    let Some(mut source) = source else { return Vec::new() };
+    let file = source.cached(&project, key).or_else(|| source.bundle(&project, key).ok());
+    engine.state.borrow_mut().project.model_assets.source = Some(source);
+    let tags = match file {
+        Some(file) => {
+            crate::files::note(&file);
+            let entry = file_stamp(&file).map(|stamp| format!("{}|{}|{}", file.display(), stamp.len, stamp.modified));
+            let known = entry.as_ref().and_then(|entry| engine.state.borrow().project.model_assets.tags.as_ref().and_then(|index| index.files.get(entry).cloned()));
+            match known {
+                Some(tags) => tags,
+                None => {
+                    let tags: Vec<String> = convert_file(&engine.reflection, &file)
+                        .map(|(plan, _)| plan.tag_names().iter().map(|tag| String::from_utf8_lossy(tag).into_owned()).collect())
+                        .unwrap_or_default();
+                    if let (Some(entry), Some(index)) = (entry, engine.state.borrow_mut().project.model_assets.tags.as_mut()) {
+                        index.files.insert(entry, tags.clone());
+                        index.learned = true;
+                    }
+                    tags
+                }
+            }
+        }
+        None => Vec::new(),
+    };
+    if let Some(index) = engine.state.borrow_mut().project.model_assets.tags.as_mut() {
+        index.keys.insert(key.to_owned(), tags.clone());
+    }
+    tags
+}
+
+/// The instances where bundles wait whose instances carry `tag` (any tag: None), each once, in the order of their keys
+pub(crate) fn tagged_waiting(engine: &Engine, tag: Option<&str>) -> Vec<InstanceId> {
+    let mut waiting: Vec<(String, InstanceId)> = {
+        let state = engine.state.borrow();
+        state.project.model_assets.pending.iter().flat_map(|(&id, keys)| keys.iter().map(move |key| (key.clone(), id))).collect()
+    };
+    crate::sort::ord(&mut waiting);
+    let mut seen = FxHashSet::default();
+    let mut out = Vec::new();
+    for (key, id) in waiting {
+        if seen.contains(&id) {
+            continue;
+        }
+        let tags = tags_of(engine, &key);
+        let carries = match tag {
+            Some(tag) => tags.iter().any(|held| held == tag),
+            None => !tags.is_empty(),
+        };
+        if carries {
+            seen.insert(id);
+            out.push(id);
+        }
+    }
+    out
+}
+
+/// Before CollectionService lists instances by tag (GetTagged: `tag`; GetAllTags: any, None): the waiting bundles whose
+/// instances carry it import first, as a look inside each would (a loopback client's server imports those it holds copies of),
+/// so the list holds what the game has in place
+pub fn import_tagged(engine: &Engine, tag: Option<&str>) {
+    let (idle, remote) = {
+        let state = engine.state.borrow();
+        let assets = &state.project.model_assets;
+        (assets.pending.is_empty(), !assets.remote.is_empty())
+    };
+    if remote {
+        crate::loopback::lazy::import_tagged_on_server(engine, tag);
+    }
+    if idle {
+        return;
+    }
+    for id in tagged_waiting(engine, tag) {
+        materialize(engine, id);
     }
 }
 
@@ -494,6 +695,9 @@ fn child_of(engine: &Engine, at: InstanceId, name: &str) -> Option<InstanceId> {
 pub fn remember(engine: &Engine) {
     let state = engine.state.borrow();
     let assets = &state.project.model_assets;
+    if let Some(index) = &assets.tags {
+        index.save();
+    }
     let mut seen = FxHashSet::default();
     let keys: Vec<&str> = assets.imported.iter().map(String::as_str).filter(|key| seen.insert(*key)).collect();
     if let Some((path, previous)) = &assets.recent {
@@ -1560,7 +1764,7 @@ mod tests {
     /// and it is the one instance a script holds; a folder bundle keeps its folder (and its values),
     /// a bundle at a path below it lands inside it, a loose bundle's members go into the folder above,
     /// one that is not one instance mounts in a folder as before, and a bundle nothing looked at is
-    /// not fetched.
+    /// not fetched, until CollectionService lists a tag its instances carry (GetTagged imports it).
     #[test]
     fn an_uploaded_bundle_is_its_instance_at_its_path() {
         use crate::{Options, lua};
@@ -1670,7 +1874,6 @@ mod tests {
             Check(Found, "ByDescendants", Assets.Models.Deep.Below)
             local Copy = ByIndex:Clone()
             assert(Copy.ClassName == "Model" and Copy.PrimaryPart == Copy.Body and Copy:GetAttribute("Reach") == 5)
-            assert(table.find(game:GetService("CollectionService"):GetTagged("Machine"), ByIndex))
 
             local Units = Assets.Models.Units
             assert(Units.ClassName == "Folder" and Units:GetAttribute("Version") == 3)
@@ -1689,12 +1892,25 @@ mod tests {
         let fetched = fetched.borrow();
         assert!(!fetched.iter().any(|key| key == "Models/Machines/Untouched"), "fetched only what was looked at: {fetched:?}");
         assert_eq!(fetched.len(), keys.len() - 1, "{fetched:?}");
-        let mut state = engine.state.borrow_mut();
+        let state = engine.state.borrow();
         let assets = &state.project.model_assets;
         assert_eq!(assets.pending.len(), 1, "the untouched bundle still waits");
         assert_eq!(assets.pending.get(&untouched).map(Vec::as_slice), Some(&["Models/Machines/Untouched".to_string()][..]));
         let placeholder = state.dom.at(untouched);
         assert!(placeholder.has(flags::BUNDLE_ROOT) && &*engine.reflection.class(placeholder.class).name == "Folder");
+        drop(state);
+        drop(fetched);
+        // CollectionService lists every machine, the untouched one imported for it, as the game has every bundle in place
+        let env = lua::modules::environment(&vm, &engine, module).unwrap();
+        env.set("Assets", lua::instance_value(&vm, &engine, root).unwrap()).unwrap();
+        vm.load(r#"
+            local Tagged = game:GetService("CollectionService"):GetTagged("Machine")
+            assert(#Tagged == 8, #Tagged)
+            assert(table.find(Tagged, Assets.Models.Machines.ByIndex) and table.find(Tagged, Assets.Models.Machines.Untouched))
+            assert(Assets.Models.Machines.Untouched.ClassName == "Model")
+        "#).set_environment(env).exec().unwrap();
+        let mut state = engine.state.borrow_mut();
+        assert!(state.project.model_assets.pending.is_empty(), "the untouched bundle waits");
         state.project.model_assets.source = None;
         drop(state);
         let _ = std::fs::remove_dir_all(directory);

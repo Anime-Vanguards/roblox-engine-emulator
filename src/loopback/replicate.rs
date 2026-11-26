@@ -254,9 +254,9 @@ fn make_lazy_regions(server: &Engine, root: InstanceId, excluded: &[InstanceId])
 }
 
 /// The copy flags an instance's copy takes of it: whether it is a Studio-only placeholder, whether its Studio children were
-/// made (lazy.rs), and whether it is a bundle's placeholder (project::model_assets: the client's copy waits for the server
-/// to import it)
-const COPIED_FLAGS: u16 = flags::STUDIO_ONLY | flags::MATERIALIZED | flags::BUNDLE_ROOT;
+/// made (lazy.rs), whether it is a bundle's placeholder (project::model_assets: the client's copy waits for the server to
+/// import it), and whether bundles wait below it (a move of the copy into the client's world imports them first)
+const COPIED_FLAGS: u16 = flags::STUDIO_ONLY | flags::MATERIALIZED | flags::BUNDLE_ROOT | flags::LAZY_ABOVE;
 
 /// What a copy keeps of its original's place in the Studio snapshot and its lazy state: the node (none for a script's
 /// instance) and [`COPIED_FLAGS`]
@@ -559,6 +559,10 @@ fn install(server: &Rc<Engine>, bridge: &Rc<Bridge>, filter: Rc<Filter>, exclude
     let log = bridge.clone();
     hooks.instance_freed.push(Box::new(move |_, id| {
         log.ids.borrow_mut().to_client.remove(id);
+        let mut deferred = log.deferred.borrow_mut();
+        if !deferred.is_empty() {
+            deferred.remove(&id);
+        }
     }));
 }
 
@@ -777,50 +781,59 @@ fn tree(state: &mut State, reflection: &Reflection, filter: &Filter, root: Insta
     nodes
 }
 
-/// A bundle import on the server at `original`, which the client holds `copy` of (made while bundles waited there: by the
-/// join or a tree; lazy.rs `bundle_imported`): the copy takes what the import made at once, as the join copies, with no
-/// event. The bundles were the place's from the join on, made when first looked at, as a plain run makes them; so the
-/// client gets the instances as they were made, whichever side looked first and in whichever frame (a server's write after
-/// it reaches the client as any other). What the import made below `original` is made whole on the server first (the
-/// levels a lazy import leaves for later: they would be made without the engine's hooks, so nothing would send them) and
-/// replicates from now on as the join's copy does. A copy that stood for the bundle's root (its placeholder) becomes that
-/// root in place, as the server's did: its class, values and flags. The children the import took out of `original` (the
-/// Studio-only placeholders a bundle's members replace) leave the copy first, as a Parent message takes them out, so both
-/// lists keep one order (the server's Parent message for them moves nothing then). Returns how many instances the client
-/// made.
-pub(super) fn copy_import(server: &Engine, client: &Engine, bridge: &Bridge, original: InstanceId, copy: InstanceId) -> u64 {
+/// Makes the levels a lazy import left for later in the subtrees `made` (what an import made): they would be made without the
+/// engine's hooks, so nothing would send them; a client's copy and a tree take them whole
+pub(super) fn make_whole(server: &Engine, made: &[InstanceId]) {
+    let mut state = server.state.borrow_mut();
+    let mut stack: Vec<InstanceId> = made.to_vec();
+    while let Some(node) = stack.pop() {
+        if state.dom.get(node).is_none() {
+            continue;
+        }
+        if state.dom.at(node).has(flags::LAZY_PENDING) {
+            crate::project::materialize_lazy(&mut state, &server.reflection, node);
+        }
+        state.dom.at(node).children.copy_to(&mut stack);
+    }
+}
+
+/// Marks the subtrees `made` (what an import made below an instance the client has a copy of, or will have) [`flags::SENT`],
+/// and [`flags::STALE`] too when that instance is out of the containers: its client copy holds them
+pub(super) fn mark_sent(state: &mut State, original: InstanceId, made: &[InstanceId]) {
+    let stale = state.dom.at(original).flags & flags::STALE;
+    let mut stack: Vec<InstanceId> = made.to_vec();
+    while let Some(node) = stack.pop() {
+        let Some(instance) = state.dom.get_mut(node) else { continue };
+        instance.flags |= flags::SENT | stale;
+        state.dom.at(node).children.copy_to(&mut stack);
+    }
+}
+
+/// A bundle import on the server at `original`, which the client holds `copy` of (lazy.rs `bundle_imported`; `made`: the
+/// children the import made there, `removed`: those it took out): the copy takes what the import made at once, as the join
+/// copies, with no event. The bundles were the place's from the join on, made when first looked at, as a plain run makes
+/// them; so the client gets the instances as they were made, whichever side looked first and in whichever frame (a server's
+/// write after it reaches the client as any other). Only what the import made is copied: a child a script parented there
+/// meanwhile arrives as the server's changes do. What the import made is made whole on the server first ([`make_whole`]) and
+/// replicates from now on as the join's copy does. A copy that stood for the bundle's root (its placeholder) becomes that root
+/// in place, as the server's did: its class, values and flags. The children the import took out (the Studio-only placeholders
+/// a bundle's members replace) leave the copy first, as a Parent message takes them out, so both lists keep one order (the
+/// server's Parent message for them moves nothing then). Returns how many instances the client made.
+pub(super) fn copy_import(server: &Engine, client: &Engine, bridge: &Bridge, original: InstanceId, copy: InstanceId, made: &[InstanceId], removed: &[InstanceId]) -> u64 {
     let Some(filter) = bridge.filter.borrow().clone() else { return 0 };
-    // the Studio-only placeholders the import took out (the server's install unparented them)
+    // the client's copies of what the import took out, out of the copy
     let gone: Vec<InstanceId> = {
-        let server_state = server.state.borrow();
         let client_state = client.state.borrow();
         let ids = bridge.ids.borrow();
-        let taken = |child: InstanceId| {
-            let counterpart = ids.to_server.get(child).and_then(|counterpart| server_state.dom.get(counterpart));
-            counterpart.is_some_and(|counterpart| counterpart.parent.is_none() && counterpart.has(flags::STUDIO_ONLY) && counterpart.flags & flags::DESTROYED == 0)
-        };
-        client_state.dom.at(copy).children.iter().copied().filter(|&child| taken(child)).collect()
+        removed.iter().filter_map(|&child| ids.to_client.get(child)).filter(|&child| client_state.dom.get(child).is_some_and(|instance| instance.parent == Some(copy))).collect()
     };
     // (the server's Parent message for each, at the client's next frame, pins the copy as it pins any the server took out)
     for child in gone {
         let _ = crate::lua::instance::set_parent(client, child, None);
     }
-    // the server's levels the import left for later, made now (what is sent already, and the copy's tree below it, is whole)
-    {
-        let mut state = server.state.borrow_mut();
-        let mut stack = vec![original];
-        while let Some(node) = stack.pop() {
-            if node != original && state.dom.at(node).flags & flags::SENT != 0 {
-                continue;
-            }
-            if state.dom.at(node).has(flags::LAZY_PENDING) {
-                crate::project::materialize_lazy(&mut state, &server.reflection, node);
-            }
-            state.dom.at(node).children.copy_to(&mut stack);
-        }
-    }
+    make_whole(server, made);
     let reflection = &client.reflection;
-    let mut made: Vec<(InstanceId, InstanceId)> = Vec::new();
+    let mut copied: Vec<(InstanceId, InstanceId)> = Vec::new();
     {
         let mut server_state = server.state.borrow_mut();
         let mut client_state = client.state.borrow_mut();
@@ -836,22 +849,21 @@ pub(super) fn copy_import(server: &Engine, client: &Engine, bridge: &Bridge, ori
             client_state.dom.at_mut(copy).flags &= !((flags::STUDIO_ONLY | flags::BUNDLE_ROOT) & !kept);
             client_state.dom.note_written(copy);
         }
-        // the server's children the copy lacks, each with what is below it, after the copy's own, in the server's order (each
-        // list in its order: a node's children are pushed last first)
-        let flags_of = server_state.dom.at(original).flags;
-        let marks = flags::SENT | (flags_of & (flags::REPLICATED | flags::STALE));
+        // what the import made the client lacks, each with what is below it, after the copy's own children, in the server's
+        // order (each list in its order: a node's children are pushed last first)
+        let lacks = |ids: &super::bridge::Ids, client_state: &State, node: InstanceId| ids.to_client.get(node).is_none_or(|copy| client_state.dom.get(copy).is_none());
         let mut stack: Vec<(InstanceId, InstanceId)> = Vec::new();
-        stack.extend(server_state.dom.at(original).children.iter().rev().filter(|&&child| server_state.dom.at(child).flags & flags::SENT == 0).map(|&child| (child, copy)));
+        stack.extend(made.iter().rev().filter(|&&root| server_state.dom.get(root).is_some_and(|instance| instance.parent == Some(original)) && lacks(&ids, &client_state, root)).map(|&root| (root, copy)));
         while let Some((node, parent)) = stack.pop() {
             let class = server_state.dom.at(node).class;
             let made_copy = core::create(&mut client_state, reflection, class);
             client_state.dom.attach(made_copy, parent);
             ids.pair(node, made_copy);
             copy_values(&server_state, &mut client_state, reflection, &filter, node, made_copy, true, (&mut refs, &mut attribute_refs), crate::services::note_tag);
-            server_state.dom.at_mut(node).flags |= marks;
-            made.push((node, made_copy));
+            copied.push((node, made_copy));
             stack.extend(server_state.dom.at(node).children.iter().rev().map(|&child| (child, made_copy)));
         }
+        mark_sent(&mut server_state, original, made);
         // instance values, every copy made: the client's copy, or nil for one it lacks
         for (holder, name, target) in refs {
             let value = ids.to_client.get(target).map_or(Value::Nil, Value::Instance);
@@ -861,7 +873,7 @@ pub(super) fn copy_import(server: &Engine, client: &Engine, bridge: &Bridge, ori
             set_attribute_ref(&mut client_state, holder, &name, ids.to_client.get(target));
         }
         // (made in place, as the import made the server's: their joints are indexed as theirs are)
-        for &(_, made_copy) in &made {
+        for &(_, made_copy) in &copied {
             crate::world::joints::made_in_place(&mut client_state, reflection, made_copy);
         }
         if placeholder {
@@ -872,12 +884,12 @@ pub(super) fn copy_import(server: &Engine, client: &Engine, bridge: &Bridge, ori
         mirror_waiting(&server_state, &mut client_state, &ids, std::iter::once(original));
     }
     // the own collision groups of the WorldModels among them
-    for (index, snapshot) in crate::services::physics::sent_models(server, made.iter().map(|&(node, _)| node)) {
-        if let Some(&(_, made_copy)) = made.get(index as usize) {
+    for (index, snapshot) in crate::services::physics::sent_models(server, copied.iter().map(|&(node, _)| node)) {
+        if let Some(&(_, made_copy)) = copied.get(index as usize) {
             crate::services::physics::apply_model_snapshot(client, made_copy, snapshot);
         }
     }
-    let count = made.len() as u64;
+    let count = copied.len() as u64;
     bridge.stats.borrow_mut().created += count;
     count
 }
@@ -971,6 +983,23 @@ pub fn apply(lua: &Lua, client: &Rc<Engine>, endpoint: &Rc<Endpoint>, message: M
             for (index, snapshot) in groups {
                 if let Some(&copy) = made.get(index as usize) {
                     crate::services::physics::apply_model_snapshot(client, copy, snapshot);
+                }
+            }
+            // what the server imported at an instance of the tree after the tree was sealed: in the tree before it enters, as
+            // the bundle was in place (lazy.rs bundle_imported)
+            let deferred: Vec<(InstanceId, InstanceId, Vec<InstanceId>, Vec<InstanceId>)> = {
+                let mut deferred = bridge.deferred.borrow_mut();
+                if deferred.is_empty() {
+                    Vec::new()
+                } else {
+                    nodes.iter().zip(&made).filter_map(|(node, &copy)| deferred.remove(&node.id).map(|(imported, removed)| (node.id, copy, imported, removed))).collect()
+                }
+            };
+            if !deferred.is_empty()
+                && let Some((_, server)) = client.peer_server()
+            {
+                for (original, copy, imported, removed) in deferred {
+                    copy_import(&server, client, bridge, original, copy, &imported, &removed);
                 }
             }
             // the tree enters at once: its DescendantAdded, ChildAdded, the tagged instances' added signals

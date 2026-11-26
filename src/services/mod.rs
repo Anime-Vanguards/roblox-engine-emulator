@@ -957,6 +957,9 @@ fn install_collection_service(behaviors: &mut Behaviors, reflection: &Reflection
         if let Some(n) = name(reflection, "GetTagged") {
             behaviors.add_method(collection, n, strings(FIRST, method(|lua, engine, _, args| {
                 let tag = args.string(1).map(|s| Str::new(&s.as_bytes())).unwrap_or_default();
+                // (the waiting bundles that hold the tag import first: the list is the game's, every bundle in place)
+                #[cfg(feature = "bundles")]
+                crate::project::model_assets::import_tagged(engine, Some(&*String::from_utf8_lossy(tag.as_bytes())));
                 let game = engine.world().game;
                 let tagged = tagged_below(&mut engine.state.borrow_mut(), game, &tag);
                 // (an instance it lists: cost.rs TAGGED_LISTED)
@@ -973,6 +976,9 @@ fn install_collection_service(behaviors: &mut Behaviors, reflection: &Reflection
         // GetAllTags: every tag in the DataModel, in first-seen order of a depth-first walk
         if let Some(n) = name(reflection, "GetAllTags") {
             behaviors.add_method(collection, n, method(|lua, engine, _, _| {
+                // (the waiting bundles that hold any tag import first, so their tags come in the walk's order)
+                #[cfg(feature = "bundles")]
+                crate::project::model_assets::import_tagged(engine, None);
                 let game = engine.world().game;
                 let mut tags: Vec<Str> = Vec::new();
                 {

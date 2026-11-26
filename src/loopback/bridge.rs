@@ -214,6 +214,10 @@ pub struct Bridge {
     pub ranks: RefCell<super::replicate::Ranks>,
     /// The client engine (the server's way to it: a bundle the server imports goes to the client's copy at once, lazy.rs)
     pub client: RefCell<std::rc::Weak<crate::Engine>>,
+    /// Bundle imports at server instances whose client copies are on their way (in a tree sealed before the import): by the
+    /// server's instance, what the import made there and took out; the copy takes them when its tree arrives (lazy.rs
+    /// bundle_imported, replicate.rs apply)
+    pub deferred: RefCell<rustc_hash::FxHashMap<InstanceId, (Vec<InstanceId>, Vec<InstanceId>)>>,
 }
 
 impl Bridge {
@@ -235,6 +239,7 @@ impl Bridge {
             filter: Default::default(),
             ranks: Default::default(),
             client: RefCell::new(std::rc::Weak::new()),
+            deferred: Default::default(),
         }
     }
 

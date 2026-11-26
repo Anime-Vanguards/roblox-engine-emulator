@@ -1632,13 +1632,68 @@ fn bundle_project(name: &str) -> (PathBuf, PathBuf, Vec<(String, PathBuf)>) {
         dom.insert(content, InstanceBuilder::new("Part").with_name("Shield"));
         write(&loose, &dom);
     }
+    // a folder bundle (a Folder with an attribute and a model) and a bundle at a path below it
+    let units = dir.join("units.rbxm");
+    {
+        let mut dom = WeakDom::new(InstanceBuilder::new("DataModel"));
+        let mut attributes = Attributes::new();
+        attributes.insert("Version".into(), Variant::Float64(3.0));
+        let folder = dom.insert(dom.root_ref(), InstanceBuilder::new("Folder").with_name("Units").with_property("Attributes", attributes));
+        let old = dom.insert(folder, InstanceBuilder::new("Model").with_name("Old"));
+        dom.insert(old, InstanceBuilder::new("Part").with_name("Torso"));
+        write(&units, &dom);
+    }
+    let nested = dir.join("nested.rbxm");
+    {
+        let mut dom = WeakDom::new(InstanceBuilder::new("DataModel"));
+        let model = dom.insert(dom.root_ref(), InstanceBuilder::new("Model").with_name("Nested"));
+        dom.insert(model, InstanceBuilder::new("Part").with_name("Head"));
+        write(&nested, &dom);
+    }
     let files = vec![
         ("Models/Items/_Loose".to_string(), loose),
+        // (a bundle whose file is missing: it does not load)
+        ("Models/Machines/Broken".to_string(), dir.join("missing.rbxm")),
         ("Models/Machines/ServerFirst".to_string(), machine.clone()),
         ("Models/Machines/Touched".to_string(), machine.clone()),
         ("Models/Machines/Untouched".to_string(), machine),
+        ("Models/Units".to_string(), units),
+        ("Models/Units/Nested".to_string(), nested),
     ];
     (dir, root, files)
+}
+
+/// `ree run --run-context loopback` of `harness` on [`bundle_project`]'s project with its bundles mounted at `mount`
+/// (`--assets-at`): the run, its emulator (which holds the server) and the bundles fetched, in order
+#[cfg(feature = "bundles")]
+fn run_bundles(name: &str, harness: &str, mount: &str, extra: &[&str]) -> (run::Done, crate::Emulator, Vec<String>, PathBuf) {
+    let (dir, root, files) = bundle_project(name);
+    let fetched = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let host = bundle_host(files, &fetched);
+    let file = dir.join("Harness.luau");
+    std::fs::write(&file, harness).unwrap();
+    let mut words: Vec<String> = ["--harness", &file.to_string_lossy(), "--roots", &root.to_string_lossy(), "--seconds", "1", "--run-context", "loopback", "--assets-at", mount, "--assets", "Models"].iter().map(|s| s.to_string()).collect();
+    words.extend(extra.iter().map(|s| s.to_string()));
+    let args = run::parse(&words, false).unwrap();
+    let (done, emulator) = run::execute(&args, &host, false).unwrap();
+    let fetched = fetched.borrow().clone();
+    (done, emulator, fetched, dir)
+}
+
+/// The instance at `path` (names from the service `service`) of `engine`, as its dom holds it (no script's look)
+#[cfg(feature = "bundles")]
+fn at_path(engine: &crate::Engine, service: &str, path: &[&str]) -> Option<crate::InstanceId> {
+    let start = crate::services::find_service(engine, engine.world().game, service)?;
+    let state = engine.state.borrow();
+    path.iter().try_fold(start, |at, name| state.dom.find_child(at, name.as_bytes()))
+}
+
+/// The class name and child count of `id` in `engine`
+#[cfg(feature = "bundles")]
+fn shape(engine: &crate::Engine, id: crate::InstanceId) -> (String, usize) {
+    let state = engine.state.borrow();
+    let instance = state.dom.at(id);
+    (engine.reflection.class(instance.class).name.to_string(), instance.children.len())
 }
 
 /// A test host whose engines take their bundles from [`Bundles`], each fetch noted in `fetched`
@@ -1764,7 +1819,7 @@ fn a_bundle_waiting_in_a_world_is_imported_at_the_join() {
     let args = run::parse(&words, false).unwrap();
     let (done, emulator) = run::execute(&args, &host, false).unwrap();
     assert_eq!(done.summary["status"], "ok", "{:?}", lines(&done.summary));
-    assert_eq!(fetched.borrow().len(), 4, "every bundle in the Workspace was imported at the join: {:?}", fetched.borrow());
+    assert_eq!(fetched.borrow().len(), 7, "every bundle in the Workspace was imported at the join: {:?}", fetched.borrow());
     let client = &emulator.engine;
     let state = client.state.borrow();
     let machines = ["Library", "Models", "Machines"].iter().try_fold(client.world().workspace, |at, name| state.dom.find_child(at, name.as_bytes())).unwrap();
@@ -1774,6 +1829,328 @@ fn a_bundle_waiting_in_a_world_is_imported_at_the_join() {
     assert!(!instance.has(crate::dom::flags::BUNDLE_ROOT) && instance.children.len() == 2, "the client's copy is whole");
     assert!(!state.project.model_assets.waits_remotely(untouched), "the client's copy waits for its server");
     drop(state);
+    drop(emulator);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A child a server script parents into a folder where loose bundles wait arrives as the server's changes do (its ChildAdded at
+/// the client's next frame), and the bundles' members come first in both lists, as in the game, where they are in place: the
+/// parenting imports them, and the client's copy takes them at once (no event); the import copies only what it made
+#[cfg(feature = "bundles")]
+#[test]
+fn a_script_child_in_a_bundle_folder_arrives_as_a_change_after_the_bundles_members() {
+    let (done, emulator, fetched, dir) = run_bundles(
+        "bundles-script-child",
+        r##"
+local Storage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local function Frames(Count)
+	for _ = 1, Count do
+		RunService.Heartbeat:Wait()
+	end
+end
+local function Names(Folder)
+	local Out = {}
+	for _, Child in Folder:GetChildren() do
+		table.insert(Out, Child.Name)
+	end
+	return table.concat(Out, " ")
+end
+return {
+	Server = function(Context)
+		Frames(3)
+		local Items = Storage.Library.Models.Items
+		local Made = Instance.new("Model")
+		Made.Name = "Made"
+		Made.Parent = Items
+		print("server", Names(Items))
+	end,
+	Client = function(Context)
+		local Items = Storage.Library.Models.Items
+		local Added = {}
+		Items.ChildAdded:Connect(function(Child)
+			table.insert(Added, Child.Name)
+		end)
+		Frames(6)
+		print("client", Names(Items), "added", table.concat(Added, " "))
+		print("@done")
+	end,
+}
+"##,
+        "ReplicatedStorage.Library",
+        &[],
+    );
+    let lines = lines(&done.summary);
+    assert_eq!(done.summary["status"], "ok", "{lines:?}");
+    assert!(has(&lines, "server print: server Sword Shield Made"), "{lines:?}");
+    assert!(has(&lines, "client print: client Sword Shield Made added Made"), "{lines:?}");
+    assert_eq!(fetched, ["Models/Items/_Loose"]);
+    drop(emulator);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A bundle the server imports while its client's copy is on its way reaches the client with it: one revealed in the frame
+/// its folder came into the containers goes whole in that frame's tree, and one revealed after that tree was sealed is taken by
+/// the copy when the tree arrives, before it enters (its ChildAdded and DescendantAdded include the bundle's instances)
+#[cfg(feature = "bundles")]
+#[test]
+fn a_bundle_imported_before_its_tree_reaches_the_client_arrives_with_it() {
+    let (done, emulator, fetched, dir) = run_bundles(
+        "bundles-tree",
+        r##"
+local Storage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+return {
+	Server = function(Context)
+		task.wait(0.1)
+		game:GetService("ServerStorage").Library.Models.Parent = Storage
+		local Touched = Storage.Models.Machines.Touched
+		print("server touched", Touched.ClassName, #Touched:GetChildren())
+		RunService.Heartbeat:Wait()
+		local Late = Storage.Models.Machines.ServerFirst
+		print("server late", Late.ClassName, #Late:GetChildren())
+	end,
+	Client = function(Context)
+		local Added = 0
+		Storage.DescendantAdded:Connect(function()
+			Added += 1
+		end)
+		local Machines = Storage:WaitForChild("Models"):WaitForChild("Machines")
+		local Touched, Late = Machines.Touched, Machines.ServerFirst
+		print("client", Touched.ClassName, #Touched:GetChildren(), Late.ClassName, #Late:GetChildren(), Late.PrimaryPart == Late.Body)
+		task.wait()
+		print("client added", Added)
+		print("@done")
+	end,
+}
+"##,
+        "ServerStorage.Library",
+        &[],
+    );
+    let lines = lines(&done.summary);
+    assert_eq!(done.summary["status"], "ok", "{lines:?}");
+    assert!(has(&lines, "server print: server touched Model 2"), "{lines:?}");
+    assert!(has(&lines, "server print: server late Model 2"), "{lines:?}");
+    assert!(has(&lines, "client print: client Model 2 Model 2 true"), "{lines:?}");
+    // (the tree's Models, Items, Units and their folders, the three machines, Broken, both machines' two parts each)
+    assert!(lines.iter().any(|line| line.starts_with("client print: client added ") && line != "client print: client added 0"), "{lines:?}");
+    assert_eq!(fetched, ["Models/Machines/Touched", "Models/Machines/ServerFirst"]);
+    drop(emulator);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A subtree holding waiting bundles that enters a world after the join imports them first, on either side, as a world's walks
+/// and recorder read it whole with no script looking: the server's move into its Workspace (its client's copy moving with it),
+/// and the client's own move of its copy into its Workspace (its server imports, the copy takes the members)
+#[cfg(feature = "bundles")]
+#[test]
+fn a_bundle_entering_a_world_after_the_join_is_imported_on_either_side() {
+    let (done, emulator, fetched, dir) = run_bundles(
+        "bundles-world-entry",
+        r##"
+local Storage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+return {
+	Server = function(Context)
+		task.wait(0.1)
+		Storage.Library.Models.Machines.Parent = workspace
+	end,
+	Client = function(Context)
+		Storage.Library.Models.Items.Parent = workspace
+		workspace:WaitForChild("Machines")
+		task.wait()
+		print("@done")
+	end,
+}
+"##,
+        "ReplicatedStorage.Library",
+        &[],
+    );
+    let lines = lines(&done.summary);
+    assert_eq!(done.summary["status"], "ok", "{lines:?}");
+    let (_, server) = emulator.engine.peer_server().unwrap();
+    let client = &emulator.engine;
+    for (side, engine) in [("server", &server), ("client", client)] {
+        for name in ["Touched", "Untouched", "ServerFirst"] {
+            let id = at_path(engine, "Workspace", &["Machines", name]).unwrap_or_else(|| panic!("{side} {name}"));
+            assert_eq!(shape(engine, id), ("Model".to_string(), 2), "the {side}'s {name} in its world");
+        }
+    }
+    let items = at_path(client, "Workspace", &["Items"]).unwrap();
+    assert_eq!(shape(client, items), ("Folder".to_string(), 2), "the client's Items in its world");
+    let server_items = at_path(&server, "ReplicatedStorage", &["Library", "Models", "Items"]).unwrap();
+    assert_eq!(shape(&server, server_items), ("Folder".to_string(), 2), "the server's Items, imported for the client's move");
+    assert!(fetched.iter().any(|key| key == "Models/Machines/Untouched") && fetched.iter().any(|key| key == "Models/Items/_Loose"), "{fetched:?}");
+    assert!(!fetched.iter().any(|key| key == "Models/Units"), "a bundle that stayed out of the worlds: {fetched:?}");
+    drop(server);
+    drop(emulator);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// CollectionService lists what waiting bundles hold as the game has them in place: GetTagged imports first the waiting bundles
+/// whose instances carry the tag (and none other), GetAllTags those carrying any tag, on either side; a placeholder passed to
+/// an engine method (AddTag) is the bundle's instance first
+#[cfg(feature = "bundles")]
+#[test]
+fn collection_service_finds_the_tags_waiting_bundles_hold() {
+    let (done, emulator, fetched, dir) = run_bundles(
+        "bundles-tags",
+        r##"
+local Storage = game:GetService("ReplicatedStorage")
+local CollectionService = game:GetService("CollectionService")
+return {
+	Server = function(Context)
+		task.wait(0.2)
+		print("server tagged", #CollectionService:GetTagged("Machine"))
+	end,
+	Client = function(Context)
+		local Tagged = CollectionService:GetTagged("Machine")
+		local Names = {}
+		for _, Machine in Tagged do
+			table.insert(Names, Machine.Name .. ":" .. Machine.ClassName)
+		end
+		table.sort(Names)
+		print("client tagged", table.concat(Names, " "))
+		print("client none", #CollectionService:GetTagged("Nothing"), table.find(CollectionService:GetAllTags(), "Machine") ~= nil)
+		-- (the folder bundle's first child is the nested bundle's placeholder, listed, not touched)
+		local Placeholder = Storage.Library.Models.Units:GetChildren()[1]
+		CollectionService:AddTag(Placeholder, "Seen")
+		local Items = #Storage.Library.Models.Items:GetChildren()
+		print("client added", Placeholder.ClassName, Placeholder:HasTag("Seen"), #Placeholder:GetChildren(), Items)
+		task.wait(0.3)
+		print("@done")
+	end,
+}
+"##,
+        "ReplicatedStorage.Library",
+        &[],
+    );
+    let lines = lines(&done.summary);
+    assert_eq!(done.summary["status"], "ok", "{lines:?}");
+    assert!(has(&lines, "server print: server tagged 3"), "{lines:?}");
+    assert!(has(&lines, "client print: client tagged ServerFirst:Model Touched:Model Untouched:Model"), "{lines:?}");
+    assert!(has(&lines, "client print: client none 0 true"), "{lines:?}");
+    assert!(has(&lines, "client print: client added Model true 1 2"), "{lines:?}");
+    // (every bundle read once for its tags, each machine imported once; the placeholder AddTag took imported then, before the
+    // look inside Items)
+    assert_eq!(fetched.iter().filter(|key| *key == "Models/Machines/Untouched").count(), 2, "{fetched:?}");
+    assert_eq!(fetched[fetched.len() - 3..], ["Models/Units", "Models/Units/Nested", "Models/Items/_Loose"], "{fetched:?}");
+    drop(emulator);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A bundle's copy takes it with no event, in the step the server imports it and as it was then (with two frames of latency, the
+/// server's write right after the import reaches the client a step later), once (a look inside on the server, which runs the
+/// Studio-children pass, makes no second copy)
+#[cfg(feature = "bundles")]
+#[test]
+fn a_bundles_copy_fires_no_event_and_takes_it_in_the_step_it_is_imported() {
+    let (done, emulator, fetched, dir) = run_bundles(
+        "bundles-step",
+        r##"
+local Storage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local function Frames(Count)
+	for _ = 1, Count do
+		RunService.Heartbeat:Wait()
+	end
+end
+return {
+	Server = function(Context)
+		Frames(5)
+		local Machine = Storage.Library.Models.Machines.ServerFirst
+		Machine.Lamp.Transparency = 0.25
+		print("server children", #Machine:GetChildren())
+	end,
+	Client = function(Context)
+		local Added = 0
+		Storage.Library.DescendantAdded:Connect(function()
+			Added += 1
+		end)
+		local Touched = Storage.Library.Models.Machines.Touched
+		print("client touched", #Touched:GetChildren())
+		Frames(5)
+		local Machine = Storage.Library.Models.Machines.ServerFirst
+		print("client same step", Machine.ClassName, Machine.Lamp.Transparency, #Machine:GetChildren())
+		Frames(1)
+		print("client next step", Machine.Lamp.Transparency, #Machine:GetChildren())
+		Frames(2)
+		print("client added", Added)
+		print("@done")
+	end,
+}
+"##,
+        "ReplicatedStorage.Library",
+        &["--latency", "2"],
+    );
+    let lines = lines(&done.summary);
+    assert_eq!(done.summary["status"], "ok", "{lines:?}");
+    assert!(has(&lines, "client print: client touched 2"), "{lines:?}");
+    assert!(has(&lines, "server print: server children 2"), "{lines:?}");
+    assert!(has(&lines, "client print: client same step Model 0 2"), "{lines:?}");
+    assert!(has(&lines, "client print: client next step 0.25 2"), "{lines:?}");
+    assert!(has(&lines, "client print: client added 0"), "{lines:?}");
+    assert_eq!(fetched, ["Models/Machines/Touched", "Models/Machines/ServerFirst"]);
+    drop(emulator);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A bundle that does not load leaves its copy a Folder (the server's warning, fetched once), a bundle at a path below a folder
+/// bundle lands in it on both sides and pairs with the server's, and a copy the client destroyed takes nothing when the server
+/// imports it later
+#[cfg(feature = "bundles")]
+#[test]
+fn a_broken_a_nested_and_a_destroyed_bundle_copy() {
+    let (done, emulator, fetched, dir) = run_bundles(
+        "bundles-edges",
+        r##"
+local Storage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+return {
+	Server = function(Context)
+		local Remote = Instance.new("RemoteEvent")
+		Remote.Name = "Ping"
+		Remote.Parent = Storage
+		Remote.OnServerEvent:Connect(function(Player, Head, Torso)
+			local Units = Storage.Library.Models.Units
+			print("server got", Head == Units.Nested.Head, Torso == Units.Old.Torso)
+		end)
+		task.wait(0.2)
+		local Machine = Storage.Library.Models.Machines.ServerFirst
+		Machine.Lamp.Transparency = 0.5
+		print("server after", Machine.ClassName, #Machine:GetChildren())
+	end,
+	Client = function(Context)
+		local Remote = Storage:WaitForChild("Ping")
+		local Machines = Storage.Library.Models.Machines
+		local Broken = Machines.Broken
+		print("client broken", Broken.ClassName, #Broken:GetChildren(), Machines.Broken.ClassName)
+		local Units = Storage.Library.Models.Units
+		local Head = Units.Nested.Head
+		print("client units", Units.ClassName, Units:GetAttribute("Version"), #Units:GetChildren(), Units.Nested.ClassName, Units.Old.Torso.ClassName)
+		Remote:FireServer(Head, Units.Old.Torso)
+		Machines:Destroy()
+		task.wait(0.4)
+		print("@done")
+	end,
+}
+"##,
+        "ReplicatedStorage.Library",
+        &[],
+    );
+    let lines = lines(&done.summary);
+    assert_eq!(done.summary["status"], "ok", "{lines:?}");
+    assert!(has(&lines, "client print: client broken Folder 0 Folder"), "{lines:?}");
+    assert!(lines.iter().any(|line| line.starts_with("server warn: modelAssets Models/Machines/Broken")), "{lines:?}");
+    assert!(has(&lines, "client print: client units Folder 3 2 Model Part"), "{lines:?}");
+    assert!(has(&lines, "server print: server got true true"), "{lines:?}");
+    assert!(has(&lines, "server print: server after Model 2"), "{lines:?}");
+    assert_eq!(fetched.iter().filter(|key| *key == "Models/Machines/Broken").count(), 1, "{fetched:?}");
+    let (_, server) = emulator.engine.peer_server().unwrap();
+    let machine = at_path(&server, "ReplicatedStorage", &["Library", "Models", "Machines", "ServerFirst"]).unwrap();
+    let copy = crate::loopback::counterpart(&server, machine);
+    assert!(copy.is_none_or(|copy| emulator.engine.state.borrow().dom.get(copy).is_none_or(|instance| instance.has(crate::dom::flags::DESTROYED) && instance.children.is_empty())), "the destroyed copy took the bundle");
+    drop(server);
     drop(emulator);
     let _ = std::fs::remove_dir_all(&dir);
 }

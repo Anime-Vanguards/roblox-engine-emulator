@@ -985,7 +985,13 @@ impl History {
 
     fn save(&self, engine: &Engine) {
         #[cfg(feature = "bundles")]
-        project::model_assets::remember(engine);
+        {
+            project::model_assets::remember(engine);
+            // (a loopback run's bundles are its server's: their imports and tags)
+            if let Some((_, server)) = engine.peer_server() {
+                project::model_assets::remember(&server);
+            }
+        }
         let mut files = modules::required_files(engine);
         // (a loopback run's server requires most of what both sides do)
         if let Some((_, server)) = engine.peer_server() {
