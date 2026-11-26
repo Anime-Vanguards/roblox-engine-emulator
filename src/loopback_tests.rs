@@ -2745,3 +2745,103 @@ return {
     assert!(has(&lines, "client print: client added ServerFirst Touched Untouched"), "{lines:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A script that connects GetInstanceRemovedSignal for a tag gets it for the tagged instances of the waiting bundles in a subtree
+/// that leaves the DataModel, whichever way it leaves (`Parent = nil`, Remove, Destroy, ClearAllChildren of its parent), as the
+/// game's does: the bundles carrying the tag import before it leaves, and the others stay waiting
+#[cfg(feature = "bundles")]
+#[test]
+fn a_subtree_leaving_with_waiting_bundles_fires_the_removed_signal_of_their_tags() {
+    let mut wrong = Vec::new();
+    for (at, leave) in ["Machines.Parent = nil", "Machines:Remove()", "Machines:Destroy()", "Models:ClearAllChildren()"].into_iter().enumerate() {
+        let (dir, root, files) = bundle_project(&format!("bundles-removed-signal-{at}"));
+        let fetched = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let (lines, emulator) = run_on(
+            &dir,
+            &root,
+            &bundle_host(files, &fetched),
+            &format!(
+                r##"
+local CollectionService = game:GetService("CollectionService")
+return function(Context)
+	local Removed = {{}}
+	CollectionService:GetInstanceRemovedSignal("Machine"):Connect(function(Machine)
+		table.insert(Removed, Machine.Name)
+	end)
+	local Models = game:GetService("ReplicatedStorage").Library.Models
+	local Machines = Models.Machines
+	{leave}
+	task.wait()
+	table.sort(Removed)
+	print("removed", table.concat(Removed, " "))
+	print("@done")
+end
+"##
+            ),
+            false,
+            &[],
+        );
+        drop(emulator);
+        if !has(&lines, "- print: removed ServerFirst Touched Untouched") {
+            wrong.push(format!("{leave}: {lines:?}"));
+        }
+        // (the bundles carrying no such tag were not imported)
+        if fetched.borrow().iter().any(|key| key.starts_with("Models/Units") || key.starts_with("Models/Items")) {
+            wrong.push(format!("{leave} imported others: {:?}", fetched.borrow()));
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+    assert!(wrong.is_empty(), "{wrong:#?}");
+}
+
+/// A loopback client that connects GetInstanceRemovedSignal for a tag gets it for the tagged instances of the waiting bundles
+/// below a server instance that leaves (the server destroys it, or parents it to nil), as a client of the game does, though
+/// nothing on the server listens: the bundles carrying the tag import at the client's copy before it leaves (from the server's
+/// source when the server's instance is destroyed, else by the server, whose import the copy takes)
+#[cfg(feature = "bundles")]
+#[test]
+fn a_loopback_client_gets_the_removed_signal_of_waiting_bundles_its_server_takes_out() {
+    let mut wrong = Vec::new();
+    for (at, leave) in ["Machines:Destroy()", "Machines.Parent = nil"].into_iter().enumerate() {
+        let (dir, root, files) = bundle_project(&format!("bundles-client-removed-{at}"));
+        let none = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let (lines, emulator) = run_on(
+            &dir,
+            &root,
+            &bundle_host(files, &none),
+            &format!(
+                r##"
+local Library = game:GetService("ReplicatedStorage"):WaitForChild("Library")
+local CollectionService = game:GetService("CollectionService")
+return {{
+	Server = function(Context)
+		task.wait(0.1)
+		local Machines = Library.Models.Machines
+		{leave}
+	end,
+	Client = function(Context)
+		local Removed = {{}}
+		CollectionService:GetInstanceRemovedSignal("Machine"):Connect(function(Machine)
+			table.insert(Removed, Machine.Name)
+		end)
+		local Machines = Library:WaitForChild("Models"):WaitForChild("Machines")
+		Machines.AncestryChanged:Wait()
+		task.wait()
+		table.sort(Removed)
+		print("client removed", table.concat(Removed, " "))
+		print("@done")
+	end,
+}}
+"##
+            ),
+            true,
+            &[],
+        );
+        drop(emulator);
+        if !has(&lines, "client print: client removed ServerFirst Touched Untouched") {
+            wrong.push(format!("{leave}: {lines:?}"));
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+    assert!(wrong.is_empty(), "{wrong:#?}");
+}

@@ -139,8 +139,11 @@ fn pair_lazily(from: &Engine, from_end: &Endpoint, to: &Engine, to_end: &Endpoin
 pub fn import_on_server(client: &Engine, id: InstanceId, own_only: bool) {
     let original = client.loopback().and_then(|endpoint| endpoint.bridge.ids.borrow().to_server.get(id));
     let server = client.peer_server().map(|(_, server)| server);
+    // (a destroyed server instance still imports for a destroyed copy: its root, which the copy takes; a copy that is not
+    // destroyed has the bundles of the server's destroyed instance whole, imported below)
+    let copy_destroyed = client.state.borrow().dom.get(id).is_some_and(|instance| instance.flags & flags::DESTROYED != 0);
     match (original, server) {
-        (Some(original), Some(server)) if server.state.borrow().dom.get(original).is_some() => {
+        (Some(original), Some(server)) if server.state.borrow().dom.get(original).is_some_and(|instance| copy_destroyed || instance.flags & flags::DESTROYED == 0) => {
             if own_only {
                 crate::project::model_assets::reveal(&server, original);
             } else {
@@ -159,8 +162,10 @@ pub fn import_on_server(client: &Engine, id: InstanceId, own_only: bool) {
                 instance.set_flag(flags::BUNDLE_ROOT, false);
             }
         }
-        // (the server's instance is gone: nothing waits for the copy any more; a destroyed copy a script holds takes its own
-        // bundle's root from the server's source, as the game's destroyed instance holds it)
+        // (the server's instance is gone: the copy's bundles are its own now. A destroyed copy a script holds takes its own
+        // bundle's root from the server's source, as the game's destroyed instance holds it; one that is not destroyed yet (its
+        // server's Destroy on the way, or being applied) imports them from that source, as the game's client holds the whole
+        // tree the server sent)
         _ => {
             let keys = {
                 let mut state = client.state.borrow_mut();
@@ -168,9 +173,13 @@ pub fn import_on_server(client: &Engine, id: InstanceId, own_only: bool) {
                 state.project.model_assets.set_remote(id, None);
                 keys
             };
-            let destroyed = client.state.borrow().dom.get(id).is_some_and(|instance| instance.flags & flags::DESTROYED != 0 && instance.has(flags::BUNDLE_ROOT));
+            let (destroyed, alive) = match client.state.borrow().dom.get(id) {
+                Some(instance) => (instance.flags & flags::DESTROYED != 0 && instance.has(flags::BUNDLE_ROOT), instance.flags & flags::DESTROYED == 0),
+                None => (false, false),
+            };
             match client.peer_server() {
                 Some((_, server)) if destroyed => crate::project::model_assets::import_root(&server, client, id, &keys),
+                Some((_, server)) if alive && !keys.is_empty() => crate::project::model_assets::import_from(&server, client, id, &keys),
                 _ => {
                     if let Some(instance) = client.state.borrow_mut().dom.get_mut(id) {
                         instance.set_flag(flags::BUNDLE_ROOT, false);

@@ -434,12 +434,7 @@ pub fn before_parent(engine: &Engine, id: InstanceId, parent: InstanceId) {
         let holds = moving.flags & (flags::LAZY_ABOVE | flags::BUNDLE_ROOT) != 0;
         let enters = holds && (state.dom.is_home(parent) || state.dom.home(parent).is_some());
         // (entering or leaving the DataModel while CollectionService signals are connected: the tags they listen for)
-        let listened = if holds && state.collection.tagged_signals() {
-            let (was, will) = (crate::services::in_data_model(&state, id), crate::services::in_data_model(&state, parent));
-            if was != will { crate::services::listened_tags(&state, will) } else { Vec::new() }
-        } else {
-            Vec::new()
-        };
+        let listened = if holds { crossing_tags(&state, id, crate::services::in_data_model(&state, parent)) } else { Vec::new() };
         if holds {
             mark_above(&mut state, parent);
         }
@@ -453,6 +448,37 @@ pub fn before_parent(engine: &Engine, id: InstanceId, parent: InstanceId) {
     if !listened.is_empty() {
         crossing_listened(engine, id, &listened);
     }
+}
+
+/// Before `id` leaves its parent for none (lua/instance.rs set_parent with no parent, as `Parent = nil` and Remove do, and
+/// Destroy at the instance it destroys, as ClearAllChildren does at each child; a loopback client's copy the same way when its
+/// server's instance goes): a subtree in which bundles wait that leaves the DataModel while GetInstanceRemovedSignal is connected
+/// imports first the bundles whose instances carry a tag it listens for, so the signal fires for those instances as the game's
+/// does ([`crossing_listened`])
+pub fn before_leaving(engine: &Engine, id: InstanceId) {
+    let listened = {
+        let state = engine.state.borrow();
+        if state.project.model_assets.idle() {
+            return;
+        }
+        let Some(moving) = state.dom.get(id) else { return };
+        if moving.flags & (flags::LAZY_ABOVE | flags::BUNDLE_ROOT) == 0 || moving.parent.is_none() {
+            return;
+        }
+        crossing_tags(&state, id, false)
+    };
+    if !listened.is_empty() {
+        crossing_listened(engine, id, &listened);
+    }
+}
+
+/// The tags the CollectionService signals connected for `id`'s subtree crossing the DataModel's edge listen for, when it is to be
+/// in the DataModel (`will`) and is not now, or the other way (none when it stays on its side, or no signal is connected)
+fn crossing_tags(state: &State, id: InstanceId, will: bool) -> Vec<Str> {
+    if !state.collection.tagged_signals() || crate::services::in_data_model(state, id) == will {
+        return Vec::new();
+    }
+    crate::services::listened_tags(state, will)
 }
 
 /// The bundles waiting in `id`'s subtree whose instances carry one of `tags`, imported before the subtree enters or leaves the
@@ -549,19 +575,15 @@ impl TagIndex {
         TagIndex { file: Some(file), entries, ..Default::default() }
     }
 
-    /// Writes what it learned into the state dir's index, with what another run wrote there since; a file's entry stays only
-    /// while that file is there as it was (an older stamp of a path that is still there goes too)
+    /// Writes what it learned into the state dir's index, with what another run wrote there since. A version's entry stays for
+    /// good, whichever manifest named it (the state dir is shared by the projects and branches run from it, and a version's tags
+    /// never change; the version entries of the game's ~1,100 bundles are ~100 KB, so tens of releases of each stay a few MB); a file's entry
+    /// stays only while that file is there as it was (an older stamp of a path that is still there goes too)
     fn save(&self) {
         let Some(file) = self.file.as_ref().filter(|_| self.learned) else { return };
         let mut entries = read_tag_entries(file);
         entries.extend(self.entries.iter().map(|(entry, tags)| (entry.clone(), tags.clone())));
         entries.retain(|entry, _| entry.strip_prefix("f:").is_none_or(file_entry_current));
-        // (a version the manifest of this run names no more goes: `v:<shape>:<asset version>`; a manifest this run did not read
-        // prunes nothing)
-        if let Some(versions) = &self.versions {
-            let named: FxHashSet<&str> = versions.values().filter_map(|entry| entry.rsplit(':').next()).collect();
-            entries.retain(|entry, _| entry.strip_prefix("v:").is_none_or(|rest| rest.rsplit(':').next().is_some_and(|version| named.contains(version))));
-        }
         let mut sorted: Vec<(&String, &Vec<String>)> = entries.iter().collect();
         crate::sort::by_key(&mut sorted, |(entry, _)| (*entry).clone());
         let map: serde_json::Map<String, serde_json::Value> = sorted.into_iter().map(|(entry, tags)| (entry.clone(), json!(tags))).collect();
@@ -836,29 +858,60 @@ pub(crate) fn import_root(from: &Engine, target: &Engine, id: InstanceId, keys: 
         }
     };
     let Some(key) = keys.iter().find(|key| !is_loose(key)) else { return clear() };
+    let Some((plans, shape)) = plans_from(from, std::slice::from_ref(key)) else { return clear() };
+    match plans.first() {
+        Some((_, plan)) if shape == BundleShape::Uploaded && plan.root_count() == 1 => {
+            let mut state = target.state.borrow_mut();
+            plan.instantiate_root(&mut state, &target.reflection, id);
+        }
+        _ => clear(),
+    }
+}
+
+/// A loopback client's copy `id` (of `target`) whose server instance is gone while bundles `keys` waited there (the server
+/// destroyed it, or let it go): they import at the copy from the server's source `from`, the one it stands for first, as at the
+/// server's ([`import`]), so the copy is whole as the game's client holds it (its leaving fires the CollectionService signals of
+/// what they hold: [`before_leaving`])
+pub(crate) fn import_from(from: &Engine, target: &Engine, id: InstanceId, keys: &[String]) {
+    if let Some(instance) = target.state.borrow_mut().dom.get_mut(id) {
+        instance.set_flag(flags::BUNDLE_ROOT, false);
+    }
+    let mut keys = keys.to_vec();
+    crate::sort::by_key(&mut keys, |key| is_loose(key));
+    let Some((plans, shape)) = plans_from(from, &keys) else { return };
+    for (key, plan) in plans {
+        if target.state.borrow().dom.get(id).is_none() {
+            return;
+        }
+        install(target, id, &key, &plan, shape);
+    }
+}
+
+/// The plans of bundles `keys` from `from`'s source (fetched when it does not hold them), with the source's shape: one that cannot
+/// be loaded is warned of and left out; none while an import under way holds the source
+fn plans_from(from: &Engine, keys: &[String]) -> Option<(Vec<(String, Arc<ModelPlan>)>, BundleShape)> {
     let (source, project, shape) = {
         let mut state = from.state.borrow_mut();
         let assets = &mut state.project.model_assets;
         (assets.source.take(), assets.project.clone(), assets.shape)
     };
-    let Some(mut source) = source else { return clear() };
-    let result = source.bundle(&project, key).and_then(|path| {
-        crate::files::note(&path);
-        plan_for(from, &path)
-    });
-    from.state.borrow_mut().project.model_assets.source = Some(source);
-    match result {
-        Ok(plan) if shape == BundleShape::Uploaded && plan.root_count() == 1 => {
-            let mut state = target.state.borrow_mut();
-            plan.instantiate_root(&mut state, &target.reflection, id);
-        }
-        Ok(_) => clear(),
-        Err(error) => {
-            crate::files::note_unchecked("a bundle failed to load");
-            from.warn(format!("modelAssets {key}: {error}"));
-            clear();
+    let mut source = source?;
+    let mut plans = Vec::with_capacity(keys.len());
+    for key in keys {
+        let result = source.bundle(&project, key).and_then(|path| {
+            crate::files::note(&path);
+            plan_for(from, &path)
+        });
+        match result {
+            Ok(plan) => plans.push((key.clone(), plan)),
+            Err(error) => {
+                crate::files::note_unchecked("a bundle failed to load");
+                from.warn(format!("modelAssets {key}: {error}"));
+            }
         }
     }
+    from.state.borrow_mut().project.model_assets.source = Some(source);
+    Some((plans, shape))
 }
 
 /// How a bundle's plan goes in at the instance it waits at.
@@ -2304,8 +2357,13 @@ mod tests {
     /// An engine with a project at `directory` whose bundles come from `source` (no mount: the tag lookups alone), its tag index
     /// the test's own file (other tests write the state dir's at once)
     fn tag_engine(directory: &Path, source: Box<dyn BundleSource>, shape: BundleShape) -> Rc<Engine> {
+        tag_engine_at(directory, &directory.join("tags.json"), source, shape)
+    }
+
+    /// [`tag_engine`] with the tag index in `index` (a state dir's, which the projects run from it share)
+    fn tag_engine_at(directory: &Path, index: &Path, source: Box<dyn BundleSource>, shape: BundleShape) -> Rc<Engine> {
         let engine = Engine::new(crate::Options::default()).unwrap();
-        let tags = Some(Box::new(TagIndex::load(directory.join("tags.json"))));
+        let tags = Some(Box::new(TagIndex::load(index.to_path_buf())));
         engine.state.borrow_mut().project.model_assets = ModelAssets { source: Some(source), shape, project: directory.to_path_buf(), tags, ..Default::default() };
         engine
     }
@@ -2378,6 +2436,59 @@ mod tests {
         assert_eq!(entries, expected);
         let reloaded = TagIndex::load(file);
         assert_eq!(reloaded.entries.get("v:asset-1-v2").map(Vec::as_slice), Some(&["Tagged".to_string()][..]));
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    /// Projects (or branches) run from one state dir share its tag index: each one's save keeps the versions the others learned,
+    /// one whose manifest does not read too, so a later run of the first finds its versions' tags without asking its source
+    #[test]
+    fn projects_sharing_a_tag_index_keep_each_others_versions() {
+        let directory = scratch("tag-index-projects");
+        let index = directory.join("state").join("tags.json");
+        let id = 7_000_000_000u64 + (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos() % 1_000_000_000) as u64;
+        // a project at `name` pinning `pins` (key, asset id), its bundles in its own folder
+        let project = |name: &str, pins: &[(&str, u64)]| {
+            let at = directory.join(name);
+            let manifest = at.join(MANIFEST);
+            std::fs::create_dir_all(manifest.parent().unwrap()).unwrap();
+            let lines: Vec<String> = pins.iter().map(|(key, asset)| format!("	[\"{key}\"] = {{ AssetId = {asset}, Version = 1 }},")).collect();
+            std::fs::write(&manifest, format!("return {{
+{}
+}}
+", lines.join("
+"))).unwrap();
+            let mut files: FxHashMap<String, PathBuf> = FxHashMap::default();
+            for (key, _) in pins {
+                let file = at.join(format!("{}.rbxm", key.replace('/', "_")));
+                write_model(&file, &machine("Machine"));
+                files.insert(key.to_string(), file);
+            }
+            (at, files)
+        };
+        let learn = |at: &Path, files: FxHashMap<String, PathBuf>, key: &str| {
+            let engine = tag_engine_at(at, &index, Box::new(Uploaded(files, Rc::new(RefCell::new(Vec::new())))), BundleShape::Uploaded);
+            assert_eq!(tags_for(&engine, &[key.to_string()]).get(key).map(Vec::as_slice), Some(&["Machine".to_string()][..]), "{key}");
+            remember(&engine);
+            engine.state.borrow_mut().project.model_assets.source = None;
+        };
+        let (first, first_files) = project("first", &[("Models/Machine", id)]);
+        learn(&first, first_files, "Models/Machine");
+        let (second, second_files) = project("second", &[("Models/Other", id + 1)]);
+        learn(&second, second_files, "Models/Other");
+        // (a project whose manifest does not read: its bundles are known by file alone)
+        let (broken, broken_files) = project("broken", &[("Models/Broken", id + 2)]);
+        std::fs::write(broken.join(MANIFEST), "return {").unwrap();
+        learn(&broken, broken_files, "Models/Broken");
+        let entries = read_tag_entries(&index);
+        for asset in [id, id + 1] {
+            let entry = format!("v:uploaded:asset-{asset}-v1");
+            assert_eq!(entries.get(&entry).map(Vec::as_slice), Some(&["Machine".to_string()][..]), "{entry} went: {entries:?}");
+        }
+        let asked = Rc::new(RefCell::new(0));
+        let again = tag_engine_at(&first, &index, Box::new(Silent(asked.clone(), BundleShape::Uploaded)), BundleShape::Uploaded);
+        assert_eq!(tags_for(&again, &["Models/Machine".to_string()]).get("Models/Machine").map(Vec::as_slice), Some(&["Machine".to_string()][..]));
+        assert_eq!(*asked.borrow(), 0, "the first project's later run asked its source for a version the index held");
+        again.state.borrow_mut().project.model_assets.source = None;
         let _ = std::fs::remove_dir_all(directory);
     }
 

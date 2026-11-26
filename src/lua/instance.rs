@@ -705,10 +705,12 @@ pub fn set_attribute(engine: &Engine, id: InstanceId, name: Str, value: Value) {
 /// SetParent on an engine handle: a part's move pays the WorldModels above it where it went, as its other changes do
 /// ([`changed_levels`]), beyond the reparenting's price.
 pub fn set_parent(engine: &Engine, id: InstanceId, parent: Option<InstanceId>) -> Result<(), Flow> {
-    // (a bundle's placeholder that is to hold `id`, or bundles waiting in a subtree that enters a world, import first)
+    // (a bundle's placeholder that is to hold `id`, bundles waiting in a subtree that enters a world, or ones whose instances carry
+    // a tag a CollectionService signal listens for as the subtree enters or leaves the DataModel, import first)
     #[cfg(feature = "bundles")]
-    if let Some(parent) = parent {
-        project::model_assets::before_parent(engine, id, parent);
+    match parent {
+        Some(parent) => project::model_assets::before_parent(engine, id, parent),
+        None => project::model_assets::before_leaving(engine, id),
     }
     let hooks = engine.hooks.borrow();
     let mut state = engine.state.borrow_mut();
@@ -823,6 +825,10 @@ fn destroy_subtree(engine: &Rc<Engine>, id: InstanceId) -> Result<(), Flow> {
         /// Its subtree destroyed: the instance's own price (with its extra) and its deferred cleanup
         Finish(InstanceId, f64),
     }
+    // (bundles waiting in the subtree whose instances carry a tag a GetInstanceRemovedSignal listens for import first, so it
+    // fires for them as the subtree leaves: project/model_assets.rs before_leaving)
+    #[cfg(feature = "bundles")]
+    project::model_assets::before_leaving(engine, id);
     // Capture DataModel placement before begin_destroy detaches the root so descendants keep their placed status.
     let root_placed = {
         let state = engine.state.borrow();
