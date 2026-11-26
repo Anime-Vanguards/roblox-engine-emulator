@@ -337,24 +337,12 @@
 	],
 	"memory_category": [
 		{
-			"line": "debug ",
-			"why": "debug.setmemorycategory in a client: it answers the category it replaces, takes a string or a number (`invalid argument #1 to 'setmemorycategory' (string expected, got <type>)`, `missing argument #1 ...`), getmemorycategory reads it back (a script's own category starts as its name), a new thread starts in its creator's, and debug also has dumpheap, dumprefs and tracerefs; ree's are stubs that answer nothing and read \"default\""
-		},
-		{
 			"line": "get-",
-			"why": "debug.setmemorycategory in a client: it answers the category it replaces, takes a string or a number (`invalid argument #1 to 'setmemorycategory' (string expected, got <type>)`, `missing argument #1 ...`), getmemorycategory reads it back (a script's own category starts as its name), a new thread starts in its creator's, and debug also has dumpheap, dumprefs and tracerefs; ree's are stubs that answer nothing and read \"default\""
+			"why": "a thread's memory category starts as its script's Name: the capture's server Script is named ParityProbe and its client job has no script (`=` and its chunk name), where ree runs the probe as a script named after it (lines after a reset or a start read show it)"
 		},
 		{
 			"line": "set",
-			"why": "debug.setmemorycategory in a client: it answers the category it replaces, takes a string or a number (`invalid argument #1 to 'setmemorycategory' (string expected, got <type>)`, `missing argument #1 ...`), getmemorycategory reads it back (a script's own category starts as its name), a new thread starts in its creator's, and debug also has dumpheap, dumprefs and tracerefs; ree's are stubs that answer nothing and read \"default\""
-		},
-		{
-			"line": "thread-get",
-			"why": "debug.setmemorycategory in a client: it answers the category it replaces, takes a string or a number (`invalid argument #1 to 'setmemorycategory' (string expected, got <type>)`, `missing argument #1 ...`), getmemorycategory reads it back (a script's own category starts as its name), a new thread starts in its creator's, and debug also has dumpheap, dumprefs and tracerefs; ree's are stubs that answer nothing and read \"default\""
-		},
-		{
-			"line": "after-thread",
-			"why": "debug.setmemorycategory in a client: it answers the category it replaces, takes a string or a number (`invalid argument #1 to 'setmemorycategory' (string expected, got <type>)`, `missing argument #1 ...`), getmemorycategory reads it back (a script's own category starts as its name), a new thread starts in its creator's, and debug also has dumpheap, dumprefs and tracerefs; ree's are stubs that answer nothing and read \"default\""
+			"why": "a thread's memory category starts as its script's Name: the capture's server Script is named ParityProbe and its client job has no script (`=` and its chunk name), where ree runs the probe as a script named after it (lines after a reset or a start read show it)"
 		}
 	],
 	"part_connected": [

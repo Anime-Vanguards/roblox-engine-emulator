@@ -70,6 +70,100 @@ fn vm_of(value: &LuaValue) -> modules::Vm {
     }
 }
 
+/// A thread's memory category (debug.setmemorycategory), kept by thread in a table with weak keys: none for a thread that never
+/// set one nor was made by one that had (app data, see [`memory_categories`])
+struct MemoryCategories(LuaTable);
+
+/// Whether any script set a memory category in this process (until then a new thread has nothing to take over)
+static MEMORY_CATEGORIES_SET: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Whether any script set a memory category yet (coroutine.create's C function asks before calling into Rust)
+pub(crate) fn memory_categories_set() -> bool {
+    MEMORY_CATEGORIES_SET.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// A thread made by the running one takes the running one's memory category (task.spawn / defer / delay of a function, the legacy
+/// spawn and delay, coroutine.create; measured, see [`memory_categories`])
+pub(crate) fn inherit_memory_category(lua: &Lua, thread: &LuaThread) {
+    if !MEMORY_CATEGORIES_SET.load(std::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
+    let Some(categories) = lua.app_data_ref::<MemoryCategories>() else { return };
+    if let Ok(name @ LuaValue::String(_)) = categories.0.raw_get::<LuaValue>(lua.current_thread()) {
+        let _ = categories.0.raw_set(thread.clone(), name);
+    }
+}
+
+/// debug.setmemorycategory, resetmemorycategory and getmemorycategory, measured in a 0.747 playing client and a server
+/// (tools/parity/probes/memory_category.luau): a category is a thread's own. setmemorycategory takes a string or a number (its
+/// text; "" and 300 characters too) and answers the category it replaces; anything else raises `invalid argument #1 to
+/// 'setmemorycategory' (string expected, got <type>)`, nothing `missing argument #1 ...`, at the calling line as a C function's
+/// argument check. A thread starts with its script's Name (a server Script's `ParityProbe`; where no script runs, a client's job,
+/// `=` and its chunk name), and resetmemorycategory goes back to it (where no script runs it changes nothing) and answers nothing.
+/// A thread task.spawn makes starts with its maker's category, and its own set does not reach back. Not followed: the client
+/// gave the threads of event handlers, a BindableFunction's callback and coroutine.wrap the category of the thread that fired,
+/// invoked or wrapped (and reused a handler's thread for the next run, its category with it); here they start with the script's.
+fn memory_categories(lua: &Lua, engine: &Rc<Engine>, r: &LuaTable) -> LuaResult<()> {
+    let table = lua.create_table()?;
+    let weak = lua.create_table()?;
+    weak.raw_set("__mode", "k")?;
+    table.set_metatable(Some(weak))?;
+    lua.set_app_data(MemoryCategories(table));
+    // (the running thread's script's Name; none where no script runs: the innermost Luau's chunk as `=<chunk>`)
+    fn start_category(lua: &Lua, engine: &Engine) -> (bool, String) {
+        // SAFETY: the running thread's state, valid while the callback runs
+        if let Some(script) = unsafe { super::script_of_thread(lua.state()) } {
+            let state = engine.state.borrow();
+            if let Some(instance) = state.dom.get(script) {
+                return (true, instance.name.to_string());
+            }
+        }
+        let chunk = super::script_position(lua).and_then(|at| at.rsplit_once(':').map(|(chunk, _)| chunk.to_string()));
+        (false, chunk.map_or_else(|| "default".to_string(), |chunk| format!("={chunk}")))
+    }
+    fn current(lua: &Lua, engine: &Engine) -> LuaResult<LuaValue> {
+        let categories = lua.app_data_ref::<MemoryCategories>().expect("memory categories");
+        match categories.0.raw_get::<LuaValue>(lua.current_thread())? {
+            LuaValue::Nil => Ok(LuaValue::String(lua.create_string(start_category(lua, engine).1)?)),
+            name => Ok(name),
+        }
+    }
+    r.set(
+        "SetMemoryCategory",
+        primitive(lua, engine, |lua, engine, args| {
+            super::encode(lua, (|| {
+                let args = Args::new(args);
+                let name = match args.get(0) {
+                    LuaValue::String(name) => LuaValue::String(name.clone()),
+                    value @ (LuaValue::Number(_) | LuaValue::Integer(_)) => LuaValue::String(lua.coerce_string(value.clone())?.expect("a number's text")),
+                    _ if args.0.is_empty() => return super::raise_at_caller("missing argument #1 to 'setmemorycategory' (string expected)"),
+                    other => {
+                        return super::raise_at_caller(format!(
+                            "invalid argument #1 to 'setmemorycategory' (string expected, got {})",
+                            super::typeof_value(engine, other)
+                        ));
+                    }
+                };
+                let previous = current(lua, engine)?;
+                MEMORY_CATEGORIES_SET.store(true, std::sync::atomic::Ordering::Relaxed);
+                lua.app_data_ref::<MemoryCategories>().expect("memory categories").0.raw_set(lua.current_thread(), name)?;
+                Ok(values([previous]))
+            })())
+        })?,
+    )?;
+    r.set(
+        "ResetMemoryCategory",
+        primitive(lua, engine, |lua, engine, _| {
+            if start_category(lua, engine).0 {
+                lua.app_data_ref::<MemoryCategories>().expect("memory categories").0.raw_set(lua.current_thread(), LuaValue::Nil)?;
+            }
+            super::encode(lua, Ok(none()))
+        })?,
+    )?;
+    r.set("GetMemoryCategory", primitive(lua, engine, |lua, engine, _| super::encode(lua, Ok(values([current(lua, engine)?])))) ?)?;
+    Ok(())
+}
+
 /// The thread task.spawn / defer / delay (`call`) runs: a thread as it is, a function in a new thread. Roblox's errors
 /// (measured in a playing client, Studio 0.744, tools/parity/probes/task_order.luau): `invalid argument #1 to 'spawn'
 /// (function or thread expected)` (#2 for delay), at the line that called it, as a C function's argument check places it (none
@@ -84,7 +178,11 @@ fn to_thread(lua: &Lua, engine: &Engine, value: &LuaValue, index: usize, call: &
             }
             Ok(thread.clone())
         }
-        LuaValue::Function(function) => Ok(lua.create_thread(function.clone())?),
+        LuaValue::Function(function) => {
+            let thread = lua.create_thread(function.clone())?;
+            inherit_memory_category(lua, &thread);
+            Ok(thread)
+        }
         _ => super::raise_at_caller(format!("invalid argument #{index} to '{call}' (function or thread expected)")),
     }
 }
@@ -109,6 +207,7 @@ fn legacy_thread(lua: &Lua, value: &LuaValue) -> LuaResult<LuaThread> {
             })?
         }
     };
+    inherit_memory_category(lua, &thread);
     Ok(thread)
 }
 
@@ -258,6 +357,7 @@ fn load_prelude(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
         })?,
     )?;
     r.set("Nothing", super::create_boxed_void(lua, Box::new(|_| Ok(())))?)?;
+    memory_categories(lua, engine, &r)?;
     // utf8.nfcnormalize and utf8.nfdnormalize (lua/normalize.rs)
     r.set("NfcNormalize", primitive(lua, engine, |lua, engine, args| super::encode(lua, super::normalize::normalize(lua, engine, args, true)))?)?;
     r.set("NfdNormalize", primitive(lua, engine, |lua, engine, args| super::encode(lua, super::normalize::normalize(lua, engine, args, false)))?)?;
@@ -939,9 +1039,15 @@ fn build_shared(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<LuaTable> {
     let coroutine: LuaTable = exports.get("Coroutine")?;
     let native_coroutine: LuaTable = globals.get("coroutine")?;
     let charge = charge_fn(lua, engine)?;
+    // (coroutine.create's thread takes its maker's memory category: inherit_memory_category)
+    let inherit = super::lua_fn(lua, |lua, thread: LuaThread| {
+        inherit_memory_category(lua, &thread);
+        Ok(())
+    })?;
     for name in ["create", "wrap"] {
         let native: LuaFunction = native_coroutine.get(name)?;
-        coroutine.raw_set(name, super::builtins::coroutine_function(lua, name, native, charge.clone(), crate::cost::THREAD)?)?;
+        let inherit = (name == "create").then(|| inherit.clone());
+        coroutine.raw_set(name, super::builtins::coroutine_function(lua, name, native, charge.clone(), crate::cost::THREAD, inherit)?)?;
     }
     shared.raw_set("coroutine", coroutine)?;
     shared.raw_set("utf8", exports.get::<LuaValue>("Utf8")?)?;

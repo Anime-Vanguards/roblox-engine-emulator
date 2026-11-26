@@ -216,6 +216,37 @@ fn calls_a_script_may_not_make_where_it_runs() {
     assert!(server.iter().any(|line| line == "print: done") && errors(&server).is_empty(), "{server:?}");
 }
 
+/// A memory category is the thread's own: it starts as its script's Name, set answers the one it replaces and takes a string or a
+/// number, reset goes back to the Name, and a thread task.spawn, the legacy spawn or coroutine.create makes starts with its maker's.
+#[test]
+fn memory_categories_are_a_threads_own() {
+    let lines = run(
+        RunContext::Server,
+        r##"
+        assert(debug.getmemorycategory() == "Test")
+        assert(debug.setmemorycategory("abc") == "Test" and debug.getmemorycategory() == "abc")
+        assert(debug.setmemorycategory(5) == "abc" and debug.getmemorycategory() == "5")
+        assert(select(2, pcall(debug.setmemorycategory, {})) == "invalid argument #1 to 'setmemorycategory' (string expected, got table)")
+        assert(select(2, pcall(debug.setmemorycategory)) == "missing argument #1 to 'setmemorycategory' (string expected)")
+        assert(select("#", debug.resetmemorycategory()) == 0 and debug.getmemorycategory() == "Test")
+        debug.setmemorycategory("outer")
+        local Seen = {}
+        task.spawn(function()
+            table.insert(Seen, debug.getmemorycategory())
+            debug.setmemorycategory("inner")
+        end)
+        coroutine.resume(coroutine.create(function() table.insert(Seen, debug.getmemorycategory()) end))
+        spawn(function() table.insert(Seen, debug.getmemorycategory()) end)
+        task.wait(0.1)
+        assert(table.concat(Seen, ",") == "outer,outer,outer" and debug.getmemorycategory() == "outer", table.concat(Seen, ","))
+        assert(type(debug.dumpheap) == "function" and type(debug.dumprefs) == "function" and type(debug.tracerefs) == "function")
+        print("done")
+        "##,
+        0.2,
+    );
+    assert!(lines.iter().any(|line| line == "print: done") && errors(&lines).is_empty(), "{lines:?}");
+}
+
 /// Model:SetPrimaryPartCFrame puts the primary part at the CFrame exactly (its PivotOffset and the WorldPivot play no part), the
 /// model's other parts moved with it; with no PrimaryPart, or one taken out of the model, both methods raise.
 #[test]

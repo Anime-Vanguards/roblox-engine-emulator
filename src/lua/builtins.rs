@@ -181,8 +181,9 @@ unsafe fn raise(state: *mut ffi::lua_State, positioned: bool) -> ! {
 
 /// coroutine.create or wrap (`name`): the VM's own (`native`), after charging the script for the thread it makes as task.spawn
 /// does (cost.rs THREAD, through `charge`) and checking its function here, so an error names the line that called it.
-pub fn coroutine_function(lua: &Lua, name: &'static str, native: LuaFunction, charge: LuaFunction, seconds: f64) -> LuaResult<LuaFunction> {
-    let extras = vec![LuaValue::Function(native), LuaValue::Function(charge), LuaValue::Number(seconds)];
+pub fn coroutine_function(lua: &Lua, name: &'static str, native: LuaFunction, charge: LuaFunction, seconds: f64, made: Option<LuaFunction>) -> LuaResult<LuaFunction> {
+    let made = made.map_or(LuaValue::Nil, LuaValue::Function);
+    let extras = vec![LuaValue::Function(native), LuaValue::Function(charge), LuaValue::Number(seconds), made];
     cfunction::raw(lua, name, Kind::Library, coroutine_body, None, extras)
 }
 
@@ -198,6 +199,12 @@ unsafe fn coroutine_body(state: *mut ffi::lua_State) -> c_int {
         ffi::lua_pushvalue(state, extra(1));
         ffi::lua_insert(state, 1);
         ffi::lua_call(state, 1, 1);
+        // (`made`, given the new thread: create's, which takes its maker's memory category, lua/globals.rs)
+        if ffi::lua_type(state, extra(4)) == ffi::LUA_TFUNCTION && super::globals::memory_categories_set() {
+            ffi::lua_pushvalue(state, extra(4));
+            ffi::lua_pushvalue(state, -2);
+            ffi::lua_call(state, 1, 0);
+        }
         1
     }
 }

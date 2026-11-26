@@ -574,12 +574,12 @@ Utf8Table.nfdnormalize = EngineFunction("nfdnormalize", false, false, R.NfdNorma
 local DebugTable = table.clone(debug)
 DebugTable.profilebegin = EngineFunction("profilebegin", false, false, R.Nothing)
 DebugTable.profileend = EngineFunction("profileend", false, false, R.Nothing)
-DebugTable.setmemorycategory = EngineFunction("setmemorycategory", false, false, R.Nothing)
-DebugTable.resetmemorycategory = EngineFunction("resetmemorycategory", false, false, R.Nothing)
+DebugTable.setmemorycategory = EngineFunction("setmemorycategory", false, false, R.SetMemoryCategory) -- (lua/globals.rs memory_categories)
+DebugTable.resetmemorycategory = EngineFunction("resetmemorycategory", false, false, R.ResetMemoryCategory)
 DebugTable.dumpcodesize = EngineFunction("dumpcodesize", false, false, R.Nothing)
-DebugTable.getmemorycategory = EngineFunction("getmemorycategory", false, true, function()
-	return "default"
-end)
+DebugTable.getmemorycategory = EngineFunction("getmemorycategory", false, false, R.GetMemoryCategory)
+DebugTable.dumpheap, DebugTable.dumprefs = EngineFunction("dumpheap", false, false, R.Nothing), EngineFunction("dumprefs", false, false, R.Nothing)
+DebugTable.tracerefs = EngineFunction("tracerefs", false, false, R.Nothing) -- (a client lists these three too; what they write is no script's)
 
 -- task.wait / wait / task.synchronize / task.desynchronize register the thread with the scheduler (or refuse to: lua/refs.rs)
 -- and yield from their C function, the values the thread is resumed with being their results (lua/cfunction.rs); each task
