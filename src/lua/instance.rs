@@ -1659,8 +1659,11 @@ fn install_base(behaviors: &mut Behaviors, reflection: &crate::Reflection) {
         let has = string_arg(args, 1).is_some_and(|tag| engine.state.borrow().dom.at(id).tags.contains(&tag));
         Ok(values([LuaValue::Boolean(has)]))
     })));
+    // (sorted by their bytes, whatever order they were added in: "B,C,a", "1,10,100,2,9"; measured, 0.747, a playing client and a
+    // server, tools/parity/probes/collection_tags.luau. The instance keeps them in the order added, which the tag signals follow)
     behaviors.add_method(base, K::GetTags as NameId, method(|lua, engine, id, _| {
-        let tags = engine.state.borrow().dom.at(id).tags.clone();
+        let mut tags = engine.state.borrow().dom.at(id).tags.clone();
+        crate::sort::by(&mut tags, |a, b| a.as_bytes().cmp(b.as_bytes()));
         let table = lua.create_table()?;
         for tag in tags {
             table.raw_push(lua.create_string(tag.as_bytes())?)?;

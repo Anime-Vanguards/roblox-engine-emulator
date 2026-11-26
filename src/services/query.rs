@@ -430,7 +430,7 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
     if let Some(name) = reflection.name_id("QueryDescendants") {
         let query = query.clone();
         behaviors.add_method(base, name, method(move |lua, engine, id, args| {
-            let text = args.string(1).map(|s| s.as_bytes().to_vec()).unwrap_or_default();
+            let text = selector(lua, engine, args)?;
             // (the call's own touch of the root says whether it was cold)
             let cold = engine.state.borrow().sched.touched.borrow_mut().take_last_cold();
             let found = query(lua, engine, id, &text)?;
@@ -454,6 +454,36 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
             Ok(values([LuaValue::Table(table)]))
         }));
     }
+}
+
+/// QueryDescendants' selector as Luau's own argument check reads it (measured, 0.747, a playing client and a server:
+/// tools/parity/probes/service_answers.luau): a string, or a number as its text; anything else raises at the calling line,
+/// "invalid argument #2 (string expected, got boolean)", and no argument at all "missing argument #2 (string expected)". Called
+/// through the method read as a value, the message names it: "invalid argument #2 to 'QueryDescendants' (...)".
+fn selector(lua: &Lua, engine: &Engine, args: &crate::lua::Args) -> Result<Vec<u8>, Flow> {
+    let value = args.get(1);
+    match value {
+        LuaValue::String(text) => return Ok(text.as_bytes().to_vec()),
+        LuaValue::Number(_) | LuaValue::Integer(_) => {
+            if let Ok(Some(text)) = lua.coerce_string(value.clone()) {
+                return Ok(text.as_bytes().to_vec());
+            }
+        }
+        _ => {}
+    }
+    // (the C function the call runs in: the method's own, named so, when it was read as a value (its callback the frame below);
+    // __namecall's for a `:` call)
+    let frame = |level: usize| lua.inspect_stack(level, |debug| (debug.names().name.map(|name| name.into_owned()), debug.source().what == "C"));
+    let named = match frame(0) {
+        Some((Some(name), _)) if name == "QueryDescendants" => true,
+        Some((Some(name), _)) if name == "__namecall" => false,
+        _ => matches!(frame(1), Some((Some(name), true)) if name == "QueryDescendants"),
+    };
+    let to = if named { " to 'QueryDescendants'" } else { "" };
+    if args.len() < 2 {
+        return crate::lua::raise_at_caller(format!("missing argument #2{to} (string expected)"));
+    }
+    crate::lua::raise_at_caller(format!("invalid argument #2{to} (string expected, got {})", crate::lua::typeof_value(engine, value)))
 }
 
 #[cfg(test)]

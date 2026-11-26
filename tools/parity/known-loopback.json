@@ -37,36 +37,12 @@
 	],
 	"replicated_properties": [
 		{
-			"line": "server: Before cannot write Model.LevelOfDetail: The current thread cannot write 'LevelOfDetail' (lacking capability PluginOrOpenCloud)",
-			"why": "a game script may not write Model.LevelOfDetail or Script.RunContext (lacking capability PluginOrOpenCloud); ree has no LevelOfDetail and lets RunContext be written (rules outside the loopback)"
-		},
-		{
-			"line": "server: Before cannot write Script.RunContext: The current thread cannot write 'RunContext' (lacking capability PluginOrOpenCloud)",
-			"why": "a game script may not write Model.LevelOfDetail or Script.RunContext (lacking capability PluginOrOpenCloud); ree has no LevelOfDetail and lets RunContext be written (rules outside the loopback)"
-		},
-		{
-			"line": "server: Later cannot write Model.LevelOfDetail: The current thread cannot write 'LevelOfDetail' (lacking capability PluginOrOpenCloud)",
-			"why": "a game script may not write Model.LevelOfDetail or Script.RunContext (lacking capability PluginOrOpenCloud); ree has no LevelOfDetail and lets RunContext be written (rules outside the loopback)"
-		},
-		{
-			"line": "server: Later cannot write Script.RunContext: The current thread cannot write 'RunContext' (lacking capability PluginOrOpenCloud)",
-			"why": "a game script may not write Model.LevelOfDetail or Script.RunContext (lacking capability PluginOrOpenCloud); ree has no LevelOfDetail and lets RunContext be written (rules outside the loopback)"
-		},
-		{
 			"line": "client: Before Part arrived {Anchored Archivable CFrame~ CanCollide CanQuery CanTouch CastShadow CollisionGroup Color CustomPhysicalProperties EnableFluidForces Locked Massless Material Reflectance RootPriority Shape Size TopSurface Transparency} not {LocalTransparencyModifier=0} attributes 5 a tagged true",
 			"why": "a real session rounds a CFrame's rotation when it replicates (CFrame~: within 1e-4); ree sends it exactly"
 		},
 		{
-			"line": "client: Before Script arrived {Enabled} not {RunContext=EnumItem} attributes 5 a tagged true",
-			"why": "a game script may not write Model.LevelOfDetail or Script.RunContext (lacking capability PluginOrOpenCloud); ree has no LevelOfDetail and lets RunContext be written (rules outside the loopback)"
-		},
-		{
 			"line": "client: After Part arrived {Anchored Archivable CFrame~ CanCollide CanQuery CanTouch CastShadow CollisionGroup Color CustomPhysicalProperties EnableFluidForces Locked Massless Material Reflectance RootPriority Shape Size TopSurface Transparency} not {LocalTransparencyModifier=0} attributes 5 a tagged true",
 			"why": "a real session rounds a CFrame's rotation when it replicates (CFrame~: within 1e-4); ree sends it exactly"
-		},
-		{
-			"line": "client: After Script arrived {Enabled} not {RunContext=EnumItem} attributes 5 a tagged true",
-			"why": "a game script may not write Model.LevelOfDetail or Script.RunContext (lacking capability PluginOrOpenCloud); ree has no LevelOfDetail and lets RunContext be written (rules outside the loopback)"
 		}
 	],
 	"server_time": [

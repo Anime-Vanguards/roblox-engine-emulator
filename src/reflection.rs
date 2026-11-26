@@ -562,6 +562,7 @@ const PROPERTY_SUPPLEMENT: &[(&str, &str, &str, &str, bool, bool)] = &[
     ("Players", "BanningEnabled", "boolean", "bool", true, true),
     ("Players", "UseStrafingAnimations", "boolean", "bool", true, true),
     ("StarterPlayer", "CreateDefaultPlayerModule", "boolean", "bool", true, true),
+    ("Model", "LevelOfDetail", "EnumItem", "ModelLevelOfDetail", true, true),
 ];
 
 /// Properties a game script may neither read nor write: (class, name, the capability it lacks). A playing client and a
@@ -578,6 +579,8 @@ pub const CAPABILITY_ONLY: &[(&str, &str, &str)] = &[
     ("Players", "BanningEnabled", "PluginOrOpenCloud"),
     ("Players", "UseStrafingAnimations", "PluginOrOpenCloud"),
     ("StarterPlayer", "CreateDefaultPlayerModule", "PluginOrOpenCloud"),
+    // (a playing client and a server, Studio 0.747: tools/parity/probes/instances.luau, loopback/replicated_properties.luau)
+    ("Model", "LevelOfDetail", "PluginOrOpenCloud"),
     // settings().Physics' debug drawing settings rbx-dom lists as not scriptable: a plugin's read raises as well (identity 4,
     // tools/parity/probes/global_settings_tree.luau; services/settings.rs)
     ("PhysicsSettings", "AreAssemblyCentersOfMassShown", "RobloxScript"),
@@ -601,6 +604,22 @@ pub const CAPABILITY_ONLY: &[(&str, &str, &str)] = &[
     ("PhysicsSettings", "SolverConvergenceMetricType", "RobloxScript"),
     ("PhysicsSettings", "SolverConvergenceVisualizationMode", "RobloxScript"),
     ("PhysicsSettings", "TorqueDrawScale", "RobloxScript"),
+];
+
+/// Properties a game script may read but not write: (class, name, the capability it lacks). A write raises "The current thread
+/// cannot write 'RunContext' (lacking capability PluginOrOpenCloud)" on a playing client and a server (Studio 0.747,
+/// tools/parity/probes/loopback/replicated_properties.luau); a plugin's code, ree's edit run context, writes it.
+/// services::install_gui_behaviors gives each its setter.
+pub const CAPABILITY_WRITES: &[(&str, &str, &str)] = &[("BaseScript", "RunContext", "PluginOrOpenCloud")];
+
+/// Events a game script may read but not connect to: (the declaring class, the event, the capability it lacks). Connect, Once and
+/// ConnectParallel raise "The current thread cannot connect 'ErrorDetailed' (lacking capability RobloxScript)" (measured, 0.747, a
+/// playing client and a server: tools/parity/probes/events_fired.luau). Nothing in the dump tells them apart: their permits are
+/// empty, as those of events a script connects to (WorldRoot.CollisionGroupCollidableChanged).
+pub const CAPABILITY_EVENTS: &[(&str, &str, &str)] = &[
+    ("InputContext", "InputActionsChanged", "RobloxScript"),
+    ("InputAction", "InputBindingsChanged", "RobloxScript"),
+    ("ScriptContext", "ErrorDetailed", "RobloxScript"),
 ];
 
 /// Methods a game script may not call: (class, name, the capability it lacks). A playing client's and a server's game

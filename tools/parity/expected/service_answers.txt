@@ -1,0 +1,232 @@
+# engine: Roblox Studio 0.747.0.7471481, a headless playing client (script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-26
+GetPlayerByUserId string error Unable to cast string to User 
+GetPlayerByUserId numeric ok nil 
+GetPlayerByUserId empty error Unable to cast string to User 
+GetPlayerByUserId int ok nil 
+GetPlayerByUserId fraction ok nil 
+GetPlayerByUserId negative ok nil 
+GetPlayerByUserId nan ok nil 
+GetPlayerByUserId huge ok nil 
+GetPlayerByUserId nil error Argument 1 missing or nil 
+GetPlayerByUserId none error Argument 1 missing or nil 
+GetPlayerByUserId table error Unable to cast Array to User 
+GetPlayerByUserId dict error Unable to cast Dictionary to User 
+GetPlayerByUserId instance error Unable to cast Instance to User 
+GetPlayerByUserId vector error Unable to cast Vector3 to User 
+GetPlayerByUserId enumitem error Unable to cast Material to User 
+GetPlayerByUserId function error Unable to cast Function to User 
+GetPlayerByUserId false ok nil 
+GetPlayerByUserId bool ok true true 
+GetPlayerByUserId own true ok true 
+CS.AddTag nil ok   own {}
+CS.AddTag int ok   own {5}
+CS.AddTag string ok   own {x}
+CS.AddTag table ok  [argument #1 expects a string, but table was passed / Stack Begin / Script '<probe>', Line @156 / Script '<probe>', Line @68 / Stack End] own {{}}
+CS.AddTag vector ok  [argument #1 expects a string, but Vector3 was passed / Stack Begin / Script '<probe>', Line @156 / Script '<probe>', Line @68 / Stack End] own {0, 0, 0}
+CS.AddTag enumitem ok  [argument #1 expects a string, but EnumItem was passed / Stack Begin / Script '<probe>', Line @156 / Script '<probe>', Line @68 / Stack End] own {Plastic}
+CS.AddTag nothing error Argument 1 missing or nil 
+CS.RemoveTag nil ok   own {0, 0, 0,5,Plastic,nil,t,x,{}}
+CS.RemoveTag int ok   own {0, 0, 0,Plastic,nil,t,x,{}}
+CS.RemoveTag string ok   own {0, 0, 0,5,Plastic,nil,t,{}}
+CS.RemoveTag table ok  [argument #1 expects a string, but table was passed / Stack Begin / Script '<probe>', Line @156 / Script '<probe>', Line @68 / Stack End] own {0, 0, 0,5,Plastic,nil,t,x}
+CS.RemoveTag vector ok  [argument #1 expects a string, but Vector3 was passed / Stack Begin / Script '<probe>', Line @156 / Script '<probe>', Line @68 / Stack End] own {5,Plastic,nil,t,x,{}}
+CS.RemoveTag enumitem ok  [argument #1 expects a string, but EnumItem was passed / Stack Begin / Script '<probe>', Line @156 / Script '<probe>', Line @68 / Stack End] own {0, 0, 0,5,nil,t,x,{}}
+CS.RemoveTag nothing error Argument 1 missing or nil 
+CS.HasTag nil ok false  own {0, 0, 0,5,Plastic,nil,t,x,{}}
+CS.HasTag int ok true  own {0, 0, 0,5,Plastic,nil,t,x,{}}
+CS.HasTag string ok true  own {0, 0, 0,5,Plastic,nil,t,x,{}}
+CS.HasTag table ok true [argument #1 expects a string, but table was passed / Stack Begin / Script '<probe>', Line @156 / Script '<probe>', Line @68 / Stack End] own {0, 0, 0,5,Plastic,nil,t,x,{}}
+CS.HasTag vector ok true [argument #1 expects a string, but Vector3 was passed / Stack Begin / Script '<probe>', Line @156 / Script '<probe>', Line @68 / Stack End] own {0, 0, 0,5,Plastic,nil,t,x,{}}
+CS.HasTag enumitem ok true [argument #1 expects a string, but EnumItem was passed / Stack Begin / Script '<probe>', Line @156 / Script '<probe>', Line @68 / Stack End] own {0, 0, 0,5,Plastic,nil,t,x,{}}
+CS.HasTag nothing error Argument 1 missing or nil 
+CS.GetTags nil ok table 0  own {}
+CS.GetTags int ok table 0  own {}
+CS.GetTags string ok table 0  own {}
+CS.GetTags table ok table 0  own {}
+CS.GetTags vector ok table 0  own {}
+CS.GetTags enumitem ok table 0  own {}
+CS.GetTags nothing ok table 0 
+CS.HasTag instance-only 1 ok false ok false [argument #1 expects a string, but Instance was passed / Stack Begin / Script '<probe>', Line @171 / Script '<probe>', Line @66 / Stack End]
+CS.HasTag instance-only 2 ok false ok false [argument #1 expects a string, but Instance was passed / Stack Begin / Script '<probe>', Line @171 / Script '<probe>', Line @66 / Stack End]
+CS.HasTag instance-only 3 ok false ok false [argument #1 expects a string, but Instance was passed / Stack Begin / Script '<probe>', Line @171 / Script '<probe>', Line @66 / Stack End]
+CS.GetInstanceAddedSignal x ok 'Signal xInstanceAdded' true 
+CS.GetInstanceRemovedSignal x ok 'Signal xInstanceRemoved' true 
+CS.GetInstanceAddedSignal space ok 'Signal a bInstanceAdded' true 
+CS.GetInstanceRemovedSignal space ok 'Signal a bInstanceRemoved' true 
+CS.GetInstanceAddedSignal empty error Empty tag string provided to GetInstanceAddedSignal 
+CS.GetInstanceRemovedSignal empty error Empty tag string provided to GetInstanceRemovedSignal 
+CS.GetInstanceAddedSignal int ok 'Signal 5InstanceAdded' true 
+CS.GetInstanceRemovedSignal int ok 'Signal 5InstanceRemoved' true 
+CS.GetInstanceAddedSignal nil error Argument 1 missing or nil 
+CS.GetInstanceRemovedSignal nil error Argument 1 missing or nil 
+CS.GetInstanceAddedSignal none error Argument 1 missing or nil 
+CS.GetInstanceRemovedSignal none error Argument 1 missing or nil 
+CS.GetInstanceAddedSignal table ok 'Signal {}InstanceAdded' true [argument #1 expects a string, but table was passed / Stack Begin / Script '<probe>', Line @178 / Script '<probe>', Line @68 / Stack End] [argument #1 expects a string, but table was passed / Stack Begin / Script '<probe>', Line @179 / Script '<probe>', Line @68 / Stack End]
+CS.GetInstanceRemovedSignal table ok 'Signal {}InstanceRemoved' true [argument #1 expects a string, but table was passed / Stack Begin / Script '<probe>', Line @178 / Script '<probe>', Line @68 / Stack End] [argument #1 expects a string, but table was passed / Stack Begin / Script '<probe>', Line @179 / Script '<probe>', Line @68 / Stack End]
+CS.TagAdded Signal TagAdded Signal TagRemoved
+Unbind one ok  
+Unbind again one ok  
+Unbind two ok  [RunService:UnbindFromRenderStep removed different functions with same reference name u-two 2 times.]
+Unbind again two ok  
+Unbind three ok  [RunService:UnbindFromRenderStep removed different functions with same reference name u-three 3 times.]
+Unbind again three ok  
+Unbind same-priority ok  [RunService:UnbindFromRenderStep removed different functions with same reference name u-same-priority 2 times.]
+Unbind again same-priority ok  
+Unbind never ok  
+Unbind leaves 0 [RunService:UnbindFromRenderStep removed different functions with same reference name u-run 2 times.]
+UrlEncode kept 30=0 31=1 32=2 33=3 34=4 35=5 36=6 37=7 38=8 39=9 41=A 42=B 43=C 44=D 45=E 46=F 47=G 48=H 49=I 4A=J 4B=K 4C=L 4D=M 4E=N 4F=O 50=P 51=Q 52=R 53=S 54=T 55=U 56=V 57=W 58=X 59=Y 5A=Z 61=a 62=b 63=c 64=d 65=e 66=f 67=g 68=h 69=i 6A=j 6B=k 6C=l 6D=m 6E=n 6F=o 70=p 71=q 72=r 73=s 74=t 75=u 76=v 77=w 78=x 79=y 7A=z
+UrlEncode 0%2E1%2D0
+UrlEncode a%20b%2Bc
+UrlEncode %7E%5F%2E%2D%2A%27%28%29%21
+UrlEncode %C3%A9
+UrlEncode 
+UrlEncode int ok '5' 
+UrlEncode fraction ok '%2D0%2E5' 
+UrlEncode true ok 'true' [argument #1 expects a string, but boolean was passed / Stack Begin / Script '<probe>', Line @230 / Script '<probe>', Line @68 / Stack End]
+UrlEncode nil error Argument 1 missing or nil 
+UrlEncode none error Argument 1 missing or nil 
+QueryDescendants class ok table 1 
+QueryDescendants empty ok table 0 
+QueryDescendants int ok table 0 
+QueryDescendants true error @252: invalid argument #2 (string expected, got boolean) 
+QueryDescendants false error @252: invalid argument #2 (string expected, got boolean) 
+QueryDescendants nil error @252: invalid argument #2 (string expected, got nil) 
+QueryDescendants none error @252: missing argument #2 (string expected) 
+QueryDescendants table error @252: invalid argument #2 (string expected, got table) 
+QueryDescendants instance error @252: invalid argument #2 (string expected, got Instance) 
+QueryDescendants vector error @252: invalid argument #2 (string expected, got Vector3) 
+QueryDescendants enumitem error @252: invalid argument #2 (string expected, got EnumItem) 
+QueryDescendants method error @255: invalid argument #2 to 'QueryDescendants' (string expected, got boolean) 
+GetAssetFetchStatus string ok Enum.AssetFetchStatus.None 
+GetAssetFetchStatus empty ok Enum.AssetFetchStatus.None 
+GetAssetFetchStatus int error Unable to cast double to ContentId 
+GetAssetFetchStatus true error Unable to cast bool to ContentId 
+GetAssetFetchStatus nil error Argument 1 missing or nil 
+GetAssetFetchStatus none error Argument 1 missing or nil 
+GetAssetFetchStatus table error Unable to cast Array to ContentId 
+GetAssetFetchStatus instance error Unable to cast Instance to ContentId 
+GetAssetFetchStatus vector error Unable to cast Vector3 to ContentId 
+GetAssetFetchStatus enumitem error Unable to cast Material to ContentId 
+GetAssetFetchStatus content error Unable to cast Content to ContentId 
+GetAssetFetchStatusChangedSignal int error Unable to cast double to ContentId 
+GetAssetFetchStatusChangedSignal true error Unable to cast bool to ContentId 
+GetAssetFetchStatusChangedSignal nil error Argument 1 missing or nil 
+GetAssetFetchStatusChangedSignal none error Argument 1 missing or nil 
+GetAssetFetchStatusChangedSignal table error Unable to cast Array to ContentId 
+GetAssetFetchStatusChangedSignal instance error Unable to cast Instance to ContentId 
+GetAssetFetchStatusChangedSignal vector error Unable to cast Vector3 to ContentId 
+GetAssetFetchStatusChangedSignal enumitem error Unable to cast Material to ContentId 
+GetAssetFetchStatusChangedSignal content error Unable to cast Content to ContentId 
+TextService.GetFamilyInfoAsync int error Unable to cast double to ContentId 
+TextService.GetFamilyInfoAsync true error Unable to cast bool to ContentId 
+TextService.GetFamilyInfoAsync nil error Argument 1 missing or nil 
+TextService.GetFamilyInfoAsync none error Argument 1 missing or nil 
+TextService.GetFamilyInfoAsync table error Unable to cast Array to ContentId 
+TextService.GetFamilyInfoAsync instance error Unable to cast Instance to ContentId 
+TextService.GetFamilyInfoAsync vector error Unable to cast Vector3 to ContentId 
+TextService.GetFamilyInfoAsync enumitem error Unable to cast Material to ContentId 
+TextService.GetFamilyInfoAsync content error Unable to cast Content to ContentId 
+KeyframeSequenceProvider.GetKeyframeSequenceAsync int error Unable to cast double to ContentId 
+KeyframeSequenceProvider.GetKeyframeSequenceAsync true error Unable to cast bool to ContentId 
+KeyframeSequenceProvider.GetKeyframeSequenceAsync nil error Argument 1 missing or nil 
+KeyframeSequenceProvider.GetKeyframeSequenceAsync none error Argument 1 missing or nil 
+KeyframeSequenceProvider.GetKeyframeSequenceAsync table error Unable to cast Array to ContentId 
+KeyframeSequenceProvider.GetKeyframeSequenceAsync instance error Unable to cast Instance to ContentId 
+KeyframeSequenceProvider.GetKeyframeSequenceAsync vector error Unable to cast Vector3 to ContentId 
+KeyframeSequenceProvider.GetKeyframeSequenceAsync enumitem error Unable to cast Material to ContentId 
+KeyframeSequenceProvider.GetKeyframeSequenceAsync content error Unable to cast Content to ContentId 
+AnimationClipProvider.GetAnimationClipAsync int error Unable to cast double to ContentId 
+AnimationClipProvider.GetAnimationClipAsync true error Unable to cast bool to ContentId 
+AnimationClipProvider.GetAnimationClipAsync nil error Argument 1 missing or nil 
+AnimationClipProvider.GetAnimationClipAsync none error Argument 1 missing or nil 
+AnimationClipProvider.GetAnimationClipAsync table error Unable to cast Array to ContentId 
+AnimationClipProvider.GetAnimationClipAsync instance error Unable to cast Instance to ContentId 
+AnimationClipProvider.GetAnimationClipAsync vector error Unable to cast Vector3 to ContentId 
+AnimationClipProvider.GetAnimationClipAsync enumitem error Unable to cast Material to ContentId 
+AnimationClipProvider.GetAnimationClipAsync content error Unable to cast Content to ContentId 
+InsertService.CreateMeshPartAsync int error Unable to cast double to ContentId 
+InsertService.CreateMeshPartAsync true error Unable to cast bool to ContentId 
+InsertService.CreateMeshPartAsync nil error Argument 1 missing or nil 
+InsertService.CreateMeshPartAsync none error Argument 1 missing or nil 
+InsertService.CreateMeshPartAsync table error Unable to cast Array to ContentId 
+InsertService.CreateMeshPartAsync instance error Unable to cast Instance to ContentId 
+InsertService.CreateMeshPartAsync vector error Unable to cast Vector3 to ContentId 
+InsertService.CreateMeshPartAsync enumitem error Unable to cast Material to ContentId 
+InsertService.CreateMeshPartAsync content error Unable to cast Content to ContentId 
+CoreGui start PlayerList=true Health=true Backpack=true Chat=true All=true EmotesMenu=true SelfView=true Captures=true AvatarSwitcher=true ExperienceShop=true
+SetCoreGuiEnabled Chat false ok  
+CoreGui PlayerList=true Health=true Backpack=true Chat=false All=false EmotesMenu=true SelfView=true Captures=true AvatarSwitcher=true ExperienceShop=true
+SetCoreGuiEnabled All false ok  
+CoreGui PlayerList=false Health=false Backpack=false Chat=false All=false EmotesMenu=false SelfView=false Captures=false AvatarSwitcher=false ExperienceShop=false
+SetCoreGuiEnabled Health true ok  
+CoreGui PlayerList=false Health=true Backpack=false Chat=false All=false EmotesMenu=false SelfView=false Captures=false AvatarSwitcher=false ExperienceShop=false
+SetCoreGuiEnabled All true ok  
+CoreGui PlayerList=true Health=true Backpack=true Chat=true All=true EmotesMenu=true SelfView=true Captures=true AvatarSwitcher=true ExperienceShop=true
+SetCoreGuiEnabled PlayerList false ok  
+CoreGui PlayerList=false Health=true Backpack=true Chat=true All=false EmotesMenu=true SelfView=true Captures=true AvatarSwitcher=true ExperienceShop=true
+SetCoreGuiEnabled string ok  
+CoreGui PlayerList=false Health=true Backpack=true Chat=false All=false EmotesMenu=true SelfView=true Captures=true AvatarSwitcher=true ExperienceShop=true
+SetCoreGuiEnabled int ok  
+CoreGui PlayerList=false Health=true Backpack=true Chat=false All=false EmotesMenu=true SelfView=true Captures=true AvatarSwitcher=true ExperienceShop=true
+SetCoreGuiEnabled huge error Unable to cast double to CoreGuiType 
+CoreGui PlayerList=false Health=true Backpack=true Chat=false All=false EmotesMenu=true SelfView=true Captures=true AvatarSwitcher=true ExperienceShop=true
+SetCoreGuiEnabled nil error Argument 1 missing or nil 
+CoreGui PlayerList=false Health=true Backpack=true Chat=false All=false EmotesMenu=true SelfView=true Captures=true AvatarSwitcher=true ExperienceShop=true
+SetCoreGuiEnabled enable-nil error Argument 2 missing or nil 
+CoreGui PlayerList=false Health=true Backpack=true Chat=false All=false EmotesMenu=true SelfView=true Captures=true AvatarSwitcher=true ExperienceShop=true
+SetCoreGuiEnabled enable-string error Unable to cast string to bool 
+CoreGui PlayerList=false Health=true Backpack=true Chat=false All=false EmotesMenu=true SelfView=true Captures=true AvatarSwitcher=true ExperienceShop=true
+SetCoreGuiEnabled enable-int ok  
+CoreGui PlayerList=false Health=false Backpack=true Chat=false All=false EmotesMenu=true SelfView=true Captures=true AvatarSwitcher=true ExperienceShop=true
+SetCoreGuiEnabled other-enum error Unable to cast Material to CoreGuiType 
+CoreGui PlayerList=false Health=false Backpack=true Chat=false All=false EmotesMenu=true SelfView=true Captures=true AvatarSwitcher=true ExperienceShop=true
+SetCoreGuiEnabled table error Unable to cast Array to CoreGuiType 
+CoreGui PlayerList=false Health=false Backpack=true Chat=false All=false EmotesMenu=true SelfView=true Captures=true AvatarSwitcher=true ExperienceShop=true
+GetCoreGuiEnabled string ok true 
+GetCoreGuiEnabled int ok true 
+GetCoreGuiEnabled huge error Unable to cast double to CoreGuiType 
+GetCoreGuiEnabled nil error Argument 1 missing or nil 
+GetCoreGuiEnabled none error Argument 1 missing or nil 
+GetCoreGuiEnabled other-enum error Unable to cast Material to CoreGuiType 
+GetCoreGuiEnabled table error Unable to cast Array to CoreGuiType 
+GetCore Nope error GetCore: Nope has not been registered by the CoreScripts 
+GetCore ChatActive error GetCore: ChatActive has not been registered by the CoreScripts 
+GetCore PointsNotificationsActive error GetCore: PointsNotificationsActive has not been registered by the CoreScripts 
+GetCore BadgesNotificationsActive error GetCore: BadgesNotificationsActive has not been registered by the CoreScripts 
+GetCore GetBlockedUserIds error GetCore: GetBlockedUserIds has not been registered by the CoreScripts 
+GetCore PlayerBlockedEvent error GetCore: PlayerBlockedEvent has not been registered by the CoreScripts 
+GetCore PlayerUnblockedEvent error GetCore: PlayerUnblockedEvent has not been registered by the CoreScripts 
+GetCore PlayerMutedEvent error GetCore: PlayerMutedEvent has not been registered by the CoreScripts 
+GetCore PlayerUnmutedEvent error GetCore: PlayerUnmutedEvent has not been registered by the CoreScripts 
+GetCore PlayerFriendedEvent error GetCore: PlayerFriendedEvent has not been registered by the CoreScripts 
+GetCore PlayerUnfriendedEvent error GetCore: PlayerUnfriendedEvent has not been registered by the CoreScripts 
+GetCore DevConsoleVisible error GetCore: DevConsoleVisible has not been registered by the CoreScripts 
+GetCore ChatWindowPosition error GetCore: ChatWindowPosition has not been registered by the CoreScripts 
+GetCore ChatWindowSize error GetCore: ChatWindowSize has not been registered by the CoreScripts 
+GetCore ChatBarDisabled error GetCore: ChatBarDisabled has not been registered by the CoreScripts 
+GetCore AvatarContextMenuEnabled error GetCore: AvatarContextMenuEnabled has not been registered by the CoreScripts 
+GetCore VREnableControllerModels error GetCore: VREnableControllerModels has not been registered by the CoreScripts 
+GetCore VRLaserPointerMode error GetCore: VRLaserPointerMode has not been registered by the CoreScripts 
+GetCore TopbarEnabled error GetCore: TopbarEnabled has not been registered by the CoreScripts 
+GetCore SendNotification error GetCore: SendNotification has not been registered by the CoreScripts 
+GetCore ResetButtonCallback error GetCore: ResetButtonCallback has not been registered by the CoreScripts 
+GetCore ChatMakeSystemMessage error GetCore: ChatMakeSystemMessage has not been registered by the CoreScripts 
+GetCore CoreGuiChatConnections error GetCore: CoreGuiChatConnections has not been registered by the CoreScripts 
+GetCore AvatarContextMenuTheme error GetCore: AvatarContextMenuTheme has not been registered by the CoreScripts 
+GetCore AvatarContextMenuTarget error GetCore: AvatarContextMenuTarget has not been registered by the CoreScripts 
+GetCore AddAvatarContextMenuOption error GetCore: AddAvatarContextMenuOption has not been registered by the CoreScripts 
+GetCore RemoveAvatarContextMenuOption error GetCore: RemoveAvatarContextMenuOption has not been registered by the CoreScripts 
+GetCore PromptSendFriendRequest error GetCore: PromptSendFriendRequest has not been registered by the CoreScripts 
+GetCore PromptUnfriend error GetCore: PromptUnfriend has not been registered by the CoreScripts 
+GetCore PromptBlockPlayer error GetCore: PromptBlockPlayer has not been registered by the CoreScripts 
+GetCore PromptUnblockPlayer error GetCore: PromptUnblockPlayer has not been registered by the CoreScripts 
+GetCore EmotesMenuOpen error GetCore: EmotesMenuOpen has not been registered by the CoreScripts 
+GetCore VRRotationIntensity error GetCore: VRRotationIntensity has not been registered by the CoreScripts 
+GetCore UserGameSettings error GetCore: UserGameSettings has not been registered by the CoreScripts 
+GetCore  error GetCore:  has not been registered by the CoreScripts 
+SetCore Nope error SetCore: Nope has not been registered by the CoreScripts 
+SetCore  error SetCore:  has not been registered by the CoreScripts 
+SetCore ChatActive error SetCore: ChatActive has not been registered by the CoreScripts 
+SetCore GetBlockedUserIds error SetCore: GetBlockedUserIds has not been registered by the CoreScripts 
+SetCore PointsNotificationsActive error SetCore: PointsNotificationsActive has not been registered by the CoreScripts 

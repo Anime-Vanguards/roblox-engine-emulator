@@ -1040,7 +1040,7 @@ end)
 
 -- (HttpService JSON and requests are Rust: services/mod.rs)
 
--- ContentProvider
+local ContentIdArg -- ContentProvider (ContentIdArg, a method's ContentId argument, is defined at this file's end: it moves no line)
 -- (it waits for the animation assets it asks for: animation/mod.rs preload. Its callback gets each Animation's id and
 -- whether it loads, for an item that is or holds Animations, measured; any other item, whose content is not looked at,
 -- its text and Success)
@@ -1068,8 +1068,8 @@ end)
 Getter("ContentProvider", "RequestQueueSize", function()
 	return 0
 end)
-Method("ContentProvider", "GetAssetFetchStatus", function()
-	return EnumItem("AssetFetchStatus", "Success")
+Method("ContentProvider", "GetAssetFetchStatus", function(_, ContentId)
+	return ContentIdArg(ContentId) and EnumItem("AssetFetchStatus", "Success")
 end)
 
 -- KeyframeSequenceProvider:GetKeyframeSequenceAsync: after a yield, a new copy of the KeyframeSequence
@@ -1077,8 +1077,8 @@ end)
 -- raises after the yield, without a position (the message is not measured). (RegisterKeyframeSequence
 -- is Rust: animation/mod.rs)
 Method("KeyframeSequenceProvider", "GetKeyframeSequenceAsync", function(_, AssetId)
-	if AssetId == nil then
-		error("Argument 1 missing or nil", 0)
+	if type(AssetId) ~= "string" then
+		ContentIdArg(AssetId)
 	end
 	task.wait()
 	local Sequence, Message = R.KeyframeSequence(tostring(AssetId))
@@ -1096,7 +1096,7 @@ Method("AnimationClipProvider", "GetAnimationClipAsync", function(_, AssetId)
 		error("Argument 1 missing or nil", 0)
 	end
 	if type(AssetId) ~= "string" then
-		error(`Unable to cast {if type(AssetId) == "number" then "double" else typeof(AssetId)} to ContentId`, 0)
+		ContentIdArg(AssetId)
 	end
 	task.wait()
 	local Clip, Message = R.AnimationClip(AssetId)
@@ -1112,7 +1112,7 @@ end)
 
 -- TextService: family metadata of a font family asset / json path
 Method("TextService", "GetFamilyInfoAsync", function(_, AssetId)
-	local Id = tostring(AssetId)
+	local Id = ContentIdArg(AssetId)
 	return {
 		Name = string.match(Id, "([^/]+)%.json$") or Id,
 		Faces = {
@@ -1597,5 +1597,42 @@ R.InvokeApart = function(Self, Callback, ...)
 	end
 	return R.Copied(Answer(Outcome))
 end
+
+-- A method's ContentId argument (a string, as it is): nil raises "Argument 1 missing or nil", anything else "Unable to cast <value>
+-- to ContentId", with "double", "bool", "Array" or "Dictionary", "Function" or an item's enum for the value (measured, 0.747, a
+-- playing client and a server: GetAssetFetchStatus, GetAssetFetchStatusChangedSignal, TextService:GetFamilyInfoAsync,
+-- KeyframeSequenceProvider:GetKeyframeSequenceAsync, AnimationClipProvider:GetAnimationClipAsync and InsertService:CreateMeshPartAsync
+-- alike, tools/parity/probes/service_answers.luau)
+ContentIdArg = function(Value, Index)
+	if Value == nil then
+		error(`Argument {Index or 1} missing or nil`, 0)
+	elseif type(Value) == "string" then
+		return Value
+	end
+	local Kind = typeof(Value)
+	if Kind == "number" then
+		Kind = "double"
+	elseif Kind == "boolean" then
+		Kind = "bool"
+	elseif Kind == "table" then
+		Kind = if #Value > 0 or next(Value) == nil then "Array" else "Dictionary"
+	elseif Kind == "function" then
+		Kind = "Function"
+	elseif Kind == "EnumItem" then
+		Kind = tostring(Value.EnumType)
+	end
+	error(`Unable to cast {Kind} to ContentId`, 0)
+end
+
+-- (no fetch is followed here: the signal reports itself once its id is read)
+Method("ContentProvider", "GetAssetFetchStatusChangedSignal", function(_, ContentId)
+	ContentIdArg(ContentId)
+	Missing("ContentProvider", "GetAssetFetchStatusChangedSignal")
+end)
+-- InsertService:CreateMeshPartAsync loads a mesh asset (not emulated) once its id is read
+Method("InsertService", "CreateMeshPartAsync", function(_, MeshId)
+	ContentIdArg(MeshId)
+	Missing("InsertService", "CreateMeshPartAsync")
+end)
 
 return true

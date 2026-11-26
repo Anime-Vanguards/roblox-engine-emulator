@@ -1256,3 +1256,31 @@ if {held} then Player.Character = Old end
     let (after_with, after_without) = (idle(&with_lua, &with), idle(&without_lua, &without));
     assert!((after_with - after_without).abs() < 1e-12, "the destroy: {after_with} against {after_without}");
 }
+
+/// A server's StarterGui answers a client's core GUI calls with a warning (measured on a 0.747 server, service_answers.luau): the
+/// arguments cast as a client casts them, then "StarterGui:SetCoreGuiEnabled must be called from a local script." and nothing
+/// done, GetCoreGuiEnabled false after its warning, SetCore a warning and nothing. ree answered true and reported them missing.
+#[test]
+fn a_servers_core_gui_calls_warn() {
+    let lines = run(
+        RunContext::Server,
+        r#"
+        local SG = game:GetService("StarterGui")
+        SG:SetCoreGuiEnabled(Enum.CoreGuiType.Chat, false)
+        print(SG:GetCoreGuiEnabled(Enum.CoreGuiType.Chat), pcall(SG.SetCoreGuiEnabled, SG, 99, false))
+        SG:SetCore("Nope", 1)
+        "#,
+        0.1,
+    );
+    let wanted: Vec<&str> = lines.iter().filter(|line| line.starts_with("print: ") || line.starts_with("warn: ")).map(String::as_str).collect();
+    assert_eq!(
+        wanted,
+        [
+            "warn: StarterGui:SetCoreGuiEnabled must be called from a local script.",
+            "warn: StarterGui:GetCoreGuiEnabled must be called from a local script.",
+            "print: false false Unable to cast double to CoreGuiType",
+            "warn: StarterGui:SetCore must be called from a local script.",
+        ],
+        "{lines:?}"
+    );
+}

@@ -6799,6 +6799,18 @@ fn actors_run_their_scripts_in_a_vm_of_their_own_in_studios_order() {
     let engine = Engine::new(Options { mode: "play".into(), ..Options::default() }).expect("engine");
     let lua = Lua::new();
     engine_lua::start(&lua, &engine).expect("start");
+    // (a game script may not write RunContext, as a client's may not: the worker template takes it through the engine)
+    let e = engine.clone();
+    let set_run_context = lua
+        .create_function(move |_, (script, item): (LuaAnyUserData, LuaAnyUserData)| {
+            let id = engine_lua::raw::instance_of_ud(&script).ok_or_else(|| LuaError::runtime("Instance expected"))?;
+            let item = item.borrow::<engine_lua::types::LEnumItem>()?.0;
+            let name = e.reflection.name_id("RunContext").expect("RunContext");
+            super::instance::raw_set_silent(&mut e.state.borrow_mut(), &e.reflection, id, name, super::value::Value::EnumItem(item));
+            Ok(())
+        })
+        .unwrap();
+    engine.lua.borrow().shared.as_ref().unwrap().raw_set("__setRunContext", set_run_context).unwrap();
     crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
     run(
         &lua,
@@ -6818,7 +6830,7 @@ fn actors_run_their_scripts_in_a_vm_of_their_own_in_studios_order() {
         Module.Source = "local Count = 0 local Actor = script:GetActor() return { Bump = function() Count += 1 return Count end, Actor = if Actor then Actor.Name else 'none' }"
         Module.Parent = Folder
         local Template = Instance.new("Script")
-        Template.RunContext = Enum.RunContext.Client
+        __setRunContext(Template, Enum.RunContext.Client)
         Template.Enabled = false
         Template.Source = [==[
             local RunService = game:GetService("RunService")
@@ -6917,23 +6929,32 @@ fn actors_run_their_scripts_in_a_vm_of_their_own_in_studios_order() {
     assert_eq!(log, expected);
 }
 
-/// Script.Source and Script.RunContext are plugin-writable in Studio and ree has no plugin boundary: a script can
-/// set them (the Actor probe builds its workers that way), and a module's new source is the one required.
+/// Script.Source is plugin-writable in Studio and ree has no plugin boundary: a script can set it, and a module's new source is
+/// the one required. Script.RunContext a game script reads but may not write ("The current thread cannot write 'RunContext'
+/// (lacking capability PluginOrOpenCloud)", measured on a 0.747 client and server: tools/parity/probes/loopback/
+/// replicated_properties.luau); a plugin's code, the edit run context, writes it.
 #[test]
-fn script_source_and_run_context_are_writable() {
-    assert_script(
+fn script_source_is_writable_and_run_context_in_edit_mode() {
+    let (lua, engine) = start_with(Options { mode: "play".into(), ..Options::default() });
+    run(
+        &lua,
+        &engine,
         r#"
         local Module = Instance.new("ModuleScript")
         Module.Source = "return 41 + 1"
         assert(require(Module) == 42, "a module's source is the one written")
         local Worker = Instance.new("Script")
-        Worker.RunContext = Enum.RunContext.Client
-        assert(Worker.RunContext == Enum.RunContext.Client, "RunContext was not written")
+        local Ok, Message = pcall(function() Worker.RunContext = Enum.RunContext.Client end)
+        assert(not Ok and Message == "The current thread cannot write 'RunContext' (lacking capability PluginOrOpenCloud)", Message)
+        assert(Worker.RunContext == Enum.RunContext.Legacy, "RunContext was written")
         assert(Worker.Enabled == true, "a Script starts enabled")
         Worker.Enabled = false
         assert(Worker.Enabled == false)
         "#,
     );
+    let (lua, engine) = start_with(Options { mode: "edit".into(), run_context: super::RunContext::Edit, ..Options::default() });
+    let output = run(&lua, &engine, r#"local Worker = Instance.new("Script") Worker.RunContext = Enum.RunContext.Client print(Worker.RunContext)"#);
+    assert_eq!(output, ["print: Enum.RunContext.Client"]);
 }
 
 /// The work clock prices datatype operations from Studio's own numbers: the op_cost probe's class
@@ -15157,6 +15178,113 @@ fn get_service_answers_nil_for_a_name_a_client_knows() {
             "GameSettingsAssetIDFace 'GameSettingsAssetIDFace' is not a valid Service name 'GameSettingsAssetIDFace' is not a valid Service name",
             "Language 'Language' is not a valid Service name 'Language' is not a valid Service name",
             "'MadeByScript' is not a valid Service name 'MadeTag' is not a valid Service name false Unable to create an Instance of type \"HandRigDescription\"",
+        ],
+        "{output:?}"
+    );
+}
+
+/// CollectionService as a 0.747 client and server answer it (tools/parity/probes/collection_tags.luau, service_answers.luau,
+/// events_fired.luau): GetTags sorted by bytes; one value and no tag, or a target that is no instance, is a call on the service
+/// itself with that value as its tag; a nil target changes nothing; TagAdded / TagRemoved for the first and last holder in the
+/// DataModel; the tag signals named after the tag, an empty tag refused. ree kept the order added, raised "Argument 1 missing or
+/// nil" for a target that was no instance, never fired TagAdded and named every tag signal "InstanceAdded".
+#[test]
+fn collection_service_tags_as_a_client_answers_them() {
+    let (lua, engine) = start();
+    let output = run(
+        &lua,
+        &engine,
+        r#"
+        local CS = game:GetService("CollectionService")
+        local Folder = Instance.new("Folder")
+        for _, Tag in { "b", "B", "10", "9", "a" } do Folder:AddTag(Tag) end
+        print("sorted", table.concat(Folder:GetTags(), ","), table.concat(CS:GetTags(Folder), ","))
+        print("one", pcall(CS.AddTag, CS, Folder), table.concat(game.GetTags(CS), ","), CS:HasTag(workspace), #CS:GetTagged("Instance"))
+        CS:RemoveTag(workspace)
+        print("target", pcall(CS.AddTag, CS, 5, "t"), pcall(CS.AddTag, CS, nil, "t"), table.concat(game.GetTags(CS), ","), CS:HasTag(5, "t"), CS:HasTag(nil, "t"))
+        print("errors", select(2, pcall(CS.AddTag, CS)), select(2, pcall(CS.AddTag, CS, nil)), select(2, pcall(CS.AddTag, CS, Folder, nil)), #CS:GetTags(), #CS:GetTags("x"))
+        print("signal", tostring(CS:GetInstanceAddedSignal("t")), tostring(CS:GetInstanceRemovedSignal("t")), select(2, pcall(CS.GetInstanceAddedSignal, CS, "")))
+        local Events = {}
+        CS.TagAdded:Connect(function(Tag) table.insert(Events, "+" .. Tag) end)
+        CS.TagRemoved:Connect(function(Tag) table.insert(Events, "-" .. Tag) end)
+        local A, B = Instance.new("Folder"), Instance.new("Folder")
+        A:AddTag("q")
+        task.wait()
+        A.Parent = workspace
+        task.wait()
+        B:AddTag("q")
+        B.Parent = workspace
+        task.wait()
+        A:RemoveTag("q")
+        task.wait()
+        B:Destroy()
+        task.wait()
+        print("events", table.concat(Events, ","))
+        "#,
+    );
+    let printed: Vec<&str> = output.iter().filter_map(|line| line.strip_prefix("print: ")).collect();
+    assert_eq!(
+        printed,
+        [
+            "sorted 10,9,B,a,b 10,9,B,a,b",
+            "one true Instance true 1",
+            "target true true 5 true false",
+            "errors Argument 1 missing or nil Argument 2 missing or nil Argument 3 missing or nil 0 0",
+            "signal Signal tInstanceAdded Signal tInstanceRemoved Empty tag string provided to GetInstanceAddedSignal",
+            "events +q,-q",
+        ],
+        "{output:?}"
+    );
+}
+
+/// StarterGui's core GUI switches and core settings, Players:GetPlayerByUserId's cast, UrlEncode, QueryDescendants' selector,
+/// UnbindFromRenderStep of a shared name, the ContentId casts and the capability refusals, as a 0.747 client answers them
+/// (tools/parity/probes/service_answers.luau, events_fired.luau, instances.luau). ree answered true for every core GUI type,
+/// nil for any GetPlayerByUserId argument, kept "." and "-" in UrlEncode, took any selector and every ContentId, warned of
+/// nothing and let a script write RunContext and connect ErrorDetailed.
+#[test]
+fn service_answers_follow_a_clients_casts_and_rules() {
+    let (lua, engine) = start_with(Options { mode: "play".into(), ..Options::default() });
+    let output = run(
+        &lua,
+        &engine,
+        r#"
+        local SG = game:GetService("StarterGui")
+        local function Try(F, ...) local Ok, E = pcall(F, ...) return if Ok then tostring(E) else E end
+        SG:SetCoreGuiEnabled(Enum.CoreGuiType.Chat, false)
+        print("chat", SG:GetCoreGuiEnabled(Enum.CoreGuiType.Chat), SG:GetCoreGuiEnabled("All"), SG:GetCoreGuiEnabled(1))
+        SG:SetCoreGuiEnabled(Enum.CoreGuiType.All, false)
+        SG:SetCoreGuiEnabled(Enum.CoreGuiType.Health, 1)
+        print("all", SG:GetCoreGuiEnabled(Enum.CoreGuiType.Health), SG:GetCoreGuiEnabled(Enum.CoreGuiType.Backpack), SG:GetCoreGuiEnabled(Enum.CoreGuiType.All))
+        print("casts", Try(SG.SetCoreGuiEnabled, SG, 99, false), Try(SG.SetCoreGuiEnabled, SG, Enum.CoreGuiType.Chat, "x"), Try(SG.SetCoreGuiEnabled, SG, Enum.Material.Plastic, true), Try(SG.GetCoreGuiEnabled, SG))
+        print("core", Try(SG.GetCore, SG, "Nope"), Try(SG.SetCore, SG, "Nope", 1), Try(SG.GetCore, SG, "ChatActive"))
+        local Players = game:GetService("Players")
+        print("user", Try(Players.GetPlayerByUserId, Players, "x"), Try(Players.GetPlayerByUserId, Players, {}), Try(Players.GetPlayerByUserId, Players, Enum.Material.Plastic), Players:GetPlayerByUserId(tostring(Players.LocalPlayer.UserId)) == Players.LocalPlayer)
+        print("url", game:GetService("HttpService"):UrlEncode("0.1-0_~a"))
+        local Root = Instance.new("Folder")
+        print("query", select(2, pcall(function() return Root:QueryDescendants(true) end)), select(2, pcall(function() return Root:QueryDescendants() end)), select(2, pcall(function() return Root.QueryDescendants(Root, true) end)), #Root:QueryDescendants(5))
+        local RS = game:GetService("RunService")
+        for Index = 1, 3 do RS:BindToRenderStep("shared", Index, function() end) end
+        RS:UnbindFromRenderStep("shared")
+        print("content", Try(game:GetService("ContentProvider").GetAssetFetchStatus, game:GetService("ContentProvider"), 5), Try(game:GetService("TextService").GetFamilyInfoAsync, game:GetService("TextService"), true))
+        local Script = Instance.new("Script")
+        print("caps", Try(function() Script.RunContext = Enum.RunContext.Client end), Try(function() return Instance.new("Model").LevelOfDetail end), Try(function() return game:GetService("ScriptContext").ErrorDetailed:Connect(print) end))
+        "#,
+    );
+    let printed: Vec<&str> = output.iter().filter(|line| line.starts_with("print: ") || line.starts_with("warn: ")).map(String::as_str).collect();
+    assert_eq!(
+        printed,
+        [
+            "print: chat false false true",
+            "print: all true false false",
+            "print: casts Unable to cast double to CoreGuiType Unable to cast string to bool Unable to cast Material to CoreGuiType Argument 1 missing or nil",
+            "print: core GetCore: Nope has not been registered by the CoreScripts SetCore: Nope has not been registered by the CoreScripts true",
+            "print: user Unable to cast string to User Unable to cast Array to User Unable to cast Material to User true",
+            "print: url 0%2E1%2D0%5F%7Ea",
+            "print: query Test:15: invalid argument #2 (string expected, got boolean) Test:15: missing argument #2 (string expected) Test:15: invalid argument #2 to 'QueryDescendants' (string expected, got boolean) 0",
+            "warn: RunService:UnbindFromRenderStep removed different functions with same reference name shared 3 times.",
+            "print: content Unable to cast double to ContentId Unable to cast bool to ContentId",
+            "print: caps The current thread cannot write 'RunContext' (lacking capability PluginOrOpenCloud) The current thread cannot read 'LevelOfDetail' (lacking capability PluginOrOpenCloud) The current thread cannot connect 'ErrorDetailed' (lacking capability RobloxScript)",
         ],
         "{output:?}"
     );

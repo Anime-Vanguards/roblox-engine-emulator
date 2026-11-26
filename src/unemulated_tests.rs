@@ -196,7 +196,6 @@ end
     assert_eq!(
         summary["unemulated"],
         json!([
-            { "member": "StarterGui.SetCoreGuiEnabled", "count": 2, "first": at(6) },
             { "member": "ContextActionService.BindAction", "count": 1, "first": at(8) },
             { "member": "Humanoid.ChangeState", "count": 1, "first": at(3) },
             { "member": "Humanoid.MoveTo", "count": 1, "first": at(4) },

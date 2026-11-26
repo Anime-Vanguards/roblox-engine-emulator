@@ -656,6 +656,17 @@ fn connect_as(lua: &Lua, engine: &Rc<Engine>, args: LuaMultiValue, once: bool, p
         if engine.options.server() && engine.state.borrow().signals.get(id).label.as_bytes() == b"RunService.RenderStepped" {
             return raise("RenderStepped event can only be used from local scripts");
         }
+        // (the events only Roblox's own scripts connect to: reflection.rs CAPABILITY_EVENTS)
+        {
+            let state = engine.state.borrow();
+            let label = state.signals.get(id).label.as_bytes();
+            if let Some(&(_, event, capability)) = crate::reflection::CAPABILITY_EVENTS
+                .iter()
+                .find(|&&(class, event, _)| label.len() == class.len() + 1 + event.len() && label.starts_with(class.as_bytes()) && label.ends_with(event.as_bytes()))
+            {
+                return raise(format!("The current thread cannot connect '{event}' (lacking capability {capability})"));
+            }
+        }
         // (a loopback run refuses the other side's remote event)
         crate::loopback::remotes::connecting(engine, id)?;
     }

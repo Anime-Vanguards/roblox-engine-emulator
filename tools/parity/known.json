@@ -21,10 +21,6 @@
 			"why": "AssetService:CreateEditableMeshAsync casts its argument before it refuses to wait (`Argument 1 missing or nil`, `Unable to cast double to Content`, `Unable to cast Array to Content`) and raises `UnpublishedPlaceNotInStudio` for an asset offline; ree's message and order differ"
 		},
 		{
-			"line": "refused GetKeyframeSequenceAsync",
-			"why": "KeyframeSequenceProvider / AnimationClipProvider cast a number id (`Unable to cast double to ContentId`) before refusing to wait, and a server rejects an rbxassetid id offline (`Invalid animation id ... Unrecognized scheme`); ree refuses first"
-		},
-		{
 			"line": "refused GetTranslatorForLocaleAsync",
 			"why": "LocalizationService:GetTranslatorForLocaleAsync casts a non-string locale and waits for the web in a client and a server (and refuses where the thread cannot yield); ree answers a translator at once"
 		},
@@ -159,92 +155,8 @@
 	],
 	"collection_tags": [
 		{
-			"line": "order",
-			"why": "GetTags lists tags sorted by their bytes in a client (B,C,a; 1,10,100,2,9), CollectionService:GetTags too; ree lists them in the order they were added"
-		},
-		{
-			"line": "random-",
-			"why": "GetTags lists tags sorted by their bytes in a client (B,C,a; 1,10,100,2,9), CollectionService:GetTags too; ree lists them in the order they were added"
-		},
-		{
-			"line": "removed ",
-			"why": "GetTags lists tags sorted by their bytes in a client (B,C,a; 1,10,100,2,9), CollectionService:GetTags too; ree lists them in the order they were added"
-		},
-		{
-			"line": "added-",
-			"why": "GetTags lists tags sorted by their bytes in a client (B,C,a; 1,10,100,2,9), CollectionService:GetTags too; ree lists them in the order they were added"
-		},
-		{
-			"line": "readded ",
-			"why": "GetTags lists tags sorted by their bytes in a client (B,C,a; 1,10,100,2,9), CollectionService:GetTags too; ree lists them in the order they were added"
-		},
-		{
-			"line": "clone ",
-			"why": "GetTags lists tags sorted by their bytes in a client (B,C,a; 1,10,100,2,9), CollectionService:GetTags too; ree lists them in the order they were added"
-		},
-		{
 			"line": "all-tags ",
 			"why": "CollectionService:GetAllTags lists a client's tags in an order of its own (neither added nor sorted: q-m,q-c,q-a,q-B,q-x for q-m,q-c,q-x,q-a,q-B added); ree lists them in the order they were added"
-		},
-		{
-			"line": "after-add-",
-			"why": "CollectionService's AddTag / RemoveTag / HasTag given one argument act on the service's own tags in a client, the argument cast to a string (an Instance as \"Instance\", with the argument #1 warning; a text or a number with none), and one nil is the two-argument form (`Argument 2 missing or nil`); ree warns and changes nothing or raises `Argument 1 missing or nil`"
-		},
-		{
-			"line": "has-instance-2",
-			"why": "CollectionService's AddTag / RemoveTag / HasTag given one argument act on the service's own tags in a client, the argument cast to a string (an Instance as \"Instance\", with the argument #1 warning; a text or a number with none), and one nil is the two-argument form (`Argument 2 missing or nil`); ree warns and changes nothing or raises `Argument 1 missing or nil`"
-		},
-		{
-			"line": "has-workspace",
-			"why": "CollectionService's AddTag / RemoveTag / HasTag given one argument act on the service's own tags in a client, the argument cast to a string (an Instance as \"Instance\", with the argument #1 warning; a text or a number with none), and one nil is the two-argument form (`Argument 2 missing or nil`); ree warns and changes nothing or raises `Argument 1 missing or nil`"
-		},
-		{
-			"line": "has-text",
-			"why": "CollectionService's AddTag / RemoveTag / HasTag given one argument act on the service's own tags in a client, the argument cast to a string (an Instance as \"Instance\", with the argument #1 warning; a text or a number with none), and one nil is the two-argument form (`Argument 2 missing or nil`); ree warns and changes nothing or raises `Argument 1 missing or nil`"
-		},
-		{
-			"line": "tagged-instance",
-			"why": "CollectionService's AddTag / RemoveTag / HasTag given one argument act on the service's own tags in a client, the argument cast to a string (an Instance as \"Instance\", with the argument #1 warning; a text or a number with none), and one nil is the two-argument form (`Argument 2 missing or nil`); ree warns and changes nothing or raises `Argument 1 missing or nil`"
-		},
-		{
-			"line": "add-text",
-			"why": "CollectionService's AddTag / RemoveTag / HasTag given one argument act on the service's own tags in a client, the argument cast to a string (an Instance as \"Instance\", with the argument #1 warning; a text or a number with none), and one nil is the two-argument form (`Argument 2 missing or nil`); ree warns and changes nothing or raises `Argument 1 missing or nil`"
-		},
-		{
-			"line": "add-number",
-			"why": "CollectionService's AddTag / RemoveTag / HasTag given one argument act on the service's own tags in a client, the argument cast to a string (an Instance as \"Instance\", with the argument #1 warning; a text or a number with none), and one nil is the two-argument form (`Argument 2 missing or nil`); ree warns and changes nothing or raises `Argument 1 missing or nil`"
-		},
-		{
-			"line": "add-vector",
-			"why": "CollectionService's AddTag / RemoveTag / HasTag given one argument act on the service's own tags in a client, the argument cast to a string (an Instance as \"Instance\", with the argument #1 warning; a text or a number with none), and one nil is the two-argument form (`Argument 2 missing or nil`); ree warns and changes nothing or raises `Argument 1 missing or nil`"
-		},
-		{
-			"line": "remove-text",
-			"why": "CollectionService's AddTag / RemoveTag / HasTag given one argument act on the service's own tags in a client, the argument cast to a string (an Instance as \"Instance\", with the argument #1 warning; a text or a number with none), and one nil is the two-argument form (`Argument 2 missing or nil`); ree warns and changes nothing or raises `Argument 1 missing or nil`"
-		},
-		{
-			"line": "remove-number",
-			"why": "CollectionService's AddTag / RemoveTag / HasTag given one argument act on the service's own tags in a client, the argument cast to a string (an Instance as \"Instance\", with the argument #1 warning; a text or a number with none), and one nil is the two-argument form (`Argument 2 missing or nil`); ree warns and changes nothing or raises `Argument 1 missing or nil`"
-		},
-		{
-			"line": "remove-vector",
-			"why": "CollectionService's AddTag / RemoveTag / HasTag given one argument act on the service's own tags in a client, the argument cast to a string (an Instance as \"Instance\", with the argument #1 warning; a text or a number with none), and one nil is the two-argument form (`Argument 2 missing or nil`); ree warns and changes nothing or raises `Argument 1 missing or nil`"
-		},
-		{
-			"line": "add-nil",
-			"why": "CollectionService's AddTag / RemoveTag / HasTag given one argument act on the service's own tags in a client, the argument cast to a string (an Instance as \"Instance\", with the argument #1 warning; a text or a number with none), and one nil is the two-argument form (`Argument 2 missing or nil`); ree warns and changes nothing or raises `Argument 1 missing or nil`"
-		},
-		{
-			"line": "has-nil",
-			"why": "CollectionService's AddTag / RemoveTag / HasTag given one argument act on the service's own tags in a client, the argument cast to a string (an Instance as \"Instance\", with the argument #1 warning; a text or a number with none), and one nil is the two-argument form (`Argument 2 missing or nil`); ree warns and changes nothing or raises `Argument 1 missing or nil`"
-		},
-		{
-			"line": "gettags-none",
-			"why": "CollectionService's AddTag / RemoveTag / HasTag given one argument act on the service's own tags in a client, the argument cast to a string (an Instance as \"Instance\", with the argument #1 warning; a text or a number with none), and one nil is the two-argument form (`Argument 2 missing or nil`); ree warns and changes nothing or raises `Argument 1 missing or nil`"
-		},
-		{
-			"line": "gettags-text",
-			"why": "CollectionService's AddTag / RemoveTag / HasTag given one argument act on the service's own tags in a client, the argument cast to a string (an Instance as \"Instance\", with the argument #1 warning; a text or a number with none), and one nil is the two-argument form (`Argument 2 missing or nil`); ree warns and changes nothing or raises `Argument 1 missing or nil`"
 		}
 	],
 	"core_services": [
@@ -401,14 +313,6 @@
 			"why": "TweenService:Create with a string for its TweenInfo makes a tween in a client; ree raises `Unable to cast string to TweenInfo`"
 		},
 		{
-			"line": "trace CollectionService:AddTag ok",
-			"why": "CollectionService:AddTag of a value that is no Instance does nothing in a client; ree raises `Argument 1 missing or nil`"
-		},
-		{
-			"line": "pcall CollectionService:AddTag ok ",
-			"why": "CollectionService:AddTag of a value that is no Instance does nothing in a client; ree raises `Argument 1 missing or nil`"
-		},
-		{
 			"line": "levels invoke @ 401 ",
 			"why": "a client runs a BindableFunction's OnInvoke on a thread of its own (no level above the handler); ree calls it from Invoke's engine Luau on the invoking thread"
 		},
@@ -459,14 +363,6 @@
 	],
 	"events_fired": [
 		{
-			"line": "step tag-",
-			"why": "CollectionService.TagAdded / TagRemoved fire when the first instance in the DataModel takes a tag and the last one loses it (not for a loose instance); ree never fires them"
-		},
-		{
-			"line": "step services",
-			"why": "game.ServiceAdded fires for each service GetService makes; ree never fires it"
-		},
-		{
 			"line": "step item-changed",
 			"why": "game.ItemChanged fires for each property change in the DataModel (instance, property name; Parent too); ree never fires it"
 		},
@@ -485,10 +381,6 @@
 		{
 			"line": "step equipped-emotes",
 			"why": "HumanoidDescription:SetEmotes / SetEquippedEmotes fire EmotesChanged / EquippedEmotesChanged; ree does not emulate the methods"
-		},
-		{
-			"line": "connect ",
-			"why": "InputContext.InputActionsChanged, InputAction.InputBindingsChanged and ScriptContext.ErrorDetailed need the RobloxScript capability to connect to (`The current thread cannot connect '<event>' (lacking capability RobloxScript)`); ree connects a game script"
 		}
 	],
 	"global_settings_tree": [
@@ -573,16 +465,8 @@
 	],
 	"instances": [
 		{
-			"line": "default Model PrimaryPart=nil(nil) LevelOfDetail=error:The current thread cannot read 'LevelOfDetail' (lacking capability PluginOrOpenCloud) ModelStreamingMode=EnumItem(Enum.ModelStreamingMode.Default) WorldPivot=CF(0 0 0 1 0 0 0 1 0 0 0 1) Name=string(Model)",
-			"why": "error text: a client refuses LevelOfDetail to a game script for lacking a capability (PluginOrOpenCloud); ree does not model capabilities and calls it no member"
-		},
-		{
 			"line": "attribute-name \"Ünï\" error Attribute name contains illegal character '\\xC3' (\"Ünï\")",
 			"why": "error text: a client names the first illegal byte of a non-ASCII name (a lone UTF-8 lead byte, Ã); ree's messages are UTF-8 text and name the whole character"
-		},
-		{
-			"line": "tags a,b has true false",
-			"why": "GetTags order: a client lists tags sorted by their bytes (collection_tags.luau: B,C,a and 1,10,100,2,9 whatever order they were added in); ree lists them in the order added"
 		}
 	],
 	"lifetime": [
@@ -1007,24 +891,12 @@
 			"why": "read-only property: an image with no image is not loaded in a client; ree answers true"
 		},
 		{
-			"line": "readonly Sound.",
-			"why": "read-only property: a Sound with no SoundId is not loaded and lasts 0 in a client; ree answers true and 1"
-		},
-		{
 			"line": "readonly TextBox.TextBounds",
 			"why": "read-only property: text bounds come from a GUI layer's text measurement (a host's), which plain ree has not"
 		},
 		{
-			"line": "readonly TextButton.LocalizedText",
-			"why": "read-only property: LocalizedText is empty until the object is in the DataModel in a client; ree reads the Text"
-		},
-		{
 			"line": "readonly TextButton.TextBounds",
 			"why": "read-only property: text bounds come from a GUI layer's text measurement (a host's), which plain ree has not"
-		},
-		{
-			"line": "readonly TextLabel.LocalizedText",
-			"why": "read-only property: LocalizedText is empty until the object is in the DataModel in a client; ree reads the Text"
 		},
 		{
 			"line": "readonly TextLabel.TextBounds",
@@ -1051,10 +923,6 @@
 			"why": "read-only property: parent rules as for AdPortal (`BaseWrap must be parented to a MeshPart.`)"
 		},
 		{
-			"line": "service Workspace.FilteringEnabled",
-			"why": "read-only property: Workspace.FilteringEnabled reads true in a playing client and server; ree reads false"
-		},
-		{
 			"line": "service Players.",
 			"why": "read-only property: NumPlayers / PreferredPlayers count the joined player (1) and ClassicChat reads true in a client and a server; ree counts 0 while it has a LocalPlayer and reads false"
 		},
@@ -1065,26 +933,6 @@
 		{
 			"line": "service GuiService.IsWindows",
 			"why": "read-only property: IsWindows is the capture machine's platform (true); ree's client profile says false"
-		},
-		{
-			"line": "service ContentProvider.BaseUrl",
-			"why": "read-only property: ContentProvider.BaseUrl is https://www.roblox.com/ in a client; ree reads empty"
-		},
-		{
-			"line": "service TextChatService.",
-			"why": "read-only property: TextChatService.ChatTranslationEnabled reads true; ree false"
-		},
-		{
-			"line": "service VRService.",
-			"why": "read-only property: VRService.ThirdPersonFollowCamEnabled reads true; ree false"
-		},
-		{
-			"line": "service Selection.",
-			"why": "read-only property: Selection.SelectionThickness reads 0.02; ree 0"
-		},
-		{
-			"line": "service TestService.",
-			"why": "read-only property: TestService.Enabled reads true; ree false"
 		},
 		{
 			"line": "service Terrain.",
@@ -1137,10 +985,82 @@
 			"why": "the order a spatial query lists a model's parts when it comes in with its welds, after a weld ends and after an Anchored write: a client files each assembly's parts together (m1,m2,m4,m6 then m3,m5); ree lists them in the order they were made"
 		}
 	],
-	"string_parameter_methods": [
+	"service_answers": [
 		{
-			"line": "CS.HasTag none ok",
-			"why": "CollectionService:HasTag given only an instance acts on the service itself in a client: Instance:HasTag on CollectionService with the instance cast to the tag \"Instance\" (with the argument #1 warning), true here because the probe's earlier CollectionService:AddTag(instance) tagged the service \"Instance\" (collection_tags.luau); ree warns and answers false"
+			"line": "GetAssetFetchStatus string ok Enum.AssetFetchStatus.None ",
+			"why": "a client answers None for an asset it never fetched; ree loads no asset and answers Success"
+		},
+		{
+			"line": "GetAssetFetchStatus empty ok Enum.AssetFetchStatus.None ",
+			"why": "a client answers None for an asset it never fetched; ree loads no asset and answers Success"
+		},
+		{
+			"line": "GetCore ChatActive error GetCore: ChatActive has not been registered by the CoreScripts ",
+			"why": "the sim's clients run no core scripts, so every GetCore raises \"has not been registered by the CoreScripts\" there; ree answers the names Roblox's StarterGui documentation lists as a client with its core scripts does (services/mod.rs GET_CORE)"
+		},
+		{
+			"line": "GetCore PointsNotificationsActive error GetCore: PointsNotificationsActive has not been registered by the CoreScripts ",
+			"why": "the sim's clients run no core scripts, so every GetCore raises \"has not been registered by the CoreScripts\" there; ree answers the names Roblox's StarterGui documentation lists as a client with its core scripts does (services/mod.rs GET_CORE)"
+		},
+		{
+			"line": "GetCore BadgesNotificationsActive error GetCore: BadgesNotificationsActive has not been registered by the CoreScripts ",
+			"why": "the sim's clients run no core scripts, so every GetCore raises \"has not been registered by the CoreScripts\" there; ree answers the names Roblox's StarterGui documentation lists as a client with its core scripts does (services/mod.rs GET_CORE)"
+		},
+		{
+			"line": "GetCore GetBlockedUserIds error GetCore: GetBlockedUserIds has not been registered by the CoreScripts ",
+			"why": "the sim's clients run no core scripts, so every GetCore raises \"has not been registered by the CoreScripts\" there; ree answers the names Roblox's StarterGui documentation lists as a client with its core scripts does (services/mod.rs GET_CORE)"
+		},
+		{
+			"line": "GetCore PlayerBlockedEvent error GetCore: PlayerBlockedEvent has not been registered by the CoreScripts ",
+			"why": "the sim's clients run no core scripts, so every GetCore raises \"has not been registered by the CoreScripts\" there; ree answers the names Roblox's StarterGui documentation lists as a client with its core scripts does (services/mod.rs GET_CORE)"
+		},
+		{
+			"line": "GetCore PlayerUnblockedEvent error GetCore: PlayerUnblockedEvent has not been registered by the CoreScripts ",
+			"why": "the sim's clients run no core scripts, so every GetCore raises \"has not been registered by the CoreScripts\" there; ree answers the names Roblox's StarterGui documentation lists as a client with its core scripts does (services/mod.rs GET_CORE)"
+		},
+		{
+			"line": "GetCore PlayerMutedEvent error GetCore: PlayerMutedEvent has not been registered by the CoreScripts ",
+			"why": "the sim's clients run no core scripts, so every GetCore raises \"has not been registered by the CoreScripts\" there; ree answers the names Roblox's StarterGui documentation lists as a client with its core scripts does (services/mod.rs GET_CORE)"
+		},
+		{
+			"line": "GetCore PlayerUnmutedEvent error GetCore: PlayerUnmutedEvent has not been registered by the CoreScripts ",
+			"why": "the sim's clients run no core scripts, so every GetCore raises \"has not been registered by the CoreScripts\" there; ree answers the names Roblox's StarterGui documentation lists as a client with its core scripts does (services/mod.rs GET_CORE)"
+		},
+		{
+			"line": "GetCore PlayerFriendedEvent error GetCore: PlayerFriendedEvent has not been registered by the CoreScripts ",
+			"why": "the sim's clients run no core scripts, so every GetCore raises \"has not been registered by the CoreScripts\" there; ree answers the names Roblox's StarterGui documentation lists as a client with its core scripts does (services/mod.rs GET_CORE)"
+		},
+		{
+			"line": "GetCore PlayerUnfriendedEvent error GetCore: PlayerUnfriendedEvent has not been registered by the CoreScripts ",
+			"why": "the sim's clients run no core scripts, so every GetCore raises \"has not been registered by the CoreScripts\" there; ree answers the names Roblox's StarterGui documentation lists as a client with its core scripts does (services/mod.rs GET_CORE)"
+		},
+		{
+			"line": "GetCore DevConsoleVisible error GetCore: DevConsoleVisible has not been registered by the CoreScripts ",
+			"why": "the sim's clients run no core scripts, so every GetCore raises \"has not been registered by the CoreScripts\" there; ree answers the names Roblox's StarterGui documentation lists as a client with its core scripts does (services/mod.rs GET_CORE)"
+		},
+		{
+			"line": "GetCore ChatWindowPosition error GetCore: ChatWindowPosition has not been registered by the CoreScripts ",
+			"why": "the sim's clients run no core scripts, so every GetCore raises \"has not been registered by the CoreScripts\" there; ree answers the names Roblox's StarterGui documentation lists as a client with its core scripts does (services/mod.rs GET_CORE)"
+		},
+		{
+			"line": "GetCore ChatWindowSize error GetCore: ChatWindowSize has not been registered by the CoreScripts ",
+			"why": "the sim's clients run no core scripts, so every GetCore raises \"has not been registered by the CoreScripts\" there; ree answers the names Roblox's StarterGui documentation lists as a client with its core scripts does (services/mod.rs GET_CORE)"
+		},
+		{
+			"line": "GetCore ChatBarDisabled error GetCore: ChatBarDisabled has not been registered by the CoreScripts ",
+			"why": "the sim's clients run no core scripts, so every GetCore raises \"has not been registered by the CoreScripts\" there; ree answers the names Roblox's StarterGui documentation lists as a client with its core scripts does (services/mod.rs GET_CORE)"
+		},
+		{
+			"line": "GetCore AvatarContextMenuEnabled error GetCore: AvatarContextMenuEnabled has not been registered by the CoreScripts ",
+			"why": "the sim's clients run no core scripts, so every GetCore raises \"has not been registered by the CoreScripts\" there; ree answers the names Roblox's StarterGui documentation lists as a client with its core scripts does (services/mod.rs GET_CORE)"
+		},
+		{
+			"line": "SetCore ChatActive error SetCore: ChatActive has not been registered by the CoreScripts ",
+			"why": "the sim's clients run no core scripts, so every SetCore raises \"has not been registered by the CoreScripts\" there; ree takes the names Roblox's StarterGui documentation lists as a client with its core scripts does (services/mod.rs SET_CORE) and reports itself"
+		},
+		{
+			"line": "SetCore PointsNotificationsActive error SetCore: PointsNotificationsActive has not been registered by the CoreScripts ",
+			"why": "the sim's clients run no core scripts, so every SetCore raises \"has not been registered by the CoreScripts\" there; ree takes the names Roblox's StarterGui documentation lists as a client with its core scripts does (services/mod.rs SET_CORE) and reports itself"
 		}
 	],
 	"table_breadth": [

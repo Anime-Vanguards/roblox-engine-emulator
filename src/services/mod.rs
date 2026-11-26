@@ -157,6 +157,8 @@ pub struct CollectionState {
     holders: FxHashMap<Str, Vec<InstanceId>>,
     /// Players leaving: what the leave reads, and the departed characters and Players waiting to be destroyed (players.rs)
     pub(crate) departures: players::Departures,
+    /// CollectionService's class and its TagAdded and TagRemoved events ([`tag_event`])
+    service_events: Option<(ClassId, NameId, NameId)>,
 }
 
 impl CollectionState {
@@ -223,13 +225,30 @@ pub fn in_data_model(state: &State, id: InstanceId) -> bool {
 }
 
 /// A subtree entered (`entered`) or is about to leave the DataModel: its tagged instances fire
-/// their tags' added / removed signals.
+/// their tags' added / removed signals, and CollectionService's TagAdded (TagRemoved) each tag no instance outside it in the
+/// DataModel holds ([`tag_event`]), the first before the instances' signals, the second after.
 pub fn subtree_moved(state: &mut State, root: InstanceId, entered: bool) {
-    if state.collection.tags.is_empty() {
+    let event = tag_event(state, entered);
+    if state.collection.tags.is_empty() && event.is_none() {
         return;
     }
     let mut nodes = vec![root];
     nodes.extend(state.dom.descendants(root));
+    let mut first: Vec<Str> = Vec::new();
+    if let Some(signal) = event {
+        for &node in &nodes {
+            for tag in &state.dom.at(node).tags {
+                if !first.contains(tag) && !held_elsewhere(state, tag, |holder| holder != root && !state.dom.is_descendant_of(holder, root)) {
+                    first.push(tag.clone());
+                }
+            }
+        }
+        if entered {
+            for tag in &first {
+                core::fire(state, signal, vec![Value::String(tag.clone())]);
+            }
+        }
+    }
     for node in nodes {
         if state.dom.at(node).tags.is_empty() {
             continue;
@@ -240,36 +259,73 @@ pub fn subtree_moved(state: &mut State, root: InstanceId, entered: bool) {
             }
         }
     }
+    if let (Some(signal), false) = (event, entered) {
+        for tag in first {
+            core::fire(state, signal, vec![Value::String(tag)]);
+        }
+    }
+}
+
+/// CollectionService's TagAdded (`added`) or TagRemoved signal, when it has handlers. A client and a server fire TagAdded when
+/// the first instance in the DataModel takes a tag (an instance given it there, or a tagged one entering it; not a loose one)
+/// and TagRemoved when the last one loses it (removed, or the instance leaving or destroyed), with the tag (measured, 0.747:
+/// tools/parity/probes/events_fired.luau).
+fn tag_event(state: &State, added: bool) -> Option<SignalId> {
+    let (class, tag_added, tag_removed) = state.collection.service_events?;
+    let service = state.dom.find_child_of_class(state.collection.game?, class)?;
+    let signal = state.dom.at(service).signals.as_ref()?.event(if added { tag_added } else { tag_removed })?;
+    state.signals.has_handlers(signal).then_some(signal)
+}
+
+/// Whether an instance in the DataModel that `counts` holds `tag`
+fn held_elsewhere(state: &State, tag: &Str, counts: impl Fn(InstanceId) -> bool) -> bool {
+    state.collection.holders.get(tag).is_some_and(|holders| {
+        holders.iter().any(|&holder| {
+            counts(holder) && state.dom.get(holder).is_some_and(|instance| instance.tags.contains(tag)) && in_data_model(state, holder)
+        })
+    })
 }
 
 fn tag_signals(state: &mut State, tag: &Str) -> (SignalId, SignalId) {
     if let Some(&signals) = state.collection.tags.get(tag) {
         return signals;
     }
-    let added = state.signals.create(Str::from("InstanceAdded"));
-    let removed = state.signals.create(Str::from("InstanceRemoved"));
+    // (named after the tag: tostring gives "Signal xInstanceAdded" for the tag "x", measured, 0.747, a playing client and a server,
+    // tools/parity/probes/service_answers.luau)
+    let added = state.signals.create(Str::new(&[tag.as_bytes(), b"InstanceAdded"].concat()));
+    let removed = state.signals.create(Str::new(&[tag.as_bytes(), b"InstanceRemoved"].concat()));
     state.collection.tags.insert(tag.clone(), (added, removed));
     (added, removed)
 }
 
-/// Hooks.TagAdded: GetInstanceAddedSignal fires for instances in the DataModel.
+/// Hooks.TagAdded: GetInstanceAddedSignal fires for instances in the DataModel (after TagAdded, [`tag_event`]).
 pub fn tag_added(state: &mut State, id: InstanceId, tag: &Str) {
     note_tag(state, id, tag);
     if !in_data_model(state, id) {
         return;
+    }
+    if let Some(signal) = tag_event(state, true)
+        && !held_elsewhere(state, tag, |holder| holder != id)
+    {
+        core::fire(state, signal, vec![Value::String(tag.clone())]);
     }
     if let Some(&(added, _)) = state.collection.tags.get(tag) {
         core::fire(state, added, vec![Value::Instance(id)]);
     }
 }
 
-/// Hooks.TagRemoved: GetInstanceRemovedSignal fires for instances in the DataModel.
+/// Hooks.TagRemoved: GetInstanceRemovedSignal fires for instances in the DataModel (then TagRemoved, [`tag_event`]).
 pub fn tag_removed(state: &mut State, id: InstanceId, tag: &Str) {
     if !in_data_model(state, id) {
         return;
     }
     if let Some(&(_, removed)) = state.collection.tags.get(tag) {
         core::fire(state, removed, vec![Value::Instance(id)]);
+    }
+    if let Some(signal) = tag_event(state, false)
+        && !held_elsewhere(state, tag, |_| true)
+    {
+        core::fire(state, signal, vec![Value::String(tag.clone())]);
     }
 }
 
@@ -444,12 +500,14 @@ pub fn get_service(engine: &Engine, game: InstanceId, service_name: &str) -> Res
     };
     // Roblox's names that are not the class's: scripts index `game["Run Service"]` and
     // `UserSettings().GameSettings` (Studio 0.748: Run Service, Script Context and Teleport Service are the DataModel's
-    // only services named otherwise)
+    // services there from the start named otherwise; a playing client and a server name the PathfindingService GetService makes
+    // "Instance", measured, 0.747, tools/parity/probes/events_fired.luau)
     let instance_name = match service_name {
         "RunService" => "Run Service",
         "ScriptContext" => "Script Context",
         "TeleportService" => "Teleport Service",
         "UserGameSettings" => "GameSettings",
+        "PathfindingService" => "Instance",
         other => other,
     };
     let service = core::create_named(&mut state, reflection, class, instance_name);
@@ -462,8 +520,37 @@ pub fn get_service(engine: &Engine, game: InstanceId, service_name: &str) -> Res
     }
     state.dom.attach(service, game);
     state.dom.at_mut(service).set_flag(flags::PARENT_LOCKED, true);
+    // (the DataModel's ServiceAdded for a service a client or a server makes when a script first gets it, not for those it holds
+    // from the start: STARTING_SERVICES)
+    if Some(state.dom.at(game).class) == reflection.class_id("DataModel")
+        && !STARTING_SERVICES.contains(&service_name)
+        && !(engine.options.server() && SERVER_STARTING_SERVICES.contains(&service_name))
+        && let Some(added) = reflection.name_id("ServiceAdded")
+    {
+        core::fire_event(&mut state, game, added, vec![Value::Instance(service)]);
+    }
     Ok(service)
 }
+
+/// The services a playing client holds once a game's scripts run (FindService finds them without a GetService first): GetService
+/// of any other makes it and fires the DataModel's ServiceAdded (measured, 0.747, a playing client and a server: every service
+/// class looked up with FindService, tools/parity/probes/service_names.luau's sweep; ServiceAdded for PathfindingService and
+/// HapticService, none for ProximityPromptService, Debris, TweenService, PhysicsService and TextService, events_fired.luau).
+const STARTING_SERVICES: &[&str] = &[
+    "AdService", "AnalyticsService", "AnimationClipProvider", "AssetService", "AvatarCreationService", "AvatarEditorService", "BadgeService",
+    "BrowserService", "CaptureService", "Chat", "CollectionService", "CommerceService", "ContentProvider", "ContextActionService",
+    "CookiesService", "DataStoreService", "Debris", "FeatureRestrictionManager", "FriendService", "GamePassService", "GenerationService",
+    "GuiService", "GuidRegistryService", "HeapProfilerService", "HttpRbxApiService", "HttpService", "InsertService", "JointsService",
+    "KeyboardService", "KeyframeSequenceProvider", "Lighting", "LocalizationService", "LogService", "MarketplaceService", "MaterialService",
+    "MemoryStoreService", "MessagingService", "MicroProfilerService", "ModerationService", "MouseService", "NotificationService", "Packages",
+    "PermissionsService", "PhysicsService", "Players", "PointsService", "PolicyService", "ProximityPromptService", "RecommendationService",
+    "ReplicatedFirst", "ReplicatedStorage", "RunService", "ScriptContext", "ScriptProfilerService", "ScriptService", "Selection",
+    "ServerScriptService", "SharedTableRegistry", "SlimContentProvider", "SocialService", "SoundService", "StarterGui", "StarterPack",
+    "StarterPlayer", "Stats", "Teams", "TeleportService", "TestService", "TextChatService", "TextService", "TimerService", "TouchInputService",
+    "TweenService", "UserInputService", "VRService", "VideoCaptureService", "VideoService", "VoiceChatService", "Workspace",
+];
+/// [`STARTING_SERVICES`]' server has these too
+const SERVER_STARTING_SERVICES: &[&str] = &["ClusterPacketCache", "ServerStorage", "SpawnerService"];
 
 /// What a playing client's services hold from the start where neither the dump nor rbx-dom gives a default (a service
 /// has none, and rbx-dom leaves UserGameSettings' numbers out, so they read 0): the mouse and gamepad sensitivities read 1
@@ -611,9 +698,13 @@ pub fn install(engine: &Rc<Engine>) {
     encoding::install(engine, &mut behaviors);
 
     install_collection_service(&mut behaviors, &reflection);
+    if let (Some(collection), Some(added), Some(removed)) = (class(&reflection, "CollectionService"), name(&reflection, "TagAdded"), name(&reflection, "TagRemoved")) {
+        engine.state.borrow_mut().collection.service_events = Some((collection, added, removed));
+    }
     install_gui_and_input(&mut behaviors, &reflection, &options);
-    install_starter_actions_debris_sound(&mut behaviors, &reflection);
+    install_starter_actions_debris_sound(&mut behaviors, &reflection, &options);
     install_remotes_and_http(&mut behaviors, &reflection);
+    install_read_only_answers(&mut behaviors, &reflection, &options);
     drop(behaviors);
     engine.clear_member_cache();
 }
@@ -793,8 +884,17 @@ fn install_players(engine: &Rc<Engine>, behaviors: &mut Behaviors, reflection: &
             }
             Ok(values([LuaValue::Table(table)]))
         }));
+        // (the id is cast as an int64 argument is, the type named "User": "5" is 5, true 1, "x" raises "Unable to cast string to
+        // User", a table "Unable to cast Array to User", an enum item "Unable to cast Material to User", nil "Argument 1 missing or
+        // nil"; measured, 0.747, a playing client and a server: tools/parity/probes/service_answers.luau)
         behaviors.add_method(players, K::GetPlayerByUserId as NameId, method(|lua, engine, this, args| {
-            let wanted = args.number(1);
+            let wanted = match convert::int64_argument(engine, args.get(1), 1) {
+                Ok(id) => Some(id as f64),
+                Err(message) => return raise(match message.strip_suffix(" to int64") {
+                    Some(cast) => format!("{cast} to User"),
+                    None => message,
+                }),
+            };
             for player in joined_players(engine, this) {
                 let user_id = engine.state.borrow().dom.number(player, K::UserId as NameId);
                 if user_id.is_some() && user_id == wanted {
@@ -934,9 +1034,21 @@ fn install_run_service(engine: &Rc<Engine>, behaviors: &mut Behaviors, reflectio
             Ok(none())
         }));
         let unbind_steps = steps.clone();
-        behaviors.add_method(run_service, K::UnbindFromRenderStep as NameId, strings(FIRST, method(move |_, _, _, args| {
+        // (every binding of the name goes; when it took more than one, a client and a server warn "RunService:UnbindFromRenderStep
+        // removed different functions with same reference name <name> <n> times.", without a stack: measured, 0.747,
+        // tools/parity/probes/service_answers.luau)
+        behaviors.add_method(run_service, K::UnbindFromRenderStep as NameId, strings(FIRST, method(move |_, engine, _, args| {
             let name = args.string(1).map(|s| s.to_string_lossy());
-            unbind_steps.borrow_mut().retain(|step| Some(&step.name) != name.as_ref());
+            let removed = {
+                let mut list = unbind_steps.borrow_mut();
+                let before = list.len();
+                list.retain(|step| Some(&step.name) != name.as_ref());
+                before - list.len()
+            };
+            if removed > 1 {
+                let name = name.unwrap_or_default();
+                engine.output("warn", format!("RunService:UnbindFromRenderStep removed different functions with same reference name {name} {removed} times."), None);
+            }
             Ok(none())
         })));
         let mut state = engine.state.borrow_mut();
@@ -1048,6 +1160,10 @@ fn install_collection_service(behaviors: &mut Behaviors, reflection: &Reflection
             if let Some(n) = name(reflection, member) {
                 behaviors.add_method(collection, n, strings(FIRST, method(move |lua, engine, _, args| {
                     let tag = args.string(1).map(|s| Str::new(&s.as_bytes())).unwrap_or_default();
+                    // (measured likewise)
+                    if tag.as_bytes().is_empty() {
+                        return raise(format!("Empty tag string provided to {member}"));
+                    }
                     let (a, r) = tag_signals(&mut engine.state.borrow_mut(), &tag);
                     Ok(values([signal_value(lua, engine, if added { a } else { r })?]))
                 })));
@@ -1057,19 +1173,56 @@ fn install_collection_service(behaviors: &mut Behaviors, reflection: &Reflection
             if let Some(n) = name(reflection, member) {
                 let forward = n;
                 let tagged = member != "GetTags";
-                behaviors.add_method(collection, n, method(move |lua, engine, _, args| {
+                // (what AddTag, RemoveTag and HasTag answer when they change nothing)
+                let nothing = move || if member == "HasTag" { values([LuaValue::Boolean(false)]) } else { none() };
+                behaviors.add_method(collection, n, method(move |lua, engine, this, args| {
+                    // (GetTags of anything but an instance, nothing included, is an empty table, without a warning: measured, 0.747,
+                    // a playing client and a server, tools/parity/probes/service_answers.luau)
+                    if !tagged && args.instance(1).is_none() {
+                        return Ok(values([LuaValue::Table(lua.create_table()?)]));
+                    }
                     // (the tag first, as a client casts the arguments from the last: a nil one raises "Argument 3 missing or nil" and
                     // another value warns "argument #2", measured, Studio 0.747)
                     let cast = if tagged && args.len() > 2 { cast_strings(lua, engine, args, TAG)? } else { None };
                     let args = cast.as_ref().unwrap_or(args);
-                    let Some(target) = args.instance(1) else { return raise("Argument 1 missing or nil") };
-                    // (a call with the instance and no tag at all warns as if the instance were the tag, "argument #1 expects a
-                    // string, but Instance was passed", and changes nothing: measured likewise. Not matched: HasTag then answered
-                    // true in one call and false in two others, tagged or not; here false)
-                    if tagged && args.len() == 2 {
-                        convert::warn_string_param(lua, engine, args.get(1), 1);
-                        return Ok(if member == "HasTag" { values([LuaValue::Boolean(false)]) } else { none() });
+                    // (with one value and no tag, the call is Instance's on the service itself, the value its tag: AddTag(folder) tags
+                    // the CollectionService "Instance", after "argument #1 expects a string, but Instance was passed", and HasTag of any
+                    // instance answers true from then on; one nil raises "Argument 2 missing or nil", no argument at all "Argument 1
+                    // missing or nil": measured, 0.747, a playing client and a server, tools/parity/probes/collection_tags.luau)
+                    if tagged && args.len() <= 2 {
+                        if args.len() < 2 {
+                            return raise("Argument 1 missing or nil");
+                        }
+                        if args.get(1).is_nil() {
+                            return raise("Argument 2 missing or nil");
+                        }
+                        let own = engine.reflection.class_id("Instance").and_then(|base| {
+                            engine.behaviors.borrow().find_method(&engine.reflection, base, forward).map(|(_, f)| f.clone())
+                        });
+                        return match own {
+                            Some(Method::Rust(f)) => f(lua, engine, this, args),
+                            Some(Method::Lua(f)) => Ok(f.call::<LuaMultiValue>(args.0.clone())?),
+                            None => Ok(nothing()),
+                        };
                     }
+                    // (a target that is no instance is the tag of a call on the service itself, the tag given after it unused:
+                    // CollectionService:AddTag(5, "x") tags the CollectionService "5", AddTag({}, "x") "{}" after "argument #1 expects a
+                    // string, but table was passed", HasTag(5, "x") answers whether it holds "5"; a nil target changes nothing (HasTag
+                    // false). Measured, 0.747, a playing client and a server: tools/parity/probes/service_answers.luau)
+                    let Some(target) = args.instance(1) else {
+                        if args.get(1).is_nil() {
+                            return Ok(nothing());
+                        }
+                        let own = engine.reflection.class_id("Instance").and_then(|base| {
+                            engine.behaviors.borrow().find_method(&engine.reflection, base, forward).map(|(_, f)| f.clone())
+                        });
+                        let first = Args(args.0.iter().take(2).cloned().collect());
+                        return match own {
+                            Some(Method::Rust(f)) => f(lua, engine, this, &first),
+                            Some(Method::Lua(f)) => Ok(f.call::<LuaMultiValue>(first.0)?),
+                            None => Ok(nothing()),
+                        };
+                    };
                     let target_class = engine.state.borrow().dom.at(target).class;
                     let Some((_, f)) = engine.behaviors.borrow().find_method(&engine.reflection, target_class, forward).map(|(c, f)| (c, f.clone())) else {
                         return Ok(none());
@@ -1198,20 +1351,94 @@ fn install_gui_and_input(behaviors: &mut Behaviors, reflection: &Reflection, opt
     }
 }
 
+/// The settings StarterGui's SetCore takes on a client: those Roblox's core scripts register (Roblox's StarterGui documentation,
+/// its SetCore list and the GetCore names it marks settable). Any other raises "SetCore: <name> has not been registered by the
+/// CoreScripts" (measured, 0.747; the sim's clients run no core scripts, so there every name raises: service_answers.luau).
+const SET_CORE: &[&str] = &[
+    "ChatActive", "PointsNotificationsActive", "BadgesNotificationsActive", "ResetButtonCallback", "ChatMakeSystemMessage", "SendNotification",
+    "TopbarEnabled", "DevConsoleVisible", "PromptSendFriendRequest", "PromptUnfriend", "PromptBlockPlayer", "PromptUnblockPlayer",
+    "AvatarContextMenuEnabled", "AvatarContextMenuTarget", "AddAvatarContextMenuOption", "RemoveAvatarContextMenuOption", "AvatarContextMenuTheme",
+    "CoreGuiChatConnections", "ChatWindowSize", "ChatWindowPosition", "ChatBarDisabled",
+];
+/// The settings GetCore reads on a client (Roblox's StarterGui documentation; VRRotationIntensity only with VR on, which no
+/// client profile here turns on). Any other raises "GetCore: <name> has not been registered by the CoreScripts" (measured likewise).
+const GET_CORE: &[&str] = &[
+    "PointsNotificationsActive", "BadgesNotificationsActive", "AvatarContextMenuEnabled", "ChatActive", "ChatWindowSize", "ChatWindowPosition",
+    "ChatBarDisabled", "GetBlockedUserIds", "PlayerBlockedEvent", "PlayerUnblockedEvent", "PlayerMutedEvent", "PlayerUnmutedEvent",
+    "PlayerFriendedEvent", "PlayerUnfriendedEvent", "DevConsoleVisible",
+];
+
+/// A script value's name in "Unable to cast X to Y" as a method's argument cast writes it: "double", "bool", "Array" or
+/// "Dictionary" for a table, "Function", an enum item's enum (measured, 0.747: SetCoreGuiEnabled, GetPlayerByUserId,
+/// GetAssetFetchStatus; tools/parity/probes/service_answers.luau).
+fn cast_name(engine: &Engine, value: &LuaValue) -> String {
+    match value {
+        LuaValue::Number(_) | LuaValue::Integer(_) => "double".into(),
+        LuaValue::Boolean(_) => "bool".into(),
+        LuaValue::Table(table) => if table.raw_len() > 0 || table.is_empty() { "Array" } else { "Dictionary" }.into(),
+        LuaValue::Function(_) => "Function".into(),
+        LuaValue::UserData(ud) if ud.is::<super::lua::types::LEnumItem>() => match ud.borrow::<super::lua::types::LEnumItem>() {
+            Ok(item) => engine.reflection.enum_item_type_name(item.0).to_string(),
+            Err(_) => "EnumItem".into(),
+        },
+        other => super::lua::typeof_value(engine, other),
+    }
+}
+
+/// A method's enum argument at `index` (1 is the first after self): an item of `enum_name`, its name or its number; nil raises
+/// "Argument n missing or nil", anything else "Unable to cast <value> to <enum_name>".
+fn enum_param(lua: &Lua, engine: &Engine, value: &LuaValue, index: usize, enum_name: &str) -> Result<crate::reflection::EnumItemId, Flow> {
+    if value.is_nil() {
+        return raise(format!("Argument {index} missing or nil"));
+    }
+    if let Some(item) = engine.reflection.enum_id(enum_name).and_then(|id| convert::coerce_enum(lua, engine, id, value)) {
+        return Ok(item);
+    }
+    raise(format!("Unable to cast {} to {enum_name}", cast_name(engine, value)))
+}
+
+/// A method's bool argument at `index`: a boolean, or a number (true unless 0); nil raises "Argument n missing or nil", anything
+/// else "Unable to cast <value> to bool" (a string too).
+fn bool_param(engine: &Engine, value: &LuaValue, index: usize) -> Result<bool, Flow> {
+    match value {
+        LuaValue::Nil => raise(format!("Argument {index} missing or nil")),
+        LuaValue::Boolean(on) => Ok(*on),
+        LuaValue::Number(number) => Ok(*number != 0.0),
+        LuaValue::Integer(number) => Ok(*number != 0),
+        LuaValue::String(_) => raise("Unable to cast string to bool"),
+        other => raise(format!("Unable to cast {} to bool", cast_name(engine, other))),
+    }
+}
+
 #[inline(never)]
-fn install_starter_actions_debris_sound(behaviors: &mut Behaviors, reflection: &Reflection) {
+fn install_starter_actions_debris_sound(behaviors: &mut Behaviors, reflection: &Reflection, options: &crate::Options) {
     // StarterGui / ContextActionService / Debris / Sound
     if let Some(starter) = class(reflection, "StarterGui") {
-        // (Roblox's own UI is not emulated: GetCore and GetCoreGuiEnabled keep their first answers)
-        for (member, params) in [("SetCore", FIRST), ("SetCoreGuiEnabled", NONE)] {
-            if let Some(n) = name(reflection, member) {
-                behaviors.add_method(starter, n, strings(params, unemulated("StarterGui", member)));
-            }
+        let server = options.server();
+        // (Roblox's own UI is not emulated: SetCore of a name the core scripts register reports itself; GetCore keeps its first
+        // answers. A server's SetCore warns "StarterGui:SetCore must be called from a local script." and does nothing: measured,
+        // 0.747, tools/parity/probes/service_answers.luau)
+        if let Some(n) = name(reflection, "SetCore") {
+            behaviors.add_method(starter, n, strings(FIRST, method(move |lua, engine, _, args| {
+                let name = args.string(1).map(|s| s.to_string_lossy()).unwrap_or_default();
+                if server {
+                    engine.output("warn", "StarterGui:SetCore must be called from a local script.", None);
+                    return Ok(none());
+                }
+                if !SET_CORE.contains(&name.as_str()) {
+                    return raise(format!("SetCore: {name} has not been registered by the CoreScripts"));
+                }
+                engine.missing(Some(lua), "StarterGui", "SetCore");
+                Ok(none())
+            })));
         }
         // (GetCore yields on a server until the core scripts register the name: a client casts its name without the warning)
         if let Some(n) = name(reflection, "GetCore") {
-            behaviors.add_method(starter, n, strings(QUIET_FIRST, method(|lua, engine, _, args| {
+            behaviors.add_method(starter, n, strings(QUIET_FIRST, method(move |lua, engine, _, args| {
                 let name = args.string(1).map(|s| s.to_string_lossy()).unwrap_or_default();
+                if !server && !GET_CORE.contains(&name.as_str()) {
+                    return raise(format!("GetCore: {name} has not been registered by the CoreScripts"));
+                }
                 // (the user ids the player blocked: the client profile's social.blocked, where it gives them)
                 if name == "GetBlockedUserIds" {
                     let profile = engine.profile();
@@ -1227,8 +1454,49 @@ fn install_starter_actions_debris_sound(behaviors: &mut Behaviors, reflection: &
                 Ok(values([if active { LuaValue::Boolean(true) } else { LuaValue::Nil }]))
             })));
         }
+        // The core GUI switches (measured, 0.747, a playing client and a server: tools/parity/probes/service_answers.luau). Every
+        // type starts enabled; SetCoreGuiEnabled(type, enabled) sets one, All sets every one, and GetCoreGuiEnabled(All) is true
+        // when every one is. The enabled flag is cast first ("Argument 2 missing or nil", "Unable to cast string to bool", a
+        // number is whether it is not 0), then the type ("Unable to cast double to CoreGuiType" for a number no item has, "...
+        // Material to CoreGuiType" for another enum's item, an item's name or number taken). A server casts them, then warns
+        // "StarterGui:SetCoreGuiEnabled must be called from a local script." and changes nothing, and GetCoreGuiEnabled warns the
+        // same and answers false.
+        let disabled: Rc<RefCell<rustc_hash::FxHashSet<crate::reflection::EnumItemId>>> = Rc::default();
+        if let Some(n) = name(reflection, "SetCoreGuiEnabled") {
+            let disabled = disabled.clone();
+            behaviors.add_method(starter, n, method(move |lua, engine, _, args| {
+                let enabled = bool_param(engine, args.get(2), 2)?;
+                let item = enum_param(lua, engine, args.get(1), 1, "CoreGuiType")?;
+                if server {
+                    engine.output("warn", "StarterGui:SetCoreGuiEnabled must be called from a local script.", None);
+                    return Ok(none());
+                }
+                let mut disabled = disabled.borrow_mut();
+                if engine.reflection.enum_item_info(item).name.as_ref() == "All" {
+                    disabled.clear();
+                    if !enabled {
+                        let info = &engine.reflection.enums[engine.reflection.enum_item_info(item).enum_type as usize];
+                        disabled.extend(info.items.iter().copied().filter(|&other| other != item));
+                    }
+                } else if enabled {
+                    disabled.remove(&item);
+                } else {
+                    disabled.insert(item);
+                }
+                Ok(none())
+            }));
+        }
         if let Some(n) = name(reflection, "GetCoreGuiEnabled") {
-            behaviors.add_method(starter, n, constant(|_| Ok(LuaValue::Boolean(true))));
+            behaviors.add_method(starter, n, method(move |lua, engine, _, args| {
+                let item = enum_param(lua, engine, args.get(1), 1, "CoreGuiType")?;
+                if server {
+                    engine.output("warn", "StarterGui:GetCoreGuiEnabled must be called from a local script.", None);
+                    return Ok(values([LuaValue::Boolean(false)]));
+                }
+                let disabled = disabled.borrow();
+                let on = if engine.reflection.enum_item_info(item).name.as_ref() == "All" { disabled.is_empty() } else { !disabled.contains(&item) };
+                Ok(values([LuaValue::Boolean(on)]))
+            }));
         }
     }
     if let Some(actions) = class(reflection, "ContextActionService") {
@@ -1304,12 +1572,64 @@ fn install_starter_actions_debris_sound(behaviors: &mut Behaviors, reflection: &
         }));
     }
     if let Some(sound) = class(reflection, "Sound") {
-        // (Play / Stop / Pause / Resume are engine::world's: they set Playing and report the play)
+        // (Play / Stop / Pause / Resume are engine::world's: they set Playing and report the play. A Sound with no SoundId is not
+        // loaded and 0 long, measured, 0.747, tools/parity/probes/readonly_properties.luau; one with an id loads at once here, 1 long)
+        let has_id = |engine: &Rc<Engine>, id: InstanceId| {
+            let state = engine.state.borrow();
+            engine.reflection.name_id("SoundId").and_then(|n| state.dom.raw_get(id, n)).is_some_and(|value| !matches!(value, Value::String(text) if text.as_bytes().is_empty()))
+        };
         if let Some(n) = name(reflection, "IsLoaded") {
-            behaviors.add_getter(sound, n, getter(|_, _, _| Ok(LuaValue::Boolean(true))));
+            behaviors.add_getter(sound, n, getter(move |_, engine, id| Ok(LuaValue::Boolean(has_id(engine, id)))));
         }
         if let Some(n) = name(reflection, "TimeLength") {
-            behaviors.add_getter(sound, n, getter(|_, _, _| Ok(LuaValue::Number(1.0))));
+            behaviors.add_getter(sound, n, getter(move |_, engine, id| Ok(LuaValue::Number(if has_id(engine, id) { 1.0 } else { 0.0 }))));
+        }
+    }
+}
+
+/// Read-only properties of services and the Terrain a playing client and a server answer where the dump gives no default or
+/// another one (measured, 0.747: tools/parity/probes/readonly_properties.luau, the `service` lines; a server's BaseUrl is "").
+/// Not here: the Terrain's CurrentPhysicalProperties, MaxExtents and ResizeableFaces (datatypes), Players.PreferredPlayers (1 on a
+/// client, 0 on its server: not explained).
+#[inline(never)]
+fn install_read_only_answers(behaviors: &mut Behaviors, reflection: &Reflection, options: &crate::Options) {
+    let server = options.server();
+    let flags: &[(&str, &str, bool)] = &[
+        ("Workspace", "FilteringEnabled", true),
+        ("Players", "ClassicChat", true),
+        ("TextChatService", "ChatTranslationEnabled", true),
+        ("VRService", "ThirdPersonFollowCamEnabled", true),
+        ("TestService", "Enabled", true),
+        ("Terrain", "IsSmooth", true),
+    ];
+    for &(class_name, member, value) in flags {
+        if let (Some(owner), Some(n)) = (class(reflection, class_name), name(reflection, member)) {
+            behaviors.add_getter(owner, n, getter(move |_, _, _| Ok(LuaValue::Boolean(value))));
+        }
+    }
+    let numbers: &[(&str, &str, f64)] = &[
+        ("Selection", "SelectionThickness", 0.02f32 as f64),
+        ("Terrain", "ResizeIncrement", 1.0),
+        ("Terrain", "SpecificGravity", 0.7f32 as f64),
+    ];
+    for &(class_name, member, value) in numbers {
+        if let (Some(owner), Some(n)) = (class(reflection, class_name), name(reflection, member)) {
+            behaviors.add_getter(owner, n, getter(move |_, _, _| Ok(LuaValue::Number(value))));
+        }
+    }
+    if let (Some(terrain), Some(n)) = (class(reflection, "Terrain"), name(reflection, "ExtentsSize")) {
+        behaviors.add_getter(terrain, n, getter(|lua, engine, _| Ok(convert::to_lua(lua, engine, &Value::Vector3(dom::Vector3::new(2044.0, 252.0, 2044.0)))?)));
+    }
+    if let (Some(content), Some(n)) = (class(reflection, "ContentProvider"), name(reflection, "BaseUrl")) {
+        let url = if server { "" } else { "https://www.roblox.com/" };
+        behaviors.add_getter(content, n, getter(move |lua, _, _| Ok(string_value(lua, url)?)));
+    }
+    // (the players in Players, as GetPlayers lists them)
+    if let Some(players) = class(reflection, "Players") {
+        for member in ["NumPlayers", "numPlayers"] {
+            if let Some(n) = name(reflection, member) {
+                behaviors.add_getter(players, n, getter(|_, engine, id| Ok(LuaValue::Number(joined_players(engine, id).len() as f64))));
+            }
         }
     }
 }
@@ -1401,8 +1721,9 @@ fn install_remotes_and_http(behaviors: &mut Behaviors, reflection: &Reflection) 
                 let text = args.string(1).map(|s| s.as_bytes().to_vec()).unwrap_or_default();
                 let mut encoded = String::new();
                 for byte in text {
-                    // (`~` is encoded too: "%7E", measured in a playing client, Studio 0.744)
-                    if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.') {
+                    // (every byte but a letter or a digit, "-", "_", "." and "~" too: "0.1-0" is "0%2E1%2D0"; measured, a 0.747 client
+                    // and server, tools/parity/probes/service_answers.luau)
+                    if byte.is_ascii_alphanumeric() {
                         encoded.push(byte as char);
                     } else {
                         encoded.push_str(&format!("%{byte:02X}"));
@@ -1478,8 +1799,12 @@ pub fn install_gui_behaviors(engine: &Rc<Engine>) {
     for class_name in ["TextLabel", "TextButton", "TextBox"] {
         let Some(class) = class(&reflection, class_name) else { continue };
         // (ContentText needs rich-text parsing: a host layer's)
+        // (empty until the text object is in the DataModel: measured, 0.747, tools/parity/probes/readonly_properties.luau)
         if let Some(name) = n("LocalizedText") {
             behaviors.add_getter(class, name, getter(|lua, engine, id| {
+                if !in_data_model(&engine.state.borrow(), id) {
+                    return Ok(LuaValue::String(lua.create_string("")?));
+                }
                 let text = engine.state.borrow().dom.raw_get(id, K::Text as NameId).cloned().unwrap_or(Value::String(Str::default()));
                 Ok(convert::to_lua(lua, engine, &text)?)
             }));
@@ -1594,6 +1919,15 @@ pub fn install_gui_behaviors(engine: &Rc<Engine>) {
         let write = format!("The current thread cannot write '{member}' (lacking capability {capability})");
         behaviors.add_getter(owner, name, getter(move |_, _, _| raise(read.clone())));
         behaviors.add_setter(owner, name, Rc::new(move |_, _, _, _| raise(write.clone())));
+    }
+    // Properties a game script reads but may not write (reflection.rs CAPABILITY_WRITES): a write raises as a client's does; a
+    // plugin's code (the edit run context) writes it through the setter it had
+    if !engine.options.edit_mode() {
+        for &(class_name, member, capability) in crate::reflection::CAPABILITY_WRITES {
+            let (Some(owner), Some(name)) = (class(&reflection, class_name), n(member)) else { continue };
+            let write = format!("The current thread cannot write '{member}' (lacking capability {capability})");
+            behaviors.add_setter(owner, name, Rc::new(move |_, _, _, _| raise(write.clone())));
+        }
     }
     // UIPageLayout.EasingStyle keeps its value when Spring or Bezier is assigned (Studio 0.747: by item, name or value;
     // no error and no Changed)
