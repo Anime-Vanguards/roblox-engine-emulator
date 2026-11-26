@@ -938,6 +938,22 @@ unsafe fn this<'a>(state: *mut ffi::lua_State) -> Option<(&'a Api, InstanceId)> 
     }
 }
 
+/// Whether the stack value at `index` is an instance of `class` or of one of its subclasses: a method's check of its self
+/// (lua/cfunction.rs over_luau_method, as lua/instance.rs checks a Rust method's). An instance that is gone passes, as there.
+pub(crate) unsafe fn stack_instance_is_a(state: *mut ffi::lua_State, index: c_int, class: ClassId) -> bool {
+    unsafe {
+        let payload = ffi::lua_touserdatatagged(state, index, INSTANCE_TAG) as *const Payload;
+        if payload.is_null() {
+            return false;
+        }
+        let payload = &*payload;
+        let engine = &*(*payload.api).engine;
+        let id = InstanceId { index: payload.index, generation: payload.generation };
+        let Ok(dom_state) = engine.state.try_borrow() else { return true };
+        dom_state.dom.get(id).is_none_or(|instance| engine.reflection.class(instance.class).is_a(class))
+    }
+}
+
 #[inline]
 /// The instance the stack value at `index` is, if any.
 pub(crate) unsafe fn stack_instance(state: *mut ffi::lua_State, index: c_int) -> Option<InstanceId> {

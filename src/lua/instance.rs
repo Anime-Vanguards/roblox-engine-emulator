@@ -189,7 +189,8 @@ fn lua_method(lua: &Lua, engine: &Rc<Engine>, owner: ClassId, name: NameId, func
     let wrapped = if is_engine {
         function
     } else {
-        super::cfunction::over_luau(lua, engine.reflection.name(name), super::cfunction::Kind::Served, function)?
+        // (checking its self first, as the Rust methods do: cfunction::over_luau_method)
+        super::cfunction::over_luau_method(lua, engine.reflection.name(name), engine.reflection.declaring_class(owner, name), function)?
     };
     engine.lua.borrow_mut().lua_methods.insert((owner, name), (body, wrapped.clone()));
     Ok(wrapped)

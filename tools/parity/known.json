@@ -249,14 +249,6 @@
 		{
 			"line": "levels invoke @ 401 ",
 			"why": "a client runs a BindableFunction's OnInvoke on a thread of its own (no level above the handler); ree calls it from Invoke's engine Luau on the invoking thread"
-		},
-		{
-			"line": "trace GetSharedTable wrong self Expected ':' not '.' calling member function GetSharedTable | @307 / @484 / @306 function Trace",
-			"why": "a service method written in the engine's Luau does not check its self, so a wrong one called with `.` runs (a client raises `Expected ':' not '.'`); the methods in Rust check it"
-		},
-		{
-			"line": "pcall GetSharedTable wrong self error Expected ':' not '.' calling member function GetSharedTable",
-			"why": "a service method written in the engine's Luau does not check its self, so a wrong one called with `.` runs (a client raises `Expected ':' not '.'`); the methods in Rust check it"
 		}
 	],
 	"engine_functions_require": [

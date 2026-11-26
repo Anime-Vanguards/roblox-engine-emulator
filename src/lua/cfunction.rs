@@ -63,7 +63,7 @@ fn interned(name: &str) -> *const c_char {
 pub fn install() {
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| {
-        let trampolines = [rust_library as ffi::lua_CFunction, rust_served, luau_library, luau_served, raw_library, raw_served];
+        let trampolines = [rust_library as ffi::lua_CFunction, rust_served, luau_library, luau_served, raw_library, raw_served, luau_method];
         assert!(
             trampolines.iter().enumerate().all(|(i, a)| trampolines[..i].iter().all(|b| !std::ptr::fn_addr_eq(*a, *b))),
             "engine function trampolines folded together"
@@ -75,6 +75,7 @@ pub fn install() {
             lua_setenginecfunction(luau_served, 1);
             lua_setenginecfunction(raw_library, 0);
             lua_setenginecfunction(raw_served, 1);
+            lua_setenginecfunction(luau_method, 1);
         }
         // (a datatype's error positioned at its caller looks through the engine function's frame, as a client's has none)
         lune_roblox::datatypes::script_error::set_engine_frame(is_engine_frame);
@@ -108,7 +109,7 @@ pub unsafe fn is_engine_function(state: *mut ffi::lua_State, index: c_int) -> bo
 
 fn is_trampoline(function: Option<ffi::lua_CFunction>) -> bool {
     let Some(function) = function else { return false };
-    [rust_library as ffi::lua_CFunction, rust_served, luau_library, luau_served, raw_library, raw_served].iter().any(|&candidate| std::ptr::fn_addr_eq(candidate, function))
+    [rust_library as ffi::lua_CFunction, rust_served, luau_library, luau_served, raw_library, raw_served, luau_method].iter().any(|&candidate| std::ptr::fn_addr_eq(candidate, function))
 }
 
 /// A new closure of the C function `function`: the same C function, name, upvalues and continuation (a Luau function is
@@ -142,7 +143,7 @@ fn continuation_of(function: ffi::lua_CFunction) -> Option<ffi::lua_Continuation
     let is = |candidate: ffi::lua_CFunction| std::ptr::fn_addr_eq(candidate, function);
     if is(rust_library) || is(rust_served) {
         Some(rust_continue)
-    } else if is(luau_library) || is(luau_served) {
+    } else if is(luau_library) || is(luau_served) || is(luau_method) {
         Some(luau_continue)
     } else if is(raw_library) || is(raw_served) {
         Some(raw_continue)
@@ -167,6 +168,27 @@ pub fn over_luau(lua: &Lua, name: &str, kind: Kind, body: LuaFunction) -> LuaRes
         Kind::Served => luau_served,
     };
     closure(lua, name, trampoline, luau_continue, body)
+}
+
+/// An object's method written in the engine's own Luau, as [`over_luau`] serves one, that first checks its self as a client's
+/// methods do (lua/instance.rs, the Rust methods' check): an instance of `class`, the class that declares the method, or of a
+/// subclass; anything else (nil, another value, another class's instance, as `.` lets a script pass) raises "Expected ':' not
+/// '.' calling member function <name>" without a position, before the arguments are looked at (measured in a 0.747 playing
+/// client and a server: tools/parity/probes/engine_functions.luau, SharedTableRegistry.GetSharedTable(aPart, "x")).
+pub fn over_luau_method(lua: &Lua, name: &str, class: u32, body: LuaFunction) -> LuaResult<LuaFunction> {
+    install();
+    let debug_name = interned(name);
+    let message = format!("Expected ':' not '.' calling member function {name}");
+    // SAFETY: the body is pushed as the argument; the class and the message are pushed above it, and the closure takes the three
+    // as its upvalues and is left as the one result
+    unsafe {
+        lua.exec_raw(body, move |state| {
+            ffi::lua_rawcheckstack(state, 2);
+            ffi::lua_pushnumber(state, class as f64);
+            ffi::lua_pushlstring(state, message.as_ptr().cast(), message.len());
+            ffi::lua_pushcclosurek(state, luau_method, debug_name, 3, Some(luau_continue));
+        })
+    }
 }
 
 /// A raw engine function's body: run in the engine function's own C frame, with the stack of a C function (its arguments), its
@@ -375,6 +397,19 @@ unsafe fn luau_call(state: *mut ffi::lua_State, kind: Kind) -> c_int {
         ffi::lua_pushvalue(state, ffi::lua_upvalueindex(1));
         ffi::lua_insert(state, 1);
         lua_pcallyieldable(state, count, ffi::LUA_MULTRET, 0)
+    }
+}
+
+unsafe extern "C-unwind" fn luau_method(state: *mut ffi::lua_State) -> c_int {
+    unsafe {
+        let class = ffi::lua_tonumber(state, ffi::lua_upvalueindex(2)) as u32;
+        if !super::raw::stack_instance_is_a(state, 1, class) {
+            ffi::lua_rawcheckstack(state, 1);
+            ffi::lua_pushvalue(state, ffi::lua_upvalueindex(3));
+            charge_raised(state, false);
+            ffi::lua_error(state);
+        }
+        luau_call(state, Kind::Served)
     }
 }
 

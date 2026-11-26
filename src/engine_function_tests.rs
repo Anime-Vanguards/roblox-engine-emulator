@@ -278,6 +278,31 @@ fn method_values_are_new_functions_where_a_clients_are() {
     assert!(lines.iter().any(|line| line == "print: done") && errors(&lines).is_empty(), "{lines:?}");
 }
 
+/// A method written in the engine's Luau checks its self as the Rust methods do: nil, another value or an instance of another
+/// class raises "Expected ':' not '.' calling member function <name>" before the arguments are looked at; a subclass's instance
+/// passes.
+#[test]
+fn a_luau_method_checks_its_self() {
+    let lines = run(
+        RunContext::Client,
+        r##"
+        local Registry = game:GetService("SharedTableRegistry")
+        local Part = Instance.new("Part")
+        assert(select(2, pcall(Registry.GetSharedTable, Part, "x")) == "Expected ':' not '.' calling member function GetSharedTable")
+        assert(select(2, pcall(Registry.GetSharedTable, nil, "x")) == "Expected ':' not '.' calling member function GetSharedTable")
+        assert(select(2, pcall(Registry.GetSharedTable, "x", nil)) == "Expected ':' not '.' calling member function GetSharedTable")
+        local Model = Instance.new("Model")
+        assert(select(2, pcall(Model.GetPrimaryPartCFrame, Part)) == "Expected ':' not '.' calling member function GetPrimaryPartCFrame")
+        assert(select(2, pcall(Model.GetBoundingBox, Part)) == "Expected ':' not '.' calling member function GetBoundingBox")
+        local Ok, Problem = pcall(Model.GetBoundingBox, Instance.new("WorldModel"))
+        assert(Ok or not string.find(Problem, "Expected ':'", 1, true), "a subclass's instance passes")
+        print("done")
+        "##,
+        0.1,
+    );
+    assert!(lines.iter().any(|line| line == "print: done") && errors(&lines).is_empty(), "{lines:?}");
+}
+
 /// Model:SetPrimaryPartCFrame puts the primary part at the CFrame exactly (its PivotOffset and the WorldPivot play no part), the
 /// model's other parts moved with it; with no PrimaryPart, or one taken out of the model, both methods raise.
 #[test]
