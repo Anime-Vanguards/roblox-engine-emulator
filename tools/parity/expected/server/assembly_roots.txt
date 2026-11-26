@@ -1,0 +1,491 @@
+# engine: Roblox Studio 0.747.0.7471481, the server of a headless play session (a Script in ServerScriptService, script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-26
+fan-abc +A U=A A=A B=B C=C
+fan-abc +B U=B A=A B=B C=C
+fan-abc +C U=C A=A B=B C=C
+fan-cba +C U=C A=A B=B C=C
+fan-cba +B U=B A=A B=B C=C
+fan-cba +A U=A A=A B=B C=C
+fan-bac +B U=B A=A B=B C=C
+fan-bac +A U=A A=A B=B C=C
+fan-bac +C U=C A=A B=B C=C
+fan-made-cba +A U=A A=A B=B C=C
+fan-made-cba +B U=B A=A B=B C=C
+fan-made-cba +C U=C A=A B=B C=C
+fan-made-cba-weld-cba +C U=C A=A B=B C=C
+fan-made-cba-weld-cba +B U=B A=A B=B C=C
+fan-made-cba-weld-cba +A U=A A=A B=B C=C
+fan-ulast +C U=C A=A B=B C=C
+fan-ulast +B U=B A=A B=B C=C
+fan-ulast +A U=A A=A B=B C=C
+fan-reverse +C U=C A=A B=B C=C
+fan-reverse +B U=B A=A B=B C=C
+fan-reverse +A U=A A=A B=B C=C
+fan-wc +C U=C A=A B=B C=C
+fan-wc +B U=B A=A B=B C=C
+fan-wc +A U=A A=A B=B C=C
+fan-motor6d +C U=C A=A B=B C=C
+fan-motor6d +B U=B A=A B=B C=C
+fan-motor6d +A U=A A=A B=B C=C
+fan-parented +C U=C A=A B=B C=C
+fan-parented +B U=C A=A B=B C=C
+fan-parented +A U=C A=A B=B C=C
+fan-parented -A U=C A=A B=B C=C
+fan-parented A-back U=C A=A B=B C=C
+fan-parented C-off U=B A=A B=B C=C
+fan-parented C-on U=C A=A B=B C=C
+fan-parented B-off U=C A=A B=B C=C
+fan-parented B-on U=C A=A B=B C=C
+fan-parented frame U=C A=A B=B C=C
+fan-parented A-to-D U=C A=A B=B C=C D=D
+fan-parented D-to-A U=C A=A B=B C=C D=D
+fan-part1 +B U=B A=A B=B C=C
+fan-part1 +C U=C A=A B=B C=C
+fan-part1 +A U=C A=A B=B C=C
+fan-model-abc U=C A=A B=B C=C
+fan-model-abc again U=C A=A B=B C=C
+fan-model-abc u-again U=C A=A B=B C=C
+fan-model-cba U=A A=A B=B C=C
+fan-model-cba again U=A A=A B=B C=C
+fan-model-cba u-again U=A A=A B=B C=C
+fan-model-bca U=A A=A B=B C=C
+fan-model-bca again U=A A=A B=B C=C
+fan-model-bca u-again U=A A=A B=B C=C
+fan-anchor free U=C A=C B=C C=C
+fan-anchor +C U=C A=C B=C C=C
+fan-anchor +A U=C A=A B=C C=C
+fan-anchor +B U=C A=A B=B C=C
+fan-anchor -B U=C A=A B=C C=C
+fan-anchor -C U=A A=A B=A C=A
+chain A-U1 A=A U1=A U2=U2 B=B
+chain U1-U2 A=A U1=A U2=A B=B
+chain U2-B A=A U1=B U2=B B=B
+chain-rev U2-B A=A U1=U1 U2=B B=B
+chain-rev U1-U2 A=A U1=B U2=B B=B
+chain-rev A-U1 A=A U1=A U2=A B=B
+chain-mid A-U1 A=A U1=A U2=U2 B=B
+chain-mid U2-B A=A U1=A U2=B B=B
+chain-mid U1-U2 A=A U1=B U2=B B=B
+chain-mid2 U2-B A=A U1=U1 U2=B B=B
+chain-mid2 A-U1 A=A U1=A U2=B B=B
+chain-mid2 U1-U2 A=A U1=A U2=A B=B
+chain-long A-U1 A=A U1=A U2=U2 U3=U3 U4=U4 B=B
+chain-long U1-U2 A=A U1=A U2=A U3=U3 U4=U4 B=B
+chain-long U2-U3 A=A U1=A U2=A U3=A U4=U4 B=B
+chain-long U3-U4 A=A U1=A U2=A U3=A U4=A B=B
+chain-long U4-B A=A U1=B U2=B U3=B U4=B B=B
+chain-long-rev U4-B A=A U1=U1 U2=U2 U3=U3 U4=B B=B
+chain-long-rev U3-U4 A=A U1=U1 U2=U2 U3=B U4=B B=B
+chain-long-rev U2-U3 A=A U1=U1 U2=B U3=B U4=B B=B
+chain-long-rev U1-U2 A=A U1=B U2=B U3=B U4=B B=B
+chain-long-rev A-U1 A=A U1=A U2=A U3=A U4=A B=B
+bridge u1-u2 A=A B=B U1=U2 U2=U2
+bridge u2-b A=A B=B U1=B U2=B
+bridge u1-a A=A B=B U1=A U2=B
+star H=L5 L1=L5 L2=L5 L3=L5 L4=L5 L5=L5
+star a5-a1 H=L5 L1=L1 L2=L5 L3=L5 L4=L5 L5=L5
+star freed H=L5 L1=L5 L2=L5 L3=L5 L4=L5 L5=L5
+star a1-a5 H=L5 L1=L1 L2=L5 L3=L5 L4=L5 L5=L5
+star a1 H=L1 L1=L1 L2=L1 L3=L1 L4=L1 L5=L1
+star a1-a3 H=L3 L1=L1 L2=L3 L3=L3 L4=L3 L5=L3
+star-rev H=L5 L1=L5 L2=L5 L3=L5 L4=L5 L5=L5
+star-rev a5-a1 H=L1 L1=L1 L2=L1 L3=L1 L4=L1 L5=L5
+star-rev freed H=L5 L1=L5 L2=L5 L3=L5 L4=L5 L5=L5
+star-mixed H=L5 L1=L5 L2=L5 L3=L5 L4=L5 L5=L5
+star-mixed a5-a1-a3 H=L3 L1=L1 L2=L3 L3=L3 L4=L3 L5=L5
+star-hublast H=H L1=H L2=H L3=H L4=H L5=H
+star-hublast-rev H=H L1=H L2=H L3=H L4=H L5=H
+pair b-a A=B B=B C=C
+pair c-a A=C B=C C=C
+glue Glue anchored A=A B=A
+glue Glue off A=A B=B
+glue Glue on A=A B=A
+glue Glue freed A=B B=B
+glue Glue free A=A B=A
+glue Glue mass 6.2999997138977051 6.2999997138977051
+glue Glue moved 1204 63 40
+glue Glue offset 0 4 0 A
+glue Glue offset-frame 0 4 0 A
+glue ManualGlue anchored A=A B=A
+glue ManualGlue off A=A B=B
+glue ManualGlue on A=A B=A
+glue ManualGlue freed A=B B=B
+glue ManualGlue free A=A B=A
+glue ManualGlue mass 6.2999997138977051 6.2999997138977051
+glue ManualGlue moved 1294 63 40
+glue ManualGlue offset 0 4 0 A
+glue ManualGlue offset-frame 0 4 0 A
+glue Snap anchored A=A B=A
+glue Snap off A=A B=B
+glue Snap on A=A B=A
+glue Snap freed A=B B=B
+glue Snap free A=A B=A
+glue Snap mass 6.2999997138977051 6.2999997138977051
+glue Snap moved 1384 63 40
+glue Snap offset 0 4 0 A
+glue Snap offset-frame 0 4 0 A
+glue ManualWeld anchored A=A B=A
+glue ManualWeld off A=A B=B
+glue ManualWeld on A=A B=A
+glue ManualWeld freed A=B B=B
+glue ManualWeld free A=A B=A
+glue ManualWeld mass 6.2999997138977051 6.2999997138977051
+glue ManualWeld moved 1474 63 40
+glue ManualWeld offset 0 4 0 A
+glue ManualWeld offset-frame 0 4 0 A
+glue-weld weld-a U=A A=A B=B
+glue-weld glue-b U=B A=A B=B
+glue-weld2 glue-b U=B A=A B=B
+glue-weld2 weld-a U=A A=A B=B
+enter-js entered A=A B=A
+enter-js frame A=A B=A
+enter-js toggled A=A B=A
+enter-folder entered A=A B=A
+enter-folder frame A=A B=A
+enter-folder toggled A=A B=A
+enter-a entered A=A B=A
+enter-a frame A=A B=A
+enter-a toggled A=A B=A
+enter-b entered A=A B=A
+enter-b frame A=A B=A
+enter-b toggled A=A B=A
+enter-js-free entered A=B B=B
+enter-js-reparent entered A=A B=A
+enter-js-reparent back A=A B=A
+enter-js-part1 entered A=A B=A
+enter-js-part1 again A=A B=A
+enter-js-c0 entered A=A B=A
+enter-js-c0 written A=A B=A
+enter-js-c0 reanchored A=A B=A
+enter-js-wc entered A=A B=B
+js-present A=A B=A
+js-present b-back A=A B=A
+js-present a-back A=A B=A
+js-present model-back A=A B=A
+js-out model A=A B=A
+js-out2 a-in A=A B=nil
+js-out2 b-in A=A B=A
+folder-out in A=A B=A
+js-worldmodel A=A B=B
+kinds U=A A=A B=B C=C
+twice b U=B A=A B=B
+twice a-again U=A A=A B=B
+twice a-again-gone U=B A=A B=B
+twice a-first-gone U=B A=A B=B
+bridge2 ends A=A B=B U1=A U2=B
+bridge2 middle A=A B=B U1=B U2=B
+ring A=A B=B U1=B U2=A
+unroot c U=B A=A B=B C=B
+unroot b U=A A=A B=A C=A
+unroot c-again U=C A=A B=C C=C
+clone original U=C A=A B=B C=C
+clone copy U=A A=A B=B C=C
+cycle-xy-yz-xz +xy X Y@3 0 0 Z@0 3 0
+cycle-xy-yz-xz +yz X Y@3 0 0 Z@3 4 0
+cycle-xy-yz-xz +xz X Y@3 0 0 Z@3 4 0
+cycle-xy-yz-xz frame X Y@3 0 0 Z@3 4 0
+cycle-xy-yz-xz moved Y@3 0 0 Z@3 4 0
+cycle-xz-yz-xy +xz X Y@3 0 0 Z@0 3 0
+cycle-xz-yz-xy +yz X Y@0 -1 0 Z@0 3 0
+cycle-xz-yz-xy +xy X Y@0 -1 0 Z@0 3 0
+cycle-xz-yz-xy frame X Y@0 -1 0 Z@0 3 0
+cycle-xz-yz-xy moved Y@0 -1 0 Z@0 3 0
+cycle-yz-xy-xz +yz X Y@0 -1 0 Z@0 3 0
+cycle-yz-xy-xz +xy X Y@0 -1 0 Z@0 3 0
+cycle-yz-xy-xz +xz X Y@0 -1 0 Z@0 3 0
+cycle-yz-xy-xz frame X Y@0 -1 0 Z@0 3 0
+cycle-yz-xy-xz moved Y@0 -1 0 Z@0 3 0
+cycle-xy-xz-yz +xy X Y@3 0 0 Z@0 3 0
+cycle-xy-xz-yz +xz X Y@3 0 0 Z@0 3 0
+cycle-xy-xz-yz +yz X Y@3 0 0 Z@0 3 0
+cycle-xy-xz-yz frame X Y@3 0 0 Z@0 3 0
+cycle-xy-xz-yz moved Y@3 0 0 Z@0 3 0
+where Weld ws-js A=A B=A
+where Weld ws-js-late A=A B=A
+where Weld ws-storage A=A B=B
+where Weld ws-storage to-js A=A B=A
+where Weld ws-world A=A B=B
+where Weld ws-world to-js A=A B=A
+where Weld world-js A=A B=B
+where Weld world-js-late A=A B=B
+where Weld world-ws A=A B=B
+where Weld world-ws to-js A=A B=B
+where Weld away-js A=A B=B
+where Weld ws-none A=A B=B
+where Weld ws-none to-js A=A B=A
+where WeldConstraint ws-js A=A B=B
+where WeldConstraint ws-js-late A=A B=B
+where WeldConstraint ws-storage A=A B=B
+where WeldConstraint ws-storage to-js A=A B=B
+where WeldConstraint ws-world A=A B=B
+where WeldConstraint ws-world to-js A=A B=B
+where WeldConstraint world-js A=A B=B
+where WeldConstraint world-js-late A=A B=B
+where WeldConstraint world-ws A=A B=B
+where WeldConstraint world-ws to-js A=A B=B
+where WeldConstraint away-js A=A B=B
+where WeldConstraint ws-none A=A B=B
+where WeldConstraint ws-none to-js A=A B=B
+where Motor6D ws-js A=A B=A
+where Motor6D ws-js-late A=A B=A
+where Motor6D ws-storage A=A B=B
+where Motor6D ws-storage to-js A=A B=A
+where Motor6D ws-world A=A B=B
+where Motor6D ws-world to-js A=A B=A
+where Motor6D world-js A=A B=B
+where Motor6D world-js-late A=A B=B
+where Motor6D world-ws A=A B=B
+where Motor6D world-ws to-js A=A B=B
+where Motor6D away-js A=A B=B
+where Motor6D ws-none A=A B=B
+where Motor6D ws-none to-js A=A B=A
+where Snap ws-js A=A B=A
+where Snap ws-js-late A=A B=A
+where Snap ws-storage A=A B=B
+where Snap ws-storage to-js A=A B=A
+where Snap ws-world A=A B=B
+where Snap ws-world to-js A=A B=A
+where Snap world-js A=A B=B
+where Snap world-js-late A=A B=B
+where Snap world-ws A=A B=B
+where Snap world-ws to-js A=A B=B
+where Snap away-js A=A B=B
+where Snap ws-none A=A B=B
+where Snap ws-none to-js A=A B=A
+where Glue ws-js A=A B=A
+where Glue ws-js-late A=A B=A
+where Glue ws-storage A=A B=B
+where Glue ws-storage to-js A=A B=A
+where Glue ws-world A=A B=B
+where Glue ws-world to-js A=A B=A
+where Glue world-js A=A B=B
+where Glue world-js-late A=A B=B
+where Glue world-ws A=A B=B
+where Glue world-ws to-js A=A B=B
+where Glue away-js A=A B=B
+where Glue ws-none A=A B=B
+where Glue ws-none to-js A=A B=A
+wcjs A=A B=B
+wcjs toggled A=A B=B
+wcjs repointed A=A B=B
+wcjs b-back A=A B=B
+wcjs under-a A=A B=A
+wcjs back-js A=A B=B
+many-js 1 Q1
+many-js 1 frame Q1
+many-js 10 Q10
+many-js 10 frame Q10
+many-js 200 Q200
+many-js 200 frame Q200
+kinds wc-weld U=B A=A B=B
+kinds weld-wc U=A A=A B=B
+kinds wc-wc-weld-wc U=C A=A B=B C=C D=D
+kinds weld-wc-wc U=A A=A B=B C=C
+kinds weld-motor U=A A=A B=B
+kinds motor-weld U=B A=A B=B
+kinds weld-snap-glue U=C A=A B=B C=C
+kinds glue-snap-weld U=C A=A B=B C=C
+kinds wc-motor-wc U=C A=A B=B C=C
+wcchain A=A U1=B U2=B B=B
+wcchain2 A=A U1=A U2=A B=B
+wcchain3 A=A U1=A U2=B B=B
+cyc-xy-yz-xz made X Y@3 0 0 Z@0 3 0
+cyc-xy-yz-xz c0-xy Y@3 0 1 Z@0 3 0
+cyc-xy-yz-xz c0-yz Y@3 0 1 Z@0 3 0
+cyc-xy-yz-xz c0-xz Y@3 0 1 Z@0 3 1
+cyc-xy-yz-xz c1-xy Y@3 -0.5 1 Z@0 3 1
+cyc-xy-yz-xz c1-yz Y@3 -0.5 1 Z@0 3 1
+cyc-xy-yz-xz c1-xz Y@3 -0.5 1 Z@0 2.5 1
+cyc-xy-yz-xz frame Y@3 -0.5 1 Z@0 2.5 1
+cyc-xz-yz-xy made X Y@3 0 0 Z@0 3 0
+cyc-xz-yz-xy c0-xy Y@3 0 1 Z@0 3 0
+cyc-xz-yz-xy c0-yz Y@3 0 1 Z@0 3 0
+cyc-xz-yz-xy c0-xz Y@3 0 1 Z@0 3 1
+cyc-xz-yz-xy c1-xy Y@3 -0.5 1 Z@0 3 1
+cyc-xz-yz-xy c1-yz Y@3 -0.5 1 Z@0 3 1
+cyc-xz-yz-xy c1-xz Y@3 -0.5 1 Z@0 2.5 1
+cyc-xz-yz-xy frame Y@3 -0.5 1 Z@0 2.5 1
+cyc-yz-xz-xy made X Y@3 0 0 Z@0 3 0
+cyc-yz-xz-xy c0-xy Y@3 0 1 Z@0 3 0
+cyc-yz-xz-xy c0-yz Y@3 0 1 Z@0 3 0
+cyc-yz-xz-xy c0-xz Y@3 0 1 Z@0 3 1
+cyc-yz-xz-xy c1-xy Y@3 -0.5 1 Z@0 3 1
+cyc-yz-xz-xy c1-yz Y@3 -0.5 1 Z@0 3 1
+cyc-yz-xz-xy c1-xz Y@3 -0.5 1 Z@0 2.5 1
+cyc-yz-xz-xy frame Y@3 -0.5 1 Z@0 2.5 1
+cyc-xy-xz-yz made X Y@3 0 0 Z@0 3 0
+cyc-xy-xz-yz c0-xy Y@3 0 1 Z@0 3 0
+cyc-xy-xz-yz c0-yz Y@3 0 1 Z@0 3 0
+cyc-xy-xz-yz c0-xz Y@3 0 1 Z@0 3 1
+cyc-xy-xz-yz c1-xy Y@3 -0.5 1 Z@0 3 1
+cyc-xy-xz-yz c1-yz Y@3 -0.5 1 Z@0 3 1
+cyc-xy-xz-yz c1-xz Y@3 -0.5 1 Z@0 2.5 1
+cyc-xy-xz-yz frame Y@3 -0.5 1 Z@0 2.5 1
+cyc-zy-yx-zx made X Y@3 0 0 Z@0 3 0
+cyc-zy-yx-zx c0-yx Y@3 0 -1 Z@0 3 0
+cyc-zy-yx-zx c0-zy Y@3 0 -1 Z@0 3 0
+cyc-zy-yx-zx c0-zx Y@3 0 -1 Z@0 3 -1
+cyc-zy-yx-zx c1-yx Y@3 0.5 -1 Z@0 3 -1
+cyc-zy-yx-zx c1-zy Y@3 0.5 -1 Z@0 3 -1
+cyc-zy-yx-zx c1-zx Y@3 0.5 -1 Z@0 3.5 -1
+cyc-zy-yx-zx frame Y@3 0.5 -1 Z@0 3.5 -1
+cyc-anch-xy-yz-xz made X Y@3 0 0 Z@0 3 0
+cyc-anch-xy-yz-xz c0-xy Y@3 0 1 Z@0 3 0
+cyc-anch-xy-yz-xz c0-yz Y@3 0 1 Z@0 3 0
+cyc-anch-xy-yz-xz c0-xz Y@3 0 1 Z@0 3 1
+cyc-anch-xy-yz-xz c1-xy Y@3 -0.5 1 Z@0 3 1
+cyc-anch-xy-yz-xz c1-yz Y@3 -0.5 1 Z@0 3 1
+cyc-anch-xy-yz-xz c1-xz Y@3 -0.5 1 Z@0 2.5 1
+cyc-anch-xy-yz-xz frame Y@3 -0.5 1 Z@0 2.5 1
+cyc-anch-xz-yz-xy made X Y@3 0 0 Z@0 3 0
+cyc-anch-xz-yz-xy c0-xy Y@3 0 1 Z@0 3 0
+cyc-anch-xz-yz-xy c0-yz Y@3 0 1 Z@0 3 0
+cyc-anch-xz-yz-xy c0-xz Y@3 0 1 Z@0 3 1
+cyc-anch-xz-yz-xy c1-xy Y@3 -0.5 1 Z@0 3 1
+cyc-anch-xz-yz-xy c1-yz Y@3 -0.5 1 Z@0 3 1
+cyc-anch-xz-yz-xy c1-xz Y@3 -0.5 1 Z@0 2.5 1
+cyc-anch-xz-yz-xy frame Y@3 -0.5 1 Z@0 2.5 1
+k Weld-Weld U=B
+k Weld-ManualWeld U=B
+k Weld-Snap U=B
+k Weld-Glue U=B
+k Weld-ManualGlue U=B
+k Weld-Motor U=A
+k Weld-Motor6D U=A
+k Weld-WeldConstraint U=A
+k Weld-Rotate U=A
+k Weld-RotateP U=A
+k Weld-RotateV U=A
+k Weld-VelocityMotor U=A
+k ManualWeld-Weld U=B
+k ManualWeld-ManualWeld U=B
+k ManualWeld-Snap U=B
+k ManualWeld-Glue U=B
+k ManualWeld-ManualGlue U=B
+k ManualWeld-Motor U=A
+k ManualWeld-Motor6D U=A
+k ManualWeld-WeldConstraint U=A
+k ManualWeld-Rotate U=A
+k ManualWeld-RotateP U=A
+k ManualWeld-RotateV U=A
+k ManualWeld-VelocityMotor U=A
+k Snap-Weld U=B
+k Snap-ManualWeld U=B
+k Snap-Snap U=B
+k Snap-Glue U=B
+k Snap-ManualGlue U=B
+k Snap-Motor U=A
+k Snap-Motor6D U=A
+k Snap-WeldConstraint U=A
+k Snap-Rotate U=A
+k Snap-RotateP U=A
+k Snap-RotateV U=A
+k Snap-VelocityMotor U=A
+k Glue-Weld U=B
+k Glue-ManualWeld U=B
+k Glue-Snap U=B
+k Glue-Glue U=B
+k Glue-ManualGlue U=B
+k Glue-Motor U=A
+k Glue-Motor6D U=A
+k Glue-WeldConstraint U=A
+k Glue-Rotate U=A
+k Glue-RotateP U=A
+k Glue-RotateV U=A
+k Glue-VelocityMotor U=A
+k ManualGlue-Weld U=B
+k ManualGlue-ManualWeld U=B
+k ManualGlue-Snap U=B
+k ManualGlue-Glue U=B
+k ManualGlue-ManualGlue U=B
+k ManualGlue-Motor U=A
+k ManualGlue-Motor6D U=A
+k ManualGlue-WeldConstraint U=A
+k ManualGlue-Rotate U=A
+k ManualGlue-RotateP U=A
+k ManualGlue-RotateV U=A
+k ManualGlue-VelocityMotor U=A
+k Motor-Weld U=B
+k Motor-ManualWeld U=B
+k Motor-Snap U=B
+k Motor-Glue U=B
+k Motor-ManualGlue U=B
+k Motor-Motor U=B
+k Motor-Motor6D U=A
+k Motor-WeldConstraint U=B
+k Motor-Rotate U=A
+k Motor-RotateP U=A
+k Motor-RotateV U=A
+k Motor-VelocityMotor U=A
+k Motor6D-Weld U=B
+k Motor6D-ManualWeld U=B
+k Motor6D-Snap U=B
+k Motor6D-Glue U=B
+k Motor6D-ManualGlue U=B
+k Motor6D-Motor U=B
+k Motor6D-Motor6D U=B
+k Motor6D-WeldConstraint U=B
+k Motor6D-Rotate U=A
+k Motor6D-RotateP U=A
+k Motor6D-RotateV U=A
+k Motor6D-VelocityMotor U=A
+k WeldConstraint-Weld U=B
+k WeldConstraint-ManualWeld U=B
+k WeldConstraint-Snap U=B
+k WeldConstraint-Glue U=B
+k WeldConstraint-ManualGlue U=B
+k WeldConstraint-Motor U=A
+k WeldConstraint-Motor6D U=A
+k WeldConstraint-WeldConstraint U=B
+k WeldConstraint-Rotate U=A
+k WeldConstraint-RotateP U=A
+k WeldConstraint-RotateV U=A
+k WeldConstraint-VelocityMotor U=A
+k Rotate-Weld U=B
+k Rotate-ManualWeld U=B
+k Rotate-Snap U=B
+k Rotate-Glue U=B
+k Rotate-ManualGlue U=B
+k Rotate-Motor U=B
+k Rotate-Motor6D U=B
+k Rotate-WeldConstraint U=B
+k Rotate-Rotate U=U
+k Rotate-RotateP U=U
+k Rotate-RotateV U=U
+k Rotate-VelocityMotor U=U
+k RotateP-Weld U=B
+k RotateP-ManualWeld U=B
+k RotateP-Snap U=B
+k RotateP-Glue U=B
+k RotateP-ManualGlue U=B
+k RotateP-Motor U=B
+k RotateP-Motor6D U=B
+k RotateP-WeldConstraint U=B
+k RotateP-Rotate U=U
+k RotateP-RotateP U=U
+k RotateP-RotateV U=U
+k RotateP-VelocityMotor U=U
+k RotateV-Weld U=B
+k RotateV-ManualWeld U=B
+k RotateV-Snap U=B
+k RotateV-Glue U=B
+k RotateV-ManualGlue U=B
+k RotateV-Motor U=B
+k RotateV-Motor6D U=B
+k RotateV-WeldConstraint U=B
+k RotateV-Rotate U=U
+k RotateV-RotateP U=U
+k RotateV-RotateV U=U
+k RotateV-VelocityMotor U=U
+k VelocityMotor-Weld U=B
+k VelocityMotor-ManualWeld U=B
+k VelocityMotor-Snap U=B
+k VelocityMotor-Glue U=B
+k VelocityMotor-ManualGlue U=B
+k VelocityMotor-Motor U=B
+k VelocityMotor-Motor6D U=B
+k VelocityMotor-WeldConstraint U=B
+k VelocityMotor-Rotate U=U
+k VelocityMotor-RotateP U=U
+k VelocityMotor-RotateV U=U
+k VelocityMotor-VelocityMotor U=U

@@ -1534,20 +1534,6 @@ pub const BULK_HOLE: f64 = 0.081e-6;
 /// more than one holding disabled joints; 0.20 to 0.28.
 pub const JOINT_TAKEN_OUT: f64 = 0.25e-6;
 pub const JOINT_LIST_LEFT: f64 = 0.5e-6;
-/// What a playing client spends putting a Glue or ManualGlue in its parts' lists of active joints, which it does when the Glue
-/// becomes active by a Parent write (world/joints.rs relist_moved), beyond the [`JOINT_LOOKED_AT`] the write pays for each joint
-/// in the lists of the parts it carries into a world (a rigid joint's [`JOINT_LINKED`] prices its link). Studio 0.748, as for
-/// [`JOINT_TAKEN_OUT`], each joint's cost at 10,000 (Welds; Glue): P back from out of the DataModel 0.40 to 0.42 us; 0.40 to 0.41,
-/// back from ReplicatedStorage 0.40 to 0.43; 0.39 to 0.42, back from a WorldModel 0.44; 0.45 to 0.52, back from JointsService 0.38
-/// to 0.41; 0.38 to 0.50 (0.04 to 0.05 for disabled joints of either: what JOINT_LOOKED_AT pays); and the Folder holding the N
-/// joints back into the Workspace 0.39 to 0.41 us a joint more than one holding disabled joints; 0.38 to 0.47, the disabled Glue
-/// costing as much as disabled Welds (1.68 to 1.75 us a Weld, 1.69 to 1.77 a Glue, with the Folder's own move: those pay what a
-/// Weld brought in that cannot link pays, [`JOINT_ENTERED`] and the looks at its parts). So a Glue P brings back reads 0.42 us
-/// here. Not modelled: P with its joints each to a part of its own (the parts 2 studs apart in a grid, the same method) cost a
-/// client 1.1 to 2.4 us a joint coming back at N = 1,000 and 1.3 to 2.8 at 10,000, Glue as much as Welds, where ree charges such a
-/// Glue 0.42 (a price for each part whose list a Glue joins would follow it); leaving, 0.59 to 1.4, where JOINT_TAKEN_OUT and
-/// JOINT_LIST_LEFT charge 0.75.
-pub const GLUE_LISTED: f64 = 0.37e-6;
 /// Workspace:UnjoinFromOutsiders (world/mod.rs, world/joints.rs unjoin_from_outsiders). Measured in a playing client (Studio 0.748, a
 /// Studio Play session; os.clock around single calls, each in a frame of its own, the median of 11, two runs), each case's cost
 /// beyond the call at N = 1,000 and 10,000: one part listed N times 0.052 to 0.079 and 0.056 to 0.059 us an entry; N nil holes
@@ -1580,8 +1566,8 @@ pub const GLUE_LISTED: f64 = 0.37e-6;
 /// taken off a part that keeps many others costs a client follows the parts of the part's assembly, not the joints it keeps
 /// (roblox-sim, Studio 0.747, two sessions; one leaf's Weld out at a frame's start, an anchored hub keeping N joints, less 51 to 72 us
 /// with none): 0.082 and 0.096 us a joint kept at N = 1,000 and 10,000 for Welds to unanchored parts (ree's LINK_PART 0.085 a part
-/// of the assembly: x1.0 and x0.88), 0.093 for Glue to unanchored parts (a client's Glue joins assemblies; ree's links nothing:
-/// x0.33 and x0.05), 0.073 and 0.045 for N Welds between the hub and the leaf (parallel, the link kept: x0.34 and x0.08), 0.005 for
+/// of the assembly: x1.0 and x0.88), 0.093 for Glue to unanchored parts (a client's Glue joins assemblies as a Weld does, and ree's
+/// since: as the Welds), 0.073 and 0.045 for N Welds between the hub and the leaf (parallel, the link kept: x0.34 and x0.08), 0.005 for
 /// Welds to anchored parts (each an assembly of its own; ree charges the hub's component, anchored parts and all: x2.4 and x7.8)
 /// and 0.002 for disabled ones. Not modelled: those three differ from the assemblies ree prices by.
 pub const UNJOIN_ENTRY: f64 = 0.057e-6;
@@ -1833,7 +1819,8 @@ pub const LINK_SPLIT_FIRST: f64 = 8e-6;
 pub const LINK_FRAME: f64 = 34e-6;
 /// What the first link change of an assembly in a frame costs (2026-11-25, the same client, two or three sessions, the geometric mean
 /// of their medians): the assembly as a client keeps it, which a link between two anchored parts does not join (each anchored part
-/// the root of an assembly of its own) and a Glue does, each part of it [`LINK_PART`], more when none of them is anchored
+/// the root of an assembly of its own) and a Glue does (a rigid joint, as a Weld), each part of it [`LINK_PART`], more when none of
+/// them is anchored
 /// ([`LINK_FREE_PART`]), and each link from its anchored parts to other anchored parts [`LINK_ANCHORED`] (world/joints.rs
 /// mark_component; an unanchored part linked to two anchored ones joins one of their assemblies: two anchored hubs of 1,000 leaves
 /// each and one part welded to both, a leaf of each changed in turn 88 and 69 us, where unbridged hubs' cost 73 and 60). A split
@@ -1871,7 +1858,7 @@ pub fn link_assembly(parts: usize, free: bool, anchored: usize) -> f64 {
 /// a Folder 3.2 to 5.2 out and 1.9 to 6.0 in, N pairs 4.2 to 5.8 a pair; links that split nothing off (a Folder of welds among a
 /// star's leaves, or between two parts) 0.3 to 1.3 us a link out and 1.0 to 4.1 in, links between anchored parts 0.5 to 1.7 out
 /// (1,000 of them 1.4 ms at a frame's start, charged 5.1 ms) and 1.2 to 2.2 in. Those timings hold the joints' list work, which
-/// [`JOINT_TAKEN_OUT`] and [`JOINT_LIST_LEFT`] (each joint taken out of its parts' lists) and [`GLUE_LISTED`] price since, so the two
+/// [`JOINT_TAKEN_OUT`] and [`JOINT_LIST_LEFT`] (each joint taken out of its parts' lists) price since, so the two
 /// were fitted again with them charged (2026-11-25, the same client, two sessions that agreed: single Parent writes, out at a frame's
 /// start and in right after it in the same frame, the welds' C0 keeping each part in place, less the same with the welds disabled;
 /// N = 100 and 1,000: an anchored hub's N unanchored leaves by their welds' Folder 2.0 ms out and 1.7 in at 1,000, by the hub 2.2

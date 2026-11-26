@@ -1203,9 +1203,10 @@ fn workspace_physics_state_answers_as_a_playing_client() {
 /// client keeps it (the order they were parented, not made); the list is cast whole before anything goes; a nested or repeated
 /// entry lists nothing new (tools/parity/probes/unjoin_from_outsiders.luau). Each entry and each instance below the entries (once
 /// a call, whether a joint exists yet or not) cost the work clock what a client spends on them (cost.rs UNJOIN_ENTRY,
-/// UNJOIN_BELOW); the rest of the place costs nothing. A Weld taken out pays, beyond what a Glue taken out pays, only the link
-/// prices that grow with its assemblies (LINK_FRAME, LINK_PART: world/joints.rs charge_link while Joints::unpriced is up). A Weld
-/// carrying others, ending several links at once, pays every link price, as its Parent = nil does.
+/// UNJOIN_BELOW); the rest of the place costs nothing. A Weld to an unanchored part taken out pays, beyond what one between two
+/// anchored parts pays (which changes no assembly), only the link prices that grow with its assemblies (LINK_FRAME, LINK_PART:
+/// world/joints.rs charge_link while Joints::unpriced is up); a Glue pays what a Weld does. A Weld carrying others, ending several
+/// links at once, pays every link price, as its Parent = nil does.
 #[test]
 fn unjoin_from_outsiders_takes_out_the_joints_to_unlisted_parts() {
     check_running(
@@ -1375,8 +1376,9 @@ fn unjoin_from_outsiders_takes_out_the_joints_to_unlisted_parts() {
         Crowd.Parent = workspace
         local Beside = OnePart()
         assert(math.abs(Beside - Alone) < 1e-7, string.format("%.3g beside 5,000 parts, %.3g alone", Beside, Alone))
-        -- (a Weld taken out costs the call what a Glue does but the link prices that grow with its assemblies: UNJOIN_REMOVED holds
-        -- the flat ones; 200 parts each joined to a part of its own outside the list, anchored or not)
+        -- (a Weld to an unanchored part taken out costs the call what one between two anchored parts does but the link prices that
+        -- grow with its assemblies: UNJOIN_REMOVED holds the flat ones; 200 parts each joined to a part of its own outside the list,
+        -- anchored or not)
         local function OwnParts(Class, Anchored)
             local Listed, Outside = Instance.new("Folder"), Instance.new("Folder")
             Listed.Parent, Outside.Parent = Root, Root
@@ -1394,17 +1396,17 @@ fn unjoin_from_outsiders_takes_out_the_joints_to_unlisted_parts() {
             return Cost
         end
         -- (each Weld to an unanchored part taken out at a frame's start leaves two parts of one part each, marked once: the frame's
-        -- first change, and each assembly's first change with each part it marks, the unanchored one's dearer, are all a Weld pays
-        -- beyond a Glue, as a client's call pays each split's assembly price; a Weld between two anchored parts, each an assembly of
-        -- its own, changes no assembly and pays nothing beyond)
-        local Welded, Glued = OwnParts("Weld", false), OwnParts("Glue", false)
+        -- first change, and each assembly's first change with each part it marks, the unanchored one's dearer, are all it pays beyond
+        -- a Weld between two anchored parts, each an assembly of its own, which changes no assembly, as a client's call pays each
+        -- split's assembly price; a Glue, a rigid joint, pays what a Weld does)
+        local Welded, Fixed = OwnParts("Weld", false), OwnParts("Weld")
         local Want = LINK_FRAME + 400 * (LINK_ASSEMBLY + LINK_PART) + 200 * LINK_FREE_PART
-        assert(math.abs(Welded - Glued - Want) < 1e-7, string.format("200 Welds taken out cost %.4g more than 200 Glue, not %.4g", Welded - Glued, Want))
-        local Fixed, FixedGlue = OwnParts("Weld"), OwnParts("Glue")
-        assert(math.abs(Fixed - FixedGlue) < 1e-7, string.format("200 Welds between anchored parts cost %.4g more than 200 Glue", Fixed - FixedGlue))
+        assert(math.abs(Welded - Fixed - Want) < 1e-7, string.format("200 Welds taken out cost %.4g more than 200 between anchored parts, not %.4g", Welded - Fixed, Want))
+        local Glued, FixedGlue = OwnParts("Glue", false), OwnParts("Glue")
+        assert(math.abs(Glued - Welded) < 1e-7 and math.abs(FixedGlue - Fixed) < 1e-7, string.format("200 Glue taken out cost %.4g and %.4g more than 200 Welds", Glued - Welded, FixedGlue - Fixed))
         -- (one leaf of an anchored hub welded to 2,000 unanchored leaves: the link change marks both sides, the leaf and the hub with
-        -- its 1,999 other leaves and its Glue leaf (a client's Glue joins assemblies), and its Weld costs the call their two assemblies'
-        -- prices and the frame's first change more than a Glue leaf's)
+        -- its 1,999 other leaves and its Glue leaf (Glue joins assemblies as a Weld does); the Glue leaf taken out next costs the call
+        -- the same but for the leaf the hub's assembly no longer holds)
         do
             local Star = Instance.new("Folder")
             Star.Parent = Root
@@ -1426,8 +1428,7 @@ fn unjoin_from_outsiders_takes_out_the_joints_to_unlisted_parts() {
             Spent({})
             local GlueLeaf = Spent({ Glued })
             assert(Made.GlueSpoke.Parent == nil, "the leaf's Glue stayed")
-            local Want = LINK_FRAME + 2 * LINK_ASSEMBLY + 2002 * LINK_PART + LINK_FREE_PART
-            assert(math.abs(WeldLeaf - GlueLeaf - Want) < 1e-7, string.format("a leaf's Weld cost %.4g more than a Glue leaf's, not %.4g", WeldLeaf - GlueLeaf, Want))
+            assert(math.abs(WeldLeaf - GlueLeaf - LINK_PART) < 1e-7, string.format("a leaf's Weld cost %.4g more than the Glue leaf's next, not %.4g", WeldLeaf - GlueLeaf, LINK_PART))
             Star:Destroy()
         end
         -- (a listed part's Weld to an unlisted part, carrying a Folder of 100 Welds between fresh unanchored pairs, ends 101 links in
@@ -1797,7 +1798,7 @@ fn join_to_outsiders_costs_what_a_client_spends() {
 /// place it keeps for the joint): a part holding 30,000 Glue to another leaves the Workspace and comes back 16 times, and then
 /// UnjoinFromOutsiders takes the Glue out, in at most twice the host time the same 30,000 Glue take spread over 30 parts of 1,000,
 /// each part glued to one of its own, which is the same work (0.29 s and 0.25 s here, the trips the faster of two runs taken in
-/// turn). Glue links nothing, so the lists are all that changes. A joint used to be looked for in each list before it left it,
+/// turn). A joint used to be looked for in each list before it left it,
 /// about 9e8 comparisons a trip with one part and 3e7 with 30: 2.2 s and 0.30 s.
 #[test]
 fn a_part_with_many_joints_moves_and_unjoins_on_little_host_time() {
@@ -2233,9 +2234,9 @@ fn a_move_takes_joints_out_and_puts_them_in_as_a_client_takes_its_subtree_up() {
 /// A part that leaves every world takes its active joints out of their parts' lists, and the work clock pays what a Studio 0.748
 /// playing client spends on that (cost.rs JOINT_TAKEN_OUT for each joint, JOINT_LIST_LEFT for each part whose list changes) beyond
 /// the Parent write's own price: a part with 1,000 Glue to one other part pays 1,000 joints and 2 lists more than one with 1,000
-/// disabled Glue, and one with 1,000 Glue each to a part of its own 1,000 joints and 1,001 lists more. Joints that are not active
-/// are not looked at, and cost nothing. (A client spends as much on Glue as on Welds; Glue links nothing, so the lists are all it
-/// pays for, where a Weld's link ending pays a link change besides: joints.rs left_world.)
+/// disabled Glue, and one with 1,000 Glue each to a part of its own 1,000 joints and 1,001 lists more, each besides the change of
+/// 1,000 links between two anchored parts, which changes no assembly (LINK_CHANGED, LINK_MORE for each further link: joints.rs
+/// left_world). Joints that are not active are not looked at, and cost nothing. (A client spends as much on Glue as on Welds.)
 #[test]
 fn a_part_leaving_every_world_pays_for_the_joints_it_takes_out_of_their_lists() {
     check_running(
@@ -2270,8 +2271,9 @@ fn a_part_leaving_every_world_pays_for_the_joints_it_takes_out_of_their_lists() 
         local Alone, Disabled, Out = Leaving(0, "one"), Leaving(1000, "disabled"), Leaving(1000, "out")
         assert(math.abs(Disabled - Alone) < 1e-7 and math.abs(Out - Alone) < 1e-7, string.format("%.4g disabled, %.4g out of the DataModel, %.4g alone", Disabled, Out, Alone))
         local One, Many = Leaving(1000, "one"), Leaving(1000, "many")
-        assert(math.abs(One - Alone - (1000 * 0.25e-6 + 2 * 0.5e-6)) < 1e-7, string.format("1,000 joints to one part %.4g", One - Alone))
-        assert(math.abs(Many - Alone - (1000 * 0.25e-6 + 1001 * 0.5e-6)) < 1e-7, string.format("1,000 joints to parts of their own %.4g", Many - Alone))
+        local Links = 1.7e-6 + 999 * 0.06e-6
+        assert(math.abs(One - Alone - (1000 * 0.25e-6 + 2 * 0.5e-6 + Links)) < 1e-7, string.format("1,000 joints to one part %.4g", One - Alone))
+        assert(math.abs(Many - Alone - (1000 * 0.25e-6 + 1001 * 0.5e-6 + Links)) < 1e-7, string.format("1,000 joints to parts of their own %.4g", Many - Alone))
         "##,
         0.5,
     );
@@ -2361,13 +2363,11 @@ fn parts_named_by_joints_out_of_the_data_model_leave_on_little_host_time() {
 }
 
 /// A part moved between two worlds, or out of every world and back, takes its active joints out of their parts' lists and puts them
-/// back, Glue and ManualGlue among them, and the work clock pays what a playing client spends on each (Studio 0.748: a part with
-/// 1,000 or 10,000 Welds or Glue to another, moved between the Workspace and a WorldModel in it, into JointsService, out of the
-/// DataModel and into ReplicatedStorage, and back, spent the same on Glue as on Welds): each joint the move takes out at
-/// JOINT_TAKEN_OUT and each part whose list changes at JOINT_LIST_LEFT, each Glue it puts in at GLUE_LISTED, and each of the part's
-/// joints in a world it looks at, at JOINT_LOOKED_AT (cost.rs). A part moved into JointsService, where none of its joints can be
-/// active, only takes its active ones out. The Folder holding the Glue, carried out and back, pays the same for each Glue it takes
-/// out and puts in, and a Folder of disabled Glue pays what one of disabled Welds pays (a client spent the same on them). 20,000
+/// back, Glue and ManualGlue among them, and the work clock pays for Glue what it pays for Welds, as a playing client spends on
+/// each (Studio 0.748: a part with 1,000 or 10,000 Welds or Glue to another, moved between the Workspace and a WorldModel in it,
+/// into JointsService, out of the DataModel and into ReplicatedStorage, and back, spent the same on Glue as on Welds): the rounds
+/// with 20,000 Glue are charged what they are with 20,000 Welds, and the Folders holding them, carried out and back, alike, enabled
+/// or disabled. 20,000
 /// Glue to one part take at most twice the host time of the same 20,000 spread over 20 parts, each glued to one of its own, which
 /// is the same work (0.27 s and 0.26 s here, each the faster of two runs taken in turn; a joint looked for in each list before it
 /// left it, 3.1 s and 0.65 s).
@@ -2416,7 +2416,7 @@ fn glue_between_worlds(parts: usize) -> (Lua, Rc<Engine>) {
     engine_lua::instance::set_parent(&engine, world_id, Some(workspace)).expect("world in workspace");
 
     let mut sets: Vec<(&str, crate::InstanceId, crate::InstanceId, crate::InstanceId)> = Vec::with_capacity(4);
-    for name in ["Lone", "Glued", "Idle", "IdleWelds"] {
+    for name in ["Lone", "Glued", "Welded", "Idle", "IdleWelds"] {
         let (holder, moving, joints) = {
             let mut state = engine.state.borrow_mut();
             let holder = crate::instance::create_named(&mut state, &reflection, folder_class, "Folder");
@@ -2433,8 +2433,8 @@ fn glue_between_worlds(parts: usize) -> (Lua, Rc<Engine>) {
                 state.dom.attach(p, moving);
                 state.dom.attach(q, holder);
                 if name != "Lone" {
-                    let (jclass, jname) = if name == "IdleWelds" { (weld_class, "Weld") } else { (glue_class, "Glue") };
-                    let enabled = name == "Glued";
+                    let (jclass, jname) = if name == "IdleWelds" || name == "Welded" { (weld_class, "Weld") } else { (glue_class, "Glue") };
+                    let enabled = name == "Glued" || name == "Welded";
                     for _ in 0..(count / parts) {
                         let joint = crate::instance::create_named(&mut state, &reflection, jclass, jname);
                         crate::instance::raw_set_silent(&mut state, &reflection, joint, part0_prop, crate::value::Value::Instance(p));
@@ -2454,7 +2454,7 @@ fn glue_between_worlds(parts: usize) -> (Lua, Rc<Engine>) {
     {
         let shared: LuaTable = engine.lua.borrow().shared.as_ref().expect("shared").get("shared").expect("shared");
         shared.set("World", engine_lua::instance_value(&lua, &engine, world_id).unwrap()).unwrap();
-        let sets_tbl = lua.create_table_with_capacity(0, 4).unwrap();
+        let sets_tbl = lua.create_table_with_capacity(0, 5).unwrap();
         for (name, holder, moving, joints) in sets {
             let entry = lua.create_table_with_capacity(0, 3).unwrap();
             entry.raw_set("Holder", engine_lua::instance_value(&lua, &engine, holder).unwrap()).unwrap();
@@ -2497,26 +2497,22 @@ fn glue_between_worlds(parts: usize) -> (Lua, Rc<Engine>) {
     );
     run(&lua, &engine, "shared.Move(\"Lone\")");
     run(&lua, &engine, "shared.Move(\"Glued\")");
-    // (a round: into the WorldModel, COUNT taken out of the moving parts' and their partners' lists and COUNT looked at; back,
-    // COUNT put in and looked at; into JointsService, out of the DataModel and into ReplicatedStorage, COUNT taken out each; back
-    // from each, COUNT put in and looked at. A Folder of COUNT disabled Glue carried out and back costs what one of disabled Welds
-    // does; the Glue's own Folder COUNT taken out of the lists and put back in more)
+    run(&lua, &engine, "shared.Move(\"Welded\")");
+    // (a client spends as much on Glue as on Welds on each of these moves: the rounds with COUNT Glue cost what they cost with COUNT
+    // Welds, and the Folders holding them, carried out and back, alike, enabled or disabled)
     run(
         &lua,
         &engine,
         &r#"
-        local N, Lists = COUNT, 2 * PARTS
-        local Out, Left, Looked, Listed = 0.25e-6, 0.5e-6, 0.05e-6, 0.37e-6
-        local Round = 4 * (N * Out + Lists * Left) + N * Looked + 4 * N * (Looked + Listed)
-        local Extra = shared.Work.Glued - shared.Work.Lone
-        assert(math.abs(Extra - 10 * Round) < 1e-7 * (1 + N / 1000), `10 rounds charged {Extra} s more than the lone parts', not {10 * Round}`)
-        local Idle, IdleWelds, Carried = shared.Carry("Idle"), shared.Carry("IdleWelds"), shared.Carry("Glued")
+        local N = COUNT
+        local Glued, Welded = shared.Work.Glued - shared.Work.Lone, shared.Work.Welded - shared.Work.Lone
+        assert(Glued > 0 and math.abs(Glued - Welded) < 1e-7 * (1 + N / 1000), `10 rounds charged {Glued} s more than the lone parts with Glue, {Welded} s with Welds`)
+        local Idle, IdleWelds = shared.Carry("Idle"), shared.Carry("IdleWelds")
         assert(math.abs(Idle - IdleWelds) < 1e-7 * (1 + N / 1000), `a Folder of disabled Glue carried out and back charged {Idle} s, of disabled Welds {IdleWelds} s`)
-        local Changed = N * Out + Lists * Left + N * Listed
-        assert(math.abs(Carried - Idle - Changed) < 1e-7 * (1 + N / 1000), `the Glue's Folder charged {Carried - Idle} s more than the disabled Glue's, not {Changed}`)
+        local Carried, CarriedWelds = shared.Carry("Glued"), shared.Carry("Welded")
+        assert(math.abs(Carried - CarriedWelds) < 1e-7 * (1 + N / 1000), `the Glue's Folder charged {Carried} s, the Welds' {CarriedWelds} s`)
         "#
-        .replace("COUNT", &count.to_string())
-        .replace("PARTS", &parts.to_string()),
+        .replace("COUNT", &count.to_string()),
     );
     super::joints::check_index(&mut engine.state.borrow_mut(), &engine.reflection).expect("the joint index");
     (lua, engine)
@@ -2798,6 +2794,186 @@ fn assembly_root_part_is_the_root_a_playing_client_picks() {
     );
 }
 
+/// Of several anchored parts, each unanchored part hangs from the one a playing client gives it (Studio 0.747, client and server,
+/// tools/parity/probes/assembly_roots.luau): its links taken a Weld, Snap or Glue before a WeldConstraint, a WeldConstraint before a
+/// Motor, a Motor before a Motor6D, of one kind the later made first, each joining its two sides unless both already hang from an
+/// anchored part. So the order joints were made in decides, not the order they were parented or given their parts in.
+#[test]
+fn a_part_linked_to_several_anchored_parts_hangs_from_the_one_a_client_picks() {
+    check(
+        r#"
+        local Folder = Instance.new("Folder")
+        Folder.Parent = workspace
+        local function Part(Name, Anchored)
+            local P = Instance.new("Part")
+            P.Name, P.Anchored, P.CanCollide = Name, Anchored, false
+            P.Parent = Folder
+            return P
+        end
+        local function Join(Kind, A, B, Parent)
+            local J = Instance.new(Kind)
+            J.Part0, J.Part1 = A, B
+            if Parent ~= false then
+                J.Parent = Parent or A
+            end
+            return J
+        end
+        local function Root(P)
+            local R = P.AssemblyRootPart
+            return R and R.Name or "nil"
+        end
+        local function Is(Case, Parts, Want)
+            local Got = {}
+            for _, P in Parts do
+                table.insert(Got, Root(P))
+            end
+            assert(table.concat(Got, " ") == Want, `{Case}: {table.concat(Got, " ")}, the client's {Want}`)
+        end
+        -- welds made A, B, C, parented C, B, A: the last made, C, whichever came last
+        local U, A, B, C = Part("U", false), Part("A", true), Part("B", true), Part("C", true)
+        local WA, WB, WC = Join("Weld", U, A, false), Join("Weld", U, B, false), Join("Weld", U, C, false)
+        WC.Parent = U
+        WB.Parent = U
+        WA.Parent = U
+        Is("parented last first", { U }, "C")
+        WC.Enabled = false
+        Is("the last made disabled", { U }, "B")
+        WC.Enabled = true
+        Is("enabled again", { U }, "C")
+        WA.Part1 = nil
+        WA.Part1 = A
+        Is("the first re-pointed", { U }, "C")
+        Folder:ClearAllChildren()
+        -- a chain between two anchored parts hangs whole from the end its last made weld reaches; a bridge hangs one from each end
+        local A1, U1, U2, B1 = Part("A", true), Part("U1", false), Part("U2", false), Part("B", true)
+        Join("Weld", A1, U1)
+        Join("Weld", U1, U2)
+        Join("Weld", U2, B1)
+        Is("chain", { U1, U2 }, "B B")
+        Folder:ClearAllChildren()
+        A1, U1, U2, B1 = Part("A", true), Part("U1", false), Part("U2", false), Part("B", true)
+        Join("Weld", U1, U2)
+        Join("Weld", U2, B1)
+        Join("Weld", U1, A1)
+        Is("bridge", { U1, U2 }, "A B")
+        Folder:ClearAllChildren()
+        -- the kinds' order: a Weld made first beats a WeldConstraint, a WeldConstraint a Motor, a Motor a Motor6D; Glue is a Weld
+        for _, Case in { { "Weld", "WeldConstraint", "A" }, { "WeldConstraint", "Motor", "A" }, { "Motor", "Motor6D", "A" }, { "Motor6D", "Motor", "B" }, { "Weld", "Glue", "B" }, { "Snap", "ManualWeld", "B" }, { "Rotate", "Weld", "B" }, { "Weld", "VelocityMotor", "A" } } do
+            local P, First, Second = Part("U", false), Part("A", true), Part("B", true)
+            Join(Case[1], P, First)
+            Join(Case[2], P, Second)
+            Is(`{Case[1]} then {Case[2]}`, { P }, Case[3])
+            Folder:ClearAllChildren()
+        end
+        -- a free star whose fifth and first leaves are anchored, in either order: the fifth, its weld the last made
+        for _, Order in { { 5, 1 }, { 1, 5 } } do
+            local Hub = Part("H", false)
+            local Leaves = {}
+            for Index = 1, 5 do
+                Leaves[Index] = Part("L" .. Index, false)
+                Join("Weld", Hub, Leaves[Index])
+            end
+            for _, Index in Order do
+                Leaves[Index].Anchored = true
+            end
+            Is(`star anchored {Order[1]}, {Order[2]}`, { Hub, Leaves[2], Leaves[1] }, "L5 L5 L1")
+            Folder:ClearAllChildren()
+        end
+        -- a clone's welds, made in the order the clone made them: each under its anchored part, the parts made U, C, B, A
+        local Model = Instance.new("Model")
+        local CU = Instance.new("Part")
+        CU.Name, CU.CanCollide, CU.Parent = "U", false, Model
+        for _, Name in { "C", "B", "A" } do
+            local P = Instance.new("Part")
+            P.Name, P.Anchored, P.CanCollide, P.Parent = Name, true, false, Model
+        end
+        for _, Name in { "A", "B", "C" } do
+            Join("Weld", CU, Model[Name], Model[Name])
+        end
+        local Copy = Model:Clone()
+        Model.Parent = Folder
+        Copy.Parent = Folder
+        Is("the original", { Model.U }, "C")
+        Is("its clone", { Copy.U }, "A")
+        "#,
+    );
+}
+
+/// Glue and ManualGlue link and place their parts as a Weld does, as on a playing client (Studio 0.747, client and server,
+/// tools/parity/probes/assembly_roots.luau): a part glued to an anchored part reads it as its AssemblyRootPart, takes the place C0
+/// and C1 give it, moves with it, and adds to its assembly's mass; disabled, the Glue links nothing.
+#[test]
+fn glue_links_and_places_its_parts_as_a_weld_does() {
+    check(
+        r#"
+        for _, Kind in { "Glue", "ManualGlue" } do
+            local A, B = Instance.new("Part"), Instance.new("Part")
+            A.Name, B.Name = "A", "B"
+            A.Size, B.Size = Vector3.new(2, 2, 2), Vector3.new(1, 1, 1)
+            A.Anchored, A.CanCollide, B.CanCollide = true, false, false
+            A.CFrame = CFrame.new(10, 20, 30)
+            A.Parent, B.Parent = workspace, workspace
+            local G = Instance.new(Kind)
+            G.Part0, G.Part1 = A, B
+            G.C0 = CFrame.new(0, 4, 0)
+            G.Parent = A
+            assert(B.AssemblyRootPart == A, `{Kind}: B's root {B.AssemblyRootPart}`)
+            assert((B.Position - Vector3.new(10, 24, 30)).Magnitude < 1e-5, `{Kind}: B at {B.Position}`)
+            G.Enabled = false
+            assert(B.AssemblyRootPart == B, `{Kind}: disabled`)
+            G.Enabled = true
+            A.Anchored = false
+            assert(B.AssemblyRootPart == A and math.abs(B.AssemblyMass - (A.Mass + B.Mass)) < 1e-5, `{Kind}: free, mass {B.AssemblyMass}`)
+            A.CFrame = A.CFrame * CFrame.new(0, 3, 0)
+            assert((B.Position - Vector3.new(10, 27, 30)).Magnitude < 1e-5, `{Kind}: moved with A, at {B.Position}`)
+            A:Destroy()
+            B:Destroy()
+        end
+        "#,
+    );
+}
+
+/// A JointInstance in JointsService links two parts of the Workspace's own world, however they came in, and no two of a WorldModel
+/// (one in the Workspace too); a WeldConstraint in JointsService links nothing: as on a playing client (Studio 0.747, client and
+/// server, tools/parity/probes/assembly_roots.luau).
+#[test]
+fn joints_service_links_joint_instances_between_parts_of_the_workspace() {
+    check(
+        r#"
+        local JS = game:GetService("JointsService")
+        local World = Instance.new("WorldModel")
+        World.Parent = workspace
+        local function Case(Kind, Where, Late)
+            local A, B = Instance.new("Part"), Instance.new("Part")
+            A.Anchored, A.CanCollide, B.CanCollide = true, false, false
+            A.Name, B.Name = "A", "B"
+            if not Late then
+                A.Parent, B.Parent = Where, Where
+            end
+            local J = Instance.new(Kind)
+            J.Part0, J.Part1 = A, B
+            J.Parent = JS
+            if Late then
+                A.Parent, B.Parent = Where, Where
+            end
+            local Linked = B.AssemblyRootPart == A
+            J:Destroy()
+            A:Destroy()
+            B:Destroy()
+            return Linked
+        end
+        for _, Kind in { "Weld", "Motor6D", "Snap", "Glue" } do
+            assert(Case(Kind, workspace), `{Kind} in JointsService between parts of the Workspace`)
+            assert(Case(Kind, workspace, true), `{Kind} in JointsService, the parts entering after it`)
+            assert(not Case(Kind, World), `{Kind} in JointsService between parts of a WorldModel`)
+            assert(not Case(Kind, World, true), `{Kind} in JointsService, the parts entering a WorldModel`)
+        end
+        assert(not Case("WeldConstraint", workspace), "a WeldConstraint in JointsService")
+        assert(not Case("WeldConstraint", workspace, true), "a WeldConstraint in JointsService, the parts entering after it")
+        "#,
+    );
+}
+
 /// Parts link only within one world as they move between worlds: a weld joins two parts in the Workspace, then neither when
 /// one is in a WorldModel, both again once the WorldModel holds both (wherever the WorldModel goes), the same from
 /// JointsService, nothing outside every world, and the same with the parts and the WorldModel at the bottom of chains of
@@ -2847,7 +3023,9 @@ fn assemblies_link_within_one_world_as_their_parts_move_between_worlds() {
             A.Parent = World
             Is(`{Depth}: both in the WorldModel`, A, B, "B B")
             Weld.Parent = game:GetService("JointsService")
-            Is(`{Depth}: the weld in JointsService`, A, B, "B B")
+            Is(`{Depth}: the weld in JointsService, its parts in the WorldModel`, A, B, "A B")
+            Weld.Parent = World
+            Is(`{Depth}: the weld in the WorldModel`, A, B, "B B")
             -- (a WorldModel is a world wherever it is)
             TopWorld.Parent = game:GetService("ReplicatedStorage")
             Is(`{Depth}: the WorldModel out of the Workspace`, A, B, "B B")
@@ -3481,7 +3659,7 @@ fn a_joints_mark_follows_its_home_when_the_log_overflows() {
     super::joints::check_index(&mut engine.state.borrow_mut(), &engine.reflection).expect("the joint index");
 }
 
-/// A part whose only active joint is a Glue, which links nothing, moved out of every world straight through the dom (no Parent
+/// A part whose only active joint is a Glue, moved out of every world straight through the dom (no Parent
 /// write) takes the Glue out of its parts' lists of active joints at the next look (joints.rs take_homes queues the joints of a part
 /// that holds some in its list, list_logged), as a part whose joints link does.
 #[test]
@@ -4570,17 +4748,13 @@ fn parallel_joints_cost_a_link_change_the_same_however_many() {
     super::joints::check_index(&mut engine.state.borrow_mut(), &engine.reflection).expect("the joint index");
 }
 
-/// A Glue that a Parent write takes out of the world joins no assembly the write's link change prices (world/joints.rs
-/// mark_component): a Model holding an unanchored part welded to an anchored one and 1,000 Glue from the anchored part to unanchored
-/// parts outside it, taken out of the Workspace at a frame's start, costs what the same Model with the Glue disabled costs and the
-/// Glue's leaving their parts' lists (JOINT_TAKEN_OUT and JOINT_LIST_LEFT each). The anchored part's assembly was charged with the
-/// 1,000 parts the leaving Glue joined to it (LINK_PART each more).
+/// Glue that a Parent write takes out of the world costs what Welds do, as a client spends as much on them (Glue links as a Weld
+/// does: world/joints.rs): a Model holding an unanchored part welded to an anchored one and 1,000 Glue from the anchored part to
+/// unanchored parts outside it, taken out of the Workspace at a frame's start, costs what the same Model with 1,000 Welds costs.
 #[test]
-fn glue_that_leaves_joins_no_assembly_the_write_prices() {
+fn glue_that_leaves_costs_what_welds_do() {
     let (lua, engine) = start_play();
     crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
-    use crate::cost::*;
-    let want = 1000.0 * (JOINT_TAKEN_OUT + JOINT_LIST_LEFT);
     run(
         &lua,
         &engine,
@@ -4596,7 +4770,7 @@ fn glue_that_leaves_joins_no_assembly_the_write_prices() {
             P.Parent = Parent or workspace
             return P
         end
-        local function Scene(Enabled)
+        local function Scene(Kind)
             local M = Instance.new("Model")
             M.Parent = workspace
             local B, P = Part(true), Part(false, M)
@@ -4604,8 +4778,9 @@ fn glue_that_leaves_joins_no_assembly_the_write_prices() {
             W.Part0, W.Part1, W.C0 = B, P, B.CFrame:ToObjectSpace(P.CFrame)
             W.Parent = M
             for _ = 1, 1000 do
-                local G = Instance.new("Glue")
-                G.Part0, G.Part1, G.Enabled = B, Part(false), Enabled
+                local Other = Part(false)
+                local G = Instance.new(Kind)
+                G.Part0, G.Part1, G.C0 = B, Other, B.CFrame:ToObjectSpace(Other.CFrame)
                 G.Parent = M
             end
             return M
@@ -4618,11 +4793,11 @@ fn glue_that_leaves_joins_no_assembly_the_write_prices() {
             return os.clock() - Start
         end
         -- (a round first, whose first touches are not what is compared)
-        Out(Scene(true))
-        Out(Scene(false))
-        local Extra = Out(Scene(true)) - Out(Scene(false))
-        -- (to 1 us: the two scenes' first touches differ by 0.2 us, where the walk crossing the leaving Glue charged 85 us more)
-        assert(math.abs(Extra - {want:e}) < 1e-6, `1,000 active Glue leaving cost {{Extra * 1e6}} us more than disabled ones, not {{{want:e} * 1e6}}`)
+        Out(Scene("Glue"))
+        Out(Scene("Weld"))
+        local Extra = Out(Scene("Glue")) - Out(Scene("Weld"))
+        -- (to 1 us: the two scenes' first touches differ by 0.2 us)
+        assert(math.abs(Extra) < 1e-6, `1,000 Glue leaving cost {{Extra * 1e6}} us more than 1,000 Welds`)
         "#
         ),
     );
