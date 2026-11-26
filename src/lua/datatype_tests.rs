@@ -375,6 +375,13 @@ assert(NK(0.5, 1, 0).Envelope == 0 and NK(0.5, 1).Envelope == 0 and Near(NK(0.5,
 assert(NK(2, 1).Time == 2, "a keypoint's time is checked by the sequence, not the keypoint")
 
 Fails("NumberRange: invalid range", NumberRange.new, 2, 1)
+-- every datatype's metatable is locked (Studio 0.747, datatype_edges_more.luau `metatable`)
+for _, Value in { CFrame.new(), Color3.new(), Vector2.new(), UDim2.new(), UDim.new(), Rect.new(), BrickColor.new(), NumberRange.new(1),
+	NumberSequence.new(1), NumberSequenceKeypoint.new(0, 1), ColorSequence.new(Color3.new()), ColorSequenceKeypoint.new(0, Color3.new()),
+	PhysicalProperties.new(1, 1, 1), Ray.new(Vector3.zero, Vector3.one), Region3.new(Vector3.zero, Vector3.one), Vector2int16.new(),
+	Vector3int16.new(), Region3int16.new(Vector3int16.new(), Vector3int16.new()) } do
+	assert(getmetatable(Value) == "The metatable is locked", typeof(Value))
+end
 local Range = NumberRange.new(1, 2)
 assert(Range.Min == 1 and Range.Max == 2 and NumberRange.new(3).Min == 3 and NumberRange.new(1, 1).Max == 1)
 

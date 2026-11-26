@@ -75,6 +75,7 @@ pub fn module(lua: Lua) -> LuaResult<LuaTable> {
     // table is quite big and probably won't get any smaller
     // since we impl all roblox constructors for each datatype.
     let exports = create_all_exports(lua.clone())?;
+    datatypes::lock_metatables(&lua)?;
     TableBuilder::new(lua)?
         .with_values(exports)?
         .build_readonly()

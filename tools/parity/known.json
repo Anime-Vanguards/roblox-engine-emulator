@@ -285,10 +285,6 @@
 			"why": "CFrame.fromMatrix without a Z column: a client's Z is the normalised cross product, or zero when it is zero (parallel or zero columns); ree gives not-a-number"
 		},
 		{
-			"line": "metatable ",
-			"why": "getmetatable of a CFrame or a Color3 is the lock text `The metatable is locked` in a client, as for the other datatypes; ree answers a boolean"
-		},
-		{
 			"line": "font-unknown",
 			"why": "Font.fromEnum(Enum.Font.Unknown) raises `Enum.Font.Unknown can't be passed to Font.fromEnum` with the caller's position in a client; ree words it otherwise, without a position"
 		},

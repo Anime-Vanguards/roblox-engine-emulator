@@ -95,10 +95,10 @@ index f6850d2..347bcd6 100644
                  v => Err(DomConversionError::ToDomValue {
                      to: "unknown",
 diff --git a/crates/lune-roblox/src/datatypes/mod.rs b/crates/lune-roblox/src/datatypes/mod.rs
-index 9ff5d42..c25ee03 100644
+index 9ff5d42..478b574 100644
 --- a/crates/lune-roblox/src/datatypes/mod.rs
 +++ b/crates/lune-roblox/src/datatypes/mod.rs
-@@ -9,13 +9,61 @@ pub mod conversion;
+@@ -9,6 +9,8 @@ pub mod conversion;
  #[cfg(feature = "mlua")]
  pub mod result;
  #[cfg(feature = "mlua")]
@@ -107,13 +107,56 @@ index 9ff5d42..c25ee03 100644
  pub mod types;
  
  #[cfg(feature = "mlua")]
- mod util;
- 
- #[cfg(feature = "mlua")]
- use result::*;
+@@ -19,3 +21,95 @@ use result::*;
  
  #[cfg(feature = "mlua")]
  pub use crate::shared::userdata::*;
++
++/// A playing client's datatypes answer getmetatable with "The metatable is locked" (Studio 0.747: every datatype, ree's
++/// tools/parity/probes/datatype_edges.luau and datatype_edges_more.luau `metatable`), where mlua's registered metatables
++/// hold `__metatable = false`. Each type's metatable is shared by all its values, so one sample of each is enough.
++#[cfg(feature = "mlua")]
++pub(crate) fn lock_metatables(lua: &mlua::Lua) -> mlua::Result<()> {
++    use glam::{IVec2, IVec3, Mat4, Vec2, Vec3};
++    use types::*;
++    let udim = UDim { scale: 0.0, offset: 0 };
++    let keypoint = NumberSequenceKeypoint { time: 0.0, value: 0.0, envelope: 0.0 };
++    let color_keypoint = ColorSequenceKeypoint { time: 0.0, color: Color3::default() };
++    let samples = [
++        lua.create_userdata(BrickColor::default())?,
++        lua.create_userdata(CFrame(Mat4::IDENTITY))?,
++        lua.create_userdata(Color3::default())?,
++        lua.create_userdata(ColorSequence { keypoints: vec![color_keypoint, color_keypoint] })?,
++        lua.create_userdata(color_keypoint)?,
++        lua.create_userdata(NumberRange { min: 0.0, max: 0.0 })?,
++        lua.create_userdata(NumberSequence { keypoints: vec![keypoint, keypoint] })?,
++        lua.create_userdata(keypoint)?,
++        lua.create_userdata(PhysicalProperties::from(rbx_dom_weak::types::CustomPhysicalProperties::new(1.0, 1.0, 1.0, 1.0, 1.0, 1.0)))?,
++        lua.create_userdata(Ray { origin: Vec3::ZERO, direction: Vec3::ZERO })?,
++        lua.create_userdata(Rect { min: Vec2::ZERO, max: Vec2::ZERO })?,
++        lua.create_userdata(Region3 { min: Vec3::ZERO, max: Vec3::ZERO })?,
++        lua.create_userdata(Region3int16 { min: IVec3::ZERO, max: IVec3::ZERO })?,
++        lua.create_userdata(udim)?,
++        lua.create_userdata(UDim2 { x: udim, y: udim })?,
++        lua.create_userdata(Vector2(Vec2::ZERO))?,
++        lua.create_userdata(Vector2int16(IVec2::ZERO))?,
++        lua.create_userdata(Vector3int16(IVec3::ZERO))?,
++    ];
++    for sample in &samples {
++        // SAFETY: the sample is pushed as the argument; its metatable is read, given the field and popped
++        unsafe {
++            lua.exec_raw::<()>(sample, |state| {
++                use mlua::ffi;
++                if ffi::lua_getmetatable(state, -1) != 0 {
++                    ffi::lua_pushstring(state, c"The metatable is locked".as_ptr());
++                    ffi::lua_setfield(state, -2, c"__metatable".as_ptr());
++                    ffi::lua_pop(state, 1);
++                }
++            })?;
++        }
++    }
++    Ok(())
++}
 +
 +/// Non-generic userdata constructors compiled inside `lune-roblox` so downstream crates create
 +/// datatype userdata without re-monomorphizing `mlua::UserDataRegistry<T>`.
@@ -6352,10 +6395,10 @@ index ff3087e..fa33158 100644
 +    get_or_create_property_ref_instance(this, "CurrentCamera", "Camera")?.into_cached_lua(lua)
  }
 diff --git a/crates/lune-roblox/src/lib.rs b/crates/lune-roblox/src/lib.rs
-index 78035b6..4fa0ded 100644
+index 78035b6..0ffe1a8 100644
 --- a/crates/lune-roblox/src/lib.rs
 +++ b/crates/lune-roblox/src/lib.rs
-@@ -67,6 +67,8 @@ fn create_all_exports(lua: Lua) -> LuaResult<Vec<(&'static str, LuaValue)>> {
+@@ -67,12 +67,15 @@ fn create_all_exports(lua: Lua) -> LuaResult<Vec<(&'static str, LuaValue)>> {
  */
  #[cfg(feature = "mlua")]
  pub fn module(lua: Lua) -> LuaResult<LuaTable> {
@@ -6364,6 +6407,13 @@ index 78035b6..4fa0ded 100644
      // FUTURE: We can probably create these lazily as users
      // index the main exports (this return value) table and
      // save some memory and startup time. The full exports
+     // table is quite big and probably won't get any smaller
+     // since we impl all roblox constructors for each datatype.
+     let exports = create_all_exports(lua.clone())?;
++    datatypes::lock_metatables(&lua)?;
+     TableBuilder::new(lua)?
+         .with_values(exports)?
+         .build_readonly()
 diff --git a/crates/lune-std-luau/src/lib.rs b/crates/lune-std-luau/src/lib.rs
 index 911646d..9194d4e 100644
 --- a/crates/lune-std-luau/src/lib.rs
