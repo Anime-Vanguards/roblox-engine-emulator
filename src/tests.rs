@@ -15340,3 +15340,47 @@ fn a_clones_instance_attributes_point_into_the_copy() {
         "#,
     );
 }
+
+/// An Attachment's CFrame write is orthonormalized whatever its error (X x Y for the third column), and the write fires Changed for
+/// each view and its World twin in a client's order, CFrame's own signal alone (measured, Studio 0.747:
+/// tools/parity/probes/cframe_writes.luau).
+#[test]
+fn an_attachment_write_is_orthonormal_and_fires_a_clients_events() {
+    let (lua, engine) = start();
+    run(
+        &lua,
+        &engine,
+        r#"
+        local Part = Instance.new("Part")
+        Part.Anchored = true
+        Part.Parent = workspace
+        local Attachment = Instance.new("Attachment")
+        Attachment.Parent = Part
+        local C, S = math.cos(0.4), math.sin(0.4)
+        Attachment.CFrame = CFrame.new(300, 40, 300, C, -S, 1e-7, S, C, 0, 0, 0, 1)
+        local Components = { Attachment.CFrame:GetComponents() }
+        print(Components[6], 1 / Components[9] < 0, Components[12])
+        local Events = {}
+        local Names = { "CFrame", "Position", "Orientation", "Rotation", "Axis", "SecondaryAxis", "WorldCFrame", "WorldPosition", "WorldOrientation", "WorldAxis", "WorldSecondaryAxis", "WorldRotation" }
+        Attachment.Changed:Connect(function(Name) table.insert(Events, "Changed(" .. Name .. ")") end)
+        for _, Name in Names do
+            Attachment:GetPropertyChangedSignal(Name):Connect(function() table.insert(Events, Name) end)
+        end
+        Attachment.Position = Vector3.new(2, 3, 4)
+        task.wait()
+        print(table.concat(Events, ","))
+        table.clear(Events)
+        Attachment.Orientation = Vector3.new(30, 20, 10)
+        task.wait()
+        print(table.concat(Events, ","))
+        "#,
+    );
+    assert_eq!(
+        lines(&engine),
+        [
+            "print: 0 true 1",
+            "print: Changed(Position),Changed(WorldPosition),Changed(CFrame),CFrame,Changed(WorldCFrame)",
+            "print: Changed(Axis),Changed(WorldAxis),Changed(SecondaryAxis),Changed(WorldSecondaryAxis),Changed(Orientation),Changed(WorldOrientation),Changed(CFrame),CFrame,Changed(WorldCFrame)",
+        ]
+    );
+}

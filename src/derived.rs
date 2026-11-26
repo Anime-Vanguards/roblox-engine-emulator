@@ -56,6 +56,8 @@ pub struct DerivedViews {
     part_companions: FxHashMap<NameId, Rc<Companions>>,
     /// Flat NameId filter for the 7 BasePart companion sources.
     has_companion: Vec<bool>,
+    /// An Attachment's CFrame change events ([`AttachmentEvents`])
+    attachment: Option<Rc<AttachmentEvents>>,
 }
 
 impl Default for DerivedViews {
@@ -68,6 +70,7 @@ impl Default for DerivedViews {
             part: None,
             part_companions: FxHashMap::default(),
             has_companion: Vec::new(),
+            attachment: None,
         }
     }
 }
@@ -92,6 +95,19 @@ impl Companions {
     fn lists(&self, name: NameId) -> bool {
         self.before.contains(&name) || self.after.contains(&name)
     }
+}
+
+/// The events an Attachment's CFrame change fires, measured in a playing client and a server (Studio 0.747,
+/// tools/parity/probes/cframe_writes.luau `events attachment-`), for a write of CFrame, Position, Orientation, Axis or WorldPosition
+/// alike: Changed alone (no property signal) for Axis, WorldAxis, SecondaryAxis, WorldSecondaryAxis, Orientation and WorldOrientation
+/// when the rotation changed, then for Position and WorldPosition when the position changed, then CFrame's Changed and its signal,
+/// then WorldCFrame's Changed. Rotation and WorldRotation fire nothing, and a move of the parent part fires nothing here.
+pub struct AttachmentEvents {
+    pub class: ClassId,
+    pub cframe: NameId,
+    pub rotation: Vec<NameId>,
+    pub position: Vec<NameId>,
+    pub world_cframe: NameId,
 }
 
 impl DerivedViews {
@@ -145,6 +161,25 @@ impl DerivedViews {
             return None;
         }
         self.part_companions.get(&source).cloned()
+    }
+
+    /// An Attachment's CFrame events, when `source` is its CFrame ([`AttachmentEvents`]).
+    #[inline]
+    pub fn attachment_events(&self, reflection: &Reflection, class: ClassId, source: NameId) -> Option<&AttachmentEvents> {
+        self.attachment.as_deref().filter(|events| events.cframe == source && reflection.class(class).is_a(events.class))
+    }
+
+    fn add_attachment_events(&mut self, reflection: &Reflection) {
+        let id = |name: &str| reflection.name_id(name);
+        let names = |list: &[&str]| list.iter().filter_map(|name| id(name)).collect::<Vec<_>>();
+        let (Some(class), Some(cframe), Some(world_cframe)) = (reflection.class_id("Attachment"), id("CFrame"), id("WorldCFrame")) else { return };
+        self.attachment = Some(Rc::new(AttachmentEvents {
+            class,
+            cframe,
+            rotation: names(&["Axis", "WorldAxis", "SecondaryAxis", "WorldSecondaryAxis", "Orientation", "WorldOrientation"]),
+            position: names(&["Position", "WorldPosition"]),
+            world_cframe,
+        }));
     }
 
     fn add_part_companions(&mut self, reflection: &Reflection) {
@@ -419,6 +454,7 @@ pub fn install(engine: &Rc<Engine>) {
     }
     drop(behaviors);
     views.add_part_companions(&reflection);
+    views.add_attachment_events(&reflection);
     engine.hooks.borrow_mut().derived = views;
     engine.clear_member_cache();
 }

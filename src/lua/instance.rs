@@ -614,19 +614,44 @@ fn cframe_as_stored(engine: &Engine, id: InstanceId, name: NameId, value: Value)
     let Variant::CFrame(cframe) = &**variant else { return value };
     let class = engine.state.borrow().dom.at(id).class;
     let property = engine.reflection.name(name);
+    let o = &cframe.orientation;
+    let rows = [[o.x.x, o.x.y, o.x.z], [o.y.x, o.y.y, o.y.z], [o.z.x, o.z.y, o.z.z]];
+    let row = |r: [f32; 3]| dom::Vector3::new(r[0], r[1], r[2]);
+    if name == crate::world::cframe_name(engine) && engine.reflection.is_a(class, "Attachment") {
+        let stored = attachment_rotation(rows);
+        return Value::Dom(Rc::new(Variant::CFrame(dom::CFrame::new(cframe.position, dom::Matrix3::new(row(stored[0]), row(stored[1]), row(stored[2]))))));
+    }
     let held = (name == crate::world::cframe_name(engine) && engine.reflection.is_a(class, "BasePart"))
         || (matches!(property, "C0" | "C1") && engine.reflection.is_a(class, "JointInstance"));
     if !held {
         return value;
     }
-    let o = &cframe.orientation;
-    let rows = [[o.x.x, o.x.y, o.x.z], [o.y.x, o.y.y, o.y.z], [o.z.x, o.z.y, o.z.z]];
     let stored = crate::world::frame::stored_rotation(rows);
     if stored == rows {
         return value;
     }
-    let row = |r: [f32; 3]| dom::Vector3::new(r[0], r[1], r[2]);
     Value::Dom(Rc::new(Variant::CFrame(dom::CFrame::new(cframe.position, dom::Matrix3::new(row(stored[0]), row(stored[1]), row(stored[2]))))))
+}
+
+/// The rotation (rows) an Attachment's CFrame write stores, whatever its error: in float32, X is the first column times the inverse
+/// of its length, Y the second column less its part along X, normalized the same way, and Z the cross product X x Y, so the
+/// written third column is dropped (a client's R12 reads -0 for a rotation about Z, and a scaled one keeps the rounding of X x Y in
+/// R22: 1.00000012). Measured, Studio 0.747, a client and a server, tools/parity/probes/cframe_writes.luau: this matches 25 of the
+/// 27 writes (a column, a scale and a skew at errors from 0 to 0.1); the scale of 0.1 and the skew of 2e-5 differ in one ulp
+/// (the client's reciprocal square root, unmodelled).
+fn attachment_rotation(rows: [[f32; 3]; 3]) -> [[f32; 3]; 3] {
+    let column = |k: usize| [rows[0][k], rows[1][k], rows[2][k]];
+    let dot = |a: [f32; 3], b: [f32; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    let normalized = |v: [f32; 3]| {
+        let inverse = 1.0 / dot(v, v).sqrt();
+        [v[0] * inverse, v[1] * inverse, v[2] * inverse]
+    };
+    let x = normalized(column(0));
+    let y0 = column(1);
+    let along = dot(x, y0);
+    let y = normalized([y0[0] - along * x[0], y0[1] - along * x[1], y0[2] - along * x[2]]);
+    let z = [x[1] * y[2] - x[2] * y[1], x[2] * y[0] - x[0] * y[2], x[0] * y[1] - x[1] * y[0]];
+    [[x[0], y[0], z[0]], [x[1], y[1], z[1]], [x[2], y[2], z[2]]]
 }
 
 /// A script's property write: [`set_property`], charged to the work clock by what Studio spends on it

@@ -363,6 +363,28 @@ pub fn notify_changed(
 
 /// NotifyChanged's events (Changed and the property signals, with the derived views').
 fn notify_changed_events(state: &mut State, reflection: &Reflection, hooks: &Hooks, id: InstanceId, name: NameId, old: Option<&Value>) {
+    // An Attachment's CFrame: its own list of Changed events, the views' events left out (derived::AttachmentEvents)
+    if let Some(events) = hooks.derived.attachment_events(reflection, state.dom.at(id).class, name) {
+        let cframe_of = |value: Option<&Value>| match value {
+            Some(Value::Dom(variant)) => match &**variant {
+                rbx_dom_weak::types::Variant::CFrame(cframe) => Some(*cframe),
+                _ => None,
+            },
+            _ => None,
+        };
+        let (rotated, moved) = match (cframe_of(old), cframe_of(state.dom.raw_get(id, name))) {
+            (Some(before), Some(after)) => (before.orientation != after.orientation, before.position != after.position),
+            _ => (true, true),
+        };
+        let rotation = if rotated { events.rotation.as_slice() } else { &[] };
+        let position = if moved { events.position.as_slice() } else { &[] };
+        for &view in rotation.iter().chain(position) {
+            fire_changed_only(state, reflection, id, view);
+        }
+        fire_changed(state, reflection, id, name);
+        fire_changed_only(state, reflection, id, events.world_cframe);
+        return;
+    }
     // Derived views (Font of FontFace, Transparency of BackgroundTransparency, ...): those someone
     // listens to fire when their value changed, before or after the source's events; a part's companion events
     // (derived::Companions: Position, Orientation and Rotation beside CFrame, AssemblyMass beside Size, ...) fire
@@ -403,6 +425,12 @@ fn notify_changed_hooks(state: &mut State, reflection: &Reflection, hooks: &Hook
 /// DiagonalFieldOfView and MaxAxisFieldOfView beside FieldOfView (world/camera_fov.rs).
 pub fn fire_computed_changed(state: &mut State, reflection: &Reflection, id: InstanceId, name: NameId) {
     fire_changed(state, reflection, id, name);
+}
+
+/// Changed alone for `name`, its property signal left out (an Attachment's views: derived::AttachmentEvents).
+fn fire_changed_only(state: &mut State, reflection: &Reflection, id: InstanceId, name: NameId) {
+    let Some(signal) = state.dom.at(id).signals.as_deref().and_then(|signals| signals.event(K::Changed as NameId)) else { return };
+    fire_measured(state, signal, vec![Value::String(Str::from(reflection.name(name)))], SignalKind::Changed);
 }
 
 fn fire_changed(state: &mut State, reflection: &Reflection, id: InstanceId, name: NameId) {
