@@ -35,10 +35,6 @@
 		{
 			"line": "Fire",
 			"why": "a remote call with a table inside itself raises `tables cannot be cyclic` before the refusal to wait, the player check and the side checks (a server's InvokeServer says it is for clients); ree checks the cycle after them or not at all"
-		},
-		{
-			"line": "legacy-spawn-thread ",
-			"why": "the legacy spawn given a coroutine logs `attempt to call a thread value` in a client; ree runs the coroutine"
 		}
 	],
 	"assembly_motion": [
@@ -65,12 +61,6 @@
 		{
 			"line": "split read Z root=Z linear=1 0 -4 angular=0 1 0 velocity=1 0 -4 rotvelocity=0 1 0",
 			"why": "a client keeps in a part's body the motion a script's read of its Velocity or RotVelocity works out (here the reads before the split), so the piece split off reads it; ree keeps a part's body from velocity writes, simulation steps and joins alone (no hook on a property's read)"
-		}
-	],
-	"bulk_move_args": [
-		{
-			"line": "bulk mode number 0.5",
-			"why": "a fractional number cast to an enum takes the item it truncates to (0.5, 1.99 and -0.99 cast; 2.5 to CameraPanMode does not); the engine's enum casts take whole numbers only"
 		}
 	],
 	"camera_float_steps": [
@@ -271,22 +261,6 @@
 		{
 			"line": "same v3.Lerp false",
 			"why": "a vector's method read as a value is a new function at every read in a client; ree's is one function a method"
-		},
-		{
-			"line": "trace spawn ok",
-			"why": "the legacy spawn and delay take a value that is no function without an error at the call in a client; ree raises invalid argument #1 there"
-		},
-		{
-			"line": "pcall spawn ok ",
-			"why": "the legacy spawn and delay take a value that is no function without an error at the call in a client; ree raises invalid argument #1 there"
-		},
-		{
-			"line": "trace delay ok",
-			"why": "the legacy spawn and delay take a value that is no function without an error at the call in a client; ree raises invalid argument #1 there"
-		},
-		{
-			"line": "pcall delay ok ",
-			"why": "the legacy spawn and delay take a value that is no function without an error at the call in a client; ree raises invalid argument #1 there"
 		},
 		{
 			"line": "trace TweenService:Create ok",
@@ -1515,12 +1489,6 @@
 			"why": "a family file a client does not have: it raises reading it; ree cannot know which family files a client has, measures it as SourceSans and reports it missing"
 		}
 	],
-	"tween": [
-		{
-			"line": "tween-errors error TweenService:Create property named 'Value' cannot be tweened due to type mismatch (property is a 'double', but given type is 'string') | ok Tween | ok Tween",
-			"why": "TweenService:Create with a string TweenInfo or nil instance returns a Tween in a client; ree rejects them (its type-mismatch text now matches)"
-		}
-	],
 	"ui_signals": [
 		{
 			"line": "mount-read 300,200 10,162 300,600",
@@ -1573,6 +1541,18 @@
 		{
 			"line": "coordinates inset 0,58/0,0 ignore=true screen 0,-58/1920,1080 box 10,-38/960,540 | ignore=false screen 0,0/1920,1022 box 10,20/960,511",
 			"why": "plain ree has no GUI layout; rur adds one and prints this line (run.mjs --rur)"
+		}
+	],
+	"bulk_move_args": [
+		{
+			"line": "bulk mode number 0.5",
+			"why": "a fractional number cast to an enum takes the item it truncates to (0.5, 1.99 and -0.99 cast; 2.5 to CameraPanMode does not); the engine's enum casts take whole numbers only"
+		}
+	],
+	"tween": [
+		{
+			"line": "tween-errors error TweenService:Create property named 'Value' cannot be tweened due to type mismatch (property is a 'double', but given type is 'string') | ok Tween | ok Tween",
+			"why": "TweenService:Create with a string TweenInfo or nil instance returns a Tween in a client; ree rejects them (its type-mismatch text now matches)"
 		}
 	],
 	"yield_refused": [

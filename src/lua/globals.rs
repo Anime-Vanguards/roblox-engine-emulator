@@ -89,12 +89,35 @@ fn to_thread(lua: &Lua, engine: &Engine, value: &LuaValue, index: usize, call: &
     }
 }
 
-/// The thread the legacy spawn / delay run (their errors were not measured).
-fn legacy_thread(lua: &Lua, value: &LuaValue) -> Result<LuaThread, Flow> {
-    match value {
-        LuaValue::Thread(thread) => Ok(thread.clone()),
-        LuaValue::Function(function) => Ok(lua.create_thread(function.clone())?),
-        _ => raise_plain("invalid argument #1 (function or thread expected)"),
+/// The thread the legacy spawn / delay run: a function's own, or a new thread with the value itself at its bottom, which the
+/// resumption calls as any value is called. Measured in a 0.747 playing client and a server (tools/parity/probes/
+/// legacy_spawn_args.luau): the call takes any value; when it is due, a table with `__call` gets itself and the two numbers a
+/// function gets, and any other value, a thread or a coroutine too, logs `attempt to call a <type> value` (its typeof: "a
+/// Instance value"), with no stack (Engine::output_error_frameless).
+fn legacy_thread(lua: &Lua, value: &LuaValue) -> LuaResult<LuaThread> {
+    let thread = if let LuaValue::Function(function) = value {
+        lua.create_thread(function.clone())?
+    } else {
+        // SAFETY: the value is the one argument on the stack; a new thread is pushed above it, the value is moved onto the new
+        // thread's stack, and the thread is left as the one result
+        unsafe {
+            lua.exec_raw::<LuaThread>(value.clone(), |state| {
+                let thread = mlua::ffi::lua_newthread(state);
+                mlua::ffi::lua_pushvalue(state, -2);
+                mlua::ffi::lua_xmove(state, thread, 1);
+                mlua::ffi::lua_remove(state, -2);
+            })?
+        }
+    };
+    Ok(thread)
+}
+
+/// The calling script, kept for a legacy thread whose value is no function: its error has no frame to name the script by, and
+/// ScriptContext.Error names the script that called spawn or delay (measured, a 0.747 server's Script: legacy_spawn_args.luau)
+fn legacy_script(lua: &Lua, engine: &Engine, thread: &LuaThread) {
+    // SAFETY: the running thread's state, valid while the callback runs
+    if let Some(script) = unsafe { super::script_of_thread(lua.state()) } {
+        engine.state.borrow_mut().sched.set_thread_script(thread, script);
     }
 }
 
@@ -1132,13 +1155,19 @@ fn build_shared(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<LuaTable> {
     let legacy_wait: LuaFunction = exports.get("LegacyWait")?;
     shared.raw_set("wait", named(lua, "wait", Library, legacy_wait.clone())?)?;
     shared.raw_set("Wait", named(lua, "Wait", Library, legacy_wait)?)?;
-    // (each alias is a C function of its own name, as a client's: `Spawn` is named Spawn; measured, engine_functions.luau)
+    // (each alias is a C function of its own name, as a client's: `Spawn` is named Spawn; measured, engine_functions.luau. Called
+    // with nothing at all, either raises "Spawn function requires 1 argument", and delay or Delay with fewer than two values
+    // "delay function requires 2 arguments", without a position: measured, legacy_spawn_args.luau)
     for name in ["spawn", "Spawn"] {
         let e = engine.clone();
         let legacy_spawn = library_function(lua, name, move |lua, args| {
             let args = Args::new(args);
+            if args.0.is_empty() {
+                return raise_plain("Spawn function requires 1 argument");
+            }
             let thread = legacy_thread(lua, args.get(0))?;
             refs::admit(&e, Hold::Work, "spawn")?;
+            legacy_script(lua, &e, &thread);
             e.state.borrow_mut().sched.schedule_legacy(TimerKind::Delay, Some(0.0), thread);
             Ok(none())
         })?;
@@ -1148,9 +1177,13 @@ fn build_shared(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<LuaTable> {
         let e = engine.clone();
         let legacy_delay = library_function(lua, name, move |lua, args| {
             let args = Args::new(args);
+            if args.0.len() < 2 {
+                return raise_plain("delay function requires 2 arguments");
+            }
             let duration = args.number(0);
             let thread = legacy_thread(lua, args.get(1))?;
             refs::admit(&e, Hold::Work, "delay")?;
+            legacy_script(lua, &e, &thread);
             e.state.borrow_mut().sched.schedule_legacy(TimerKind::Delay, duration, thread);
             Ok(none())
         })?;

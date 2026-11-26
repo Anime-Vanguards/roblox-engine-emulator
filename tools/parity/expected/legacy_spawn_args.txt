@@ -1,0 +1,36 @@
+# engine: Roblox Studio 0.747.0.7471481, a headless playing client (script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-26
+spawn-number ok  MessageError[attempt to call a number value / ]
+spawn-nil ok  MessageError[attempt to call a nil value / ]
+spawn-none error Spawn function requires 1 argument 
+spawn-string ok  MessageError[attempt to call a string value / ]
+spawn-table ok  MessageError[attempt to call a table value / ]
+spawn-bool ok  MessageError[attempt to call a boolean value / ]
+spawn-instance ok  MessageError[attempt to call a Instance value / ]
+spawn-callable ok  called(true,number,number)
+spawn-function ok  ran(2)
+spawn-thread ok  MessageError[attempt to call a thread value / ]
+Spawn-number ok  MessageError[attempt to call a number value / ]
+delay-number ok  MessageError[attempt to call a number value / ]
+delay-nil ok  MessageError[attempt to call a nil value / ]
+delay-none error delay function requires 2 arguments 
+delay-nothing error delay function requires 2 arguments 
+delay-table ok  MessageError[attempt to call a table value / ]
+delay-callable ok  called(true,number,number)
+delay-thread ok  MessageError[attempt to call a thread value / ]
+Delay-number ok  MessageError[attempt to call a number value / ]
+delay-seconds-string ok  ran(2)
+delay-seconds-numstring ok  ran(2)
+delay-seconds-nil ok  ran(2)
+delay-seconds-table ok  ran(2)
+delay-seconds-bool ok  ran(2)
+delay-seconds-negative ok  ran(2)
+delay-seconds-vector ok  ran(2)
+spawn-error-stack ok  MessageError[@68: from call / Stack Begin / Script '<probe>', Line @68 - function __call / Stack End]
+arity spawn-nil-nil ok 
+arity delay-nil-nil ok 
+arity delay-one-nil error delay function requires 2 arguments
+arity Delay-none error delay function requires 2 arguments
+arity Spawn-none error Spawn function requires 1 argument
+raw spawn-number error "attempt to call a nil value" trace "" | error "attempt to call a nil value" trace "" | error "attempt to call a number value" trace "" | out "attempt to call a nil value\\x0A    " | out "attempt to call a nil value\\x0A    " | out "attempt to call a number value\\x0A    "
+raw delay-thread error "attempt to call a thread value" trace "" | out "attempt to call a thread value\\x0A    "

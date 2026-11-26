@@ -53,10 +53,6 @@
 			"why": "a remote call with a table inside itself raises `tables cannot be cyclic` before the refusal to wait, the player check and the side checks (a server's InvokeServer says it is for clients); ree checks the cycle after them or not at all"
 		},
 		{
-			"line": "legacy-spawn-thread ",
-			"why": "the legacy spawn given a coroutine logs `attempt to call a thread value` in a client; ree runs the coroutine"
-		},
-		{
 			"line": "renderstepped-",
 			"why": "RunService.RenderStepped:Wait on a server raises `RenderStepped event can only be used from local scripts`, and ConnectParallel in a server Script outside an Actor raises `Event.ConnectParallel: The calling script must be rooted under an Actor.`; ree waits, and words the second as a call from no script"
 		},
@@ -89,12 +85,6 @@
 		{
 			"line": "split read Z root=Z linear=1 0 -4 angular=0 1 0 velocity=1 0 -4 rotvelocity=0 1 0",
 			"why": "a client keeps in a part's body the motion a script's read of its Velocity or RotVelocity works out (here the reads before the split), so the piece split off reads it; ree keeps a part's body from velocity writes, simulation steps and joins alone (no hook on a property's read)"
-		}
-	],
-	"bulk_move_args": [
-		{
-			"line": "bulk mode number 0.5",
-			"why": "a fractional number cast to an enum takes the item it truncates to (0.5, 1.99 and -0.99 cast; 2.5 to CameraPanMode does not); the engine's enum casts take whole numbers only"
 		}
 	],
 	"camera_cutoff": [
@@ -209,22 +199,6 @@
 		{
 			"line": "same v3.Lerp false",
 			"why": "a vector's method read as a value is a new function at every read in a client; ree's is one function a method"
-		},
-		{
-			"line": "trace spawn ok",
-			"why": "the legacy spawn and delay take a value that is no function without an error at the call in a client; ree raises invalid argument #1 there"
-		},
-		{
-			"line": "pcall spawn ok ",
-			"why": "the legacy spawn and delay take a value that is no function without an error at the call in a client; ree raises invalid argument #1 there"
-		},
-		{
-			"line": "trace delay ok",
-			"why": "the legacy spawn and delay take a value that is no function without an error at the call in a client; ree raises invalid argument #1 there"
-		},
-		{
-			"line": "pcall delay ok ",
-			"why": "the legacy spawn and delay take a value that is no function without an error at the call in a client; ree raises invalid argument #1 there"
 		},
 		{
 			"line": "trace TweenService:Create ok",
@@ -937,12 +911,6 @@
 			"why": "task.spawn / defer / delay of a thread that cannot be resumed: a client raises `cannot spawn non-suspended coroutine with arguments` when arguments are given, logs `cannot resume non-suspended coroutine` for a thread that died on an error, the running thread or a normal one, raises `Cannot call task.spawn on a thread that is already 'waiting' in the task library` for a thread in task.wait; ree resumes or skips them silently"
 		}
 	],
-	"tween": [
-		{
-			"line": "tween-errors error TweenService:Create property named 'Value' cannot be tweened due to type mismatch (property is a 'double', but given type is 'string') | ok Tween | ok Tween",
-			"why": "TweenService:Create with a string TweenInfo or nil instance returns a Tween in a client; ree rejects them (its type-mismatch text now matches)"
-		}
-	],
 	"yield_refused": [
 		{
 			"line": "sort-synchronize",
@@ -983,6 +951,18 @@
 		{
 			"line": "yieldable-PreloadAsync",
 			"why": "ContentProvider:PreloadAsync of a list with nothing to load returns at once in a client; ree waits a frame where the thread can yield (where it cannot, it returns at once, as a client does)"
+		}
+	],
+	"bulk_move_args": [
+		{
+			"line": "bulk mode number 0.5",
+			"why": "a fractional number cast to an enum takes the item it truncates to (0.5, 1.99 and -0.99 cast; 2.5 to CameraPanMode does not); the engine's enum casts take whole numbers only"
+		}
+	],
+	"tween": [
+		{
+			"line": "tween-errors error TweenService:Create property named 'Value' cannot be tweened due to type mismatch (property is a 'double', but given type is 'string') | ok Tween | ok Tween",
+			"why": "TweenService:Create with a string TweenInfo or nil instance returns a Tween in a client; ree rejects them (its type-mismatch text now matches)"
 		}
 	]
 }

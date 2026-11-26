@@ -67,6 +67,8 @@ mod scheduler_tests;
 #[cfg(test)]
 mod server_tests;
 #[cfg(test)]
+mod engine_function_tests;
+#[cfg(test)]
 mod client_profile_script_tests;
 #[cfg(test)]
 mod loopback_tests;
@@ -1088,6 +1090,15 @@ impl Engine {
         self.output_full("error", message, trace, None, script, fire_script_context);
     }
 
+    /// An uncaught error raised before any frame ran on its thread: a legacy spawn's or delay's value that is no function
+    /// ("attempt to call a number value"). A client's line is the message, a line break and the four spaces its empty stack
+    /// leaves, with no Stack Begin and Stack End; ScriptContext.Error gets the message and an empty trace (measured in a 0.747
+    /// playing client and a server: tools/parity/probes/legacy_spawn_args.luau).
+    pub fn output_error_frameless(&self, message: String, script: Option<InstanceId>) {
+        let text = format!("{message}\n    ");
+        self.output_text("error", message, Some(text), Some(String::new()), None, script, true);
+    }
+
     fn output_full(
         &self,
         kind: &'static str,
@@ -1097,11 +1108,26 @@ impl Engine {
         script: Option<InstanceId>,
         fire_script_context: bool,
     ) {
+        self.output_text(kind, message, None, trace, context, script, fire_script_context);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn output_text(
+        &self,
+        kind: &'static str,
+        message: String,
+        text: Option<String>,
+        trace: Option<String>,
+        context: Option<Value>,
+        script: Option<InstanceId>,
+        fire_script_context: bool,
+    ) {
         let mut state = self.state.borrow_mut();
         let now = state.sched.now;
-        let text = match &trace {
-            Some(trace) if kind == "error" || kind == "warn" => client_error_text(&message, trace),
-            _ => message.clone(),
+        let text = match (text, &trace) {
+            (Some(text), _) => text,
+            (None, Some(trace)) if kind == "error" || kind == "warn" => client_error_text(&message, trace),
+            (None, _) => message.clone(),
         };
         if matches!(kind, "print" | "info" | "warn" | "error") {
             let timestamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs_f64();

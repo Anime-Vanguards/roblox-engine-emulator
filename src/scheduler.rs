@@ -1201,6 +1201,8 @@ pub(crate) fn resume_ready(lua: &Lua, engine: &Rc<Engine>, thread: &LuaThread, a
 
 enum ResumeError {
     String(String, Option<InstanceId>),
+    /// An error raised before any frame ran on the thread (a legacy spawn's value that is no function)
+    Frameless(String),
     LogError(String, Option<InstanceId>),
     NonString,
     Exhaustion,
@@ -1235,6 +1237,8 @@ fn resume_raw(lua: &Lua, thread: &LuaThread, args: LuaMultiValue, log_errors: u6
                 _ => {
                     let script = super::lua::script_of_thread(thread_state);
                     let kind = ffi::lua_type(thread_state, -1);
+                    let mut frame: ffi::lua_Debug = std::mem::zeroed();
+                    let frameless = ffi::lua_getinfo(thread_state, 0, c"".as_ptr(), &mut frame) == 0;
                     let outcome = match kind {
                         ffi::LUA_TSTRING | ffi::LUA_TNUMBER => {
                             ffi::lua_pushvalue(thread_state, -1);
@@ -1246,7 +1250,7 @@ fn resume_raw(lua: &Lua, thread: &LuaThread, args: LuaMultiValue, log_errors: u6
                                 String::from_utf8_lossy(std::slice::from_raw_parts(data as *const u8, len)).into_owned()
                             };
                             ffi::lua_pop(thread_state, 1);
-                            ResumeError::String(text, script)
+                            if frameless { ResumeError::Frameless(text) } else { ResumeError::String(text, script) }
                         }
                         ffi::LUA_TTABLE => {
                             let mut log_text = None;
@@ -1406,6 +1410,9 @@ fn resume_thread(lua: &Lua, engine: &Rc<Engine>, thread: &LuaThread, args: LuaMu
                     } else {
                         engine.output_error_with_script(message, trace, script.or(fallback_script), true);
                     }
+                }
+                ResumeError::Frameless(message) => {
+                    engine.output_error_frameless(message, fallback_script);
                 }
                 ResumeError::NonString => {
                     // Non-string uncaught error (table, nil, etc.): logs NO_OUTPUT with its stack and fires
