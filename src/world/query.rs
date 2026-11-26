@@ -7,8 +7,8 @@
 //! sphere of the smallest axis, Cylinder along X), and their oriented bounding box otherwise
 //! (wedges, corner wedges, MeshParts, unions, trusses: no mesh geometry is loaded). Terrain holds
 //! no voxels and is never hit. Casts follow Roblox's documented rules: nothing a ray starts inside
-//! or a shape starts overlapping is hit, parts with CanQuery off are skipped, RespectCanCollide
-//! skips parts with CanCollide off, collision groups are not modelled (everything collides). A
+//! or a shape starts overlapping is hit, parts with CanQuery and CanCollide both off are skipped (CanQuery off alone hides
+//! nothing: measured), RespectCanCollide skips parts with CanCollide off, collision groups are not modelled (everything collides). A
 //! Blockcast against a ball or cylinder uses its bounding box; a Spherecast against a box uses the
 //! box grown by the radius (its corners square, so a glancing hit near a corner lands a little
 //! early); a Blockcast's hit Position is the cast box's face centre at contact. Overlap queries
@@ -96,8 +96,8 @@ pub struct Filter {
     pub include_instances: Listed,
     pub respect_can_collide: bool,
     pub max_parts: usize,
-    /// Parts with CanQuery off are seen too (GetPartsObscuringTarget's and the PlayerMouse's view of the Workspace: world/camera.rs,
-    /// world/mouse.rs); never set from a query's params
+    /// Parts with CanQuery and CanCollide both off are seen too (the PlayerMouse's view of the Workspace: world/mouse.rs); never set
+    /// from a query's params
     pub unqueryable: bool,
 }
 
@@ -193,13 +193,13 @@ impl Filter {
         (admitted, seconds)
     }
 
-    /// Whether a query with this filter sees the indexed part `part` (world/broadphase.rs): CanQuery off left out (unless the
+    /// Whether a query with this filter sees the indexed part `part` (world/broadphase.rs): CanQuery and CanCollide off left out (unless the
     /// view takes such parts), CanCollide off left out with RespectCanCollide, and what [`Filter::admits`] says.
     pub(crate) fn sees(&self, state: &State, part: InstanceId, entry: &Entry) -> bool {
         self.flags_pass(entry) && self.admits(state, part)
     }
 
-    /// Whether the indexed part's flags let a query with this filter see it, before its lists are asked: CanQuery (unless the view
+    /// Whether the indexed part's flags let a query with this filter see it, before its lists are asked: CanQuery or CanCollide (unless the view
     /// takes parts with it off) and CanCollide with RespectCanCollide.
     fn flags_pass(&self, entry: &Entry) -> bool {
         (self.unqueryable || entry.can_query) && (!self.respect_can_collide || entry.can_collide)
@@ -1095,7 +1095,7 @@ fn charge_cast(engine: &Engine, (met, admitted): (usize, usize), each: f64, kind
     }
 }
 
-/// The parts among `near` with CanQuery on (whatever else the cast's filter says) that a cast's path from `origin` along
+/// The parts among `near` a query sees (CanQuery or CanCollide on, whatever else the cast's filter says) that a cast's path from `origin` along
 /// `direction`, grown by `grow`, meets up to its hit (`hit`, the distance along `direction`), and how many of those its filter
 /// admits when it hit something: what [`charge_cast`] charges for; and what its filter's checks of them cost.
 #[allow(clippy::too_many_arguments)]
@@ -1103,7 +1103,7 @@ fn cast_counts<'a>(state: &State, near: impl IntoIterator<Item = (InstanceId, &'
     let length = direction.length();
     let (mut met, mut admitted, mut walks) = (0usize, 0usize, 0.0);
     for (part, entry) in near {
-        // (the parts a query with no filter sees: CanQuery off left out)
+        // (the parts a query with no filter sees: CanQuery and CanCollide off left out)
         if !entry.can_query {
             continue;
         }
@@ -1249,7 +1249,7 @@ fn walk_cost(walked: Walked, missed: usize) -> f64 {
 /// walk_box), at most MaxParts of them: those of the walk over the box `center` +- `extent` (every part for none), the box clamped
 /// to its centre +- [`CLAMP`] for the walk and the test alike (a part kept must also meet the clamped box). What the walk cost a
 /// client is charged with `walked_price` ([`walk_cost`]: GetPartBoundsInBox, GetPartBoundsInRadius as a box of 2r), as is each part
-/// the box meets but CanQuery leaves out (cost.rs QUERY_UNQUERYABLE) and each the filter leaves out (QUERY_FILTERED_PART). It takes
+/// the box meets but CanQuery and CanCollide leave out (cost.rs QUERY_UNQUERYABLE) and each the filter leaves out (QUERY_FILTERED_PART). It takes
 /// in `world`'s parts ([`take_in_of`]).
 fn overlapping(engine: &Engine, world: InstanceId, filter: Filter, center: Vec3, extent: Option<Vec3>, walked_price: bool, keep: impl Fn(&Solid) -> bool) -> Vec<InstanceId> {
     let Some(index) = take_in_of(engine, world) else {

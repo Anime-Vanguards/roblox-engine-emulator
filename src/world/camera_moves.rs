@@ -260,7 +260,7 @@ fn blocks(state: &State, names: &Names, can_collide: Option<NameId>, ignore: &[I
 }
 
 /// The five rays against the Workspace's parts (not Terrain) as the spatial queries keep them (world/broadphase.rs, the
-/// PlayerMouse's and GetPartsObscuringTarget's view: CanQuery off included), so a call walks nothing: each ray tests the parts
+/// PlayerMouse's view: CanQuery off included), so a call walks nothing: each ray tests the parts
 /// near it whose bounding sphere meets the box around the rays, and what decides whether a part stops it ([`blocks`]) is looked
 /// at only for a part it meets nearer than its hit so far, in the Workspace's order. A part waiting for the spatial index is not
 /// met. What a client spends is charged as a client's rays pay (Studio 0.747, cost.rs CUTOFF_CALL): the call, and

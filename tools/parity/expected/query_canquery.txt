@@ -1,0 +1,18 @@
+# engine: Roblox Studio 0.747.0.7471481, a headless playing client (script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-26
+on-on reads true/true/true | ray on-on | rayRespect on-on | block on-on | sphere on-on | shape on-on | box found | boxRespect found | radius found | inpart found | fpor on-on | region found
+Qoff reads false/true/true | ray Qoff | rayRespect Qoff | block Qoff | sphere Qoff | shape Qoff | box found | boxRespect found | radius found | inpart found | fpor Qoff | region found
+Coff,Qoff reads false/false/true | ray nil | rayRespect nil | block nil | sphere nil | shape nil | box none | boxRespect none | radius none | inpart none | fpor nil | region none
+Qoff,Coff reads false/false/true | ray nil | rayRespect nil | block nil | sphere nil | shape nil | box none | boxRespect none | radius none | inpart none | fpor nil | region none
+Coff reads true/false/true | ray Coff | rayRespect nil | block Coff | sphere Coff | shape Coff | box found | boxRespect none | radius found | inpart found | fpor Coff | region found
+Coff,Qoff,Con reads false/true/true | ray Coff,Qoff,Con | rayRespect Coff,Qoff,Con | block Coff,Qoff,Con | sphere Coff,Qoff,Con | shape Coff,Qoff,Con | box found | boxRespect found | radius found | inpart found | fpor Coff,Qoff,Con | region found
+Qoff,Toff reads false/true/false | ray Qoff,Toff | rayRespect Qoff,Toff | block Qoff,Toff | sphere Qoff,Toff | shape Qoff,Toff | box found | boxRespect found | radius found | inpart found | fpor Qoff,Toff | region found
+Coff,Qoff,unanch reads false/false/true | ray nil | rayRespect nil | block nil | sphere nil | shape nil | box none | boxRespect none | radius none | inpart none | fpor nil | region none
+Qoff,unanch reads false/true/true | ray Qoff,unanch | rayRespect Qoff,unanch | block Qoff,unanch | sphere Qoff,unanch | shape Qoff,unanch | box found | boxRespect found | radius found | inpart found | fpor Qoff,unanch | region found
+Qoff then Coff later nil none
+and Con again Qoff found
+touching false false
+obscuring QoffCon,Toucher
+obscuring off Toucher2
+worldmodel ray Inside Inside
+include ray QoffCon

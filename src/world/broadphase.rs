@@ -47,7 +47,8 @@ use crate::{
 #[derive(Clone, Copy, Debug)]
 pub struct Entry {
     pub solid: Solid,
-    /// CanQuery is not false
+    /// A query sees it: CanQuery is not false, or CanCollide is not (a playing client queries a part with CanQuery off while
+    /// CanCollide is on, whichever was written first: measured, Studio 0.747, client and server, tools/parity/probes/query_canquery.luau)
     pub can_query: bool,
     /// CanCollide is not false
     pub can_collide: bool,
@@ -342,7 +343,8 @@ fn held_list(spatial: &Spatial, world: u32, entry: u32) -> Option<u8> {
 fn entry_of(state: &State, engine: &Engine, names: &Names, part: InstanceId) -> Entry {
     let solid = super::query::solid(state, engine, part);
     let not_false = |name: Option<NameId>| name.and_then(|n| state.dom.boolean(part, n)) != Some(false);
-    Entry { solid, can_query: not_false(names.can_query), can_collide: not_false(names.can_collide) }
+    let can_collide = not_false(names.can_collide);
+    Entry { solid, can_query: can_collide || not_false(names.can_query), can_collide }
 }
 
 impl Spatial {

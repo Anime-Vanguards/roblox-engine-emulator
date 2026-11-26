@@ -278,13 +278,15 @@ fn repeated_raycasts_see_what_changed_between_them() {
         -- moved, between two rays of one frame
         Box.CFrame = CFrame.new(10, 2, 0)
         assert(down(0) == nil and down(10).Instance == Box)
-        -- another parented, then CanQuery turned off
+        -- another parented, then CanQuery turned off: still hit while CanCollide is on (measured), not once both are off
         local Other = Instance.new("Part")
         Other.Size = Vector3.new(4, 4, 4)
         Other.CFrame = CFrame.new(0, 2, 0)
         Other.Parent = workspace
         assert(down(0).Instance == Other)
         Other.CanQuery = false
+        assert(down(0).Instance == Other)
+        Other.CanCollide = false
         assert(down(0) == nil)
         -- unparented
         Box.Parent = nil
@@ -525,6 +527,88 @@ fn params_members_cast_as_a_client_does() {
         assert(#OverlapParams.new({ FilterDescendantsInstances = { A } }).FilterDescendantsInstances == 0, "new ignores its table")
         "#,
     );
+}
+
+/// A playing client queries a part with CanQuery off while CanCollide is on, whichever was written first, and leaves one out
+/// only when both are off (Studio 0.747, client and server: tools/parity/probes/query_canquery.luau): every cast and box query,
+/// FindPartOnRay, the Region3 queries, an Include filter naming it and GetPartsObscuringTarget alike. A box query pays
+/// QUERY_UNQUERYABLE for each part it meets that both leave out (0.45 to 0.53 of a listed part's cost on a client).
+#[test]
+fn a_part_with_can_query_off_is_queried_while_can_collide_is_on() {
+    let (lua, engine) = start_play();
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    run(
+        &lua,
+        &engine,
+        r##"
+        local function Part(X, Query, Collide)
+            local P = Instance.new("Part")
+            P.Anchored, P.Size, P.Position, P.CanQuery, P.CanCollide = true, Vector3.new(10, 1, 10), Vector3.new(X, 90, 300), Query, Collide
+            P.Parent = workspace
+            return P
+        end
+        local On = Part(300, false, true)
+        local Off = Part(400, false, false)
+        local Late = Part(500, true, true)
+        Late.CanQuery = false
+        Late.CanCollide = false
+        Late.CanCollide = true
+        local Probe = Instance.new("Part")
+        Probe.Anchored, Probe.Size, Probe.CanQuery, Probe.CanCollide = true, Vector3.new(2, 2, 2), false, false
+        local function Seen(P)
+            local Top, Down = P.Position + Vector3.new(0, 10, 0), Vector3.new(0, -20, 0)
+            Probe.CFrame = P.CFrame
+            local Region = Region3.new(P.Position - Vector3.one, P.Position + Vector3.one)
+            local Include = RaycastParams.new()
+            Include.FilterType = Enum.RaycastFilterType.Include
+            Include.FilterDescendantsInstances = { P }
+            local Hits = {
+                workspace:Raycast(Top, Down), workspace:Raycast(Top, Down, Include), workspace:Blockcast(CFrame.new(Top), Vector3.one, Down),
+                workspace:Spherecast(Top, 0.5, Down), workspace:FindPartOnRay(Ray.new(Top, Down)),
+                workspace:GetPartBoundsInBox(P.CFrame, Vector3.one * 2)[1], workspace:GetPartBoundsInRadius(P.Position, 1)[1],
+                workspace:GetPartsInPart(Probe)[1], workspace:FindPartsInRegion3(Region)[1],
+            }
+            local Count = 0
+            for Index = 1, 9 do
+                if Hits[Index] then
+                    Count += 1
+                end
+            end
+            return Count
+        end
+        assert(Seen(On) == 9, "CanQuery off, CanCollide on: " .. Seen(On))
+        assert(Seen(Off) == 0, "both off: " .. Seen(Off))
+        assert(Seen(Late) == 9, "CanCollide on again: " .. Seen(Late))
+        local Cam = workspace.CurrentCamera
+        Cam.CFrame = CFrame.lookAt(Vector3.new(300, 120, 300), Vector3.new(300, 60, 300))
+        assert(#Cam:GetPartsObscuringTarget({ Vector3.new(300, 60, 300) }, {}) == 1, "obscuring, CanCollide on")
+        Cam.CFrame = CFrame.lookAt(Vector3.new(400, 120, 300), Vector3.new(400, 60, 300))
+        assert(#Cam:GetPartsObscuringTarget({ Vector3.new(400, 60, 300) }, {}) == 0, "obscuring, both off")
+        -- what a box query pays for the parts both leave out: 10 such parts against none
+        local Folder = Instance.new("Folder")
+        Folder.Parent = workspace
+        for I = 1, 10 do
+            local P = Instance.new("Part")
+            P.Anchored, P.Size, P.Position, P.CanQuery, P.CanCollide = true, Vector3.one, Vector3.new(1000 + I * 1.5, 90, 300), false, false
+            P.Parent = Folder
+        end
+        local function Cost()
+            local Start = os.clock()
+            workspace:GetPartBoundsInBox(CFrame.new(1009.75, 90, 300), Vector3.new(16, 2, 2))
+            return os.clock() - Start
+        end
+        local _ = Cost()
+        local Left = Cost()
+        for _, P in Folder:GetChildren() do
+            P.CanCollide = true
+        end
+        local _ = Cost()
+        -- (the same walk listing the ten instead)
+        shared.Unqueryable = Cost() - Left
+        "##,
+    );
+    let listed = 10.0 * (crate::cost::QUERY_BOX_PART - crate::cost::QUERY_UNQUERYABLE);
+    run(&lua, &engine, &format!("assert(math.abs(shared.Unqueryable - {listed:e}) < 1e-9, `{{shared.Unqueryable}} s more for ten listed than left out, not {listed:e}`)"));
 }
 
 /// RaycastParams / OverlapParams ExcludeInstances and IncludeInstances (`{Instance}?`, nil until
@@ -10378,8 +10462,10 @@ fn the_broadphase_follows_the_dom_and_starts_over_past_its_log() {
         assert(workspace:Raycast(Vector3.new(30, 30, 0), Vector3.new(0, 20, 0)) == nil, "resized")
         assert(workspace:Raycast(Vector3.new(30, 50, 0), Down * 2).Distance == 30, "resized, hit at its new top")
         Part.CanQuery = false
-        assert(workspace:Raycast(Vector3.new(30, 50, 0), Down * 2) == nil, "CanQuery off")
-        Part.CanQuery = true
+        assert(workspace:Raycast(Vector3.new(30, 50, 0), Down * 2).Instance == Part, "CanQuery off, CanCollide on")
+        Part.CanCollide = false
+        assert(workspace:Raycast(Vector3.new(30, 50, 0), Down * 2) == nil, "CanQuery and CanCollide off")
+        Part.CanQuery, Part.CanCollide = true, true
         Part.Parent = nil
         assert(workspace:Raycast(Vector3.new(30, 50, 0), Down * 2) == nil, "out")
         Part.Parent = workspace

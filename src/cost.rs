@@ -1159,11 +1159,13 @@ pub const QUERY_RADIUS_PART: f64 = 0.09e-6;
 /// studs 0.27 / 0.87 / 5.0-5.2 / 37-39 / 228-232, the clamp's 59^3 root cells on level 5; with a level-6 part in the world that frame
 /// 0.27 / 0.91 / 5.4 / 28.9, an eighth of the cells; beside 100,000 parts far away the same), each cell holding parts it visits
 /// ([`QUERY_CELL`]) and each part it tests and misses there ([`QUERY_MISSED_PART`]: a cell of parts the box does not meet 7.6 ns a
-/// part); and each part the box meets but CanQuery leaves out ([`QUERY_UNQUERYABLE`], 0.12 us).
+/// part); and each part the box meets but CanQuery and CanCollide, both off, leave out ([`QUERY_UNQUERYABLE`]: 0.45 to 0.53 of a
+/// listed part's cost in five sessions of 100 and 400 such parts beside 100 and 400 listed ones (2026-11-26), 0.055 us against
+/// QUERY_BOX_PART; it was 0.12 us, fitted on parts with CanQuery off and CanCollide on, which a client lists).
 pub const QUERY_ROOT_CELL: f64 = 1.05e-9;
 pub const QUERY_CELL: f64 = 25e-9;
 pub const QUERY_MISSED_PART: f64 = 7.6e-9;
-pub const QUERY_UNQUERYABLE: f64 = 0.12e-6;
+pub const QUERY_UNQUERYABLE: f64 = 0.055e-6;
 /// What a Raycast's walk of the spatial grid costs a client on its way, beyond the parts it meets ([`RAY_MET`], [`RAY_CROSSED`];
 /// world/query.rs charge_ray_walk), measured as [`QUERY_BOX_PART`]: its length up to its hit, the whole cut path on a miss
 /// ([`RAY_LENGTH`] each 1,000 studs: an empty region's ray of 1 to 1,000 studs 0.21 us, 10,000 0.34, 15,000 or longer 0.41), each

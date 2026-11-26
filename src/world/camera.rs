@@ -311,7 +311,8 @@ fn ignore_walk(state: &crate::State, ignored: &super::IgnoreList, part: Instance
 /// touches at the point is not counted, a point inside a part counts it, a part holding the camera is not counted (a ray starting
 /// inside does not hit). The camera's orientation does not matter.
 ///
-/// The parts are the Workspace's every BasePart but Terrain, whatever its Transparency, CanCollide or CanQuery (measured), from
+/// The parts are the Workspace's every BasePart but Terrain, whatever its Transparency, CanCollide or CanQuery but for one with both
+/// CanCollide and CanQuery off, which is not counted (measured, Studio 0.747, client and server: query_canquery.luau), from
 /// the spatial queries' broadphase (world/broadphase.rs: each segment tests only the parts near it); an ignored instance or
 /// descendant is left out as it is met. What a client spends on it is charged as a client's work goes (Studio 0.747, cost.rs
 /// OBSCURING_CAST): for each point a client casts from the camera again and again, each cast to the nearest part not ignored and
@@ -360,7 +361,7 @@ fn parts_obscuring(lua: &Lua, engine: &Rc<Engine>, camera: InstanceId, args: &Ar
         hits.clear();
         if let Some(world) = world {
             query::walk_ray(engine, world, origin, direction, |parts, _| {
-                hits.extend(parts.iter().filter(|(_, entry, _)| near(&entry.solid)).filter_map(|(part, entry, _)| query::ray_solid(&entry.solid, origin, direction, 0.0).filter(|(t, _)| *t < 1.0).map(|(t, _)| (t, *part))));
+                hits.extend(parts.iter().filter(|(_, entry, _)| entry.can_query && near(&entry.solid)).filter_map(|(part, entry, _)| query::ray_solid(&entry.solid, origin, direction, 0.0).filter(|(t, _)| *t < 1.0).map(|(t, _)| (t, *part))));
             });
         }
         // (in a ray walk's order, then nearest first: the stable sort keeps that order among equals, as a client's casts take the
