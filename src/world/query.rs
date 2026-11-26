@@ -9,9 +9,9 @@
 //! no voxels and is never hit. Casts follow Roblox's documented rules: nothing a ray starts inside
 //! or a shape starts overlapping is hit, parts with CanQuery and CanCollide both off are skipped (CanQuery off alone hides
 //! nothing: measured), RespectCanCollide skips parts with CanCollide off, collision groups are not modelled (everything collides). A
-//! Blockcast against a ball or cylinder uses its bounding box; a Spherecast against a box uses the
-//! box grown by the radius (its corners square, so a glancing hit near a corner lands a little
-//! early); a Blockcast's hit Position is the cast box's face centre at contact. Overlap queries
+//! Blockcast against a ball or cylinder uses its bounding box; a Spherecast against a box meets the box grown by the radius
+//! with rounded edges and corners ([`sweep_sphere_box`]); a cast touching a part only at its start or its end misses it; a
+//! Blockcast's hit Position is where a client puts it ([`box_contact`]). Overlap queries
 //! test each part's oriented box (a ball's sphere) against the query box or sphere.
 //!
 //! Filters ([`Filter`]): RaycastParams / OverlapParams carry FilterType with
@@ -544,8 +544,10 @@ pub(crate) fn world_reach(solid: &Solid) -> (Vec3, Vec3) {
     (frame::translation(&solid.frame), reach)
 }
 
-/// Where a ray from `origin` along `direction` (its length the reach) first enters `solid`:
-/// (fraction of the direction, local normal), or None (a ray starting inside does not hit).
+/// Where a ray from `origin` along `direction` (its length the reach) first enters `solid`, or a sphere of radius `grow` swept along
+/// it first touches it: (fraction of the direction, local normal), or None (a ray starting inside or on its surface does not hit,
+/// nor one only reaching it at its end). A swept sphere meets a box as the box grown by its radius with rounded edges and corners
+/// ([`sweep_sphere_box`]), a ball or cylinder grown by it.
 pub(crate) fn ray_solid(solid: &Solid, origin: Vec3, direction: Vec3, grow: f32) -> Option<(f32, Vec3)> {
     // a ray passing beyond the solid's bounding sphere misses it, found before the frame's inverse (most of a map's solids)
     let center = frame::translation(&solid.frame);
@@ -559,13 +561,16 @@ pub(crate) fn ray_solid(solid: &Solid, origin: Vec3, direction: Vec3, grow: f32)
     let o = inverse.transform_point3(origin);
     let d = inverse.transform_vector3(direction);
     match solid.shape {
+        Shape::Box(half) if grow > 0.0 => sweep_sphere_box(o, d, half, grow),
         Shape::Box(half) => ray_box(o, d, half + Vec3::splat(grow)),
         Shape::Ball(radius) => ray_sphere(o, d, radius + grow),
         Shape::Cylinder(half_length, radius) => ray_cylinder(o, d, half_length + grow, radius + grow),
     }
 }
 
-/// Slab test against a box centred at the origin; the entry must be at or after the start.
+/// Slab test against a box centred at the origin; the entry must be past the start and short of the end: a ray starting on a face
+/// does not hit it, nor does one whose end is on it (measured, Studio 0.747, client and server: tools/parity/probes/query_edges.luau).
+/// A ray along a face's plane or an edge hits the face it reaches.
 pub fn ray_box(o: Vec3, d: Vec3, half: Vec3) -> Option<(f32, Vec3)> {
     let (mut enter, mut exit) = (f32::NEG_INFINITY, f32::INFINITY);
     let mut normal = Vec3::ZERO;
@@ -593,7 +598,80 @@ pub fn ray_box(o: Vec3, d: Vec3, half: Vec3) -> Option<(f32, Vec3)> {
             return None;
         }
     }
-    (enter >= 0.0 && enter <= 1.0 && enter <= exit).then_some((enter, normal))
+    (enter > 0.0 && enter < 1.0 && enter <= exit).then_some((enter, normal))
+}
+
+/// Whether a cast's entry fraction `t` hits: past the start and short of the end (a cast touching a part only at its start or only
+/// at its end does not hit it: measured)
+fn within<T: PartialOrd + From<u8>>(t: T) -> bool {
+    t > T::from(0) && t < T::from(1)
+}
+
+/// A sphere of `radius` swept from `o` along `d` against a box centred at the origin with half extents `half`: the box grown by the
+/// radius with its edges and corners rounded (its sum with the sphere), as a playing client's Spherecast meets a box (measured,
+/// Studio 0.747, client and server, query_edges.luau: a sphere passing a top edge hits where it touches the edge, its Normal from
+/// the edge to its centre, its Position the edge's point). The first contact's fraction and normal; none when the sphere starts
+/// touching or overlapping the box.
+pub fn sweep_sphere_box(o: Vec3, d: Vec3, half: Vec3, radius: f32) -> Option<(f32, Vec3)> {
+    // (in doubles: a contact found by a quadratic loses digits in floats that a client's does not)
+    let (o, d, half, radius) = (o.as_dvec3(), d.as_dvec3(), half.as_dvec3(), f64::from(radius));
+    if (o - o.clamp(-half, half)).length_squared() <= radius * radius {
+        return None;
+    }
+    let mut best: Option<f64> = None;
+    let mut keep = |t: f64| {
+        if within(t) && best.is_none_or(|b| t < b) {
+            best = Some(t);
+        }
+    };
+    // the faces, grown by the radius
+    for axis in 0..3 {
+        if d[axis] == 0.0 {
+            continue;
+        }
+        let sign = if d[axis] < 0.0 { 1.0 } else { -1.0 };
+        let t = (sign * (half[axis] + radius) - o[axis]) / d[axis];
+        let p = o + d * t;
+        let (i, j) = ((axis + 1) % 3, (axis + 2) % 3);
+        if p[i].abs() <= half[i] && p[j].abs() <= half[j] {
+            keep(t);
+        }
+    }
+    // the edges (a cylinder of the radius about each)
+    for axis in 0..3 {
+        let (i, j) = ((axis + 1) % 3, (axis + 2) % 3);
+        let a = d[i] * d[i] + d[j] * d[j];
+        if a <= 0.0 {
+            continue;
+        }
+        for (si, sj) in [(-1.0f64, -1.0f64), (-1.0, 1.0), (1.0, -1.0), (1.0, 1.0)] {
+            let (ci, cj) = (o[i] - si * half[i], o[j] - sj * half[j]);
+            let b = ci * d[i] + cj * d[j];
+            let c = ci * ci + cj * cj - radius * radius;
+            let discriminant = b * b - a * c;
+            if discriminant < 0.0 {
+                continue;
+            }
+            let t = (-b - discriminant.sqrt()) / a;
+            if (o[axis] + d[axis] * t).abs() <= half[axis] {
+                keep(t);
+            }
+        }
+    }
+    // the corners (a sphere of the radius about each)
+    let a = d.length_squared();
+    for corner in 0..8 {
+        let at = glam::DVec3::new(if corner & 1 == 0 { -half.x } else { half.x }, if corner & 2 == 0 { -half.y } else { half.y }, if corner & 4 == 0 { -half.z } else { half.z });
+        let from = o - at;
+        let b = from.dot(d);
+        let discriminant = b * b - a * (from.length_squared() - radius * radius);
+        if a > 0.0 && discriminant >= 0.0 {
+            keep((-b - discriminant.sqrt()) / a);
+        }
+    }
+    let t = best?;
+    let center = o + d * t;
+    Some((t as f32, (center - center.clamp(-half, half)).normalize_or(glam::DVec3::Y).as_vec3()))
 }
 
 pub fn ray_sphere(o: Vec3, d: Vec3, radius: f32) -> Option<(f32, Vec3)> {
@@ -611,7 +689,7 @@ pub fn ray_sphere(o: Vec3, d: Vec3, radius: f32) -> Option<(f32, Vec3)> {
         return None;
     }
     let t = (-b - discriminant.sqrt()) / a;
-    (0.0..=1.0).contains(&t).then(|| (t, (o + d * t).normalize_or(Vec3::Y)))
+    within(t).then(|| (t, (o + d * t).normalize_or(Vec3::Y)))
 }
 
 /// A cylinder along X centred at the origin: its side or a cap.
@@ -622,7 +700,7 @@ pub fn ray_cylinder(o: Vec3, d: Vec3, half_length: f32, radius: f32) -> Option<(
     }
     let mut best: Option<(f32, Vec3)> = None;
     let mut consider = |t: f32, normal: Vec3| {
-        if (0.0..=1.0).contains(&t) && best.is_none_or(|(b, _)| t < b) {
+        if within(t) && best.is_none_or(|(b, _)| t < b) {
             best = Some((t, normal));
         }
     };
@@ -738,20 +816,66 @@ fn sweep_boxes(a: &Oriented, direction: Vec3, b: &Oriented) -> Option<(f32, Vec3
         let (near, far) = if t0 < t1 { (t0, t1) } else { (t1, t0) };
         if near > enter {
             enter = near;
-            normal = if speed > 0.0 { -axis } else { axis };
+            // (+ 0: no negative zero in a component, which a client's normal does not hold)
+            normal = if speed > 0.0 { -axis } else { axis } + Vec3::ZERO;
         }
         exit = exit.min(far);
         if enter > exit {
             return None;
         }
     }
-    (enter > 0.0 && enter <= 1.0).then_some((enter, normal))
+    within(enter).then_some((enter, normal))
+}
+
+/// Where a Blockcast's box (`moving` at its contact, `signed` its half extents as given: a side may be negative) touches `other`
+/// across `normal`, as a playing client reports it (measured, Studio 0.747, client and server: query_edges.luau, 40 boxes on and
+/// beside a part's faces): on the face of `other` that the normal leaves, and along each of that face's axes at the point that
+/// divides the two centres as the boxes' half extents do (`a + ha (b - a) / (ha + hb)`: a 1-stud box 4.8 studs off the centre of
+/// a 10-stud face touches 4.3636 off it), at the face's edge when both boxes' far edges coincide there, and at the box's centre
+/// plus its negative half where a side is negative. None when the normal is no face axis of `other` (an edge or the box's own
+/// face: its centre less its reach is reported then). A box turned against the face it hits is reported as its projected half
+/// extents give it, which a client's differs from by up to a few tenths.
+fn box_contact(moving: &Oriented, signed: Vec3, normal: Vec3, other: &Oriented) -> Option<Vec3> {
+    let face = (0..3).find(|&k| other.axes[k].dot(normal).abs() > 1.0 - 1e-5)?;
+    let offset = moving.center - other.center;
+    let mut position = other.center;
+    for (j, axis) in other.axes.iter().enumerate() {
+        let a = offset.dot(*axis);
+        let hb = other.half[j];
+        let along = if j == face {
+            hb.copysign(axis.dot(normal))
+        } else {
+            let (mut ha, mut negative, mut inverted) = (0.0f32, 0.0f32, false);
+            for (i, own) in moving.axes.iter().enumerate() {
+                // (a negative side of an axis lying in the face puts the point at the box's centre plus that side, along the axis:
+                // measured, turned boxes too; one across the face, tilted onto an edge, counts as its size)
+                if signed[i] < 0.0 && own.dot(normal).abs() < 1e-5 && own.dot(*axis).abs() > 1e-5 {
+                    negative += own.dot(*axis) * signed[i];
+                    inverted = true;
+                } else {
+                    ha += own.dot(*axis).abs() * signed[i].abs();
+                }
+            }
+            if inverted {
+                a + negative
+            } else if a + ha == hb {
+                hb
+            } else if ha + hb > 0.0 {
+                a - ha * a / (ha + hb)
+            } else {
+                a
+            }
+        };
+        position += *axis * along;
+    }
+    Some(position)
 }
 
 /// The closest part of `near` that `sees` lets through a box (`frame`, `size`) swept along `direction` touches, `except` aside:
 /// the parts it touches in the order its walk of the grid gave them, the nearest kept, the first of equals.
 pub fn cast_box(near: &[(InstanceId, Entry)], sees: impl Fn(InstanceId, &Entry) -> bool, frame: &Affine3A, size: Vec3, direction: Vec3, except: Option<InstanceId>) -> Option<Hit> {
-    let moving = Oriented::of(&unit_frame(frame), size * 0.5);
+    // (a negative side sweeps as its size: measured, the distance of a cast down with size (1, -2, 1) is a 2-stud box's)
+    let moving = Oriented::of(&unit_frame(frame), (size * 0.5).abs());
     let mut best: Option<Hit> = None;
     for (part, entry) in near {
         if except == Some(*part) {
@@ -764,7 +888,8 @@ pub fn cast_box(near: &[(InstanceId, Entry)], sees: impl Fn(InstanceId, &Entry) 
             continue;
         }
         let center = moving.center + direction * t;
-        let position = center - normal * moving.radius(normal);
+        let at = Oriented { center, ..moving };
+        let position = box_contact(&at, size * 0.5, normal, &other).unwrap_or(center - normal * moving.radius(normal));
         best = Some(Hit { part: *part, position, normal, distance });
     }
     best
@@ -1361,7 +1486,9 @@ pub fn install(engine: &Rc<Engine>) {
         shapecast_direction(direction)?;
         shapecast_frame(&frame)?;
         let filter = take_filter(engine, Params::Raycast, &params);
-        if !finite_path(frame::translation(&frame), direction) {
+        // (a negative side past the largest finds nothing, where a positive one raises: measured, size (-600, 1, 1) found nothing and
+        // sides of -1 to -20 hit; the bound is taken to be the positive one's, inferred)
+        if !finite_path(frame::translation(&frame), direction) || size.min_element() < -SHAPECAST_SIDE {
             return missed(lua, engine, world, filter);
         }
         // (a box's path counted as its centre's, grown by its half diagonal: its bounding sphere; the walk over its swept box, every

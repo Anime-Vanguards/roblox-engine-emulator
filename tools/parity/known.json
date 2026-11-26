@@ -845,6 +845,56 @@
 			"why": "plain ree has no GUI layout; rur adds one and prints this line (run.mjs --rur)"
 		}
 	],
+	"query_edges": [
+		{
+			"line": "block size -1, 1, 1 turned Wall pos 299.5555 90.5000 300.2301 n 0.0000 1.0000 0.0000 d 9.0000",
+			"why": "a turned Blockcast box with a negative side and a positive one in the hit face: a client's Position takes a small part of the positive side too (0.02 studs), which ree does not model"
+		},
+		{
+			"line": "block side neg Wall pos 295.0000 89.5000 299.5000 n -1.0000 0.0000 0.0000 d 5.5000",
+			"why": "a Blockcast with a negative side along a sideways cast: a client reports the box hitting with its far face (Distance 5.5 where ree reads 4.5), and size (1, -2, 1) misses; ree sweeps a negative side as its size, as a client does for a cast down"
+		},
+		{
+			"line": "sphere graze Wall pos 295.0000 90.5000 300.0000 n -0.0003 1.0000 0.0000 d 5.0000",
+			"why": "a Spherecast touching a box's edge: a client's Normal is 3e-4 off the exact one (its iterated contact), ree's is exact; the Distance and Position match"
+		},
+		{
+			"line": "turned box 15 Wall pos 301.6547 90.5000 300.9900 n 0.0000 1.0000 0.0000 d 9.0000",
+			"why": "a Blockcast's box turned against the face it hits: a client's Position is its GJK cast's witness on the simplex it ended on, which ree does not follow; ree divides the centres by the box's projected half extents (up to 0.4 studs apart)"
+		},
+		{
+			"line": "turned box 30 Wall pos 301.1091 90.5000 301.3576 n 0.0000 1.0000 0.0000 d 9.0000",
+			"why": "a Blockcast's box turned against the face it hits: a client's Position is its GJK cast's witness on the simplex it ended on, which ree does not follow; ree divides the centres by the box's projected half extents (up to 0.4 studs apart)"
+		},
+		{
+			"line": "turned box 45 Wall pos 301.9675 90.5000 300.7542 n 0.0000 1.0000 0.0000 d 9.0000",
+			"why": "a Blockcast's box turned against the face it hits: a client's Position is its GJK cast's witness on the simplex it ended on, which ree does not follow; ree divides the centres by the box's projected half extents (up to 0.4 studs apart)"
+		},
+		{
+			"line": "onto turned Turned pos 501.8636 90.5000 300.5000 n 0.0000 1.0000 0.0000 d 9.0000",
+			"why": "a Blockcast's box turned against the face it hits: a client's Position is its GJK cast's witness on the simplex it ended on, which ree does not follow; ree divides the centres by the box's projected half extents (up to 0.4 studs apart)"
+		},
+		{
+			"line": "neg -1, 1, 1 side Wall pos 295.0000 90.1000 300.9091 n -1.0000 0.0000 0.0000 d 5.5000",
+			"why": "a Blockcast with a negative side along a sideways cast: a client reports the box hitting with its far face (Distance 5.5 where ree reads 4.5), and size (1, -2, 1) misses; ree sweeps a negative side as its size, as a client does for a cast down"
+		},
+		{
+			"line": "neg -3, 1, 2 side Wall pos 295.0000 90.1000 300.8333 n -1.0000 0.0000 0.0000 d 6.5000",
+			"why": "a Blockcast with a negative side along a sideways cast: a client reports the box hitting with its far face (Distance 5.5 where ree reads 4.5), and size (1, -2, 1) misses; ree sweeps a negative side as its size, as a client does for a cast down"
+		},
+		{
+			"line": "neg 1, -2, 1 side nil",
+			"why": "a Blockcast with a negative side along a sideways cast: a client reports the box hitting with its far face (Distance 5.5 where ree reads 4.5), and size (1, -2, 1) misses; ree sweeps a negative side as its size, as a client does for a cast down"
+		},
+		{
+			"line": "sphere r1 290, 91, 300 20, 0, 0 Wall pos 295.0000 90.5000 300.0000 n -0.8663 0.4996 0.0000 d 4.1340",
+			"why": "a Spherecast touching a box's edge: a client's Normal is 3e-4 off the exact one (its iterated contact), ree's is exact; the Distance and Position match"
+		},
+		{
+			"line": "sphere r0.5 290, 91, 300 20, 0, 0 Wall pos 295.0000 90.5000 300.0000 n -0.0003 1.0000 0.0000 d 5.0000",
+			"why": "a Spherecast touching a box's edge: a client's Normal is 3e-4 off the exact one (its iterated contact), ree's is exact; the Distance and Position match"
+		}
+	],
 	"readonly_properties": [
 		{
 			"line": "readonly AdPortal.",

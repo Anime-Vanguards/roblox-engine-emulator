@@ -611,6 +611,53 @@ fn a_part_with_can_query_off_is_queried_while_can_collide_is_on() {
     run(&lua, &engine, &format!("assert(math.abs(shared.Unqueryable - {listed:e}) < 1e-9, `{{shared.Unqueryable}} s more for ten listed than left out, not {listed:e}`)"));
 }
 
+/// Cast edges as a playing client meets them (Studio 0.747, client and server: tools/parity/probes/query_edges.luau): a cast
+/// touching a part only at its path's end or only at its start misses it; a Spherecast meets a box's edges and corners rounded;
+/// a Blockcast's Position divides the two centres by the boxes' half extents along the hit face, at the face's edge where both
+/// boxes' far edges coincide, and at the box's corner for a negative side.
+#[test]
+fn casts_meet_a_parts_edges_as_a_client_does() {
+    check(
+        r#"
+        local Wall = Instance.new("Part")
+        Wall.Anchored, Wall.Size, Wall.Position = true, Vector3.new(10, 1, 10), Vector3.new(300, 90, 300)
+        Wall.Parent = workspace
+        local Caster = Instance.new("Part")
+        Caster.Anchored, Caster.Size, Caster.Position, Caster.CanQuery, Caster.CanCollide = true, Vector3.one, Vector3.new(300, 100, 300), false, false
+        Caster.Parent = workspace
+        local function R(V)
+            return string.format("%.4f %.4f %.4f", V.X, V.Y, V.Z)
+        end
+        local V, Down = Vector3.new(300, 100, 300), Vector3.new(0, -9.5, 0)
+        assert(workspace:Raycast(V, Down) == nil, "a ray ending on the face")
+        assert(math.abs(workspace:Raycast(V, Down * 1.000001).Distance - 9.5) < 1e-4, "a ray past it")
+        assert(workspace:Raycast(Vector3.new(300, 90.5, 300), Vector3.new(0, -5, 0)) == nil, "a ray starting on the face")
+        assert(math.abs(workspace:Raycast(Vector3.new(290, 90.5, 300), Vector3.new(20, 0, 0)).Distance - 5) < 1e-4, "a ray along the face's plane")
+        assert(workspace:Spherecast(V, 0.5, Vector3.new(0, -9, 0)) == nil, "a sphere ending touching")
+        assert(workspace:Spherecast(Vector3.new(300, 91, 300), 0.5, Vector3.new(0, -5, 0)) == nil, "a sphere starting touching")
+        assert(workspace:Blockcast(CFrame.new(V), Vector3.one, Vector3.new(0, -9, 0)) == nil, "a box ending touching")
+        assert(workspace:Shapecast(Caster, Vector3.new(0, -9, 0)) == nil, "a shape ending touching")
+        -- a sphere past a top edge: where it touches the edge, its normal from the edge to its centre
+        local Hit = workspace:Spherecast(Vector3.new(290, 91, 300), 1, Vector3.new(20, 0, 0))
+        assert(math.abs(Hit.Distance - (5 - math.sqrt(0.75))) < 1e-4 and R(Hit.Position) == "295.0000 90.5000 300.0000" and R(Hit.Normal) == "-0.8660 0.5000 0.0000", R(Hit.Normal))
+        Hit = workspace:Spherecast(Vector3.new(290, 91, 300), 0.5, Vector3.new(20, 0, 0))
+        assert(math.abs(Hit.Distance - 5) < 1e-4 and R(Hit.Normal) == "0.0000 1.0000 0.0000", "grazing the top: " .. Hit.Distance)
+        -- Blockcast positions
+        local function Block(X, Z, Size)
+            return R(workspace:Blockcast(CFrame.new(X, 100, Z), Size, Vector3.new(0, -20, 0)).Position)
+        end
+        assert(Block(304.8, 304.6, Vector3.one) == "304.3636 90.5000 304.1818", Block(304.8, 304.6, Vector3.one))
+        assert(Block(302, 301, Vector3.new(30, 2, 12)) == "300.5000 90.5000 300.4546", Block(302, 301, Vector3.new(30, 2, 12)))
+        assert(Block(300, 300, Vector3.new(10, 1, 10)) == "305.0000 90.5000 305.0000", "coinciding far edges")
+        assert(Block(302, 301, Vector3.new(-1, 1, 1)) == "301.5000 90.5000 300.9091", "a negative side's corner")
+        assert(Block(300, 300, Vector3.new(-20, 1, 1)) == "290.0000 90.5000 300.0000", "a negative side across cells")
+        assert(workspace:Blockcast(CFrame.new(300, 100, 300), Vector3.new(-600, 1, 1), Vector3.new(0, -20, 0)) == nil, "a negative side past 512")
+        local Side = workspace:Blockcast(CFrame.new(290, 90.3, 300), Vector3.one, Vector3.new(10, 0, 0))
+        assert(R(Side.Position) == "295.0000 90.1500 300.0000" and R(Side.Normal) == "-1.0000 0.0000 0.0000", R(Side.Position))
+        "#,
+    );
+}
+
 /// RaycastParams / OverlapParams ExcludeInstances and IncludeInstances (`{Instance}?`, nil until
 /// assigned; Roblox's spatial query filters of April 2026, devforum.roblox.com/t/4563575 and the
 /// reference): the part, then each ancestor in turn, and the first either list names decides,
