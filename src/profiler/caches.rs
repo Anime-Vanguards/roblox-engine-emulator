@@ -11,16 +11,29 @@
 use std::{
     cell::RefCell,
     sync::{
-        Mutex,
-        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+        Mutex, MutexGuard,
+        atomic::{AtomicU64, AtomicUsize, Ordering},
     },
 };
 
-/// Active `--profile caches` sessions across all threads: off, a count site pays one relaxed load.
+/// The `--profile caches` sessions of the process. The count and the flag change together under this one lock, and a
+/// session reads the flag and merges the background's counts under it too, so no begin or finish on another thread can
+/// come between (two begins that each set the flag in a step of their own once left it unset with two sessions active).
+struct Sessions {
+    /// Active sessions across all threads
+    active: usize,
+    /// Set when a session began while another was active, until one begins with none: each session then keeps only its
+    /// own thread's counts, so parallel sessions do not mix background-thread counts into one another
+    concurrent: bool,
+}
+
+static SESSIONS: Mutex<Sessions> = Mutex::new(Sessions { active: 0, concurrent: false });
+/// `SESSIONS.active` for the count sites, written only under its lock: off, a count site pays one relaxed load.
 static ACTIVE_SESSIONS: AtomicUsize = AtomicUsize::new(0);
-/// Set while more than one caches session overlaps in the process: each session then keeps only its own thread's counts
-/// so parallel sessions do not mix background-thread counts into one another.
-static CONCURRENT: AtomicBool = AtomicBool::new(false);
+
+fn sessions() -> MutexGuard<'static, Sessions> {
+    SESSIONS.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 /// Coordinates unit tests that assert exclusive single-session background merging with concurrent
 /// `Session` tests in the same library binary (normal sessions hold a shared read lock).
@@ -237,7 +250,8 @@ fn build_facts(slots: &[[u64; 3]; SLOTS], touched: u64) -> Facts {
 }
 
 fn collect_current() -> ([[u64; 3]; SLOTS], u64) {
-    let include_bg = !CONCURRENT.load(Ordering::Acquire);
+    let sessions = sessions();
+    let include_bg = !sessions.concurrent;
     LOCAL.with(|local| {
         let local = local.borrow();
         let mut slots = local.counts;
@@ -330,19 +344,20 @@ pub(crate) fn begin() {
         prev
     });
     if !was_active {
-        let prev = ACTIVE_SESSIONS.fetch_add(1, Ordering::AcqRel);
-        if prev == 0 {
+        let mut sessions = sessions();
+        if sessions.active == 0 {
             reset_bg();
-            CONCURRENT.store(false, Ordering::Release);
+            sessions.concurrent = false;
         } else {
-            CONCURRENT.store(true, Ordering::Release);
+            sessions.concurrent = true;
         }
+        sessions.active += 1;
+        ACTIVE_SESSIONS.store(sessions.active, Ordering::Release);
     }
 }
 
 /// Stops counting caches on this thread and returns this session's snapshot and facts.
 pub(crate) fn finish() -> (Vec<(&'static str, &'static str, Counts)>, Facts) {
-    let include_bg = !CONCURRENT.load(Ordering::Acquire);
     let (was_active, mut slots, local_touched) = LOCAL.with(|local| {
         let mut local = local.borrow_mut();
         let prev = local.active;
@@ -356,7 +371,8 @@ pub(crate) fn finish() -> (Vec<(&'static str, &'static str, Counts)>, Facts) {
         return (Vec::new(), Facts::default());
     }
     let mut touched = local_touched.len() as u64;
-    if include_bg {
+    let mut sessions = sessions();
+    if !sessions.concurrent {
         for (index, slot) in slots.iter_mut().enumerate() {
             let bg = bg_counts(index);
             slot[0] += bg.hits;
@@ -368,7 +384,9 @@ pub(crate) fn finish() -> (Vec<(&'static str, &'static str, Counts)>, Facts) {
             touched += bg.iter().filter(|id| !local_touched.contains(id)).count() as u64;
         }
     }
-    ACTIVE_SESSIONS.fetch_sub(1, Ordering::AcqRel);
+    sessions.active = sessions.active.saturating_sub(1);
+    ACTIVE_SESSIONS.store(sessions.active, Ordering::Release);
+    drop(sessions);
     (build_snapshot(&slots), build_facts(&slots, touched))
 }
 
@@ -385,7 +403,9 @@ pub(crate) fn cancel() {
         })
         .unwrap_or(false);
     if was_active {
-        ACTIVE_SESSIONS.fetch_sub(1, Ordering::AcqRel);
+        let mut sessions = sessions();
+        sessions.active = sessions.active.saturating_sub(1);
+        ACTIVE_SESSIONS.store(sessions.active, Ordering::Release);
     }
 }
 
@@ -543,5 +563,64 @@ mod tests {
         assert_eq!(counts_of(&rows2, Cache::Atoms), Counts::default());
         assert_eq!(counts_of(&rows2, Cache::Queries), Counts { hits: 0, misses: 0, evictions: 4 });
         assert_eq!(facts2.instances_touched, 2);
+    }
+
+    /// Two sessions that begin at the same moment, many times over: each round both begin, a thread with no session counts
+    /// hits while both are on, and each session must read only its own. Their begins once raced (the count went up in one
+    /// step and the overlap flag was set in another, so the first session's `false` could land after the second's `true`)
+    /// and both sessions then took the background's hits as their own.
+    #[test]
+    fn sessions_beginning_together_keep_their_own_counts() {
+        use std::sync::{Arc, Barrier, atomic::AtomicUsize, mpsc};
+        let _exclusive = TEST_SESSION_LOCK.write().unwrap_or_else(|poisoned| poisoned.into_inner());
+        const ROUNDS: usize = 2000;
+        const BACKGROUND_HITS: u64 = 5;
+        // A spinning start, not a Barrier: a Barrier's last arrival runs on while it wakes the others, microseconds later,
+        // which is long enough for one begin to finish before the other starts.
+        let start = Arc::new(AtomicUsize::new(0));
+        let begun = Arc::new(Barrier::new(3));
+        let counted = Arc::new(Barrier::new(3));
+        let (sender, results) = mpsc::channel();
+        let workers: Vec<_> = [7u64, 13]
+            .into_iter()
+            .map(|own| {
+                let (start, begun, counted, sender) = (start.clone(), begun.clone(), counted.clone(), sender.clone());
+                std::thread::spawn(move || {
+                    for round in 1..=ROUNDS {
+                        while start.load(Ordering::Acquire) < round {
+                            std::hint::spin_loop();
+                        }
+                        begin();
+                        for _ in 0..own {
+                            hit(Cache::Atoms);
+                        }
+                        begun.wait();
+                        counted.wait();
+                        let (rows, _) = finish();
+                        sender.send((round, own, counts_of(&rows, Cache::Atoms).hits)).unwrap();
+                    }
+                })
+            })
+            .collect();
+        drop(sender);
+        let mut wrong = Vec::new();
+        for round in 1..=ROUNDS {
+            start.store(round, Ordering::Release);
+            begun.wait();
+            for _ in 0..BACKGROUND_HITS {
+                hit(Cache::Atoms);
+            }
+            counted.wait();
+            for _ in 0..2 {
+                let (round, own, read) = results.recv().unwrap();
+                if read != own {
+                    wrong.push((round, own, read));
+                }
+            }
+        }
+        for worker in workers {
+            worker.join().unwrap();
+        }
+        assert!(wrong.is_empty(), "{} of {} sessions read hits not their own (round, own, read): {:?}", wrong.len(), 2 * ROUNDS, &wrong[..wrong.len().min(8)]);
     }
 }
