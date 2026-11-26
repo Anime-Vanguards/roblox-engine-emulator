@@ -35,6 +35,8 @@
 //!   them over the finished image), hidden by Enabled off while they are not there.
 //! - Prints, warnings, errors and sound plays go to the event log with their times; the camera's
 //!   CFrame and field of view when they change to the camera track.
+//! - A part's or decal's Transparency is recorded as drawn, with its LocalTransparencyModifier, in the
+//!   scene file as in the playback.
 //!
 //! Time `t` of frame `n` is `n / fps`; frame 0 is the world right after the harness started.
 
@@ -938,7 +940,12 @@ impl TerrainClouds {
 /// Transparency as drawn: LocalTransparencyModifier over Transparency.
 fn effective_transparency(state: &State, engine: &Engine, id: InstanceId) -> f64 {
     let read = |name: &str| engine.reflection.name_id(name).and_then(|n| state.dom.number(id, n)).unwrap_or(0.0);
-    1.0 - (1.0 - read("Transparency")) * (1.0 - read("LocalTransparencyModifier"))
+    1.0 - (1.0 - read("Transparency")) * (1.0 - local_modifier(state, engine, id))
+}
+
+/// A part's or decal's LocalTransparencyModifier (0 for anything else).
+fn local_modifier(state: &State, engine: &Engine, id: InstanceId) -> f64 {
+    engine.reflection.name_id("LocalTransparencyModifier").and_then(|n| state.dom.number(id, n)).unwrap_or(0.0)
 }
 
 /// The value a tracked property is recorded as (None: it cannot be played back).
@@ -1449,7 +1456,17 @@ fn appear(inner: &mut Inner, state: &State, engine: &Engine, id: InstanceId, par
     // the file's values of what is tracked
     for prop in &plan.tracked {
         let value = if prop.track == Track::Effective {
-            Some(json!(round(effective_transparency(state, engine, id))))
+            // the file holds the Transparency the client draws: files don't keep LocalTransparencyModifier, and a client draws
+            // and shadows a part (and a decal) at 1 - (1 - T)(1 - M) (measured in a 0.747 client: ror P16 SH-2)
+            let drawn = effective_transparency(state, engine, id);
+            if local_modifier(state, engine, id) != 0.0 {
+                let key = ustr("Transparency");
+                match record.properties.iter_mut().find(|(property, _)| *property == key) {
+                    Some(slot) => slot.1 = Variant::Float32(drawn as f32),
+                    None => record.properties.push((key, Variant::Float32(drawn as f32))),
+                }
+            }
+            Some(json!(round(drawn)))
         } else if let Some(sibling) = prop.sibling {
             let uri = state.dom.raw_get(id, sibling).and_then(|value| match value {
                 Value::String(uri) => Some(uri.to_string()),

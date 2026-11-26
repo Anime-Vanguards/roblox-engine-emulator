@@ -983,6 +983,51 @@ fn what_a_client_parents_to_its_camera_is_recorded() {
     assert_eq!(emits[0]["target"], "ClientWorld.Spark.ParticleEmitter");
 }
 
+/// A LocalTransparencyModifier set before a part (or decal) appears is drawn from its first frame: files keep no modifier, so
+/// the scene holds the transparency a client draws and shadows it at, 1 - (1 - T)(1 - M) (a 0.747 client: ror P16 SH-2), and
+/// the playback changes nothing for it; one appearing later shows at that transparency.
+#[test]
+fn a_local_transparency_modifier_set_before_a_part_appears_is_in_the_scene() {
+    let (playback, _, scene, _) = record(
+        r#"
+        local Plate = Instance.new("Part")
+        Plate.Name = "Plate"
+        Plate.Anchored = true
+        Plate.Transparency = 0.5
+        Plate.LocalTransparencyModifier = 0.5
+        local Face = Instance.new("Decal")
+        Face.Name = "Face"
+        Face.Transparency = 0.2
+        Face.LocalTransparencyModifier = 0.5
+        Face.Parent = Plate
+        Plate.Parent = workspace
+        local Plain = Instance.new("Part")
+        Plain.Name = "Plain"
+        Plain.Anchored = true
+        Plain.Transparency = 0.3
+        Plain.Parent = workspace
+        task.delay(0.05, function()
+            local Late = Instance.new("Part")
+            Late.Name = "Late"
+            Late.Anchored = true
+            Late.LocalTransparencyModifier = 0.6
+            Late.Parent = workspace
+        end)
+        "#,
+        10,
+    );
+    let transparency = |path: &[&str]| instance(&scene, path).properties.get(&"Transparency".into()).cloned();
+    assert_eq!(transparency(&["Plate"]), Some(Variant::Float32(0.75)), "drawn: 1 - 0.5 x 0.5");
+    assert_eq!(transparency(&["Plate", "Face"]), Some(Variant::Float32(0.6)), "drawn: 1 - 0.8 x 0.5");
+    assert_eq!(transparency(&["Plain"]), Some(Variant::Float32(0.3)), "no modifier: as written");
+    assert_eq!(transparency(&["Late"]), Some(Variant::Float32(1.0)), "hidden until it appears");
+    for target in ["Plate", "Plate.Face", "Plain"] {
+        assert!(find(&playback["actions"], |a| a["target"] == target).is_empty(), "{target}: {}", playback["actions"]);
+    }
+    let late: Vec<(f64, f64)> = find(&playback["actions"], |a| a["target"] == "Late").iter().map(|a| (a["at"].as_f64().unwrap(), a["set"]["Transparency"].as_f64().unwrap())).collect();
+    assert!(late.len() == 1 && (late[0].0 - 0.05).abs() < 0.02 && (late[0].1 - 0.6).abs() < 1e-6, "{late:?}");
+}
+
 /// What a script parents to workspace.Terrain draws as Studio draws it (an effect module can clone its
 /// meshes into Terrain): recorded as roots, the Terrain itself not.
 #[test]
