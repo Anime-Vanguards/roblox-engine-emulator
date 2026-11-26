@@ -15291,6 +15291,90 @@ fn service_answers_follow_a_clients_casts_and_rules() {
     );
 }
 
+/// Instance API errors and locks as a playing client and a server raise them (Studio 0.747: tools/parity/probes/instance_api_texts.luau):
+/// PivotTo's cast, Instance.new's class name, a key that is no string, property names that name no property a script may use, an
+/// attribute signal's text, Clone of what refuses it, GetTextBoundsParams' Parent lock, the classes that keep a parent rule, and a
+/// part's CurrentPhysicalProperties and ResizeableFaces. Each check failed before the change.
+#[test]
+fn instance_api_errors_and_locks_are_a_clients() {
+    assert_script(
+        r##"
+        local function Message(Callback)
+            local Ok, Err = pcall(Callback)
+            assert(not Ok and type(Err) == "string", "no error")
+            return (string.gsub(Err, "^Test:%d+: ", "@: "))
+        end
+        local Part = Instance.new("Part")
+        Part.Name = "Holder"
+        Part.Parent = workspace
+        assert(Message(function() Part:PivotTo(nil) end) == "Argument 1 missing or nil")
+        assert(Message(function() Part:PivotTo() end) == "Argument 1 missing or nil")
+        assert(Message(function() Part:PivotTo(5) end) == "Unable to cast double to CoordinateFrame")
+        assert(Message(function() Part:PivotTo({}) end) == "Unable to cast Array to CoordinateFrame")
+        assert(Message(function() Part:PivotTo(Vector3.one) end) == "Unable to cast Vector3 to CoordinateFrame")
+        assert(Message(function() Instance.new("Model"):PivotTo(workspace) end) == "Unable to cast Instance to CoordinateFrame")
+        assert(Message(function() return Instance.new(nil) end) == "@: invalid argument #1 to 'new' (string expected, got nil)")
+        assert(Message(function() return Instance.new() end) == "@: missing argument #1 to 'new' (string expected)")
+        assert(Message(function() return Instance.new(Vector3.one) end) == "@: invalid argument #1 to 'new' (string expected, got Vector3)")
+        assert(Message(function() return Instance.new(5) end) == 'Unable to create an Instance of type "5"')
+        assert(Message(function() return Part[5] end) == '5 is not a valid member of Part "Workspace.Holder"')
+        assert(Message(function() return Part[1e20] end) == '100000000000000000000 is not a valid member of Part "Workspace.Holder"')
+        assert(Message(function() return Part[0 / 0] end) == 'nan is not a valid member of Part "Workspace.Holder"')
+        assert(Message(function() return Part[true] end) == "@: invalid argument #2 (string expected, got boolean)")
+        assert(Message(function() Part[5] = 1 end) == "@: invalid argument #2 (string expected, got number)")
+        assert(Message(function() Part[workspace] = 1 end) == "@: invalid argument #2 (string expected, got Instance)")
+        local Numbered = Instance.new("Folder")
+        local Five = Instance.new("Folder")
+        Five.Name = "5"
+        Five.Parent = Numbered
+        assert(Numbered[5] == Five)
+        local Folder = Instance.new("Folder")
+        assert(Message(function() return Folder:IsPropertyModified("Nope") end) == "Invalid argument to IsPropertyModified(): Class Folder has no property named `Nope`")
+        assert(Message(function() Folder:ResetPropertyToDefault("Changed") end) == "Invalid argument to ResetPropertyToDefault(): Class Folder has no property named `Changed`")
+        assert(Message(function() return Folder:GetStyled("name") end) == "GetStyled(): No such property named `name`")
+        assert(Message(function() return Folder:IsPropertyModified(5) end) == "Invalid argument to IsPropertyModified(): Class Folder has no property named `5`")
+        assert(Message(function() return Part:IsPropertyModified("Origin") end) == "Invalid argument to IsPropertyModified(): Class Part has no property named `Origin`")
+        assert(Folder:IsPropertyModified("Name") == false and Folder:GetStyled("Name") == "Folder")
+        assert(Message(function() return Part:GetPropertyChangedSignal("Origin") end) == "Origin is not a scriptable property.")
+        assert(Message(function() return Instance.new("LocalizationTable"):GetPropertyChangedSignal("Contents") end) == "Contents is not a scriptable property.")
+        assert(Message(function() return Folder:GetPropertyChangedSignal("Nope") end) == "Nope is not a valid property name.")
+        assert(Message(function() return workspace:GetPropertyChangedSignal("StreamingMinRadius") end) == "The current thread cannot read 'StreamingMinRadius' (lacking capability PluginOrOpenCloud)")
+        assert(Message(function() return workspace:IsPropertyModified("StreamingMinRadius") end) == "The current thread cannot call IsPropertyModified() on Workspace.StreamingMinRadius (lacking capability PluginOrOpenCloud)")
+        assert(Message(function() return workspace:GetStyled("StreamingMinRadius") end) == "The current thread cannot call GetStyled() on 'StreamingMinRadius' (lacking capability PluginOrOpenCloud)")
+        assert(tostring(Folder:GetAttributeChangedSignal("n")) == "Signal nAttributeChanged")
+        assert(tostring(Folder:GetAttributeChangedSignal(5)) == "Signal 5AttributeChanged")
+        assert(Message(function() return workspace.Terrain:Clone() end) == "Cannot Clone() Terrain")
+        local Params = Instance.new("GetTextBoundsParams")
+        assert(Params:Clone() == nil and Params.Archivable)
+        assert(Message(function() Params.Parent = workspace end) == "The Parent property of Instance is locked, current parent: NULL, new parent Workspace")
+        assert(Message(function() return Instance.new("GetTextBoundsParams", Folder) end) == "The Parent property of Instance is locked, current parent: NULL, new parent Folder")
+        Params.Parent = nil
+        assert(Message(function() Instance.new("AdPortal").Parent = Instance.new("WedgePart") end) == "AdPortal must be parented to a Part.")
+        Instance.new("AdPortal").Parent = Instance.new("Part")
+        assert(Message(function() Instance.new("Animator").Parent = Instance.new("Model") end) == "Animator has to be placed under Humanoid or AnimationController!")
+        Instance.new("Animator").Parent = Instance.new("AnimationController")
+        assert(Message(function() Instance.new("Bone").Parent = Folder end) == "Bones must be parented to a BasePart or another Bone.")
+        Instance.new("Bone").Parent = Instance.new("MeshPart")
+        assert(Message(function() return Instance.new("WrapLayer", Instance.new("Part")) end) == "BaseWrap must be parented to a MeshPart.")
+        local Wrap = Instance.new("WrapTarget")
+        local Mesh = Instance.new("MeshPart")
+        Wrap.Parent = Mesh
+        Mesh.Parent = Folder
+        assert(Message(function() Wrap.Parent = Folder end) == "BaseWrap must be parented to a MeshPart.")
+        Wrap.Parent = nil
+        local Piece = Instance.new("Part")
+        Piece.Material = Enum.Material.Ice
+        assert(tostring(Piece.CurrentPhysicalProperties) == "0.91900003, 0.0199999996, 0.150000006, 3, 1, 0.200000003")
+        Piece.CustomPhysicalProperties = PhysicalProperties.new(2, 0.4, 0.6, 3, 4)
+        assert(tostring(Piece.CurrentPhysicalProperties) == "2, 0.400000006, 0.600000024, 3, 4, 1")
+        Piece.CustomPhysicalProperties = nil
+        assert(tostring(Piece.CurrentPhysicalProperties) == "0.91900003, 0.0199999996, 0.150000006, 3, 1, 0.200000003")
+        assert(tostring(Piece.ResizeableFaces) == "Right, Top, Back, Left, Bottom, Front")
+        assert(typeof(Instance.new("RayValue").Value) == "Ray")
+        "##,
+    );
+}
+
 /// An attribute name's checks in a client's order (the RBX prefix, empty, over 100 bytes, an illegal byte), and the illegal byte
 /// itself, not its character (measured, Studio 0.747: tools/parity/probes/arg_checks.luau, instances.luau).
 #[test]
