@@ -242,16 +242,41 @@ fn material_physical_properties(material: &str) -> Value {
     )))))
 }
 
+/// A GUI object's BrickColor view of a Color3 (BackgroundColor, BorderColor, TextColor): BrickColor.new(Color3)'s
+/// nearest colour (lune-roblox's brick_color.rs: float32 L1 against each brick colour's Color, the lowest number on a
+/// tie; not-a-number and infinite channels give Medium stone grey). Measured equal to BrickColor.new over 502 palette
+/// midpoints in a 0.747 client and server (tools/parity/probes/brickcolor_views.luau).
 fn nearest_brick_color(value: Option<&Value>) -> Value {
+    let brick = match value.and_then(Value::as_color3) {
+        Some(color) => dom::BrickColor::from(lune_roblox::datatypes::types::BrickColor::from(lune_roblox::datatypes::types::Color3::from(color))),
+        None => dom::BrickColor::from_number(194).unwrap_or(dom::BrickColor::MediumStoneGrey),
+    };
+    Value::Dom(Rc::new(Variant::BrickColor(brick)))
+}
+
+/// The byte a client stores for a part's colour channel: `uint8_t(int(channel * 255.0f))` with x86's conversion, so the
+/// product wraps past a byte (1.5 is 126, -0.5 is 129) and is 0 when it is not-a-number, infinite or outside the int32
+/// range (Studio 0.747: tools/parity/probes/tween_color.luau, brickcolor_views.luau `part-color`).
+fn color_byte(channel: f32) -> u8 {
+    let whole = (channel * 255.0).trunc();
+    if whole.abs() < 2_147_483_648.0 { whole as i32 as u8 } else { 0 }
+}
+
+/// A part's BrickColor read from its Color, as a client answers it: each channel as the byte a client stores for it
+/// ([`color_byte`]), then the brick colour with the least sum of absolute byte differences, over every brick colour in number order and
+/// the lowest number on a tie. Fitted with no miss over 988 palette midpoints and seven odd colours written to a part's
+/// Color (Studio 0.747, tools/parity/probes/datatype_edges.luau `brickcolor-view`, brickcolor_views.luau `part-color`);
+/// BrickColor.new(Color3) of the unrounded colour picks otherwise for 41 of them, the least squared distance for 202.
+fn part_brick_color(value: Option<&Value>) -> Value {
     let Some(color) = value.and_then(Value::as_color3) else {
         return Value::Dom(Rc::new(Variant::BrickColor(dom::BrickColor::from_number(194).unwrap_or(dom::BrickColor::MediumStoneGrey))));
     };
-    let mut best: Option<(f64, dom::BrickColor)> = None;
+    let (r, g, b) = (i32::from(color_byte(color.r)), i32::from(color_byte(color.g)), i32::from(color_byte(color.b)));
+    let mut best: Option<(i32, dom::BrickColor)> = None;
     for number in 1..=1032u16 {
         let Some(candidate) = dom::BrickColor::from_number(number) else { continue };
         let c = candidate.to_color3uint8();
-        let (r, g, b) = ((c.r as f32 / 255.0) as f64, (c.g as f32 / 255.0) as f64, (c.b as f32 / 255.0) as f64);
-        let distance = (r - color.r as f64).powi(2) + (g - color.g as f64).powi(2) + (b - color.b as f64).powi(2);
+        let distance = (r - i32::from(c.r)).abs() + (g - i32::from(c.g)).abs() + (b - i32::from(c.b)).abs();
         if best.is_none_or(|(d, _)| distance < d) {
             best = Some((distance, candidate));
         }
@@ -354,14 +379,14 @@ pub fn install(engine: &Rc<Engine>) {
             }
         });
         derive(&mut views, class_name, "TextWrap", "TextWrapped", ViewEvents::None, identity, write);
-        color_view(&mut derive_wrapper(&mut views, &mut derive), class_name, "TextColor", "TextColor3", &reflection);
+        color_view(&mut derive_wrapper(&mut views, &mut derive), class_name, "TextColor", "TextColor3", &reflection, nearest_brick_color);
     }
-    color_view(&mut derive_wrapper(&mut views, &mut derive), "GuiObject", "BackgroundColor", "BackgroundColor3", &reflection);
-    color_view(&mut derive_wrapper(&mut views, &mut derive), "GuiObject", "BorderColor", "BorderColor3", &reflection);
+    color_view(&mut derive_wrapper(&mut views, &mut derive), "GuiObject", "BackgroundColor", "BackgroundColor3", &reflection, nearest_brick_color);
+    color_view(&mut derive_wrapper(&mut views, &mut derive), "GuiObject", "BorderColor", "BorderColor3", &reflection, nearest_brick_color);
     // A part's BrickColor is the nearest palette colour to its Color, and writing it sets Color (measured in a playing
     // client, Studio 0.744: either write fires BrickColor's events and then Color's, tools/parity/probes/changed.luau and
     // derived_changed.luau; ree kept the two apart, so a BrickColor write never reached the part's colour).
-    color_view(&mut derive_wrapper(&mut views, &mut derive), "BasePart", "BrickColor", "Color", &reflection);
+    color_view(&mut derive_wrapper(&mut views, &mut derive), "BasePart", "BrickColor", "Color", &reflection, part_brick_color);
 
     // Measured: Transparency reads BackgroundTransparency; on text objects writing it also sets
     // TextTransparency (events: TextTransparency, BackgroundTransparency; none for Transparency).
@@ -469,7 +494,7 @@ pub fn install(engine: &Rc<Engine>) {
                 let coerced = convert::coerce(lua, engine, &info, &value)?;
                 let quantized = match coerced {
                     Value::Color3(c) => {
-                        let q = |channel: f32| ((channel * 255.0) as i32 as u8) as f32 / 255.0;
+                        let q = |channel: f32| f32::from(color_byte(channel)) / 255.0;
                         Value::Color3(dom::Color3::new(q(c.r), q(c.g), q(c.b)))
                     }
                     other => other,
@@ -586,8 +611,8 @@ fn derive_wrapper<'a, 'b>(views: &'a mut DerivedViews, derive: &'a mut DeriveFn<
     DeriveWrapper { views, derive }
 }
 
-fn color_view(wrapper: &mut DeriveWrapper, class_name: &str, name: &str, source: &str, reflection: &Reflection) {
-    let read: ReadFn = Rc::new(nearest_brick_color);
+fn color_view(wrapper: &mut DeriveWrapper, class_name: &str, name: &str, source: &str, reflection: &Reflection, nearest: fn(Option<&Value>) -> Value) {
+    let read: ReadFn = Rc::new(nearest);
     let source_id = reflection.name_id(source);
     let write: WriteFn = Rc::new(move |state, reflection, hooks, id, value| {
         if let (Some(color), Some(source)) = (brick_color3(&value), source_id) {

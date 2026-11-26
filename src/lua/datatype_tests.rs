@@ -389,6 +389,25 @@ assert(BrickColor.new(1, 0, 0).Name == "Really red" and BrickColor.new(0, 1, 0).
 assert(BrickColor.new(0.502, 0.734, 0.859).Name == "Pastel Blue", "Roblox's documented example")
 assert(BrickColor.new(Color3.new(1, 0, 0)).Name == "Really red" and BrickColor.new(Color3.fromRGB(128, 187, 219)).Name == "Pastel Blue")
 assert(BrickColor.new(0, 0, 0).Name == "Really black" and BrickColor.new(21).Name == "Bright red")
+-- the nearest colour in float32 against each colour's Color (its bytes times 1/255), the lowest number on a tie; a part
+-- reads its BrickColor from the bytes it stores, a GUI object as BrickColor.new (Studio 0.747, datatype_edges.luau
+-- `brickcolor-`, brickcolor_views.luau)
+local function Middle(A, B)
+	local P, Q = BrickColor.palette(A).Color, BrickColor.palette(B).Color
+	return Color3.new((P.R + Q.R) / 2, (P.G + Q.G) / 2, (P.B + Q.B) / 2)
+end
+assert(BrickColor.new(Middle(0, 47)).Number == 301 and BrickColor.new(Middle(0, 67)).Number == 154 and BrickColor.new(Middle(0, 68)).Number == 192)
+local Viewer, Frame = Instance.new("Part"), Instance.new("Frame")
+Viewer.Color = Middle(0, 1)
+assert(Viewer.BrickColor.Number == 364, Viewer.BrickColor.Number)
+Viewer.Color = Middle(0, 21)
+assert(Viewer.BrickColor.Number == 306, Viewer.BrickColor.Number)
+Viewer.Color = Color3.new(1.5, -0.5, 2)
+Frame.BackgroundColor3 = Color3.new(1.5, -0.5, 2)
+assert(Viewer.BrickColor.Number == 1006 and Frame.BackgroundColor.Number == 1032)
+Viewer.Color = Color3.new(0 / 0, 0.5, 0.5)
+Frame.BackgroundColor3 = Color3.new(0 / 0, 0.5, 0.5)
+assert(Viewer.BrickColor.Number == 107 and Frame.BackgroundColor.Number == 194)
 
 local Clamped = PhysicalProperties.new(-1, 5, 2, 200, -3)
 assert(Near(Clamped.Density, 0.0001) and Clamped.Friction == 2 and Clamped.Elasticity == 1, "clamped")

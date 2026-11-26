@@ -169,7 +169,10 @@ impl From<BrickColor> for Color3 {
 
 impl From<DomBrickColor> for BrickColor {
     fn from(v: DomBrickColor) -> Self {
-        color_from_name(v.to_string())
+        // by number: four names belong to two colours each (Lilac 219 and 321, Rust 216 and 345, Gold 127 and 333,
+        // Deep orange 1005 and 1017), and a part's BrickColor 321 reads 321 in a client (Studio 0.747,
+        // tools/parity/probes/datatype_edges.luau `brickcolor-view`); Lune went by name
+        color_from_number(v as u16)
     }
 }
 
@@ -226,26 +229,24 @@ fn color_from_name(name: impl AsRef<str>) -> BrickColor {
         .into()
 }
 
-// The brick colour nearest 0-1 components, as Roblox's documentation describes BrickColor.new(r, g,
-// b): the smallest sum of absolute channel differences over every known brick colour (the lowest
-// number on a tie, not measured in Studio). Lune summed the signed differences of 0-255 bytes.
+// The brick colour nearest 0-1 components, as a client's BrickColor.new(r, g, b) and BrickColor.new(Color3) pick it: each
+// brick colour as its Color (its bytes times 1/255 in float32), each channel's difference in float32, then |dr| + |dg|,
+// then + |db|, the least over every brick colour in number order and the lowest number on a tie (fitted with no miss
+// over all 8,128 midpoints of two palette colours, Studio 0.747, ree's tools/parity/probes/datatype_edges.luau; a
+// difference with the bytes divided by 255 missed 179). Lune summed the signed differences of 0-255 bytes.
 fn color_from_rgb(r: f32, g: f32, b: f32) -> BrickColor {
-    BRICK_COLOR_VALUES
-        .iter()
-        .fold(
-            (BRICK_COLOR_DEFAULT_VALUE, f32::INFINITY),
-            |(closest_color, closest_distance), color| {
-                let channel = |value: f32, byte: u8| (value - f32::from(byte) / 255.0).abs();
-                let distance = channel(r, color.2.0) + channel(g, color.2.1) + channel(b, color.2.2);
-                if distance < closest_distance {
-                    (color, distance)
-                } else {
-                    (closest_color, closest_distance)
-                }
-            },
-        )
-        .0
-        .into()
+    let unit = 1.0f32 / 255.0;
+    let mut closest = BRICK_COLOR_DEFAULT_VALUE;
+    let mut closest_distance = f32::INFINITY;
+    for color in BRICK_COLOR_VALUES {
+        let channel = |value: f32, byte: u8| (value - f32::from(byte) * unit).abs();
+        let distance = channel(r, color.2.0) + channel(g, color.2.1) + channel(b, color.2.2);
+        if distance < closest_distance {
+            closest = color;
+            closest_distance = distance;
+        }
+    }
+    closest.into()
 }
 
 const BRICK_COLOR_DEFAULT: u16 = 194;

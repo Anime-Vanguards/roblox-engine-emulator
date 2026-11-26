@@ -199,10 +199,6 @@
 	],
 	"datatype_edges": [
 		{
-			"line": "brickcolor-",
-			"why": "BrickColor.new(Color3) and a part's Color read as BrickColor pick the colour with the least sum of absolute channel differences computed in float32 (each difference, then |r| + |g|, then + |b|), over every BrickColor by number, the lowest on a tie (all 8,128 palette midpoints); ree's sum and order pick another colour for some"
-		},
-		{
 			"line": "millis-range ",
 			"why": "DateTime.fromUnixTimestampMillis out of range: a client says `Error interpreting timestampMillis as a precise point in time. Fields out of range. UnixTimestampMillis should be between -17987443200000 and 253402300799999.`; ree gives the seconds' message"
 		},
