@@ -615,8 +615,8 @@ fn a_part_with_can_query_off_is_queried_while_can_collide_is_on() {
 /// assigned; Roblox's spatial query filters of April 2026, devforum.roblox.com/t/4563575 and the
 /// reference): the part, then each ancestor in turn, and the first either list names decides,
 /// ExcludeInstances first; with none named IncludeInstances = nil lets a part through and `{}` does
-/// not. Every query honours them; with FilterDescendantsInstances set too both filters apply (how
-/// Roblox combines them is not documented: unmeasured). A list assigned or read back is a copy.
+/// not. Every query honours them; with FilterDescendantsInstances set too both filters apply (as a client's do:
+/// query_filter_combine.luau). A list assigned or read back is a copy.
 #[test]
 fn exclude_and_include_instances_filter_every_query() {
     check(

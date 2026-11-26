@@ -255,10 +255,6 @@
 			"why": "Content.fromAssetId in a client: 0 is rbxassetid://0, a fraction rounds (1.5 is rbxassetid://2), a non-finite id raises `Invalid id. Expected a finite value.`; fromObject(nil) raises `Expected Object, got nil.` and a number `invalid argument #1 to 'fromObject' (Object expected, got number)` with a position; ree answers and words them otherwise"
 		},
 		{
-			"line": "catalog-",
-			"why": "CatalogSearchParams' text lists AssetTypes and BundleTypes as their items' Values joined by commas (8,11,12) in a client; ree prints their names"
-		},
-		{
 			"line": "clone-attribute ",
 			"why": "an attribute holding an instance inside the cloned tree points at the copy's instance in a clone (a client); ree keeps the original"
 		}

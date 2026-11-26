@@ -76,8 +76,8 @@ pub struct Hit {
 
 /// Which parts a query sees (RaycastParams / OverlapParams): a part passes both of the params'
 /// filters, FilterType with FilterDescendantsInstances and ExcludeInstances with IncludeInstances.
-/// How Roblox combines the two is not documented; here each applies (unmeasured), so params that set
-/// only one filter (a new RaycastParams excludes nothing by the other) behave as documented.
+/// A part must pass both, as on a playing client (measured, Studio 0.747, client and server: every combination of FilterType,
+/// FilterDescendantsInstances and the two lists through GetPartBoundsInBox and Raycast, tools/parity/probes/query_filter_combine.luau).
 #[derive(Clone, Debug, Default)]
 pub struct Filter {
     /// FilterType Include (or the legacy Whitelist): FilterDescendantsInstances lists what is seen
