@@ -207,6 +207,41 @@ impl DerivedViews {
     }
 }
 
+/// Each Material's physical properties as PhysicalProperties.new(material) gives them in a playing client (density, friction,
+/// elasticity, friction weight, elasticity weight, acoustic absorption: the table the vendored Lune datatype keeps,
+/// vendor/lune-roblox physical_properties.rs MATERIAL_ENUM_MAP, which world/gravity.rs's densities follow); a material it does not
+/// list reads Plastic's.
+const MATERIAL_PHYSICAL_PROPERTIES: &[(&str, [f32; 6])] = &[
+    ("Plastic", [0.7, 0.3, 0.5, 1.0, 1.0, 0.3]), ("SmoothPlastic", [0.7, 0.2, 0.5, 1.0, 1.0, 0.2]), ("Neon", [0.7, 0.3, 0.2, 1.0, 1.0, 0.3]),
+    ("Wood", [0.35, 0.48, 0.2, 1.0, 1.0, 0.25]), ("WoodPlanks", [0.35, 0.48, 0.2, 1.0, 1.0, 0.25]), ("Marble", [2.563, 0.2, 0.17, 1.0, 1.0, 0.01]),
+    ("Basalt", [2.691, 0.7, 0.15, 0.3, 1.0, 0.2]), ("Slate", [2.691, 0.4, 0.2, 1.0, 1.0, 0.03]), ("CrackedLava", [2.691, 0.65, 0.15, 1.0, 1.0, 0.35]),
+    ("Concrete", [2.403, 0.7, 0.2, 0.3, 1.0, 0.05]), ("Limestone", [2.691, 0.5, 0.15, 1.0, 1.0, 0.15]), ("Granite", [2.691, 0.4, 0.2, 1.0, 1.0, 0.2]),
+    ("Pavement", [2.691, 0.5, 0.17, 0.3, 1.0, 0.6]), ("Brick", [1.922, 0.8, 0.15, 0.3, 1.0, 0.35]), ("Pebble", [2.403, 0.4, 0.17, 1.0, 1.5, 0.4]),
+    ("Cobblestone", [2.691, 0.5, 0.17, 1.0, 1.0, 0.45]), ("Rock", [2.691, 0.5, 0.17, 1.0, 1.0, 0.15]), ("Sandstone", [2.691, 0.5, 0.15, 5.0, 1.0, 0.2]),
+    ("CorrodedMetal", [7.85, 0.7, 0.2, 1.0, 1.0, 0.15]), ("DiamondPlate", [7.85, 0.35, 0.25, 1.0, 1.0, 0.05]), ("Foil", [2.7, 0.4, 0.25, 1.0, 1.0, 0.1]),
+    ("Metal", [7.85, 0.4, 0.25, 1.0, 1.0, 0.1]), ("Grass", [0.9, 0.4, 0.1, 1.0, 1.5, 0.7]), ("LeafyGrass", [0.9, 0.4, 0.1, 2.0, 2.0, 0.75]),
+    ("Sand", [1.602, 0.5, 0.05, 5.0, 2.5, 0.55]), ("Fabric", [0.7, 0.35, 0.05, 1.0, 1.0, 0.65]), ("Snow", [0.9, 0.3, 0.03, 3.0, 4.0, 0.8]),
+    ("Mud", [0.9, 0.3, 0.07, 3.0, 4.0, 0.65]), ("Ground", [0.9, 0.45, 0.1, 1.0, 1.0, 0.6]), ("Asphalt", [2.36, 0.8, 0.2, 0.3, 1.0, 0.4]),
+    ("Salt", [2.165, 0.5, 0.05, 1.0, 1.0, 0.15]), ("Ice", [0.919, 0.02, 0.15, 3.0, 1.0, 0.2]), ("Glacier", [0.919, 0.05, 0.15, 2.0, 1.0, 0.7]),
+    ("Glass", [2.403, 0.25, 0.2, 1.0, 1.0, 0.1]), ("ForceField", [2.403, 0.25, 0.2, 1.0, 1.0, 0.0]), ("Air", [0.01, 0.01, 0.01, 1.0, 1.0, 0.01]),
+    ("Water", [1.0, 0.005, 0.01, 1.0, 1.0, 0.01]), ("Cardboard", [0.7, 0.5, 0.05, 1.0, 2.0, 0.55]), ("Carpet", [1.1, 0.4, 0.25, 1.0, 2.0, 0.65]),
+    ("CeramicTiles", [2.4, 0.51, 0.2, 1.0, 1.0, 0.04]), ("ClayRoofTiles", [2.0, 0.51, 0.2, 1.0, 1.0, 0.3]), ("RoofShingles", [2.36, 0.8, 0.2, 0.3, 1.0, 0.3]),
+    ("Leather", [0.86, 0.35, 0.25, 1.0, 1.0, 0.65]), ("Plaster", [0.75, 0.6, 0.2, 0.3, 1.0, 0.3]), ("Rubber", [1.3, 1.5, 0.95, 3.0, 2.0, 0.5]),
+];
+
+fn material_physical_properties(material: &str) -> Value {
+    let [density, friction, elasticity, friction_weight, elasticity_weight, acoustic] =
+        MATERIAL_PHYSICAL_PROPERTIES.iter().find(|(name, _)| *name == material).unwrap_or(&MATERIAL_PHYSICAL_PROPERTIES[0]).1;
+    Value::Dom(Rc::new(Variant::PhysicalProperties(dom::PhysicalProperties::Custom(dom::CustomPhysicalProperties::new(
+        density,
+        friction,
+        elasticity,
+        friction_weight,
+        elasticity_weight,
+        acoustic,
+    )))))
+}
+
 fn nearest_brick_color(value: Option<&Value>) -> Value {
     let Some(color) = value.and_then(Value::as_color3) else {
         return Value::Dom(Rc::new(Variant::BrickColor(dom::BrickColor::from_number(194).unwrap_or(dom::BrickColor::MediumStoneGrey))));
@@ -443,6 +478,38 @@ pub fn install(engine: &Rc<Engine>) {
                 Ok(())
             }),
         ));
+    }
+
+    // BasePart.CurrentPhysicalProperties: the CustomPhysicalProperties set, else the Material's (PhysicalProperties.new(material),
+    // with its AcousticAbsorption), as a client reads it (measured, Studio 0.747, a client and a server: Plastic 0.7, 0.3, 0.5, 1, 1,
+    // 0.3, Wood, Neon, Ice, Concrete, Granite, Air, Water, a custom one and one cleared again: tools/parity/probes/
+    // instance_api_texts.luau, readonly_properties.luau). Its Changed fires beside Material's and CustomPhysicalProperties'
+    // (part companions).
+    if let (Some(base_part), Some(current), Some(material), Some(custom)) =
+        (reflection.class_id("BasePart"), name_of("CurrentPhysicalProperties"), name_of("Material"), name_of("CustomPhysicalProperties"))
+    {
+        let getter: GetterFn = Rc::new(move |lua, engine, id| {
+            let value = {
+                let state = engine.state.borrow();
+                match state.dom.raw_get(id, custom) {
+                    Some(value @ Value::Dom(variant)) if matches!(**variant, Variant::PhysicalProperties(dom::PhysicalProperties::Custom(_))) => value.clone(),
+                    // (a script's PhysicalProperties.new(...), kept as it was given: a copy of it)
+                    Some(value @ Value::Lua(_)) => value.clone(),
+                    _ => {
+                        let item = state.dom.raw_get(id, material).and_then(Value::as_enum);
+                        let name = item.map_or("Plastic", |item| &*engine.reflection.enum_item_info(item).name);
+                        material_physical_properties(name)
+                    }
+                }
+            };
+            if let Value::Lua(held) = &value
+                && let Some(copy) = crate::lua::instance::copied_datatype(lua, held)?
+            {
+                return Ok(copy);
+            }
+            Ok(convert::to_lua(lua, engine, &value)?)
+        });
+        getters.push((base_part, current, getter));
     }
 
     let mut behaviors = engine.behaviors.borrow_mut();

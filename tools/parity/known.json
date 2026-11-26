@@ -207,10 +207,6 @@
 			"why": "BrickColor.new(Color3) and a part's Color read as BrickColor pick the colour with the least sum of absolute channel differences computed in float32 (each difference, then |r| + |g|, then + |b|), over every BrickColor by number, the lowest on a tie (all 8,128 palette midpoints); ree's sum and order pick another colour for some"
 		},
 		{
-			"line": "size ",
-			"why": "a part's Size in a client holds each axis at 2048 or less, and a write with a not-a-number axis changes nothing; ree keeps the larger axes and stores the not-a-number write (0.001 and inf)"
-		},
-		{
 			"line": "millis-range ",
 			"why": "DateTime.fromUnixTimestampMillis out of range: a client says `Error interpreting timestampMillis as a precise point in time. Fields out of range. UnixTimestampMillis should be between -17987443200000 and 253402300799999.`; ree gives the seconds' message"
 		},
@@ -879,14 +875,6 @@
 	],
 	"readonly_properties": [
 		{
-			"line": "readonly BasePart.CurrentPhysicalProperties",
-			"why": "read-only property: a part's CurrentPhysicalProperties is its material's (0.7, 0.3, 0.5, 1, 1, 0.3 for Plastic) in a client; ree reads nil"
-		},
-		{
-			"line": "readonly BasePart.ResizeableFaces",
-			"why": "read-only property: a part's ResizeableFaces lists all six faces in a client; ree reads nil"
-		},
-		{
 			"line": "readonly ImageButton.IsLoaded",
 			"why": "read-only property: an image with no image is not loaded in a client; ree answers true"
 		},
@@ -1263,56 +1251,6 @@
 		{
 			"line": "coordinates inset 0,58/0,0 ignore=true screen 0,-58/1920,1080 box 10,-38/960,540 | ignore=false screen 0,0/1920,1022 box 10,20/960,511",
 			"why": "plain ree has no GUI layout; rur adds one and prints this line (run.mjs --rur)"
-		}
-	],
-	"value_read_identity": [
-		{
-			"line": "Color3 ",
-			"why": "a client makes a new userdata for each read of a property holding a datatype other than Vector3 (Color3, CFrame, UDim2, Vector2, UDim, Rect, NumberRange, the sequences, PhysicalProperties, Ray), so two reads are not rawequal and the second is not found as a table key; ree hands back the value it made while the property is unchanged"
-		},
-		{
-			"line": "CFrame ",
-			"why": "a client makes a new userdata for each read of a property holding a datatype other than Vector3 (Color3, CFrame, UDim2, Vector2, UDim, Rect, NumberRange, the sequences, PhysicalProperties, Ray), so two reads are not rawequal and the second is not found as a table key; ree hands back the value it made while the property is unchanged"
-		},
-		{
-			"line": "PhysicalProperties ",
-			"why": "a client makes a new userdata for each read of a property holding a datatype other than Vector3 (Color3, CFrame, UDim2, Vector2, UDim, Rect, NumberRange, the sequences, PhysicalProperties, Ray), so two reads are not rawequal and the second is not found as a table key; ree hands back the value it made while the property is unchanged"
-		},
-		{
-			"line": "UDim2 ",
-			"why": "a client makes a new userdata for each read of a property holding a datatype other than Vector3 (Color3, CFrame, UDim2, Vector2, UDim, Rect, NumberRange, the sequences, PhysicalProperties, Ray), so two reads are not rawequal and the second is not found as a table key; ree hands back the value it made while the property is unchanged"
-		},
-		{
-			"line": "Vector2 ",
-			"why": "a client makes a new userdata for each read of a property holding a datatype other than Vector3 (Color3, CFrame, UDim2, Vector2, UDim, Rect, NumberRange, the sequences, PhysicalProperties, Ray), so two reads are not rawequal and the second is not found as a table key; ree hands back the value it made while the property is unchanged"
-		},
-		{
-			"line": "UDim ",
-			"why": "a client makes a new userdata for each read of a property holding a datatype other than Vector3 (Color3, CFrame, UDim2, Vector2, UDim, Rect, NumberRange, the sequences, PhysicalProperties, Ray), so two reads are not rawequal and the second is not found as a table key; ree hands back the value it made while the property is unchanged"
-		},
-		{
-			"line": "Rect ",
-			"why": "a client makes a new userdata for each read of a property holding a datatype other than Vector3 (Color3, CFrame, UDim2, Vector2, UDim, Rect, NumberRange, the sequences, PhysicalProperties, Ray), so two reads are not rawequal and the second is not found as a table key; ree hands back the value it made while the property is unchanged"
-		},
-		{
-			"line": "NumberSequence ",
-			"why": "a client makes a new userdata for each read of a property holding a datatype other than Vector3 (Color3, CFrame, UDim2, Vector2, UDim, Rect, NumberRange, the sequences, PhysicalProperties, Ray), so two reads are not rawequal and the second is not found as a table key; ree hands back the value it made while the property is unchanged"
-		},
-		{
-			"line": "ColorSequence ",
-			"why": "a client makes a new userdata for each read of a property holding a datatype other than Vector3 (Color3, CFrame, UDim2, Vector2, UDim, Rect, NumberRange, the sequences, PhysicalProperties, Ray), so two reads are not rawequal and the second is not found as a table key; ree hands back the value it made while the property is unchanged"
-		},
-		{
-			"line": "NumberRange ",
-			"why": "a client makes a new userdata for each read of a property holding a datatype other than Vector3 (Color3, CFrame, UDim2, Vector2, UDim, Rect, NumberRange, the sequences, PhysicalProperties, Ray), so two reads are not rawequal and the second is not found as a table key; ree hands back the value it made while the property is unchanged"
-		},
-		{
-			"line": "Ray ",
-			"why": "RayValue.Value reads a Ray in a client; ree reads nil"
-		},
-		{
-			"line": "cframevalue",
-			"why": "a client makes a new userdata for each read of a property holding a datatype other than Vector3 (Color3, CFrame, UDim2, Vector2, UDim, Rect, NumberRange, the sequences, PhysicalProperties, Ray), so two reads are not rawequal and the second is not found as a table key; ree hands back the value it made while the property is unchanged"
 		}
 	],
 	"yield_refused": [

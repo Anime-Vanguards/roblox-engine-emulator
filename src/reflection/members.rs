@@ -1833,6 +1833,12 @@ enum DefaultTag {
     ColorSequence,
     Font,
     Content,
+    /// Defaults the dump records as text in `s`: a part's ResizeableFaces ("Right, Top, Back, Left, Bottom, Front"), Handles.Faces,
+    /// ArcHandles.Axes ("X, Y, Z"), RayValue.Value ("{0, 0, 0}, {0, 0, 0}"); a client reads them (measured, Studio 0.747, a client and
+    /// a server: tools/parity/probes/instance_api_texts.luau, value_read_identity.luau)
+    Faces,
+    Axes,
+    Ray,
     Other,
 }
 
@@ -1865,6 +1871,9 @@ impl<'de> Deserialize<'de> for OptDefaultTag {
                     "ColorSequence" => DefaultTag::ColorSequence,
                     "Font" => DefaultTag::Font,
                     "Content" => DefaultTag::Content,
+                    "Faces" => DefaultTag::Faces,
+                    "Axes" => DefaultTag::Axes,
+                    "Ray" => DefaultTag::Ray,
                     _ => DefaultTag::Other,
                 }))
             }
@@ -1897,11 +1906,12 @@ impl<'de> Deserialize<'de> for OptDefaultTag {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum SpecialNumTag {
     Nan,
     Inf,
-    Other,
+    /// Any other text (a Faces', Axes' or Ray's default)
+    Other(String),
 }
 
 struct OptSpecialNum(Option<SpecialNumTag>);
@@ -1918,7 +1928,7 @@ impl<'de> Deserialize<'de> for OptSpecialNum {
                 Ok(Some(match s {
                     "nan" => SpecialNumTag::Nan,
                     "inf" => SpecialNumTag::Inf,
-                    _ => SpecialNumTag::Other,
+                    other => SpecialNumTag::Other(other.to_string()),
                 }))
             }
             fn visit_bool<E: de::Error>(self, _: bool) -> Result<Option<SpecialNumTag>, E> {
@@ -2180,6 +2190,17 @@ impl<'de> Deserialize<'de> for ParsedDefault {
                     DefaultTag::Content => match v {
                         Some(DefaultV::Str(uri)) if !uri.is_empty() => ParsedDefault::Dom(Variant::Content(dom::Content::from_uri(uri))),
                         _ => ParsedDefault::Dom(Variant::Content(dom::Content::none())),
+                    },
+                    DefaultTag::Faces | DefaultTag::Axes | DefaultTag::Ray => match s {
+                        Some(SpecialNumTag::Other(text)) => {
+                            let kind = match tag {
+                                DefaultTag::Faces => "Faces",
+                                DefaultTag::Axes => "Axes",
+                                _ => "Ray",
+                            };
+                            crate::value::text_default(kind, &text).map_or(ParsedDefault::None, ParsedDefault::Dom)
+                        }
+                        _ => ParsedDefault::None,
                     },
                     DefaultTag::Other => ParsedDefault::None,
                 })

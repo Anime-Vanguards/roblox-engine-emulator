@@ -7,7 +7,7 @@
 //! callback machinery: keys resolve through Luau string atoms (`useratom` maps a string to its
 //! interned `NameId` once per string), members through a per-(class, name) dispatch cache, and
 //! the common cases (plain property reads and writes of primitive / enum / instance values,
-//! cached datatype values, Name / Parent / ClassName, children by name, events, the frequent
+//! datatype values (a new userdata each read), Name / Parent / ClassName, children by name, events, the frequent
 //! Instance methods) run without a Luau or mlua call. Everything else falls back to mlua
 //! functions (`instance::get` / `instance::assign`, a behaviour method's protocol function)
 //! called from C. Script errors are raised from the C function itself with `luaL_where(L, 1)`
@@ -272,8 +272,8 @@ fn compute_member(engine: &Engine, class: ClassId, key: NameId) -> Member {
     member
 }
 
-/// Converted datatype property values (UDim2, Color3, ...): one userdata per (instance,
-/// property) while the instance's version holds, kept in a Luau table so C can push it.
+/// Kept GetChildren lists (key `(instance, CHILDREN_KEY)`, version: its child_version), in a Luau table so C can push them.
+/// (Datatype property values are no longer kept: each read is a new userdata, as a client's is.)
 #[derive(Default)]
 struct ValueCache {
     map: FxHashMap<(InstanceId, NameId), (u32, c_int)>,
@@ -579,7 +579,7 @@ pub fn registry_names(engine: &Engine) -> Vec<(c_int, &'static str)> {
     vec![
         (refs.instances, "ree instance userdata cache"),
         (refs.anchors, "ree anchors of instances in the DataModel"),
-        (refs.values, "ree datatype value cache"),
+        (refs.values, "ree children list cache"),
         (refs.enums, "ree enums"),
         (refs.enum_ids, "ree enum ids"),
         (refs.signals, "ree signal objects"),
@@ -862,22 +862,6 @@ pub fn remember_index_function(engine: &Engine, class: ClassId, name: NameId, fu
     member.index_fn = slot;
     api.set_member(class, name, member);
     Ok(())
-}
-
-/// A cached converted datatype value of (instance, property) at `version`.
-pub fn cached_value(engine: &Engine, id: InstanceId, name: NameId, version: u32) -> LuaResult<Option<LuaValue>> {
-    let Some(api) = api(engine) else { return Ok(None) };
-    let slot = match api.values.borrow().map.get(&(id, name)) {
-        Some(&(cached, slot)) if cached == version => slot,
-        _ => return Ok(None),
-    };
-    Ok(Some(api.values_table.raw_get(slot)?))
-}
-
-pub fn cache_value(engine: &Engine, id: InstanceId, name: NameId, version: u32, value: &LuaValue) -> LuaResult<()> {
-    let Some(api) = api(engine) else { return Ok(()) };
-    let slot = api.value_slot((id, name), version);
-    api.values_table.raw_set(slot, value.clone())
 }
 
 // C helpers
@@ -1185,9 +1169,9 @@ unsafe extern "C" fn instance_dtor(_state: *mut ffi::lua_State, data: *mut c_voi
     }
 }
 
-/// Pushes a stored property value if C can (primitives, instances, mirrored enum items, cached
-/// datatype values); `false` leaves the stack unchanged.
-unsafe fn push_value(state: *mut ffi::lua_State, api: &Api, dom_state: &State, id: InstanceId, name: NameId, value: Option<&Value>) -> bool {
+/// Pushes a stored property value if C can (primitives, instances, mirrored enum items, datatype
+/// values made anew); `false` leaves the stack unchanged.
+unsafe fn push_value(state: *mut ffi::lua_State, api: &Api, dom_state: &State, _id: InstanceId, _name: NameId, value: Option<&Value>) -> bool {
     unsafe {
         match value {
             None | Some(Value::Nil) => ffi::lua_pushnil(state),
@@ -1212,8 +1196,10 @@ unsafe fn push_value(state: *mut ffi::lua_State, api: &Api, dom_state: &State, i
             }
             // (a Vector3 is the native vector type)
             Some(Value::Vector3(v)) => ffi::lua_pushvector(state, v.x, v.y, v.z),
+            // (each read is a new userdata, as a client's is: lua/instance.rs read_property. Made here and handed to the stack
+            // through the bridge table, so the read stays on this path)
             Some(
-                Value::UDim(_)
+                value @ (Value::UDim(_)
                 | Value::UDim2(_)
                 | Value::Vector2(_)
                 | Value::Color3(_)
@@ -1221,20 +1207,18 @@ unsafe fn push_value(state: *mut ffi::lua_State, api: &Api, dom_state: &State, i
                 | Value::NumberRange(_)
                 | Value::NumberSequence(_)
                 | Value::ColorSequence(_)
-                | Value::Dom(_),
+                | Value::Dom(_)),
             ) => {
-                let version = dom_state.dom.at(id).version;
-                let slot = match api.values.borrow().map.get(&(id, name)) {
-                    Some(&(cached, slot)) if cached == version => slot,
-                    _ => {
-                        crate::profiler::caches::miss(crate::profiler::caches::Cache::Values);
-                        return false;
-                    }
-                };
-                crate::profiler::caches::hit(crate::profiler::caches::Cache::Values);
-                ffi::lua_rawgeti_(state, REGISTRY, api.refs.values);
-                ffi::lua_rawgeti_(state, -1, slot);
+                crate::profiler::caches::miss(crate::profiler::caches::Cache::Values);
+                let Some(lua) = api.lua.try_upgrade() else { return false };
+                let Ok(converted) = super::convert::to_lua(&lua, api.engine(), value) else { return false };
+                if api.bridge.raw_set(1, converted).is_err() {
+                    return false;
+                }
+                ffi::lua_rawgeti_(state, REGISTRY, api.refs.bridge);
+                ffi::lua_rawgeti_(state, -1, 1);
                 ffi::lua_remove(state, -2);
+                let _ = api.bridge.raw_set(1, LuaValue::Nil);
             }
             Some(_) => return false,
         }

@@ -408,37 +408,47 @@ pub fn not_a_member_message(engine: &Engine, id: InstanceId, key: &[u8]) -> Stri
     format!("{} is not a valid member of {} \"{}\"", String::from_utf8_lossy(key), class_name(engine, id), full_name(engine, id))
 }
 
-/// A property read. Immutable datatype values (UDim2, Color3, ...) keep one userdata while the
-/// instance is unchanged, as the Luau runtime returns the stored value (and to spare an allocation);
-/// the raw `__index` returns them from the same cache.
+/// A property read. Each read of a datatype value other than a Vector3 (a Color3, CFrame, UDim2, Vector2, UDim, Rect,
+/// NumberRange, NumberSequence, ColorSequence, PhysicalProperties, Ray, ...) is a userdata of its own: not rawequal to another
+/// read's nor to the value written, so a table keyed by one read does not find the next (measured in a playing client and a
+/// server, Studio 0.747: tools/parity/probes/value_read_identity.luau). A Vector3 is a value.
 fn read_property(lua: &Lua, engine: &Rc<Engine>, id: InstanceId, name: NameId) -> Result<LuaValue, Flow> {
-    let (value, version) = {
-        let state = engine.state.borrow();
-        (state.dom.raw_get(id, name).cloned(), state.dom.at(id).version)
-    };
+    let value = engine.state.borrow().dom.raw_get(id, name).cloned();
     let Some(value) = value else { return Ok(LuaValue::Nil) };
-    let cacheable = matches!(
-        value,
-        Value::UDim(_)
-            | Value::UDim2(_)
-            | Value::Vector2(_)
-            | Value::Vector3(_)
-            | Value::Color3(_)
-            | Value::Rect(_)
-            | Value::NumberRange(_)
-            | Value::NumberSequence(_)
-            | Value::ColorSequence(_)
-            | Value::Dom(_)
+    if let Value::Lua(held) = &value
+        && let Some(copy) = copied_datatype(lua, held)?
+    {
+        return Ok(copy);
+    }
+    Ok(convert::to_lua(lua, engine, &value)?)
+}
+
+/// A copy of a datatype userdata a script wrote and a property keeps as it was given (a PhysicalProperties, a Ray, Faces, Axes,
+/// a Region3, the int16 vectors: kept as the script's userdata, since rbx-dom's conversion would round a Ray's vectors), so each
+/// read hands out a new value as a client's does; None for any other value.
+pub fn copied_datatype(lua: &Lua, value: &LuaValue) -> LuaResult<Option<LuaValue>> {
+    use lune_roblox::datatypes::{create, types as lune};
+    let LuaValue::UserData(ud) = value else { return Ok(None) };
+    macro_rules! copied {
+        ($(($kind:ty, $ctor:ident)),*) => {$(
+            if let Ok(held) = ud.borrow::<$kind>() {
+                let copy = *held;
+                drop(held);
+                return Ok(Some(LuaValue::UserData(create::$ctor(lua, copy)?)));
+            }
+        )*};
+    }
+    copied!(
+        (lune::PhysicalProperties, physical_properties),
+        (lune::Ray, ray),
+        (lune::Faces, faces),
+        (lune::Axes, axes),
+        (lune::Region3, region3),
+        (lune::Region3int16, region3int16),
+        (lune::Vector2int16, vector2int16),
+        (lune::Vector3int16, vector3int16)
     );
-    if !cacheable {
-        return Ok(convert::to_lua(lua, engine, &value)?);
-    }
-    if let Some(cached) = raw::cached_value(engine, id, name, version)? {
-        return Ok(cached);
-    }
-    let converted = convert::to_lua(lua, engine, &value)?;
-    raw::cache_value(engine, id, name, version, &converted)?;
-    Ok(converted)
+    Ok(None)
 }
 
 /// `instance[key] = value` (InstanceMeta.__newindex).
@@ -654,10 +664,28 @@ fn attachment_rotation(rows: [[f32; 3]; 3]) -> [[f32; 3]; 3] {
     [[x[0], y[0], z[0]], [x[1], y[1], z[1]], [x[2], y[2], z[2]]]
 }
 
+/// A part's Size as a script's write leaves it: each axis held from 0.001 to 2048 (convert.rs vector3_for), and a write with an axis
+/// that is not a number changes nothing (measured, Studio 0.747, a client and a server: tools/parity/probes/datatype_edges.luau
+/// `size`: (nan, inf, -inf) leaves 2048, 2048, 2047.9 as it was).
+fn size_as_stored(engine: &Engine, id: InstanceId, name: NameId, value: Value) -> Value {
+    if name != K::Size as NameId {
+        return value;
+    }
+    let Value::Vector3(size) = &value else { return value };
+    if !(size.x.is_nan() || size.y.is_nan() || size.z.is_nan()) {
+        return value;
+    }
+    let state = engine.state.borrow();
+    if !engine.reflection.is_a(state.dom.at(id).class, "BasePart") {
+        return value;
+    }
+    state.dom.raw_get(id, name).cloned().unwrap_or(value)
+}
+
 /// A script's property write: [`set_property`], charged to the work clock by what Studio spends on it
 /// (crate::cost::write: the property, whether it changed, whether the instance is in the workspace).
 pub fn script_set_property(engine: &Engine, id: InstanceId, name: NameId, value: Value) -> bool {
-    let value = cframe_as_stored(engine, id, name, value);
+    let value = size_as_stored(engine, id, name, cframe_as_stored(engine, id, name, value));
     // (a client looks a Text write up for translation: AutoLocalize on and a letter in it)
     let client = !engine.options.edit_mode() && !engine.options.server();
     let looked_up = match &value {

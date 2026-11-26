@@ -429,6 +429,7 @@ pub fn decode_json(reflection: &Reflection, value: &serde_json::Value) -> Option
             let v = v();
             Value::NumberRange(dom::NumberRange::new(at(&v, 0) as f32, at(&v, 1) as f32))
         }
+        "Faces" | "Axes" | "Ray" => Value::Dom(Rc::new(text_default(kind, map.get("s")?.as_str()?)?)),
         "NumberSequence" => {
             let keypoints = match raw {
                 Some(J::Array(items)) => items
@@ -560,6 +561,28 @@ pub fn from_dom(reflection: &Reflection, value: &Variant) -> Option<Value> {
         | Variant::PhysicalProperties(_) => Value::Dom(Rc::new(value.clone())),
         _ => return None,
     })
+}
+
+/// A default the dump records as text in `s`: a part's ResizeableFaces ("Right, Top, Back, Left, Bottom, Front"), Handles.Faces,
+/// ArcHandles.Axes ("X, Y, Z") and RayValue.Value ("{0, 0, 0}, {0, 0, 0}"), which a client reads (measured, Studio 0.747, a client and a
+/// server: tools/parity/probes/instance_api_texts.luau, value_read_identity.luau); `kind` is the dump's `$t`.
+pub fn text_default(kind: &str, text: &str) -> Option<Variant> {
+    match kind {
+        "Faces" | "Axes" => {
+            let names: &[&str] = if kind == "Faces" { &["Right", "Top", "Back", "Left", "Bottom", "Front"] } else { &["X", "Y", "Z"] };
+            let mut bits = 0u8;
+            for name in text.split(',').map(str::trim).filter(|name| !name.is_empty()) {
+                bits |= 1 << names.iter().position(|known| *known == name)?;
+            }
+            Some(if kind == "Faces" { Variant::Faces(dom::Faces::from_bits(bits)?) } else { Variant::Axes(dom::Axes::from_bits(bits)?) })
+        }
+        "Ray" => {
+            let numbers: Vec<f32> = text.split([',', '{', '}']).map(str::trim).filter(|part| !part.is_empty()).map(str::parse).collect::<Result<_, _>>().ok()?;
+            let &[ox, oy, oz, dx, dy, dz] = numbers.as_slice() else { return None };
+            Some(Variant::Ray(dom::Ray::new(dom::Vector3::new(ox, oy, oz), dom::Vector3::new(dx, dy, dz))))
+        }
+        _ => None,
+    }
 }
 
 /// A recorded default as a value (Reflection.Default's decode step).

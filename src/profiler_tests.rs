@@ -897,7 +897,8 @@ fn ree_caches_count_hits_and_misses() {
     assert!(game["instances_touched"].as_u64().unwrap() >= 11, "{game}");
     // (the caches' counts are the process's: another test's engine can add to them, never take from them)
     assert!(game["datatype_reads"].as_u64().unwrap() >= 100, "{game}");
-    assert!(game["datatype_reads_reused"].as_u64().unwrap() >= 99, "{game}");
+    // (each read makes a new value, as a client's does: none is handed back again)
+    assert_eq!(game["datatype_reads_reused"].as_u64().unwrap(), 0, "{game}");
     assert!(summary.contains("game facts") && summary.contains("emulator: ree's own caches"), "{summary}");
     assert!(json["luau_caches"]["by_kind"].as_array().is_some(), "Luau's caches come with the stepping");
 }

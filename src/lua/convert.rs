@@ -198,11 +198,12 @@ fn part_size_owner(engine: &Engine, info: &PropertyInfo) -> bool {
     engine.reflection.class_id("BasePart").is_some_and(|base| engine.reflection.class(info.owner).is_a(base))
 }
 
-/// The Vector3 a Vector3 property stores (BasePart.Size clamps each axis to at least 0.001).
+/// The Vector3 a Vector3 property stores (BasePart.Size holds each axis from 0.001 to 2048, a not-a-number axis left for
+/// lua/instance.rs size_as_stored, which keeps the part's Size: measured, Studio 0.747, tools/parity/probes/datatype_edges.luau).
 #[inline]
 fn vector3_for(engine: &Engine, info: &PropertyInfo, x: f32, y: f32, z: f32) -> Value {
     if info.name == crate::K::Size as crate::NameId && part_size_owner(engine, info) {
-        return Value::Vector3(dom::Vector3::new(x.max(0.001), y.max(0.001), z.max(0.001)));
+        return Value::Vector3(dom::Vector3::new(x.clamp(0.001, 2048.0), y.clamp(0.001, 2048.0), z.clamp(0.001, 2048.0)));
     }
     Value::Vector3(dom::Vector3::new(x, y, z))
 }
@@ -497,7 +498,7 @@ pub fn coerce(lua: &Lua, engine: &Engine, info: &PropertyInfo, value: &LuaValue)
             if matches {
                 if let Value::Vector3(v) = &converted {
                     if info.name == crate::K::Size as crate::NameId && part_size_owner(engine, info) {
-                        return Ok(Value::Vector3(dom::Vector3::new(v.x.max(0.001), v.y.max(0.001), v.z.max(0.001))));
+                        return Ok(Value::Vector3(dom::Vector3::new(v.x.clamp(0.001, 2048.0), v.y.clamp(0.001, 2048.0), v.z.clamp(0.001, 2048.0))));
                     }
                 }
                 return Ok(converted);

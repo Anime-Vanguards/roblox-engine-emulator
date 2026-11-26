@@ -106,7 +106,7 @@ impl Cache {
             Cache::Atoms => "a property or method name's id kept on the Luau string (hit: read off the string; miss: looked up by its bytes, once for each new string the VM makes)",
             Cache::Members => "the Instance API's fast path per class and member (miss: worked out from the reflection)",
             Cache::Resolve => "the engine's member resolution per class and name",
-            Cache::Values => "a UDim2, Color3, ... property's converted value, kept while the instance is unchanged",
+            Cache::Values => "a UDim2, Color3, ... property's value: each read makes a userdata of its own, as a client's does (every read a miss)",
             Cache::Wrappers => "an instance's Luau userdata (miss: a new one made; eviction: one collected)",
             Cache::Requires => "a ModuleScript's result (miss: the module ran)",
             Cache::Bytecode => "a module file's source and bytecode kept by the process (miss: read and compiled)",
@@ -312,8 +312,8 @@ pub struct Facts {
     /// ModuleScripts that ran (a require that ran the module), and requires served by the result kept
     pub modules_run: u64,
     pub requires_kept: u64,
-    /// Datatype property reads (UDim2, Color3, ...): a client makes a new value for each; ree handed back the value it made
-    /// while the property was unchanged for `datatype_reads_reused` of them
+    /// Datatype property reads (UDim2, Color3, ...): each makes a new value, as a client's does (`datatype_reads_reused`, the
+    /// reads that handed a kept value back, stays 0)
     pub datatype_reads: u64,
     pub datatype_reads_reused: u64,
 }

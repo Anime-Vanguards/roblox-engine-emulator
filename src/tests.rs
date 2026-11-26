@@ -15320,6 +15320,54 @@ fn attribute_names_are_refused_in_a_clients_order() {
     assert!(output.iter().all(|line| line.starts_with("print: true true ")), "{output:?}");
 }
 
+/// Each read of a property holding a datatype other than a Vector3 is a new userdata, as a client's (measured, Studio 0.747:
+/// tools/parity/probes/value_read_identity.luau): not rawequal to another read or to the value written, and a table keyed by one read
+/// does not find the next; a Vector3 is a value.
+#[test]
+fn each_datatype_read_is_a_new_value() {
+    assert_script(
+        r#"
+        local Part = Instance.new("Part")
+        local Frame = Instance.new("Frame")
+        assert(not rawequal(Part.Color, Part.Color) and Part.Color == Part.Color)
+        assert(not rawequal(Part.CFrame, Part.CFrame) and not rawequal(Frame.Size, Frame.Size) and not rawequal(Frame.AnchorPoint, Frame.AnchorPoint))
+        assert(rawequal(Part.Size, Part.Size))
+        Part.CustomPhysicalProperties = PhysicalProperties.new(1, 0.3, 0.5)
+        assert(not rawequal(Part.CustomPhysicalProperties, Part.CustomPhysicalProperties))
+        local Given = Color3.new(0.25, 0.5, 0.75)
+        Part.Color = Given
+        assert(not rawequal(Given, Part.Color))
+        local Keys = {}
+        Keys[Frame.Size] = true
+        assert(Keys[Frame.Size] == nil)
+        local Holder = Instance.new("RayValue")
+        Holder.Value = Ray.new(Vector3.one, Vector3.zero)
+        assert(not rawequal(Holder.Value, Holder.Value) and Holder.Value.Origin == Vector3.one)
+        local Value = Instance.new("CFrameValue")
+        assert(not rawequal(Value.Value, Value.Value))
+        "#,
+    );
+}
+
+/// A part's Size holds each axis from 0.001 to 2048, and a write with an axis that is not a number changes nothing (measured, Studio
+/// 0.747: tools/parity/probes/datatype_edges.luau `size`).
+#[test]
+fn part_size_is_held_to_2048_and_a_nan_write_changes_nothing() {
+    assert_script(
+        r#"
+        local Part = Instance.new("Part")
+        Part.Size = Vector3.new(5000, 1e10, -3)
+        assert(Part.Size == Vector3.new(2048, 2048, 0.001))
+        local Changed = 0
+        Part:GetPropertyChangedSignal("Size"):Connect(function() Changed += 1 end)
+        Part.Size = Vector3.new(1, 0 / 0, 1)
+        Part.Size = Vector3.new(0 / 0, math.huge, -math.huge)
+        task.wait()
+        assert(Part.Size == Vector3.new(2048, 2048, 0.001) and Changed == 0)
+        "#,
+    );
+}
+
 /// A clone's attribute holding an instance of the copied tree holds the copy's instance, one outside keeps its target (measured,
 /// Studio 0.747: tools/parity/probes/datatype_edges.luau `clone-attribute`).
 #[test]

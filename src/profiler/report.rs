@@ -3619,7 +3619,7 @@ fn write_caches_section(input: &Input, summary: &mut String, report: &mut Profil
     let facts = input.facts;
     let _ = writeln!(
         summary,
-        "\ngame facts (counted by the engine): {} instances touched by scripts ({} userdata made, {} collected); {} modules ran ({} requires served by a kept result); {} datatype property reads, a new value each on a client (not measured against one): ree handed back the value it had made for {} of them",
+        "\ngame facts (counted by the engine): {} instances touched by scripts ({} userdata made, {} collected); {} modules ran ({} requires served by a kept result); {} datatype property reads, a new value each, as on a client ({} handed back again)",
         group_digits(facts.instances_touched),
         group_digits(facts.userdata_made),
         group_digits(facts.userdata_collected),
@@ -3630,7 +3630,7 @@ fn write_caches_section(input: &Input, summary: &mut String, report: &mut Profil
     );
     report.game = Some(GameJson {
         about: GameAboutJson {
-            datatype_reads: "UDim2, Color3, ... property reads: a client makes a new value for each read (not measured against a client); ree hands back the value it made while the property is unchanged (datatype_reads_reused), so rawequal of two reads is true in ree",
+            datatype_reads: "UDim2, Color3, ... property reads: each read is a new value, as a client makes one (measured, Studio 0.747: tools/parity/probes/value_read_identity.luau); datatype_reads_reused stays 0",
             instances_touched: "instances a userdata was made for: the ones the scripts reached (a client makes one for each too)",
             modules_run: "ModuleScripts that ran: a require that ran its module",
             userdata_made: "userdata made for instances, an instance's again after the VM collected its first",
