@@ -16,6 +16,16 @@ use crate::{
 /// tick of Windows' clock (100 ns) took the same folder and wrote each other's files into it
 static TEST_DIRS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+thread_local! {
+    /// The camera track (camera.json) of this thread's last recording
+    static LAST_CAMERA: std::cell::RefCell<Json> = const { std::cell::RefCell::new(Json::Null) };
+}
+
+/// The camera track of this thread's last [`record`]
+fn last_camera() -> Json {
+    LAST_CAMERA.with(|camera| camera.borrow().clone())
+}
+
 /// Runs `source` in a play-mode engine for `frames` frames at 60 a second, recording; returns the
 /// output directory's files as read back.
 #[inline(never)]
@@ -102,6 +112,7 @@ fn record_prepared_dyn(options: Options, source: &str, frames: u32, walk_always:
     let read = |name: &str| -> Json { serde_json::from_str(&std::fs::read_to_string(out.join(name)).unwrap()).unwrap() };
     let playback = read("playback.json");
     let events = read("events.json");
+    LAST_CAMERA.with(|camera| *camera.borrow_mut() = read("camera.json"));
     let bytes = std::fs::read(out.join("scene.rbxm")).unwrap();
     let scene = rbx_binary::from_reader(bytes.as_slice()).expect("scene.rbxm");
     let _ = std::fs::remove_dir_all(&out);
@@ -499,6 +510,105 @@ fn camera_post_effects_play_in_the_lighting() {
     let moves: Vec<&str> = parents.iter().map(|a| a["parent"].as_str().unwrap()).collect();
     assert_eq!(moves, ["Lighting", "~Lighting"]);
     assert_eq!(find(&playback["actions"], |a| a["target"] == "~Lighting.ImpactBloom" && a["set"]["Enabled"] == true).len(), 1);
+}
+
+/// The camera track's keys: (time, position, field of view).
+fn camera_keys(track: &Json) -> Vec<(f64, [f64; 3], f64)> {
+    track
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|key| {
+            let cframe = key["cframe"].as_array().unwrap();
+            let at = |i: usize| cframe[i].as_f64().unwrap();
+            (key["at"].as_f64().unwrap(), [at(0), at(1), at(2)], key["fov"].as_f64().unwrap())
+        })
+        .collect()
+}
+
+/// The camera track follows the camera a client draws from: Workspace.CurrentCamera after the render step, wherever it is. A
+/// script's switch to another camera, a camera with no parent made current (drawn that frame; the simulation step puts the
+/// engine's new Camera in its place the next), measured on a rendered 0.747 client.
+#[test]
+fn the_camera_track_follows_the_current_camera() {
+    record(
+        r#"
+        local Start = workspace.CurrentCamera
+        Start.CameraType = Enum.CameraType.Scriptable
+        Start.CFrame = CFrame.new(0, 5, 20)
+        local Other = Instance.new("Camera")
+        Other.CFrame = CFrame.new(100, 5, 0)
+        Other.FieldOfView = 40
+        Other.Parent = workspace
+        task.delay(0.05, function()
+            workspace.CurrentCamera = Other
+        end)
+        task.delay(0.1, function()
+            local Loose = Instance.new("Camera")
+            Loose.CFrame = CFrame.new(-50, 5, 0)
+            workspace.CurrentCamera = Loose
+        end)
+        "#,
+        12,
+    );
+    let keys = camera_keys(&last_camera());
+    let at: Vec<f64> = keys.iter().map(|key| (key.0 * 60.0).round()).collect();
+    let positions: Vec<[f64; 3]> = keys.iter().map(|key| key.1).collect();
+    let fovs: Vec<f64> = keys.iter().map(|key| key.2).collect();
+    assert_eq!(positions, [[0.0, 5.0, 20.0], [100.0, 5.0, 0.0], [-50.0, 5.0, 0.0], [0.0, 20.0, 20.0]], "{keys:?}");
+    assert_eq!(fovs, [70.0, 40.0, 70.0, 70.0], "{keys:?}");
+    assert_eq!(at, [0.0, 3.0, 6.0, 7.0], "the switch's frame, the loose camera's, the engine's camera the frame after: {keys:?}");
+}
+
+/// What a client draws of cameras (a rendered 0.747 client): the children of any Camera in the Workspace (current or not, in a
+/// folder too), none of a camera out of it, the CurrentCamera's post effects wherever it is, no other camera's; with no
+/// CurrentCamera at the render step, the frame is drawn from a new Camera's view.
+#[test]
+fn what_a_client_draws_of_cameras_is_recorded() {
+    let (_, _, scene, _) = record(
+        r#"
+        local Rig = Instance.new("Folder")
+        Rig.Name = "Rig"
+        Rig.Parent = workspace
+        local Side = Instance.new("Camera")
+        Side.Name = "Side"
+        Side.Parent = Rig
+        local Held = Instance.new("Part")
+        Held.Name = "Held"
+        Held.Anchored = true
+        Held.Parent = Side
+        local SideGrade = Instance.new("ColorCorrectionEffect")
+        SideGrade.Name = "SideGrade"
+        SideGrade.Parent = Side
+        local Loose = Instance.new("Camera")
+        Loose.CFrame = CFrame.new(0, 50, 0)
+        local Away = Instance.new("Part")
+        Away.Name = "Away"
+        Away.Parent = Loose
+        local Grade = Instance.new("ColorCorrectionEffect")
+        Grade.Name = "Grade"
+        Grade.Parent = Loose
+        local Mode = "loose"
+        game:GetService("RunService").RenderStepped:Connect(function()
+            workspace.CurrentCamera = if Mode == "loose" then Loose else nil
+        end)
+        task.delay(0.1, function()
+            Mode = "nil"
+        end)
+        "#,
+        12,
+    );
+    instance(&scene, &["Rig"]);
+    instance(&scene, &["Held"]);
+    instance(&scene, &["~Lighting", "Grade"]);
+    let names: Vec<String> = scene.descendants().map(|instance| instance.name.clone()).collect();
+    for absent in ["Away", "SideGrade", "Side", "Loose"] {
+        assert!(!names.iter().any(|name| name == absent), "{absent} is not drawn: {names:?}");
+    }
+    let keys = camera_keys(&last_camera());
+    let positions: Vec<[f64; 3]> = keys.iter().map(|key| key.1).collect();
+    assert_eq!(positions.last(), Some(&[0.0, 20.0, 20.0]), "no CurrentCamera: a new Camera's view: {keys:?}");
+    assert!(positions.contains(&[0.0, 50.0, 0.0]), "the loose camera while it is current: {keys:?}");
 }
 
 /// The place's own look parked by the run (as a cutscene parks the map's look) takes ror's

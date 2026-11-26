@@ -6,8 +6,8 @@
 //! sessions). run.rs is its command line (`rur-native record`).
 //!
 //! - Everything that is ever in the Workspace gets one copy in the scene, as it was when it
-//!   appeared (the CurrentCamera's children too, as roots: Roblox draws what a client parents to
-//!   its camera, a game's client-only world folders among it); before that frame and after it leaves it is
+//!   appeared (a Camera's children too, as roots: Roblox draws what a client parents to a camera in
+//!   the Workspace, a game's client-only world folders among it); before that frame and after it leaves it is
 //!   hidden (a part's or decal's Transparency 1, a Glass part out of the world, an emitter's /
 //!   trail's / beam's / light's Enabled off and its particles cleared, a GUI's Enabled or a GUI
 //!   object's Visible off), and shown again if it comes back.
@@ -33,8 +33,9 @@
 //!   does not records.
 //! - The ScreenGuis the local player's PlayerGui shows are kept in the scene's `PlayerGui` (ror draws
 //!   them over the finished image), hidden by Enabled off while they are not there.
-//! - Prints, warnings, errors and sound plays go to the event log with their times; the camera's
-//!   CFrame and field of view when they change to the camera track.
+//! - Prints, warnings, errors and sound plays go to the event log with their times; the CFrame and
+//!   field of view of the camera the frame is drawn from (the CurrentCamera) when they change to the
+//!   camera track.
 //! - A part's or decal's Transparency is recorded as drawn, with its LocalTransparencyModifier, in the
 //!   scene file as in the playback.
 //!
@@ -380,7 +381,9 @@ struct Inner {
     stage: Vec<(u32, String, bool)>,
     /// The dom's structure version and the CurrentCamera when the world was last walked: while both
     /// are the same nothing appeared, left or moved, and the walk is skipped
-    walked: Option<(u64, InstanceId)>,
+    walked: Option<(u64, Option<InstanceId>)>,
+    /// The camera this frame is drawn from: the Workspace's CurrentCamera as the render step left it (read once a sample)
+    drawn_camera: Option<InstanceId>,
     /// Walk every frame (a test comparing the two)
     walk_always: bool,
     /// The work clock's total (seconds, desktop prices) at each sampled frame, for a timing check's comparison of the work a
@@ -901,11 +904,26 @@ fn camera_values(state: &State, engine: &Engine, camera: InstanceId) -> Vec<(Nam
     values
 }
 
-/// The Workspace's CurrentCamera: not recorded itself, but what is parented to it is drawn in the
-/// world as Roblox draws it (local-only content, such as a game's client-only world folders), recorded as roots.
-fn is_drawn_camera(state: &State, engine: &Engine, id: InstanceId) -> bool {
-    let world = engine.world();
-    id == world.camera && state.dom.parent_of(id) == Some(world.workspace)
+/// A Camera in the world, outside any GUI (`id` is in the Workspace): not recorded itself, but what is parented to it is drawn
+/// in the world as Roblox draws it (local-only content, such as a game's client-only world folders), recorded as roots. Measured
+/// on a rendered 0.747 client (roblox-sim): the children of a Camera in the Workspace draw whether it is the CurrentCamera or
+/// not, a direct child of the Workspace or in a Folder; a camera out of the Workspace draws none, the CurrentCamera too.
+fn is_world_camera(state: &State, engine: &Engine, id: InstanceId) -> bool {
+    if !is_a(engine, state.dom.at(id).class, "Camera") {
+        return false;
+    }
+    let workspace = engine.world().workspace;
+    let mut at = state.dom.parent_of(id);
+    while let Some(node) = at {
+        if node == workspace {
+            return true;
+        }
+        if is_a(engine, state.dom.at(node).class, "GuiBase") {
+            return false;
+        }
+        at = state.dom.parent_of(node);
+    }
+    false
 }
 
 /// The Workspace's Terrain: its voxels are not recorded, but what is parented to it is drawn in the
@@ -1324,12 +1342,14 @@ fn parent_slot(inner: &Inner, state: &State, engine: &Engine, id: InstanceId) ->
         return Some((Some(index), inner.records[index].lighting_child));
     }
     let world = engine.world();
-    if is_drawn_camera(state, engine, parent) && is_a(engine, state.dom.at(id).class, "PostEffect") {
+    if Some(parent) == inner.drawn_camera && is_a(engine, state.dom.at(id).class, "PostEffect") {
         // a post effect in the camera draws exactly as one in Lighting (measured in Studio
-        // 2026-10-17: a Camera's BloomEffect and ColorCorrectionEffect matched the Lighting's)
+        // 2026-10-17: a Camera's BloomEffect and ColorCorrectionEffect matched the Lighting's); only the CurrentCamera's,
+        // wherever it is (a rendered 0.747 client: one under a camera with no parent made current drew, one under another
+        // camera in the Workspace did not)
         return Some((None, true));
     }
-    if parent == world.workspace || is_drawn_camera(state, engine, parent) || is_drawn_terrain(state, engine, parent) {
+    if parent == world.workspace || is_world_camera(state, engine, parent) || is_drawn_terrain(state, engine, parent) {
         return Some((None, false));
     }
     let lighting = super::services::find_service(engine, world.game, "Lighting");
@@ -1619,10 +1639,11 @@ fn sample(inner: &mut Inner, engine: &Rc<Engine>) {
     // (no parent changed anywhere since the last walk, no Adornee was written and the same camera is
     // drawn: the world holds what it held, where it was, so nothing appears, comes back, moves or leaves)
     stage_moves(inner, &state, engine);
-    let walk = inner.walk_always || inner.adornee_written || inner.walked != Some((state.dom.structure_version, world.camera));
+    inner.drawn_camera = drawn_camera(&state, engine);
+    let walk = inner.walk_always || inner.adornee_written || inner.walked != Some((state.dom.structure_version, inner.drawn_camera));
     if walk {
         crate::timing::time("frames: sample: walk", || walk_world(inner, &state, engine, lighting));
-        inner.walked = Some((state.dom.structure_version, world.camera));
+        inner.walked = Some((state.dom.structure_version, inner.drawn_camera));
         inner.adornee_written = false;
     }
     crate::timing::time("frames: sample: changes", || sample_changes(inner, &state, engine, lighting));
@@ -1663,7 +1684,11 @@ fn walk_world(inner: &mut Inner, state: &State, engine: &Rc<Engine>, lighting: O
         let class = state.dom.at(id).class;
         let walk = walk_of(inner, engine, class);
         if walk == Walk::Skip {
-            if is_drawn_camera(&state, engine, id) || is_drawn_terrain(&state, engine, id) {
+            if is_world_camera(state, engine, id) {
+                // (a post effect of a camera that is not the CurrentCamera draws nothing)
+                let current = Some(id) == inner.drawn_camera;
+                stack.extend(state.dom.children_of(id).iter().rev().copied().filter(|&child| current || !is_a(engine, state.dom.at(child).class, "PostEffect")));
+            } else if is_drawn_terrain(state, engine, id) {
                 stack.extend(state.dom.children_of(id).iter().rev().copied());
             }
             continue;
@@ -1681,6 +1706,13 @@ fn walk_world(inner: &mut Inner, state: &State, engine: &Rc<Engine>, lighting: O
         if walk == Walk::Open {
             stack.extend(state.dom.children_of(id).iter().rev().copied());
         }
+    }
+    // a CurrentCamera out of the world still draws its post effects (a rendered 0.747 client: a ColorCorrectionEffect under a
+    // camera with no parent made current drew), nothing else under it
+    if let Some(camera) = inner.drawn_camera
+        && !state.dom.is_descendant_of(camera, world.workspace)
+    {
+        now.extend(state.dom.children_of(camera).iter().copied().filter(|&child| is_a(engine, state.dom.at(child).class, "PostEffect")));
     }
     // SurfaceGuis and BillboardGuis in the local player's PlayerGui adorned to something in the world
     // draw there as if parented to it (a portal window can host its SurfaceGui in PlayerGui); its
@@ -1813,7 +1845,6 @@ fn mark_seen(inner: &mut Inner, found: &mut Vec<usize>, index: usize, walk: u32)
 /// their own CFrame, sounds, the camera.
 #[inline(never)]
 fn sample_changes(inner: &mut Inner, state: &State, engine: &Rc<Engine>, lighting: Option<InstanceId>) {
-    let world = engine.world();
     let frame = inner.frame;
 
     // Property writes of what was already there
@@ -1967,14 +1998,39 @@ fn sample_changes(inner: &mut Inner, state: &State, engine: &Rc<Engine>, lightin
         });
     }
 
-    // The camera, when it moves
-    let camera = world.camera;
-    if state.dom.get(camera).is_some() {
-        let cframe = frame::affine_of(state.dom.raw_get(camera, world::cframe_name(engine)));
-        let fov = engine.reflection.name_id("FieldOfView").and_then(|n| state.dom.number(camera, n)).unwrap_or(70.0);
-        let moved = inner.camera.last().is_none_or(|(_, last, last_fov)| differs(last, &cframe) || (last_fov - fov).abs() > 1e-3);
-        if moved && finite_affine(&cframe) {
-            inner.camera.push((frame, cframe, fov));
+    // The camera the frame is drawn from, when it moves or another takes its place
+    let (cframe, fov) = camera_view(state, engine, inner.drawn_camera);
+    let moved = inner.camera.last().is_none_or(|(_, last, last_fov)| differs(last, &cframe) || (last_fov - fov).abs() > 1e-3);
+    if moved && finite_affine(&cframe) {
+        inner.camera.push((frame, cframe, fov));
+    }
+}
+
+/// The camera a client draws the frame from: the Workspace's CurrentCamera as the render step left it, wherever it is (in the
+/// Workspace, in a folder of it, with no parent, destroyed); None when it is nil. Measured on a rendered 0.747 client (roblox-sim:
+/// each camera looking at a wall of its own colour, a marker whose colour flips each render step): a camera made current in a
+/// render step draws that frame, with that step's world; one with no parent made current in every render step draws every
+/// frame, though the simulation step puts another in its place each frame.
+fn drawn_camera(_state: &State, engine: &Engine) -> Option<InstanceId> {
+    world::camera::current(engine)
+}
+
+/// What the frame is drawn through: the camera's CFrame and FieldOfView; with no CurrentCamera, a new Camera's (measured: a
+/// client with a nil CurrentCamera at its render step draws from (0, 20, 20) looking at the origin, as a new Camera's view,
+/// whatever camera it drew from before and whichever the simulation step made current).
+fn camera_view(state: &State, engine: &Engine, camera: Option<InstanceId>) -> (Affine3A, f64) {
+    let cframe_name = world::cframe_name(engine);
+    let fov_name = engine.reflection.name_id("FieldOfView");
+    match camera {
+        Some(camera) => {
+            let cframe = frame::affine_of(state.dom.raw_get(camera, cframe_name));
+            (cframe, fov_name.and_then(|n| state.dom.number(camera, n)).unwrap_or(70.0))
+        }
+        None => {
+            let class = engine.reflection.class_id("Camera");
+            let read = |name: NameId| class.and_then(|class| engine.reflection.default_value(class, name));
+            let cframe = frame::affine_of(read(cframe_name).as_ref());
+            (cframe, fov_name.and_then(read).and_then(|value| value.as_number()).unwrap_or(70.0))
         }
     }
 }
