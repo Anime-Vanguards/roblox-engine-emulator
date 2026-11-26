@@ -218,7 +218,7 @@ R.SetVectorMetatable({
 		-- (a key that is no string is the client's Luau check, from the calling line: `Vector3.one[1]` raises "invalid
 		-- argument #2 (string expected, got number)" in Studio 0.747, tools/parity/probes/datatype_errors.luau)
 		if type(Key) ~= "string" then error(`invalid argument #2 (string expected, got {TypeName(Key)})`, 2) end
-		error(`{Key} is not a valid member of Vector3`, 0)
+		R.Charge(R.MemberMissedCost) error(`{Key} is not a valid member of Vector3`, 0)
 	end,
 	__namecall = R.MakeVectorNamecall(ColonExtras),
 	-- an assignment raises Studio's "X cannot be assigned to" for any string or number key (a vector is a value), any other

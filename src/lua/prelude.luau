@@ -1125,14 +1125,14 @@ end
 -- other key raises "invalid argument #2 (string expected, got boolean)" at the script's line: each is called by the type's
 -- __index or __newindex itself, so level 3 is the script's.
 function Members.ReadMiss(TypeName, Key, Quoted)
-	local Kind = type(Key)
+	local Kind = type(Key) R.Charge(R.MemberMissedCost)
 	if Kind == "string" or (Quoted and Kind == "number") then
 		error(if Quoted then `'{Key}' is not a valid member of {TypeName}` else `{Key} is not a valid member of {TypeName}`, 0)
 	end
 	error(`invalid argument #2 (string expected, got {Typeof(Key)})`, 3)
 end
 function Members.WriteMiss(TypeName, Key, ReadOnly)
-	local Kind = type(Key)
+	local Kind = type(Key) R.Charge(R.MemberMissedCost)
 	if Kind == "string" or Kind == "number" then
 		error(if ReadOnly then `{Key} member of {TypeName} is read-only and cannot be assigned to` else `{Key} is not a valid member of {TypeName}`, 0)
 	end

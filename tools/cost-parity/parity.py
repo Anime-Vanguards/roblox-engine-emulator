@@ -31,10 +31,10 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 FAMILIES = ["loop", "read", "write", "method", "find", "attr", "create", "clone", "parent", "destroy", "signal", "task", "tween",
-            "datatype", "lib", "libsize", "json", "gc", "mem", "lang", "native"]
+            "datatype", "lib", "libsize", "json", "gc", "mem", "lang", "native", "error"]
 # Families a sim job runs together (a job is capped at 300 s; each group stays well under it)
 GROUPS = [["loop", "read", "attr"], ["write"], ["method", "find"], ["create", "clone"], ["parent", "destroy"], ["signal", "task", "tween"],
-          ["datatype"], ["lib"], ["libsize"], ["json"], ["gc"], ["mem"], ["lang"], ["native"]]
+          ["datatype"], ["lib"], ["libsize"], ["json"], ["gc"], ["mem"], ["lang"], ["native"], ["error"]]
 
 
 def held_out(name):

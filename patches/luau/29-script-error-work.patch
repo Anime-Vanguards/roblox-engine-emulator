@@ -1,0 +1,66 @@
+# Topic: a script's errors on the work counters
+#
+# What it does: counts each error thrown (luaD_throw, LUA_ERRRUN) while a script's Luau is the innermost Luau frame in a new
+# hostops slot (lua.h LUA_WORK_SCRIPTERRORS at 230, LUA_WORK_FIRSTSLOT from 231 to 230): a script's own error(), assert and
+# failed instruction (arithmetic on nil, indexing nil, calling nil), a library function's argument error, a datatype's method
+# or operator error and an engine call's error raised into it. An error thrown inside the host's own Luau (an exempt function)
+# is not counted, nor one while the counters are off; the host prices the slot (and adds what an engine error costs past it).
+#
+# Why upstream lacks it: an emulator's work clock charges what a client spends raising and unwinding an error
+# (src/cost.rs SCRIPT_ERROR); a live Luau VM runs on the real clock and needs no counter.
+
+diff --git a/luau/VM/include/lua.h b/luau/VM/include/lua.h
+--- a/luau/VM/include/lua.h
++++ b/luau/VM/include/lua.h
+@@ -458,8 +458,9 @@ LUA_API void lua_coldframe(lua_State* L);
+ #define LUA_WORK_BUFBIGCOPY 233 // bytes one buffer.copy, buffer.fill or buffer.writestring moved, of a call that moved over 64 KB (past a core's nearest caches)
+ #define LUA_WORK_LARGEBUFFER 232 // new buffers of at least 64 KB: OS/allocator segment commit overhead beyond per-byte zeroing
+ #define LUA_WORK_BUFDRAMCOPY 231 // bytes one buffer.copy, buffer.fill or buffer.writestring moved, of a call that moved over 1 MB (DRAM bandwidth tier)
++#define LUA_WORK_SCRIPTERRORS 230 // errors thrown while a script's Luau is the innermost Luau frame (luaD_throw): its own error(), assert or failed instruction, a library's, a datatype's or an engine call's error
+ // the first of these slots: a profile books each slot from here up at every step, as it books the scalar counters
+-#define LUA_WORK_FIRSTSLOT 231
++#define LUA_WORK_FIRSTSLOT 230
+ // marks `f` as one of the host's own C functions (process-wide): an object a host function makes for a script is part of the
+ // operation the host prices itself, so the library counts above (LUA_WORK_LIBOBJECTS, ALLOCBYTES, GCOBJECTS) leave it out
+ LUA_API void lua_sethostcfunction(lua_CFunction f);
+diff --git a/luau/VM/src/ldo.cpp b/luau/VM/src/ldo.cpp
+--- a/luau/VM/src/ldo.cpp
++++ b/luau/VM/src/ldo.cpp
+@@ -97,6 +97,7 @@ int luaD_rawrunprotected(lua_State* L, Pfunc f, void* ud)
+ 
+ l_noret luaD_throw(lua_State* L, int errcode)
+ {
++    luaE_workerror(L, errcode);
+     if (lua_jmpbuf* jb = L->global->errorjmp)
+     {
+         jb->status = errcode;
+@@ -246,6 +247,7 @@ int luaD_rawrunprotected(lua_State* L, Pfunc f, void* ud)
+ 
+ l_noret luaD_throw(lua_State* L, int errcode)
+ {
++    luaE_workerror(L, errcode);
+     if (lua_jmpbuf* jb = L->global->errorjmp)
+     {
+         jb->status = errcode;
+diff --git a/luau/VM/src/lstate.h b/luau/VM/src/lstate.h
+--- a/luau/VM/src/lstate.h
++++ b/luau/VM/src/lstate.h
+@@ -562,6 +562,18 @@ static_assert(LUA_WBIT_COUNT <= 64, "workdirty bitmask must fit in uint64_t");
+             luaE_workmarkhostop((L)->global, (slot)); \
+         } \
+     } while (0)
++// an error thrown (luaD_throw) while a script's Luau is the innermost Luau frame (lua.h LUA_WORK_SCRIPTERRORS): a script's own
++// error(), assert or failed instruction, and a library's, a datatype's or an engine call's error raised into it; not one thrown
++// inside the host's own Luau (exempt), nor one while the counters are off
++#define luaE_workerror(L, errcode) \
++    do \
++    { \
++        if ((errcode) == LUA_ERRRUN && luaE_scriptframe((L), (L)->ci)) \
++        { \
++            (L)->global->work.hostops[LUA_WORK_SCRIPTERRORS]++; \
++            luaE_workmarkhostop((L)->global, LUA_WORK_SCRIPTERRORS); \
++        } \
++    } while (0)
+ // a new buffer's bytes (lua.h LUA_WORK_BUFBYTES), and those past Luau's own pages again (LUA_WORK_BUFFRESH)
+ #define luaE_workbufnew(L, n) \
+     do \

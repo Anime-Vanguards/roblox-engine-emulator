@@ -562,6 +562,18 @@ static_assert(LUA_WBIT_COUNT <= 64, "workdirty bitmask must fit in uint64_t");
             luaE_workmarkhostop((L)->global, (slot)); \
         } \
     } while (0)
+// an error thrown (luaD_throw) while a script's Luau is the innermost Luau frame (lua.h LUA_WORK_SCRIPTERRORS): a script's own
+// error(), assert or failed instruction, and a library's, a datatype's or an engine call's error raised into it; not one thrown
+// inside the host's own Luau (exempt), nor one while the counters are off
+#define luaE_workerror(L, errcode) \
+    do \
+    { \
+        if ((errcode) == LUA_ERRRUN && luaE_scriptframe((L), (L)->ci)) \
+        { \
+            (L)->global->work.hostops[LUA_WORK_SCRIPTERRORS]++; \
+            luaE_workmarkhostop((L)->global, LUA_WORK_SCRIPTERRORS); \
+        } \
+    } while (0)
 // a new buffer's bytes (lua.h LUA_WORK_BUFBYTES), and those past Luau's own pages again (LUA_WORK_BUFFRESH)
 #define luaE_workbufnew(L, n) \
     do \

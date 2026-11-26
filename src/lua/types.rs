@@ -705,6 +705,7 @@ fn connect_as(lua: &Lua, engine: &Rc<Engine>, args: LuaMultiValue, once: bool, p
         // Roblox raises nothing: it logs the message and returns a connection that is not connected, which firing the
         // signal skips (measured in a playing client, Studio 0.744: tools/parity/probes/signals.luau)
         engine.output("error", "Attempt to connect failed: Passed value is not a function", None);
+        super::cfunction::charge_error_work(engine, crate::cost::CONNECT_FAILED_LOGGED);
         let userdata = lua.create_any_userdata(LConnection(ConnectionId::DISCONNECTED))?;
         return Ok(values([LuaValue::UserData(userdata)]));
     };

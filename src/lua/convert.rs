@@ -304,6 +304,13 @@ pub fn number_for(engine: &Engine, info: &PropertyInfo, number: f64) -> f64 {
     }
 }
 
+/// A number property's value for a value that is no number nor a numeric string: 0, at what a client spends on the conversion it
+/// fails (cost.rs CONVERSION_FAILED; a client raises nothing).
+fn conversion_failed(engine: &Engine) -> f64 {
+    super::cfunction::charge_error_work(engine, crate::cost::CONVERSION_FAILED);
+    0.0
+}
+
 /// Coerce: converts an assigned value to what the property stores, or the assignment error.
 pub fn coerce(lua: &Lua, engine: &Engine, info: &PropertyInfo, value: &LuaValue) -> Result<Value, Flow> {
     let name = engine.reflection.name(info.name);
@@ -315,8 +322,8 @@ pub fn coerce(lua: &Lua, engine: &Engine, info: &PropertyInfo, value: &LuaValue)
             let number = match value {
                 LuaValue::Number(n) => *n,
                 LuaValue::Integer(n) => *n as f64,
-                LuaValue::String(_) => lua.coerce_number(value.clone())?.unwrap_or(0.0),
-                _ => 0.0,
+                LuaValue::String(_) => lua.coerce_number(value.clone())?.unwrap_or_else(|| conversion_failed(engine)),
+                _ => conversion_failed(engine),
             };
             Ok(Value::Number(number_for(engine, info, number)))
         }
@@ -601,6 +608,7 @@ pub fn string_param(lua: &Lua, engine: &Engine, value: &LuaValue, argument: usiz
 
 /// The warning a client gives before it casts a value that is neither a string nor a number to a string parameter ([`string_param`]).
 pub fn warn_string_param(lua: &Lua, engine: &Engine, value: &LuaValue, argument: usize) {
+    super::cfunction::charge_error_work(engine, crate::cost::CONVERSION_FAILED);
     let message = format!("argument #{argument} expects a string, but {} was passed", typeof_value(engine, value));
     engine.output("warn", message, Some(super::script_traceback(lua)));
 }

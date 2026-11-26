@@ -292,23 +292,44 @@ unsafe fn finish(state: *mut ffi::lua_State) -> c_int {
 /// a service name, a spatial query's), RAISED_AT_CALLER for one at the calling line, an argument check in Luau's words (`positioned`).
 /// Nothing when the error goes back to the engine's own Luau (the frame it returns to is a chunk of the engine's, or a C function
 /// one called: its pcall), which handles it or raises it again from its engine function, charged then; nothing while the engine's
-/// Luau prices a whole call (the clock muted).
+/// Luau prices a whole call (the clock muted). The VM counts the throw itself as a script's error (cost.rs SCRIPT_ERROR: the
+/// innermost Luau frame is the script's exactly when the error does not go back to the engine's Luau), so this charges the rest.
 ///
 /// # Safety
 /// `state` must be the running thread, inside the C function that raises the error.
 pub(crate) unsafe fn charge_raised(state: *mut ffi::lua_State, positioned: bool) {
+    let total = if positioned { crate::cost::RAISED_AT_CALLER } else { crate::cost::RAISED };
+    unsafe { charge_raised_extra(state, total - crate::cost::SCRIPT_ERROR) }
+}
+
+/// Charges `seconds` for an error the running C function raises into a script, past what [`charge_raised`] charges (a refused
+/// property write: lua/raw.rs), under the same conditions.
+///
+/// # Safety
+/// As [`charge_raised`].
+pub(crate) unsafe fn charge_raised_extra(state: *mut ffi::lua_State, seconds: f64) {
     unsafe {
-        if raised_into_engine(state) {
+        if seconds <= 0.0 || raised_into_engine(state) {
             return;
         }
         let lua = Lua::get_or_init_from_ptr(state);
         let Ok(Some(engine)) = lua.try_app_data_ref::<std::rc::Rc<crate::Engine>>() else { return };
         let Ok(engine_state) = engine.state.try_borrow() else { return };
-        let seconds = if positioned { crate::cost::RAISED_AT_CALLER } else { crate::cost::RAISED };
         engine_state.sched.charge(seconds);
         if !engine_state.sched.is_muted() {
             crate::boundary::add_cost(seconds);
         }
+    }
+}
+
+/// Charges what a client spends on a script's error that ree has no throw for, past the call (cost.rs CONVERSION_FAILED, a failed
+/// conversion that raises nothing; CONNECT_FAILED_LOGGED, an error the engine logs), as an engine charge: nothing while the clock is
+/// muted.
+pub(crate) fn charge_error_work(engine: &crate::Engine, seconds: f64) {
+    let Ok(state) = engine.state.try_borrow() else { return };
+    state.sched.charge(seconds);
+    if !state.sched.is_muted() {
+        crate::boundary::add_cost(seconds);
     }
 }
 

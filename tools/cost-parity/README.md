@@ -4,7 +4,7 @@
 
 ## Files
 
-- **`Corpus.luau`:** Engine-call benchmarks grouped by family (reads, writes, methods, finds, attributes, `Instance.new`, `Clone`, reparenting, `Destroy`, signals, threads, tweens, datatypes, library calls, GC, memory, plus `libsize` and `json` scaling across 10–100,000 elements and 1 KB–1 MB). Uses median of 9 rounds; memory rows keep objects alive across rounds to isolate GC and internal bridge-table growth spikes.
+- **`Corpus.luau`:** Engine-call benchmarks grouped by family (reads, writes, methods, finds, attributes, `Instance.new`, `Clone`, reparenting, `Destroy`, signals, threads, tweens, datatypes, library calls, errors caught by a `pcall`, GC, memory, plus `libsize` and `json` scaling across 10–100,000 elements and 1 KB–1 MB). Uses median of 9 rounds; memory rows keep objects alive across rounds to isolate GC and internal bridge-table growth spikes.
 - **`Language.luau`:** Pure Luau microbenchmarks loaded three ways: standard interpreted, `--!native`, and after `getfenv()` (unsafe environment disabling fastcall/import optimizations, running `M.Unsafe` rows).
 - **`parity.py`:** Runs either engine, compares results, and prints error tables.
 - **`fit.py`:** Computes per-row residuals (`residuals`) and fits pricing models (`luau`, `luau --native`, `library`, `sizes`) strictly on non-held-out rows.

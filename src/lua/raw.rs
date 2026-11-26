@@ -1424,7 +1424,10 @@ unsafe extern "C-unwind" fn meta_newindex(state: *mut ffi::lua_State) -> c_int {
     let out = guard(|| unsafe { newindex_fast(state) });
     match out {
         Out::Ret(_) => {}
-        Out::Raise(message, level) => unsafe { raise(state, message, level) },
+        Out::Raise(message, level) => unsafe {
+            super::cfunction::charge_raised_extra(state, write_refused_price(message.as_bytes(), c_int::from(level)));
+            raise(state, message, level)
+        },
         _ => unsafe { newindex_slow(state) },
     }
     unsafe {
@@ -1566,7 +1569,37 @@ unsafe fn newindex_slow(state: *mut ffi::lua_State) {
         }
         let level = ffi::lua_tonumberx(state, -1, std::ptr::null_mut()) as c_int;
         ffi::lua_pop(state, 1);
+        if ffi::lua_type(state, -1) == ffi::LUA_TSTRING {
+            let mut length = 0usize;
+            let text = ffi::lua_tolstring(state, -1, &mut length);
+            let price = write_refused_price(std::slice::from_raw_parts(text.cast::<u8>(), length), level);
+            super::cfunction::charge_raised_extra(state, price);
+        }
         raise_top(state, level)
+    }
+}
+
+/// What a client spends on a property write it refuses past the error's own price (lua/cfunction.rs charge_raised), told by the
+/// error's words (measured, Studio 0.747, a playing client and a server: cost.rs WRITE_REFUSED, WRITE_CAST_REFUSED): a value of the
+/// wrong type for a property that is no enum ("Unable to assign property Size. Vector3 expected, got string"), and the other
+/// refusals (read only, an enum's unknown item or a value an enum cannot take, a locked Parent, a circular one). An error raised at
+/// the script's line (a Parent written a number) and a member that is not (an unknown member's write) cost the error alone.
+fn write_refused_price(message: &[u8], level: c_int) -> f64 {
+    let contains = |text: &[u8], needle: &[u8]| text.windows(needle.len()).any(|window| window == needle);
+    if level != 0 {
+        return 0.0;
+    }
+    if let Some(rest) = message.strip_prefix(b"Unable to assign property ") {
+        // (the property's name, then ". " and why: "Property is read only", "Invalid value ... for enum", "EnumItem, number, or
+        // string expected, got ...", "EnumItem of type ... expected, got ...", "<Type> expected, got <type>")
+        let reason = rest.windows(2).position(|pair| pair == b". ").map_or(rest, |at| &rest[at + 2..]);
+        let enum_or_rule = reason.starts_with(b"EnumItem") || reason.starts_with(b"Invalid value") || !contains(reason, b" expected, got ");
+        return if enum_or_rule { crate::cost::WRITE_REFUSED } else { crate::cost::WRITE_CAST_REFUSED };
+    }
+    if message.starts_with(b"The Parent property of ") || contains(message, b" would result in circular reference") {
+        crate::cost::WRITE_REFUSED
+    } else {
+        0.0
     }
 }
 

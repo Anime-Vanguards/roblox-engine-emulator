@@ -10831,6 +10831,86 @@ fn engine_errors_cost_what_a_client_spends_on_the_error() {
     for (name, price) in checks {
         run(&lua, &engine, &format!("assert(math.abs(shared.Errors.{name} - {price:e}) < 0.06e-6, `{name}: {{shared.Errors.{name}}} s more work when it raises, not {price:e}`)"));
     }
+/// A script's own errors, the datatypes' and the proxy values' errors, refused property writes, failed conversions and the error a
+/// Connect logs cost the work clock what a playing client spends on them (cost.rs SCRIPT_ERROR, MEMBER_MISSED, WRITE_REFUSED,
+/// WRITE_CAST_REFUSED, CONVERSION_FAILED, CONNECT_FAILED_LOGGED; Studio 0.747, a headless client, its server and a rendered client:
+/// error() 1.86-1.93 us, a refused write 4.34-4.87, a wrong-typed one 7.47-7.83, "x" for Transparency 4.58-4.99, Connect(nil) 7.24-7.61
+/// past the call), each against the same work going on; an engine error still costs RAISED in all. The VM's error count is
+/// patches/luau/29-script-error-work.patch. Before, the script's and datatypes' errors cost nothing and the writes RAISED alone.
+#[test]
+fn script_errors_refused_writes_and_failed_conversions_cost_what_a_client_spends() {
+    let (lua, engine) = start_play();
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    run(
+        &lua,
+        &engine,
+        r##"
+        local Folder = Instance.new("Folder")
+        Folder.Name = "F"
+        Folder.Parent = workspace
+        local Child = Instance.new("Folder")
+        Child.Parent = Folder
+        local Part = Instance.new("Part")
+        Part.Parent = Folder
+        local Value = Instance.new("IntValue")
+        local Params = RaycastParams.new()
+        local Missing, Text, Number, Zero, Fn, V, Size = nil, "x", 5, 0, function() end, Vector3.new(1, 2, 3), Part.Size
+        local function Cost(Call)
+            pcall(Call)
+            local Start = os.clock()
+            pcall(Call)
+            return os.clock() - Start
+        end
+        local function Extra(Raises, Passes)
+            return Cost(Raises) - Cost(Passes)
+        end
+        shared.Errors = {
+            Error = Extra(function() error(Text) end, function() end),
+            Assert = Extra(function() assert(false) end, function() end),
+            Arithmetic = Extra(function() return Missing + 1 end, function() end),
+            Library = Extra(function() return math.floor(Text) end, function() return math.floor(Zero) end),
+            Operator = Extra(function() return V + Text end, function() return V + V end),
+            VectorMember = Extra(function() return V.Nope end, function() return V.X end),
+            ProxyMember = Extra(function() return Params.Nope end, function() return Params.IgnoreWater end),
+            ReadOnly = Extra(function() Folder.ClassName = Text end, function() Folder.Name = "F" end),
+            EnumItem = Extra(function() Part.Material = Text end, function() Part.Material = Enum.Material.Plastic end),
+            Circular = Extra(function() Folder.Parent = Child end, function() Folder.Parent = workspace end),
+            WrongType = Extra(function() Part.Size = Text end, function() Part.Size = Size end),
+            WrongString = Extra(function() Folder.Name = Fn end, function() Folder.Name = "F" end),
+            NumberText = Extra(function() Part.Transparency = Text end, function() Part.Transparency = "0" end),
+            IntValueText = Extra(function() Value.Value = Text end, function() Value.Value = Zero end),
+            NumberNil = Extra(function() Part.Transparency = Missing end, function() Part.Transparency = Zero end),
+            StringParameter = Extra(function() Folder:FindFirstChild({}) end, function() Folder:FindFirstChild(Text) end),
+            Connect = Extra(function() Part.Changed:Connect(Missing) end, function() end),
+        }
+        "##,
+    );
+    let script = crate::cost::SCRIPT_ERROR;
+    let checks = [
+        ("Error", script),
+        ("Assert", script),
+        ("Arithmetic", script),
+        ("Library", script),
+        ("Operator", script),
+        ("VectorMember", crate::cost::MEMBER_MISSED),
+        ("ProxyMember", crate::cost::MEMBER_MISSED),
+        ("ReadOnly", crate::cost::RAISED + crate::cost::WRITE_REFUSED - crate::cost::WRITE_QUIET),
+        ("EnumItem", crate::cost::RAISED + crate::cost::WRITE_REFUSED - crate::cost::WRITE_QUIET),
+        ("Circular", crate::cost::RAISED + crate::cost::WRITE_REFUSED),
+        ("WrongType", crate::cost::RAISED + crate::cost::WRITE_CAST_REFUSED - crate::cost::WRITE_QUIET),
+        ("WrongString", crate::cost::RAISED + crate::cost::WRITE_CAST_REFUSED - crate::cost::WRITE_QUIET),
+        ("NumberText", crate::cost::CONVERSION_FAILED),
+        ("IntValueText", crate::cost::CONVERSION_FAILED),
+        ("NumberNil", crate::cost::CONVERSION_FAILED),
+        ("StringParameter", crate::cost::CONVERSION_FAILED),
+        ("Connect", crate::cost::CONNECT_FAILED_LOGGED),
+    ];
+    // (within what the passing work does past its arguments and the messages' own strings: 0.2 us at most)
+    for (name, price) in checks {
+        run(&lua, &engine, &format!("assert(math.abs(shared.Errors.{name} - {price:e}) < 0.2e-6, `{name}: {{shared.Errors.{name}}} s more work, not {price:e}`)"));
+    }
+}
+
 }
 
 /// A query whose geometry is not finite tests no part, as a client's spends nothing on the parts (Studio 0.747: a NaN or infinite

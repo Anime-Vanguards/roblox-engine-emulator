@@ -1205,13 +1205,47 @@ pub const QUERY_SIDE_NOT_FINITE: f64 = 1.3e-6;
 /// task.cancel, task.delay, task.wait and task.spawn 2.4-2.7, typeof() 2.2, a Parent written a number 2.8-2.9, Instance.new(nil)
 /// 2.7-2.8, SharedTable.new and size 2.3-2.4, Random.new and NextNumber 2.4-2.5, DateTime 2.5, utf8.nfcnormalize 2.7,
 /// collectgarbage 2.4, Signal.Wait 2.9, iterating an Instance 2.1, CFrame.new 2.3-2.4. ree charged the call
-/// alone (0.004 to 0.45 us) but for the spatial queries (3.4 since 2026-11-23, now this). Not charged here: a refused property
-/// write costs a client more, 4.5 to 4.8 us (read only, an enum's unknown item, a locked or circular Parent) and 7.4 to 7.7 (a
-/// value of the wrong type for a datatype or string property), where this charges RAISED; a script's own error (error(),
-/// assert, arithmetic, a builtin's argument) 1.8 to 2.4, and an error raised by a datatype's method or operator or a proxy
-/// value's member 2.2 to 2.9, which ree raises in the VM, mlua or the engine's Luau and does not charge.
+/// alone (0.004 to 0.45 us) but for the spatial queries (3.4 since 2026-11-23, now this). Each is a total: the VM counts the
+/// error's throw as [`SCRIPT_ERROR`] (patches/luau/29-script-error-work.patch), and charge_raised adds the rest. A refused
+/// property write costs more again ([`WRITE_REFUSED`], [`WRITE_CAST_REFUSED`]).
 pub const RAISED: f64 = 3.4e-6;
 pub const RAISED_AT_CALLER: f64 = 2.5e-6;
+/// An error thrown while a script's Luau is the innermost Luau frame, whatever threw it: a script's own error(), assert or failed
+/// instruction (arithmetic on nil, indexing or calling nil), a library function's argument error, a datatype's method, operator or
+/// member error, and an engine call's error (of which [`RAISED`] and [`RAISED_AT_CALLER`] are the totals). The VM counts each throw
+/// (VmCounters hostops[[`SCRIPT_ERRORS_SLOT`]], patches/luau/29-script-error-work.patch: luaD_throw with a script's frame
+/// innermost; one thrown inside the engine's own Luau is not counted) and [`luau`] prices it. Measured in a headless playing
+/// client, its server and a rendered client (roblox-sim, Studio 0.747; os.clock around 400 calls in pcall, 15 samples less an empty
+/// pcall, each sample beside 200 calls of FindFirstChild(nil), whose 3.45 us (RAISED and the call) scales the row: the machine was
+/// loaded and the ratio held where the absolute figures drifted), past an empty pcall, the three sessions' range: error("x") 1.86-1.93
+/// us, error("x", 0) 1.71-1.73, assert(false) 2.01-2.03, arithmetic on nil 2.08-2.20, indexing nil 2.03-2.11, calling nil 1.95-2.07,
+/// math.floor("x") 2.26-2.40, Vector3:Cross("x") 2.23-2.30, CFrame * "x" 2.17-2.30, Vector3 + "x" 2.13-2.20 (ree charged 0.01-0.15);
+/// a datatype's missing member costs more, 2.70-2.82 (Vector3, CFrame, RaycastParams, RaycastResult): a proxy value's (the
+/// prelude's Members.ReadMiss / WriteMiss, raised in the engine's Luau) charges [`MEMBER_MISSED`] itself, a Lune datatype's and a
+/// Vector3's are thrown at this price (x0.76).
+pub const SCRIPT_ERROR: f64 = 2.1e-6;
+pub const MEMBER_MISSED: f64 = 2.75e-6;
+/// A property write a client refuses, past [`RAISED`] (lua/raw.rs write_refused_price, from the error's words): read only, an
+/// enum's unknown item or a value an enum cannot take, a locked or circular Parent ([`WRITE_REFUSED`]: 4.34-4.87 us in all, past an
+/// empty pcall, measured as [`SCRIPT_ERROR`]: read only 4.52-4.59, "Nope" for Material 4.59-4.87, a function for Material 4.56-4.70,
+/// a destroyed part's Parent 4.34-4.46, a circular Parent 4.66-4.67); a value of the wrong type for any other property
+/// ([`WRITE_CAST_REFUSED`]: 7.47-7.83 in all: a string for Size 7.47-7.76, a function for Name 7.55-7.70, a number for an
+/// ObjectValue's Value 7.73-7.79, a Vector3 for Color 7.64-7.73, a string for CFrame 7.50-7.83). ree charged RAISED (3.4). A
+/// Parent written a number raises at the script's line (2.67-2.79, RAISED_AT_CALLER), and an unknown member's write costs RAISED
+/// alone (3.15-3.18).
+pub const WRITE_REFUSED: f64 = 1.2e-6;
+pub const WRITE_CAST_REFUSED: f64 = 4.2e-6;
+/// A value a client converts for a script and fails to, raising nothing, past the call (measured as [`SCRIPT_ERROR`], 4.26-5.29 us in
+/// all): a value that is no number nor a numeric string written to a number property, which stores 0 (lua/convert.rs coerce: "x"
+/// for Transparency 4.58-4.99, for an IntValue's Value 4.26-4.53; nil 4.43-5.07, true 4.53-4.88, a function 4.31-4.73; a numeric
+/// string costs nothing more, a Bool property takes any value's truth for nothing), and a value that is neither a string nor a
+/// number given to a string parameter, which the engine warns about and casts (convert.rs warn_string_param: FindFirstChild({})
+/// 4.75-4.99, FindFirstChild(true) 4.57-5.09, GetAttribute({}) 4.87-5.29). ree charged the write or the call (0.06-0.08).
+pub const CONVERSION_FAILED: f64 = 4.6e-6;
+/// The error a signal's Connect logs when it is given no function ("Attempt to connect failed: Passed value is not a function",
+/// lua/types.rs), past the call: a headless client 7.24 us, a rendered one 7.61 (a server 13.3), measured as [`SCRIPT_ERROR`]; ree
+/// charged the call (0.05).
+pub const CONNECT_FAILED_LOGGED: f64 = 7.35e-6;
 /// An error a dictionary key's `__tostring` raises while a copy names the key (lua/bindable.rs key_name), beyond the [`RAISED`] the
 /// call charges when it raises it again. A 0.747 playing client and server (roblox-sim, three sessions each; 20 calls a sample, the
 /// median of 15 less an empty loop): `{[key] = 1}` whose key's `__tostring` returns nil took BindableEvent:Fire 5.4 to 9.4 us more
@@ -2958,7 +2992,8 @@ pub fn luau(c: &VmCounters) -> f64 {
         + c.hostops[BUFFRESH_SLOT] as f64 * LUAU_BUFFER_FRESH_BYTE
         + c.hostops[BUFBIGCOPY_SLOT] as f64 * LUAU_BUFFER_BIG_COPY_BYTE
         + c.hostops[LARGEBUFFER_SLOT] as f64 * LUAU_LARGE_BUFFER
-        + c.hostops[BUFDRAMCOPY_SLOT] as f64 * LUAU_BUFFER_DRAM_COPY_BYTE)
+        + c.hostops[BUFDRAMCOPY_SLOT] as f64 * LUAU_BUFFER_DRAM_COPY_BYTE
+        + c.hostops[SCRIPT_ERRORS_SLOT] as f64 * (SCRIPT_ERROR * 1e9))
 }
 
 /// The collector's charge so far on the work clock (seconds at desktop prices): the objects the scripts' work allocated at
@@ -3040,8 +3075,11 @@ pub const BUFFRESH_SLOT: usize = 234;
 pub const BUFBIGCOPY_SLOT: usize = 233;
 pub const LARGEBUFFER_SLOT: usize = 232;
 pub const BUFDRAMCOPY_SLOT: usize = 231;
+/// ... and the errors thrown while a script's Luau is the innermost Luau frame (patches/luau/29-script-error-work.patch,
+/// lua.h LUA_WORK_SCRIPTERRORS): [`SCRIPT_ERROR`] each
+pub const SCRIPT_ERRORS_SLOT: usize = 230;
 /// The first of hostops' slots that count something other than an opcode (lua.h LUA_WORK_FIRSTSLOT)
-pub const FIRST_SPECIAL_SLOT: usize = 231;
+pub const FIRST_SPECIAL_SLOT: usize = 230;
 
 /// The engine instructions hostops counted: its opcodes' slots, without the slots that count other work
 pub fn host_instructions(c: &VmCounters) -> u64 {

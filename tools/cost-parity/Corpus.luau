@@ -3019,6 +3019,55 @@ memory("Instance.Folder.clone11.touched", 500, function(N)
 	return T
 end)
 
+-- errors: what a pcall that catches each kind costs past the loop (a script's own, an engine call's, a datatype's member, a refused
+-- property write, a wrong-typed one, and a conversion that fails without raising)
+local function errors(Name, N, Make)
+	W("error", Name, N, function(N, S)
+		local F = Make(S)
+		for _ = 1, N do
+			pcall(F)
+		end
+	end)
+end
+errors("script.error", 2000, function()
+	return function() error("x") end
+end)
+errors("script.assert", 2000, function()
+	return function() assert(false) end
+end)
+errors("script.index_nil", 2000, function()
+	local Missing = nil
+	return function() return Missing.x end
+end)
+errors("engine.FindFirstChild_nil", 2000, function(S)
+	local P, Missing = S.Part, nil
+	return function() P:FindFirstChild(Missing) end
+end)
+errors("member.Vector3", 2000, function()
+	local V = Vector3.new(1, 2, 3)
+	return function() return V.Nope end
+end)
+errors("member.RaycastParams", 2000, function()
+	local Params = RaycastParams.new()
+	return function() return Params.Nope end
+end)
+errors("write.read_only", 2000, function(S)
+	local P = S.Part
+	return function() P.ClassName = "x" end
+end)
+errors("write.wrong_type", 2000, function(S)
+	local P, Text = S.Part, "x"
+	return function() P.Size = Text end
+end)
+errors("convert.number_text", 2000, function(S)
+	local P, Text = S.Part, "x"
+	return function() P.Transparency = Text end
+end)
+errors("convert.string_parameter", 2000, function(S)
+	local P, Table = S.Part, {}
+	return function() P:FindFirstChild(Table) end
+end)
+
 ------------------------------------------------------------------------------------------------ the runner
 
 -- Language.luau's workloads, interpreted and native, as rows of the `lang` family (`lang.<name>` and `native.<name>`)

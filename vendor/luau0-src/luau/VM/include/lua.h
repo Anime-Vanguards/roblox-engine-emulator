@@ -458,8 +458,9 @@ LUA_API void lua_coldframe(lua_State* L);
 #define LUA_WORK_BUFBIGCOPY 233 // bytes one buffer.copy, buffer.fill or buffer.writestring moved, of a call that moved over 64 KB (past a core's nearest caches)
 #define LUA_WORK_LARGEBUFFER 232 // new buffers of at least 64 KB: OS/allocator segment commit overhead beyond per-byte zeroing
 #define LUA_WORK_BUFDRAMCOPY 231 // bytes one buffer.copy, buffer.fill or buffer.writestring moved, of a call that moved over 1 MB (DRAM bandwidth tier)
+#define LUA_WORK_SCRIPTERRORS 230 // errors thrown while a script's Luau is the innermost Luau frame (luaD_throw): its own error(), assert or failed instruction, a library's, a datatype's or an engine call's error
 // the first of these slots: a profile books each slot from here up at every step, as it books the scalar counters
-#define LUA_WORK_FIRSTSLOT 231
+#define LUA_WORK_FIRSTSLOT 230
 // marks `f` as one of the host's own C functions (process-wide): an object a host function makes for a script is part of the
 // operation the host prices itself, so the library counts above (LUA_WORK_LIBOBJECTS, ALLOCBYTES, GCOBJECTS) leave it out
 LUA_API void lua_sethostcfunction(lua_CFunction f);

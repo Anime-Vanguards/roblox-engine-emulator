@@ -264,6 +264,8 @@ fn load_prelude(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     r.set("ParamsReadCost", crate::cost::PARAMS_READ)?;
     // (what a params list write or AddToFilter that raises spends on its error: prelude.luau ParamsListWrite)
     r.set("RaisedCost", crate::cost::RAISED)?;
+    // (what a proxy value's missing member costs a script: prelude.luau Members.ReadMiss / WriteMiss)
+    r.set("MemberMissedCost", crate::cost::MEMBER_MISSED)?;
     // Vector3:Angle's atan2 in floats (the C runtime's atan2f), as a playing client takes it (Studio 0.744,
     // tools/parity/probes/cframe_order.luau and datatypes.luau: math.atan2's doubles differ in the last digits)
     r.set("Atan2f", super::lua_fn(lua, |_, (y, x): (f64, f64)| Ok(f64::from((y as f32).atan2(x as f32))))?)?;
