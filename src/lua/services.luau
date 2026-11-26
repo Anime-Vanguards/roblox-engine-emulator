@@ -35,7 +35,7 @@ local Options = R.Options
 local Cost = R.Cost
 local Mute = R.Mute
 local Charge = R.Charge
-local Pack, Unpack = table.pack, table.unpack
+local Pack, Unpack = table.pack, table.unpack; --[[ a CFrame parameter as a client casts it (PivotTo: measured, Studio 0.747, tools/parity/probes/instance_api_texts.luau): nil "Argument 1 missing or nil", another value "Unable to cast double to CoordinateFrame", named as camera.rs cast_name names it, without a position ]] local function CastCFrame(Value) if Value == nil then error("Argument 1 missing or nil", 0) end local Kind = typeof(Value) if Kind == "table" then Kind = if rawlen(Value) > 0 or next(Value) == nil then "Array" else "Dictionary" elseif Kind == "EnumItem" then Kind = tostring(Value.EnumType) else Kind = ({ number = "double", boolean = "bool", ["function"] = "Function", thread = "null", Enum = "null", Enums = "null", userdata = "null", RBXScriptSignal = "EventInstance" })[Kind] or Kind end error(`Unable to cast {Kind} to CoordinateFrame`, 0) end
 
 -- Methods Studio does in one native call that this file does in Luau price themselves (cost.rs: the whole call, measured
 -- in Studio); the Instance API's charges for the reads and writes made here meanwhile are dropped.
@@ -278,7 +278,7 @@ end
 -- Delta = Target * Pivot:Inverse() onto the old one instead let its float error compound: the inverse is the transpose, so a
 -- pivot scaled by s came back scaled by s squared, and a model pivoted every frame (an attack effect's spin) lost its
 -- rotation in about 25 frames (its start part went to [0 0 0; 0 1 0; 0 0 0], the parts it emitted to NaN).
-Method("PVInstance", "PivotTo", Priced(function(Self, Target)
+Method("PVInstance", "PivotTo", Priced(function(Self, Target) if typeof(Target) ~= "CFrame" then CastCFrame(Target) end
 	if Self:IsA("BasePart") then
 		-- Measured (Studio 2026-10-16): a part's PivotTo carries every part under it, through Folders, Attachments and
 		-- Models, as one rigid move (an effect that moves its FX parts so: ree left a nested Slash 1,915 studs behind)

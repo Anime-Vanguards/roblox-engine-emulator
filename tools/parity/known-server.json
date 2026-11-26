@@ -53,10 +53,6 @@
 			"why": "a remote call with a table inside itself raises `tables cannot be cyclic` before the refusal to wait, the player check and the side checks (a server's InvokeServer says it is for clients); ree checks the cycle after them or not at all"
 		},
 		{
-			"line": "attribute-name ",
-			"why": "an attribute name with the RBX prefix is refused for it first (`Attempt to assign attribute <name>. CoreScript permission required`), before an illegal character or the length; ree checks those first"
-		},
-		{
 			"line": "legacy-spawn-thread ",
 			"why": "the legacy spawn given a coroutine logs `attempt to call a thread value` in a client; ree runs the coroutine"
 		},
@@ -443,12 +439,6 @@
 		{
 			"line": "physics at x 100000000: fell through, Touched never",
 			"why": "ree's physics differs: a client's block resting on a floor fires Touched, up to the grid's bound, and falls through the floor past it; ree's fires no Touched for it and has no bound"
-		}
-	],
-	"instances": [
-		{
-			"line": "attribute-name \"Ünï\" error Attribute name contains illegal character '\\xC3' (\"Ünï\")",
-			"why": "error text: a client names the first illegal byte of a non-ASCII name (a lone UTF-8 lead byte, Ã); ree's messages are UTF-8 text and name the whole character"
 		}
 	],
 	"lifetime": [

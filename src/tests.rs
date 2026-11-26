@@ -209,7 +209,8 @@ fn instances_properties_and_errors() {
         assert(Message(function() return F:GetPropertyChangedSignal("Nope") end) == "Nope is not a valid property name.")
         assert(Message(function() F:SetAttribute("A", {}) end) == "Array is not a supported attribute type")
         assert(Message(function() return F.Changed.Nope end) == "Nope is not a valid member of RBXScriptSignal")
-        assert(Message(function() return F[1] end) == "@: invalid argument #2 (string expected, got number)")
+        -- (a number key names the member or child of its text: tools/parity/probes/instance_api_texts.luau)
+        assert(Message(function() return F[1] end) == '1 is not a valid member of Frame "Frame"')
         assert(Message(function() return game:GetService("Nope") end) == "'Nope' is not a valid Service name")
         F.BorderMode = "Inset"
         assert(F.BorderMode == Enum.BorderMode.Inset)
@@ -15288,4 +15289,33 @@ fn service_answers_follow_a_clients_casts_and_rules() {
         ],
         "{output:?}"
     );
+}
+
+/// An attribute name's checks in a client's order (the RBX prefix, empty, over 100 bytes, an illegal byte), and the illegal byte
+/// itself, not its character (measured, Studio 0.747: tools/parity/probes/arg_checks.luau, instances.luau).
+#[test]
+fn attribute_names_are_refused_in_a_clients_order() {
+    let (lua, engine) = start();
+    run(
+        &lua,
+        &engine,
+        r#"
+        local Folder = Instance.new("Folder")
+        local Long = string.rep("a", 100) .. "$"
+        for _, Case in {
+            { "RBX$", "Attempt to assign attribute RBX$. CoreScript permission required" },
+            { "RBX " .. string.rep("a", 101), "Attempt to assign attribute RBX " .. string.rep("a", 101) .. ". CoreScript permission required" },
+            { Long, 'Attribute name exceeds 100 character limit ("' .. Long .. '")' },
+            { "\195\156n\195\175", "Attribute name contains illegal character '\195' (\"\195\156n\195\175\")" },
+        } do
+            local _, Message = pcall(Folder.SetAttribute, Folder, Case[1], 1)
+            local _, Called = pcall(function() Folder:SetAttribute(Case[1], 1) end)
+            print(Message == Case[2], Called == Case[2], (string.gsub(Message, "[\128-\255]", function(Byte) return string.format("<%02X>", string.byte(Byte)) end)))
+        end
+        "#,
+    );
+    let output = lines(&engine);
+    assert_eq!(output.len(), 4, "{output:?}");
+    // the last names the lone lead byte 0xC3 of `Ü`, not the character
+    assert!(output.iter().all(|line| line.starts_with("print: true true ")), "{output:?}");
 }

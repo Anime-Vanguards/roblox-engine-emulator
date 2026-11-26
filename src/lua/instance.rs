@@ -24,13 +24,7 @@ use crate::{
 fn key_text(key: &LuaValue) -> String {
     match key {
         LuaValue::String(s) => s.to_string_lossy(),
-        LuaValue::Number(n) => {
-            if n.fract() == 0.0 && n.abs() < 1e15 {
-                format!("{}", *n as i64)
-            } else {
-                n.to_string()
-            }
-        }
+        LuaValue::Number(n) => number_key_text(*n),
         LuaValue::Integer(n) => n.to_string(),
         LuaValue::Boolean(b) => b.to_string(),
         LuaValue::Nil => "nil".into(),
@@ -309,13 +303,50 @@ pub fn find_child_where(engine: &Engine, id: InstanceId, matches: impl Fn(&State
     }
 }
 
+/// The text a number key of an instance names (`part[5]`, `part[1e20]`): its shortest round-trip digits, written out from 1e-6 to
+/// below 1e21 (`0.3333333333333333`, `100000000000000000000`) and with an exponent of at least two digits outside
+/// (`1e-07`, `-1.5e-10`, `1e+21`, `1e+300`), and `inf`, `-inf`, `nan` and `-0` (measured in a playing client and a server, Studio
+/// 0.747: `Folder[5]` finds a child named "5", `part[1e20]` raises `100000000000000000000 is not a valid member of Part "..."`;
+/// tools/parity/probes/instance_api_texts.luau).
+fn number_key_text(number: f64) -> String {
+    if number.is_nan() {
+        return "nan".into();
+    }
+    if number.is_infinite() || number == 0.0 {
+        return format!("{number}");
+    }
+    let scientific = format!("{number:e}");
+    let (digits, exponent) = scientific.split_once('e').unwrap_or((&scientific, "0"));
+    let exponent: i32 = exponent.parse().unwrap_or(0);
+    if (-6..21).contains(&exponent) {
+        return format!("{number}");
+    }
+    format!("{digits}e{}{:02}", if exponent < 0 { '-' } else { '+' }, exponent.abs())
+}
+
 /// `instance[key]` (InstanceMeta.__index): a member by its exact name, else a child by that name, else (a client's rule,
-/// docs/engine.md "Member names") the member the key names with its first letter upper-cased.
+/// docs/engine.md "Member names") the member the key names with its first letter upper-cased. A number key names the member or
+/// child of its text, and one that names nothing raises `5 is not a valid member of Part "..."` without a position; any other
+/// key that is no string raises Luau's `invalid argument #2 (string expected, got boolean)` at the calling line (measured,
+/// Studio 0.747, a client and a server: tools/parity/probes/instance_api_texts.luau).
 pub fn get(lua: &Lua, engine: &Rc<Engine>, id: InstanceId, key: &LuaValue) -> Result<LuaValue, Flow> {
-    let LuaValue::String(key_string) = key else {
-        return raise_at_caller(format!("invalid argument #2 (string expected, got {})", typeof_value(engine, key)));
+    let number_text;
+    let key_string;
+    let key_bytes: &[u8] = match key {
+        LuaValue::String(text) => {
+            key_string = text.as_bytes();
+            &key_string
+        }
+        LuaValue::Number(number) => {
+            number_text = number_key_text(*number);
+            number_text.as_bytes()
+        }
+        LuaValue::Integer(number) => {
+            number_text = number.to_string();
+            number_text.as_bytes()
+        }
+        _ => return raise_at_caller(format!("invalid argument #2 (string expected, got {})", typeof_value(engine, key))),
     };
-    let key_bytes = key_string.as_bytes();
     if engine.state.borrow().dom.at(id).has(flags::BUNDLE_ROOT) {
         reveal_bundle(engine, id);
     }
@@ -418,7 +449,9 @@ pub fn assign(lua: &Lua, engine: &Rc<Engine>, id: InstanceId, key: &LuaValue, va
     let class = engine.state.borrow().dom.at(id).class;
     let name = match key {
         LuaValue::String(s) => engine.reflection.name_id_bytes(&s.as_bytes()),
-        _ => None,
+        // (a write's key that is no string raises Luau's argument error at the calling line, a number's too, where a read takes the
+        // number's text: measured, Studio 0.747, a client and a server, tools/parity/probes/instance_api_texts.luau)
+        _ => return raise_at_caller(format!("invalid argument #2 (string expected, got {})", typeof_value(engine, key))),
     };
     let member = name.map_or(Member::None, |name| engine.resolve_member(class, name));
     let name = match (member, name) {
@@ -1089,28 +1122,62 @@ fn string_arg(args: &Args, index: usize) -> Option<Str> {
     args.string(index).map(|s| Str::new(&s.as_bytes()))
 }
 
-/// Why SetAttribute refuses an attribute name, as Roblox words it (measured in a playing client, Studio 0.744,
-/// tools/parity/probes/instances.luau, raised without a position): empty, over 100 characters, a byte other than
-/// letters, digits and `_ - . /` (a space, `$`, the first byte of `Ü`), or the `RBX` prefix (case matters: `rbxname`
-/// goes). Not measured: which check comes first for a name that fails several.
-pub fn attribute_name_error(name: &[u8]) -> Option<String> {
-    let shown = String::from_utf8_lossy(name);
+/// Why SetAttribute refuses an attribute name, as Roblox words it, raised without a position (measured in a playing client and a
+/// server, Studio 0.744 and 0.747, tools/parity/probes/instances.luau and arg_checks.luau), the checks in this order: the `RBX`
+/// prefix (case matters: `rbxname` goes; `RBX$` and a 104-byte `RBX aa...` get it), empty, over 100 bytes (a 101-byte name with
+/// `$` gets it), then the first byte other than letters, digits and `_ - . /` (a space, `$`, the lone lead byte 0xC3 of `Ü`). The
+/// message holds the name's bytes as they are, so the illegal byte alone can make it no UTF-8.
+pub fn attribute_name_error(name: &[u8]) -> Option<Vec<u8>> {
+    let message = |head: &str, tail: &str| [head.as_bytes(), name, tail.as_bytes()].concat();
+    if name.starts_with(b"RBX") {
+        return Some(message("Attempt to assign attribute ", ". CoreScript permission required"));
+    }
     if name.is_empty() {
-        return Some("Attribute name cannot be empty (\"\")".into());
+        return Some(b"Attribute name cannot be empty (\"\")".to_vec());
     }
     if name.len() > 100 {
-        return Some(format!("Attribute name exceeds 100 character limit (\"{shown}\")"));
+        return Some(message("Attribute name exceeds 100 character limit (\"", "\")"));
     }
-    let legal = |c: char| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '/');
-    if let Some(illegal) = shown.chars().find(|&c| !legal(c)) {
-        // (Roblox prints the first illegal byte, a lone lead byte for `Ü`; the message here is UTF-8, so it holds the
-        // whole character)
-        return Some(format!("Attribute name contains illegal character '{illegal}' (\"{shown}\")"));
+    let legal = |byte: u8| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.' | b'/');
+    let illegal = *name.iter().find(|&&byte| !legal(byte))?;
+    Some([b"Attribute name contains illegal character '".as_slice(), &[illegal], b"' (\"", name, b"\")"].concat())
+}
+
+/// A capability-only property `name` of `class` (reflection.rs CAPABILITY_ONLY): its declaring class's name and the capability a
+/// game script lacks for it.
+fn capability_property(engine: &Engine, class: ClassId, name: &[u8]) -> Option<(&'static str, &'static str)> {
+    crate::reflection::CAPABILITY_ONLY
+        .iter()
+        .find(|(owner, property, _)| property.as_bytes() == name && engine.reflection.is_a(class, owner))
+        .map(|&(owner, _, capability)| (owner, capability))
+}
+
+/// The property IsPropertyModified, ResetPropertyToDefault and GetStyled name (their string parameter, cast as `strings` casts it):
+/// one a game script may use. A name that is no property's (a NotScriptable one, a deprecated lower-case one, an event's, a
+/// method's) raises "Invalid argument to IsPropertyModified(): Class Folder has no property named `Nope`" (GetStyled "GetStyled():
+/// No such property named `Nope`"), and one a game script lacks the capability for "The current thread cannot call
+/// IsPropertyModified() on Model.LevelOfDetail (lacking capability PluginOrOpenCloud)" (GetStyled "... GetStyled() on
+/// 'LevelOfDetail' ..."); measured, Studio 0.747, a client and a server: tools/parity/probes/instance_api_texts.luau.
+fn property_name_arg(engine: &Engine, id: InstanceId, args: &Args, method: &str) -> Result<NameId, Flow> {
+    let class = engine.state.borrow().dom.at(id).class;
+    let text = args.string(1).map(|s| s.as_bytes().to_vec()).unwrap_or_default();
+    let shown = String::from_utf8_lossy(&text);
+    if let Some((owner, capability)) = capability_property(engine, class, &text) {
+        return raise(if method == "GetStyled" {
+            format!("The current thread cannot call GetStyled() on '{shown}' (lacking capability {capability})")
+        } else {
+            format!("The current thread cannot call {method}() on {owner}.{shown} (lacking capability {capability})")
+        });
     }
-    if name.starts_with(b"RBX") {
-        return Some(format!("Attempt to assign attribute {shown}. CoreScript permission required"));
+    let name = engine.reflection.name_id_bytes(&text).filter(|&name| {
+        engine.reflection.class_property(class, name).is_some_and(|property| property.scriptable)
+            && matches!(engine.resolve_member(class, name), Member::Property { .. })
+    });
+    match name {
+        Some(name) => Ok(name),
+        None if method == "GetStyled" => raise(format!("GetStyled(): No such property named `{shown}`")),
+        None => raise(format!("Invalid argument to {method}(): Class {} has no property named `{shown}`", engine.reflection.class(class).name)),
     }
-    None
 }
 
 /// A method's Object parameter (IsDescendantOf's, IsAncestorOf's) as a client casts it: an Instance, or none for nil and for
@@ -1573,9 +1640,21 @@ fn install_base(behaviors: &mut Behaviors, reflection: &crate::Reflection) {
     behaviors.add_method(base, K::WaitForChild as NameId, strings(QUIET_NAME, method(wait_for_child)));
     behaviors.add_method(base, K::GetPropertyChangedSignal as NameId, strings(NAME, method(|lua, engine, id, args| {
         let class = engine.state.borrow().dom.at(id).class;
-        let name = args.string(1).and_then(|s| engine.reflection.name_id_bytes(&s.as_bytes()));
+        let text = args.string(1).map(|s| s.as_bytes().to_vec()).unwrap_or_default();
+        let shown = String::from_utf8_lossy(&text);
+        // (a property a game script lacks the capability for raises the read's error, one scripts cannot use at all (NotScriptable:
+        // PVInstance.Origin, Model.WorldPivotData) "Origin is not a scriptable property.", and any other name, a deprecated lower-case
+        // one with no member of its own too, "Nope is not a valid property name."; measured, Studio 0.747, a client and a server:
+        // tools/parity/probes/instance_api_texts.luau)
+        if let Some((_, capability)) = capability_property(engine, class, &text) {
+            return raise(format!("The current thread cannot read '{shown}' (lacking capability {capability})"));
+        }
+        let name = engine.reflection.name_id_bytes(&text);
         let member = name.map_or(Member::None, |name| engine.resolve_member(class, name));
         let (Member::Property { .. }, Some(name)) = (member, name) else {
+            if name.is_some_and(|name| engine.reflection.class_property(class, name).is_some()) {
+                return raise(format!("{shown} is not a scriptable property."));
+            }
             return raise(format!("{} is not a valid property name.", key_text(args.get(1))));
         };
         let signal = core::property_signal(&mut engine.state.borrow_mut(), &engine.reflection, id, name);
@@ -1604,7 +1683,7 @@ fn install_base(behaviors: &mut Behaviors, reflection: &crate::Reflection) {
     }));
     // (the name is read before the value is checked: a boolean's warning comes before "Function is not a supported attribute
     // type", as a client casts its arguments before the method runs)
-    behaviors.add_method(base, K::SetAttribute as NameId, strings(NAME, method(|_, engine, id, args| {
+    behaviors.add_method(base, K::SetAttribute as NameId, strings(NAME, method(|lua, engine, id, args| {
         let value = args.get(2);
         // (an Instance, or an InstanceHandle, is kept by reference: Studio 0.744 takes both; a handle of none is kept as such
         // and reads back as one, listed by GetAttributes and copied by Clone, measured in a 0.748 client and server:
@@ -1628,7 +1707,11 @@ fn install_base(behaviors: &mut Behaviors, reflection: &crate::Reflection) {
         }
         let name = string_arg(args, 1).unwrap_or_default();
         if let Some(message) = attribute_name_error(name.as_bytes()) {
-            return raise(message);
+            // (bytes that are no UTF-8, the illegal byte of a name such as `Ünï`, go as a string of those bytes, raised as it is)
+            return match String::from_utf8(message) {
+                Ok(text) => raise(text),
+                Err(bytes) => Err(Flow::Raised(LuaValue::String(lua.create_string(bytes.into_bytes())?))),
+            };
         }
         let converted = match handle {
             Some(Some(target)) => Value::Instance(target),
@@ -1675,14 +1758,12 @@ fn install_base(behaviors: &mut Behaviors, reflection: &crate::Reflection) {
         optional_instance(lua, engine, actor)
     }));
     behaviors.add_method(base, K::IsPropertyModified as NameId, strings(NAME, method(|_, engine, id, args| {
-        let name = args.string(1).and_then(|s| engine.reflection.name_id_bytes(&s.as_bytes()));
-        let modified = name.is_some_and(|name| engine.state.borrow().dom.at(id).stored(name).is_some());
+        let name = property_name_arg(engine, id, args, "IsPropertyModified")?;
+        let modified = engine.state.borrow().dom.at(id).stored(name).is_some();
         Ok(values([LuaValue::Boolean(modified)]))
     })));
     behaviors.add_method(base, K::ResetPropertyToDefault as NameId, strings(NAME, method(|_, engine, id, args| {
-        let Some(name) = args.string(1).and_then(|s| engine.reflection.name_id_bytes(&s.as_bytes())) else {
-            return Ok(none());
-        };
+        let name = property_name_arg(engine, id, args, "ResetPropertyToDefault")?;
         let hooks = engine.hooks.borrow();
         let mut state = engine.state.borrow_mut();
         if state.dom.at_mut(id).unstore(name).is_some() {
@@ -1699,8 +1780,8 @@ fn install_base(behaviors: &mut Behaviors, reflection: &crate::Reflection) {
         Ok(values([LuaValue::String(lua.create_string(format!("RUR_{serial}"))?)]))
     }));
     behaviors.add_method(base, K::GetStyled as NameId, strings(NAME, method(|lua, engine, id, args| {
-        let name = args.string(1).and_then(|s| engine.reflection.name_id_bytes(&s.as_bytes()));
-        let value = name.and_then(|name| engine.state.borrow().dom.raw_get(id, name).cloned());
+        let name = property_name_arg(engine, id, args, "GetStyled")?;
+        let value = engine.state.borrow().dom.raw_get(id, name).cloned();
         Ok(values([match value {
             Some(value) => convert::to_lua(lua, engine, &value)?,
             None => LuaValue::Nil,

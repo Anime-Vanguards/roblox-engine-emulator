@@ -182,8 +182,11 @@ pub fn attribute_signal(state: &mut State, id: InstanceId, name: &Str) -> Signal
     if let Some(signal) = state.dom.at(id).signals.as_ref().and_then(|s| s.attribute(name.as_bytes())) {
         return signal;
     }
-    let label = format!("Instance.{}AttributeChanged", name.to_str_lossy());
-    let signal = state.signals.create_labelled(name.clone(), Str::from(label.as_str()));
+    // tostring reads "Signal nAttributeChanged" and diagnostics "Instance.nAttributeChanged" (measured in a playing client and a server,
+    // Studio 0.747: tools/parity/probes/instance_api_texts.luau)
+    let changed = [name.as_bytes(), b"AttributeChanged".as_slice()].concat();
+    let label = [b"Instance.".as_slice(), &changed].concat();
+    let signal = state.signals.create_labelled(Str::new(&changed), Str::new(&label));
     state
         .dom
         .at_mut(id)

@@ -1062,6 +1062,16 @@ unsafe extern "C-unwind" fn instance_new(state: *mut ffi::lua_State) -> c_int {
     crate::boundary::enter(state);
     // (host time: the call's time is its line's)
     let _time = unsafe { crate::luau_profile::ApiCall::new(state) };
+    // A class name that is neither a string nor a number raises Luau's `invalid argument #1 to 'new' (string expected, got nil)` at
+    // the calling line, typeof's name for any value, and none at all `missing argument #1 to 'new' (string expected)` (measured,
+    // Studio 0.747, a client and a server: tools/parity/probes/instance_api_texts.luau)
+    unsafe {
+        let kind = ffi::lua_type(state, 1);
+        if kind != ffi::LUA_TSTRING && kind != ffi::LUA_TNUMBER {
+            super::cfunction::charge_raised(state, true);
+            ffi::luaL_typeerror(state, 1, c"string".as_ptr())
+        }
+    }
     let bad_parent = std::cell::Cell::new(false);
     let out = guard(|| unsafe {
         let api = &*(ffi::lua_touserdata(state, ffi::lua_upvalueindex(1)) as *const Api);
