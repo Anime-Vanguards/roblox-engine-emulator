@@ -155,6 +155,14 @@ pub struct CollectionState {
     holders: FxHashMap<Str, Vec<InstanceId>>,
 }
 
+impl CollectionState {
+    /// Whether a script asked for any tag's signals (GetInstanceAddedSignal, GetInstanceRemovedSignal)
+    #[inline]
+    pub fn tagged_signals(&self) -> bool {
+        !self.tags.is_empty()
+    }
+}
+
 /// Records that `id` was given `tag` (whatever gave it: AddTag, Clone, a model import).
 pub fn note_tag(state: &mut State, id: InstanceId, tag: &Str) {
     state.collection.tagged = true;
@@ -191,6 +199,18 @@ pub fn tagged_below(state: &mut State, root: InstanceId, tag: &Str) -> Vec<Insta
         .collect();
     crate::sort::ord(&mut found);
     found.into_iter().map(|(_, id)| id).collect()
+}
+
+/// The tags whose CollectionService signal for instances entering the DataModel (`entering`: GetInstanceAddedSignal) or leaving
+/// it (GetInstanceRemovedSignal) has a connection
+pub fn listened_tags(state: &State, entering: bool) -> Vec<Str> {
+    state
+        .collection
+        .tags
+        .iter()
+        .filter(|&(_, &(added, removed))| state.signals.has_handlers(if entering { added } else { removed }))
+        .map(|(tag, _)| tag.clone())
+        .collect()
 }
 
 /// Whether `id` is the DataModel or inside it.

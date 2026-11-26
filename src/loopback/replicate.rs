@@ -274,8 +274,8 @@ fn mirror_waiting(server: &State, client: &mut State, ids: &super::bridge::Ids, 
         if let Some(copy) = ids.to_client.get(original)
             && client.dom.get(copy).is_some()
         {
-            let waits = crate::project::bundle_waits(server, original);
-            client.project.model_assets.set_waits_remotely(copy, waits);
+            let keys = server.project.model_assets.waiting_keys(original).cloned();
+            client.project.model_assets.set_remote(copy, keys);
         }
     }
 }
@@ -557,12 +557,10 @@ fn install(server: &Rc<Engine>, bridge: &Rc<Bridge>, filter: Rc<Filter>, exclude
         }
     }));
     let log = bridge.clone();
+    // (an import kept for a client copy on its way stays when the server frees the instance: the copy takes it when its tree
+    // arrives, and its Destroy follows; apply)
     hooks.instance_freed.push(Box::new(move |_, id| {
         log.ids.borrow_mut().to_client.remove(id);
-        let mut deferred = log.deferred.borrow_mut();
-        if !deferred.is_empty() {
-            deferred.remove(&id);
-        }
     }));
 }
 
@@ -573,7 +571,7 @@ pub fn install_client(client: &Rc<Engine>, bridge: &Rc<Bridge>) {
         ids.ids.borrow_mut().to_server.remove(id);
         let _ = &state;
         #[cfg(feature = "bundles")]
-        state.project.model_assets.set_waits_remotely(id, false);
+        state.project.model_assets.set_remote(id, None);
     }));
 }
 
@@ -765,7 +763,18 @@ fn node_of(state: &State, reflection: &Reflection, filter: &Filter, id: Instance
         json: instance.flags & flags::JSON_MODULE != 0,
         studio,
         studio_flags,
-        waits: crate::project::bundle_waits(state, id),
+        waits: waiting_keys(state, id),
+    }
+}
+
+/// The keys of the bundles that wait at the server's `id` (none without bundles)
+fn waiting_keys(state: &State, id: InstanceId) -> Vec<String> {
+    #[cfg(feature = "bundles")]
+    return state.project.model_assets.waiting_keys(id).cloned().unwrap_or_default();
+    #[cfg(not(feature = "bundles"))]
+    {
+        let _ = (state, id);
+        Vec::new()
     }
 }
 
@@ -853,7 +862,7 @@ fn take_deferred(client: &Engine, bridge: &Bridge, copy: InstanceId, deferred: s
             crate::world::joints::made_in_place(&mut state, reflection, copy);
         }
         #[cfg(feature = "bundles")]
-        state.project.model_assets.set_waits_remotely(copy, root.waits);
+        state.project.model_assets.set_remote(copy, Some(std::mem::take(&mut root.waits)));
     }
     for (index, snapshot) in groups {
         if let Some(&made_copy) = made.get(index as usize) {
@@ -1077,8 +1086,8 @@ pub fn apply(lua: &Lua, client: &Rc<Engine>, endpoint: &Rc<Endpoint>, message: M
                     }
                     // (a copy of an instance where bundles wait: the client's look has the server import them)
                     #[cfg(feature = "bundles")]
-                    if node.waits {
-                        state.project.model_assets.set_waits_remotely(copy, true);
+                    if !node.waits.is_empty() {
+                        state.project.model_assets.set_remote(copy, Some(node.waits.clone()));
                     }
                 }
             }
@@ -1159,6 +1168,13 @@ pub fn apply(lua: &Lua, client: &Rc<Engine>, endpoint: &Rc<Endpoint>, message: M
             }
         }
         Msg::Destroy { id } => {
+            // (an import kept for a copy whose tree never arrived goes with it)
+            {
+                let mut deferred = bridge.deferred.borrow_mut();
+                if !deferred.is_empty() {
+                    deferred.remove(&id);
+                }
+            }
             let Some(copy) = live(id) else { return Ok(()) };
             if client.state.borrow().dom.is_pinned(copy) {
                 client.state.borrow_mut().dom.unpin(copy);

@@ -147,24 +147,35 @@ pub fn import_on_server(client: &Engine, id: InstanceId, own_only: bool) {
                 crate::project::model_assets::materialize(&server, original);
             }
             // (an import that made nothing gave the copy nothing: it takes the flag and the waiting the server's has now)
-            let (waits, placeholder) = {
+            let (keys, placeholder) = {
                 let state = server.state.borrow();
-                (crate::project::bundle_waits(&state, original), state.dom.at(original).has(flags::BUNDLE_ROOT))
+                (state.project.model_assets.waiting_keys(original).cloned(), state.dom.get(original).is_some_and(|instance| instance.has(flags::BUNDLE_ROOT)))
             };
             let mut state = client.state.borrow_mut();
-            state.project.model_assets.set_waits_remotely(id, waits);
+            state.project.model_assets.set_remote(id, keys);
             if let Some(instance) = state.dom.get_mut(id)
                 && !placeholder
             {
                 instance.set_flag(flags::BUNDLE_ROOT, false);
             }
         }
-        // (the server's instance is gone: nothing waits for the copy any more)
+        // (the server's instance is gone: nothing waits for the copy any more; a destroyed copy a script holds takes its own
+        // bundle's root from the server's source, as the game's destroyed instance holds it)
         _ => {
-            let mut state = client.state.borrow_mut();
-            state.project.model_assets.set_waits_remotely(id, false);
-            if let Some(instance) = state.dom.get_mut(id) {
-                instance.set_flag(flags::BUNDLE_ROOT, false);
+            let keys = {
+                let mut state = client.state.borrow_mut();
+                let keys = state.project.model_assets.waiting_keys(id).cloned().unwrap_or_default();
+                state.project.model_assets.set_remote(id, None);
+                keys
+            };
+            let destroyed = client.state.borrow().dom.get(id).is_some_and(|instance| instance.flags & flags::DESTROYED != 0 && instance.has(flags::BUNDLE_ROOT));
+            match client.peer_server() {
+                Some((_, server)) if destroyed => crate::project::model_assets::import_root(&server, client, id, &keys),
+                _ => {
+                    if let Some(instance) = client.state.borrow_mut().dom.get_mut(id) {
+                        instance.set_flag(flags::BUNDLE_ROOT, false);
+                    }
+                }
             }
         }
     }
@@ -215,10 +226,13 @@ pub fn bundle_imported(server: &Engine, id: InstanceId, before: &[InstanceId]) {
     let copy = to_client(&client, &client_end, id);
     match copy {
         Some(copy) => {
-            if client.state.borrow().dom.get(copy).is_none_or(|instance| instance.flags & flags::DESTROYED != 0) {
-                return;
-            }
-            crate::timing::time("loopback: a bundle's copy", || super::replicate::copy_import(server, &client, bridge, id, copy, &made, &removed));
+            let destroyed = match client.state.borrow().dom.get(copy) {
+                None => return,
+                Some(instance) => instance.flags & flags::DESTROYED != 0,
+            };
+            // (a destroyed copy a script holds takes the root alone, as the game's destroyed instance holds it)
+            let (made, removed): (&[InstanceId], &[InstanceId]) = if destroyed { (&[], &[]) } else { (&made, &removed) };
+            crate::timing::time("loopback: a bundle's copy", || super::replicate::copy_import(server, &client, bridge, id, copy, made, removed));
         }
         None => {
             // (the client's copy is in a tree on its way: it takes them as they are now when it arrives, and the server's changes
@@ -228,9 +242,10 @@ pub fn bundle_imported(server: &Engine, id: InstanceId, before: &[InstanceId]) {
             super::replicate::mark_sent(&mut server.state.borrow_mut(), id, &made);
             let mut deferred = bridge.deferred.borrow_mut();
             match deferred.get_mut(&id) {
-                // (a second import there before the copy arrived: its root as it is now, the instances of both)
+                // (a second import there before the copy arrived: the root as the first import left it, which the server's
+                // writes since then follow as messages, and what waits there now; the instances of both)
                 Some(earlier) => {
-                    earlier.root = snapshot.root;
+                    earlier.root.waits = snapshot.root.waits;
                     let offset = earlier.nodes.len() as u32;
                     earlier.nodes.extend(snapshot.nodes.into_iter().map(|mut node| {
                         node.parent = node.parent.map(|parent| parent + offset);
@@ -256,9 +271,12 @@ pub fn import_tagged_on_server(client: &Engine, tag: Option<&str>) {
     let sent = |state: &crate::State, id: InstanceId| state.dom.at(id).flags & flags::SENT != 0;
     for original in crate::project::model_assets::tagged_waiting(&server, tag, &sent) {
         let copy = endpoint.bridge.ids.borrow().to_client.get(original);
-        if let Some(copy) = copy
-            && client.state.borrow().project.model_assets.waits_remotely(copy)
-        {
+        // (a copy out of the client's DataModel, or destroyed, is not one its lookup lists)
+        let listed = copy.is_some_and(|copy| {
+            let state = client.state.borrow();
+            state.project.model_assets.waits_remotely(copy) && state.dom.get(copy).is_some_and(|instance| instance.flags & flags::DESTROYED == 0) && crate::services::in_data_model(&state, copy)
+        });
+        if let Some(copy) = copy.filter(|_| listed) {
             import_on_server(client, copy, false);
         }
     }

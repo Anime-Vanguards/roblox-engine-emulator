@@ -63,8 +63,9 @@ pub struct Node {
     /// Its place in the Studio snapshot and whether its Studio children were made (lazy.rs): the client makes them itself
     pub studio: crate::dom::StudioNode,
     pub studio_flags: u16,
-    /// Bundles wait to import at it (project.rs `bundle_waits`): the server imports them when the client looks (lazy.rs)
-    pub waits: bool,
+    /// The keys of the bundles that wait to import at it (none: none waits; project::model_assets): the server imports them
+    /// when the client looks (lazy.rs)
+    pub waits: Vec<String>,
 }
 
 /// Messages sealed at the end of a sender's frame, delivered at the receiver's frame `due`.

@@ -116,7 +116,7 @@ pub struct ModelAssets {
     aliases: FxHashMap<String, String>,
     /// A loopback client's copies of the server's instances where bundles wait (the server's mount's, sent at the join or in a
     /// tree): its server imports them when the client looks, and the copy takes what that made (src/loopback/lazy.rs)
-    remote: FxHashSet<InstanceId>,
+    remote: FxHashMap<InstanceId, Vec<String>>,
     /// The tags of the bundles' instances (CollectionService: [`import_tagged`]), read when first asked for
     tags: Option<Box<TagIndex>>,
 }
@@ -178,7 +178,7 @@ pub fn mount(engine: &Engine, roots: &[String], chosen: &ModelAssetsOverride) {
             .collect();
         Decoding::start(files, reflection)
     });
-    engine.state.borrow_mut().project.model_assets = ModelAssets { source: Some(source), shape, project: project.into(), pending, decoding, recent, scene, imported: Vec::new(), root: Some(parent), aliases, remote: FxHashSet::default(), tags: None };
+    engine.state.borrow_mut().project.model_assets = ModelAssets { source: Some(source), shape, project: project.into(), pending, decoding, recent, scene, imported: Vec::new(), root: Some(parent), aliases, remote: FxHashMap::default(), tags: None };
     // (an instance freed takes the bundles waiting at it along: nothing imports them, or reads their tags, any more)
     engine.hooks.borrow_mut().instance_freed.push(Box::new(|state, id| {
         let assets = &mut state.project.model_assets;
@@ -277,7 +277,12 @@ impl ModelAssets {
     /// looks ([`ModelAssets::remote`])
     #[inline]
     pub(crate) fn waits_remotely(&self, id: InstanceId) -> bool {
-        !self.remote.is_empty() && self.remote.contains(&id)
+        !self.remote.is_empty() && self.remote.contains_key(&id)
+    }
+
+    /// The keys of the bundles that wait at `id` (on a loopback client, at its server's instance: [`ModelAssets::remote`])
+    pub(crate) fn waiting_keys(&self, id: InstanceId) -> Option<&Vec<String>> {
+        self.pending.get(&id).or_else(|| self.remote.get(&id))
     }
 
     /// No bundle waits here, nor on a loopback client's server for a copy it holds
@@ -286,12 +291,17 @@ impl ModelAssets {
         self.pending.is_empty() && self.remote.is_empty()
     }
 
-    /// Notes whether bundles wait on a loopback client's server at the instance the client's `id` is a copy of
-    pub(crate) fn set_waits_remotely(&mut self, id: InstanceId, waits: bool) {
-        if waits {
-            self.remote.insert(id);
-        } else {
-            self.remote.remove(&id);
+    /// Notes which bundles wait (`keys`; none: no more) on a loopback client's server at the instance the client's `id` is a copy of
+    pub(crate) fn set_remote(&mut self, id: InstanceId, keys: Option<Vec<String>>) {
+        match keys.filter(|keys| !keys.is_empty()) {
+            Some(keys) => {
+                self.remote.insert(id, keys);
+            }
+            None => {
+                if !self.remote.is_empty() {
+                    self.remote.remove(&id);
+                }
+            }
         }
     }
 }
@@ -317,15 +327,38 @@ fn import(engine: &Engine, id: InstanceId, own_only: bool) {
         crate::loopback::lazy::import_on_server(engine, id, own_only);
         return;
     }
+    // (a freed instance's bundles are gone with it; a destroyed one a script still holds takes its own bundle's root, as the
+    // game's destroyed instance holds it: its class and values, none of what was below it, the loose bundles' members none)
+    let destroyed: Option<Vec<String>> = {
+        let mut state = engine.state.borrow_mut();
+        let state = &mut *state;
+        let flags_of = state.dom.get(id).map(|instance| instance.flags);
+        let assets = &mut state.project.model_assets;
+        match flags_of {
+            None => {
+                assets.pending.remove(&id);
+                return;
+            }
+            Some(held) if held & flags::DESTROYED != 0 && assets.pending.contains_key(&id) && assets.source.is_some() => {
+                let own: Vec<String> = assets.pending.remove(&id).unwrap_or_default().into_iter().filter(|key| !is_loose(key)).collect();
+                state.dom.at_mut(id).set_flag(flags::BUNDLE_ROOT, false);
+                Some(own)
+            }
+            Some(_) => None,
+        }
+    };
+    if let Some(own) = destroyed {
+        import_root(engine, engine, id, &own);
+        // (a loopback server's: its client's copy takes the root too)
+        if engine.loopback.borrow().is_some() {
+            crate::loopback::lazy::bundle_imported(engine, id, &[]);
+        }
+        return;
+    }
     let (keys, mut source, project, decoding, shape) = {
         let mut state = engine.state.borrow_mut();
         let state = &mut *state;
         let assets = &mut state.project.model_assets;
-        // (a destroyed or freed instance's bundles are gone with it)
-        if state.dom.get(id).is_none_or(|instance| instance.flags & flags::DESTROYED != 0) {
-            assets.pending.remove(&id);
-            return;
-        }
         let Some(pending) = assets.pending.get_mut(&id) else {
             if own_only {
                 state.dom.at_mut(id).set_flag(flags::BUNDLE_ROOT, false);
@@ -400,14 +433,61 @@ pub fn before_parent(engine: &Engine, id: InstanceId, parent: InstanceId) {
         let (Some(moving), Some(_)) = (state.dom.get(id), state.dom.get(parent)) else { return };
         let holds = moving.flags & (flags::LAZY_ABOVE | flags::BUNDLE_ROOT) != 0;
         let enters = holds && (state.dom.is_home(parent) || state.dom.home(parent).is_some());
+        // (entering or leaving the DataModel while CollectionService signals are connected: the tags they listen for)
+        let listened = if holds && state.collection.tagged_signals() {
+            let (was, will) = (crate::services::in_data_model(&state, id), crate::services::in_data_model(&state, parent));
+            if was != will { crate::services::listened_tags(&state, will) } else { Vec::new() }
+        } else {
+            Vec::new()
+        };
         if holds {
             mark_above(&mut state, parent);
         }
-        enters
+        (enters, listened)
     };
+    let (enters, listened) = enters;
     before_child(engine, parent);
     if enters {
         entering_world(engine, id);
+    }
+    if !listened.is_empty() {
+        crossing_listened(engine, id, &listened);
+    }
+}
+
+/// The bundles waiting in `id`'s subtree whose instances carry one of `tags`, imported before the subtree enters or leaves the
+/// DataModel, so the CollectionService signals connected for them fire for those instances as the game's do (a loopback
+/// client's copy is imported by its server: its tags are the server's to read)
+fn crossing_listened(engine: &Engine, id: InstanceId, tags: &[Str]) {
+    let mut waiting: Vec<(InstanceId, Vec<String>)> = Vec::new();
+    {
+        let state = engine.state.borrow();
+        let assets = &state.project.model_assets;
+        let mut stack = vec![id];
+        while let Some(node) = stack.pop() {
+            let Some(instance) = state.dom.get(node) else { continue };
+            if let Some(keys) = assets.waiting_keys(node) {
+                waiting.push((node, keys.clone()));
+            }
+            stack.extend(instance.children.iter().copied().filter(|&child| state.dom.at(child).flags & (flags::LAZY_ABOVE | flags::BUNDLE_ROOT) != 0));
+        }
+    }
+    if waiting.is_empty() {
+        return;
+    }
+    let mut keys: Vec<String> = waiting.iter().flat_map(|(_, keys)| keys.iter().cloned()).collect();
+    crate::sort::ord(&mut keys);
+    keys.dedup();
+    let remote = engine.state.borrow().project.model_assets.waits_remotely(waiting[0].0);
+    let known = match remote.then(|| engine.peer_server()).flatten() {
+        Some((_, server)) => tags_for(&server, &keys),
+        None => tags_for(engine, &keys),
+    };
+    let wanted: Vec<String> = tags.iter().map(|tag| String::from_utf8_lossy(tag.as_bytes()).into_owned()).collect();
+    for (node, keys) in waiting {
+        if keys.iter().any(|key| known.get(key).is_some_and(|held| held.iter().any(|tag| wanted.contains(tag)))) {
+            materialize(engine, node);
+        }
     }
 }
 
@@ -476,6 +556,12 @@ impl TagIndex {
         let mut entries = read_tag_entries(file);
         entries.extend(self.entries.iter().map(|(entry, tags)| (entry.clone(), tags.clone())));
         entries.retain(|entry, _| entry.strip_prefix("f:").is_none_or(file_entry_current));
+        // (a version the manifest of this run names no more goes: `v:<shape>:<asset version>`; a manifest this run did not read
+        // prunes nothing)
+        if let Some(versions) = &self.versions {
+            let named: FxHashSet<&str> = versions.values().filter_map(|entry| entry.rsplit(':').next()).collect();
+            entries.retain(|entry, _| entry.strip_prefix("v:").is_none_or(|rest| rest.rsplit(':').next().is_some_and(|version| named.contains(version))));
+        }
         let mut sorted: Vec<(&String, &Vec<String>)> = entries.iter().collect();
         crate::sort::by_key(&mut sorted, |(entry, _)| (*entry).clone());
         let map: serde_json::Map<String, serde_json::Value> = sorted.into_iter().map(|(entry, tags)| (entry.clone(), json!(tags))).collect();
@@ -488,8 +574,11 @@ impl TagIndex {
     }
 }
 
-/// How long a bundle whose tags could not be read waits before a lookup asks for it again ([`TagIndex::failed`])
-const TAG_RETRY: Duration = Duration::from_secs(10);
+/// How long a bundle whose tags could not be read waits before a lookup asks for it again ([`TagIndex::failed`]): a failure may
+/// pass (a download that failed, a bundle another run fetches meanwhile), so it is not kept for the engine's life, but a game's
+/// start asks GetTagged tens of times, and asking at each made the game's loopback boot 12.2 s against 8.2 (offline, its
+/// worker asked for 272 missing bundles at each lookup)
+const TAG_RETRY: Duration = if cfg!(test) { Duration::from_millis(300) } else { Duration::from_secs(10) };
 
 /// The entries of the tag index in `file` (none when it is missing or does not read as one)
 fn read_tag_entries(file: &Path) -> FxHashMap<String, Vec<String>> {
@@ -513,7 +602,7 @@ fn file_entry(path: &Path) -> Option<String> {
 /// thread pool; a bundle the source does not hold is fetched, [`BundleSource::fetch_many`]). A bundle that cannot be read is
 /// left out (asked again next time), noted for a prepared run (its missing file, or unchecked when the source cannot name it)
 /// and named in one warning a key.
-fn tags_for(engine: &Engine, keys: &[String]) -> FxHashMap<String, Vec<String>> {
+pub(crate) fn tags_for(engine: &Engine, keys: &[String]) -> FxHashMap<String, Vec<String>> {
     let mut known: FxHashMap<String, Vec<String>> = FxHashMap::default();
     let (unknown, source, project) = {
         let mut state = engine.state.borrow_mut();
@@ -521,8 +610,14 @@ fn tags_for(engine: &Engine, keys: &[String]) -> FxHashMap<String, Vec<String>> 
         let project = assets.project.clone();
         let index = assets.tags.get_or_insert_with(|| Box::new(TagIndex::load(crate::state_dir(&engine.options.repo).join("model-bundles").join("tags.json"))));
         if index.versions.is_none() {
+            // (with the source's shape: a members file holds the root's children alone, not its tags, so its tags are not an
+            // uploaded file's)
+            let shape = match assets.shape {
+                BundleShape::Uploaded => "uploaded",
+                BundleShape::Members => "members",
+            };
             let versions = Manifest::read(&project)
-                .map(|manifest| manifest.entries.keys().filter_map(|key| manifest.file_name(key).map(|name| (key.clone(), format!("v:{}", name.trim_end_matches(".rbxm"))))).collect())
+                .map(|manifest| manifest.entries.keys().filter_map(|key| manifest.file_name(key).map(|name| (key.clone(), format!("v:{shape}:{}", name.trim_end_matches(".rbxm"))))).collect())
                 .unwrap_or_default();
             index.versions = Some(versions);
         }
@@ -538,7 +633,7 @@ fn tags_for(engine: &Engine, keys: &[String]) -> FxHashMap<String, Vec<String>> 
                 known.insert(key.clone(), tags);
                 continue;
             }
-            // (one that could not be read a moment ago is not asked for again yet)
+            // (one that could not be read a moment ago is not asked for again yet: TAG_RETRY says why)
             if index.failed.get(key).is_some_and(|at| at.elapsed() < TAG_RETRY) {
                 continue;
             }
@@ -556,15 +651,36 @@ fn tags_for(engine: &Engine, keys: &[String]) -> FxHashMap<String, Vec<String>> 
     let missing: Vec<usize> = (0..unknown.len()).filter(|&index| files[index].is_none()).collect();
     let mut failed: Vec<(String, String, Option<PathBuf>)> = Vec::new();
     if !missing.is_empty() {
-        let keys: Vec<String> = missing.iter().map(|&index| unknown[index].clone()).collect();
+        // (each file fetched once: two manifest lines that pin one version name one file, which two workers must not write at
+        // once)
+        let expected: Vec<Option<PathBuf>> = missing.iter().map(|&index| source.expected(&project, &unknown[index])).collect();
+        let mut first: FxHashMap<PathBuf, usize> = FxHashMap::default();
+        let mut fetch: Vec<usize> = Vec::new();
+        for (at, path) in expected.iter().enumerate() {
+            match path {
+                Some(path) if first.contains_key(path) => {}
+                Some(path) => {
+                    first.insert(path.clone(), at);
+                    fetch.push(at);
+                }
+                None => fetch.push(at),
+            }
+        }
+        let keys: Vec<String> = fetch.iter().map(|&at| unknown[missing[at]].clone()).collect();
         let fetched = crate::timing::time("bundles: fetch for tags", || source.fetch_many(&project, &keys));
-        for (&index, result) in missing.iter().zip(fetched) {
+        let mut results: Vec<Option<Result<PathBuf, String>>> = vec![None; missing.len()];
+        for (&at, result) in fetch.iter().zip(fetched) {
+            results[at] = Some(result);
+        }
+        for at in 0..missing.len() {
+            let result = match &results[at] {
+                Some(result) => result.clone(),
+                None => expected[at].as_ref().and_then(|path| first.get(path)).and_then(|&lead| results[lead].clone()).unwrap_or_else(|| Err("not fetched".into())),
+            };
+            let index = missing[at];
             match result {
                 Ok(path) => files[index] = Some(path),
-                Err(error) => {
-                    let expected = source.expected(&project, &unknown[index]);
-                    failed.push((unknown[index].clone(), error, expected));
-                }
+                Err(error) => failed.push((unknown[index].clone(), error, expected[at].clone())),
             }
         }
     }
@@ -706,6 +822,42 @@ pub fn import_tagged(engine: &Engine, tag: Option<&str>) {
     }
     for id in tagged_waiting(engine, tag, &|_, _| true) {
         materialize(engine, id);
+    }
+}
+
+/// A destroyed placeholder `id` (of `target`) a script still holds: its own bundle (the first of `keys` that is not loose) from
+/// `from`'s source, its root's class, values, attributes and tags taken as the game's destroyed instance holds them, nothing below
+/// it made, no event (a bundle that is no one instance, or a source's members, leave the folder as it is). `from` is `target`
+/// itself, or a loopback client's server, whose source the client's bundles come from.
+pub(crate) fn import_root(from: &Engine, target: &Engine, id: InstanceId, keys: &[String]) {
+    let clear = || {
+        if let Some(instance) = target.state.borrow_mut().dom.get_mut(id) {
+            instance.set_flag(flags::BUNDLE_ROOT, false);
+        }
+    };
+    let Some(key) = keys.iter().find(|key| !is_loose(key)) else { return clear() };
+    let (source, project, shape) = {
+        let mut state = from.state.borrow_mut();
+        let assets = &mut state.project.model_assets;
+        (assets.source.take(), assets.project.clone(), assets.shape)
+    };
+    let Some(mut source) = source else { return clear() };
+    let result = source.bundle(&project, key).and_then(|path| {
+        crate::files::note(&path);
+        plan_for(from, &path)
+    });
+    from.state.borrow_mut().project.model_assets.source = Some(source);
+    match result {
+        Ok(plan) if shape == BundleShape::Uploaded && plan.root_count() == 1 => {
+            let mut state = target.state.borrow_mut();
+            plan.instantiate_root(&mut state, &target.reflection, id);
+        }
+        Ok(_) => clear(),
+        Err(error) => {
+            crate::files::note_unchecked("a bundle failed to load");
+            from.warn(format!("modelAssets {key}: {error}"));
+            clear();
+        }
     }
 }
 
@@ -2123,6 +2275,78 @@ mod tests {
         assert!(state.project.model_assets.pending.is_empty(), "the untouched bundle waits");
         state.project.model_assets.source = None;
         drop(state);
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    /// A source that answers nothing, its bundle files counted as asked for (the tag lookups below read the index only)
+    struct Silent(Rc<RefCell<usize>>, BundleShape);
+
+    impl BundleSource for Silent {
+        fn catalog(&mut self, _: &Path) -> Result<Vec<String>, String> {
+            Ok(Vec::new())
+        }
+
+        fn bundle(&mut self, _: &Path, key: &str) -> Result<PathBuf, String> {
+            *self.0.borrow_mut() += 1;
+            Err(format!("no bundle {key}"))
+        }
+
+        fn cached(&mut self, _: &Path, _: &str) -> Option<PathBuf> {
+            *self.0.borrow_mut() += 1;
+            None
+        }
+
+        fn shape(&self) -> BundleShape {
+            self.1
+        }
+    }
+
+    /// An engine with a project at `directory` whose bundles come from `source` (no mount: the tag lookups alone), its tag index
+    /// the test's own file (other tests write the state dir's at once)
+    fn tag_engine(directory: &Path, source: Box<dyn BundleSource>, shape: BundleShape) -> Rc<Engine> {
+        let engine = Engine::new(crate::Options::default()).unwrap();
+        let tags = Some(Box::new(TagIndex::load(directory.join("tags.json"))));
+        engine.state.borrow_mut().project.model_assets = ModelAssets { source: Some(source), shape, project: directory.to_path_buf(), tags, ..Default::default() };
+        engine
+    }
+
+    /// The tags of a bundle whose manifest line pins its asset version are read once and kept: a later engine (another run) finds
+    /// them in the index without asking its source anything, for a source of the same shape only; and one that cannot be read
+    /// is asked again only once the retry wait has passed
+    #[test]
+    fn a_versions_tags_are_read_once_and_a_failure_is_asked_again_later() {
+        let directory = scratch("tag-versions");
+        let manifest = directory.join(MANIFEST);
+        std::fs::create_dir_all(manifest.parent().unwrap()).unwrap();
+        let id = 8_000_000_000u64 + (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos() % 1_000_000_000) as u64;
+        std::fs::write(&manifest, format!("return {{\n\t[\"Models/Machine\"] = {{ AssetId = {id}, Version = 1 }},\n}}\n")).unwrap();
+        let machine_file = directory.join("machine.rbxm");
+        write_model(&machine_file, &machine("Machine"));
+        let mut files: FxHashMap<String, PathBuf> = FxHashMap::default();
+        files.insert("Models/Machine".into(), machine_file);
+        let fetched = Rc::new(RefCell::new(Vec::new()));
+        let first = tag_engine(&directory, Box::new(Uploaded(files, fetched.clone())), BundleShape::Uploaded);
+        let key = vec!["Models/Machine".to_string()];
+        assert_eq!(tags_for(&first, &key).get("Models/Machine").map(Vec::as_slice), Some(&["Machine".to_string()][..]));
+        assert_eq!(fetched.borrow().len(), 1, "the first read fetched the bundle once");
+        remember(&first);
+        let asked = Rc::new(RefCell::new(0));
+        let later = tag_engine(&directory, Box::new(Silent(asked.clone(), BundleShape::Uploaded)), BundleShape::Uploaded);
+        assert_eq!(tags_for(&later, &key).get("Models/Machine").map(Vec::as_slice), Some(&["Machine".to_string()][..]));
+        assert_eq!(*asked.borrow(), 0, "a later run asked its source for a version the index holds");
+        // (another shape: not that entry; its source is asked, fails, and is asked again only after the wait)
+        let members = tag_engine(&directory, Box::new(Silent(asked.clone(), BundleShape::Members)), BundleShape::Members);
+        assert!(tags_for(&members, &key).is_empty());
+        let once = *asked.borrow();
+        assert!(once > 0, "a members source was answered by an uploaded file's tags");
+        assert!(tags_for(&members, &key).is_empty());
+        assert_eq!(*asked.borrow(), once, "a failure was asked again at once");
+        std::thread::sleep(TAG_RETRY + std::time::Duration::from_millis(50));
+        assert!(tags_for(&members, &key).is_empty());
+        assert!(*asked.borrow() > once, "a failure was not asked again after the wait");
+        for engine in [first, later, members] {
+            engine.state.borrow_mut().project.model_assets.source = None;
+        }
         let _ = std::fs::remove_dir_all(directory);
     }
 

@@ -1194,6 +1194,29 @@ impl ModelPlan {
         self.import_lazy(state, reflection, Placing::As(target));
     }
 
+    /// [`ModelPlan::instantiate_lazy_as`] of a destroyed `target` a script still holds: it takes the root's class, values,
+    /// attributes and tags, and nothing below the root is made (the game's instance lost its children when it was destroyed;
+    /// a value referencing one of them reads nil). No event fires. The plan must have one root.
+    pub fn instantiate_root(self: &Arc<Self>, state: &mut State, reflection: &Reflection, target: InstanceId) {
+        debug_assert_eq!(self.root_count(), 1);
+        let import = state.project.imports.len() as u32;
+        state.project.imports.push(LazyImport { plan: self.clone(), ids: vec![UNMADE; self.nodes.len()], serial_base: 0, texts: Texts::default(), props: Rc::new(PlanProps::new(self.clone())) });
+        let node = &self.nodes[0];
+        state.dom.set_class(reflection, target, node.class);
+        let instance = state.dom.at_mut(target);
+        instance.flags &= !(flags::STUDIO_ONLY | flags::BUNDLE_ROOT);
+        instance.flags |= flags::MATERIALIZED;
+        instance.studio_node = crate::dom::StudioNode::None;
+        state.project.imports[import as usize].ids[0] = target;
+        let ids = std::mem::take(&mut state.project.imports[import as usize].ids);
+        let mut texts = std::mem::take(&mut state.project.imports[import as usize].texts);
+        let table = state.project.imports[import as usize].props.clone();
+        fill(state, reflection, self, 0, target, &mut texts, Some(&table), |referenced| ids[referenced as usize]);
+        let import_state = &mut state.project.imports[import as usize];
+        import_state.ids = ids;
+        import_state.texts = texts;
+    }
+
     /// [`ModelPlan::instantiate_lazy`] of the children of a plan's one root as children of `parent`
     /// (a loose manifest bundle: the game moves its instance's members into the parent folder and
     /// drops the instance, so the root itself is never made and references to it read nil). Returns
