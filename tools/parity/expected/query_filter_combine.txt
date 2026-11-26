@@ -1,0 +1,153 @@
+# engine: Roblox Studio 0.747.0.7471481, a headless playing client (script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-26
+fields ok nil nil | ok nil nil
+combine Exclude fdi=none ex=nil in=nil box ok A,B,C ray ok A
+combine Exclude fdi=none ex=nil in=empty box ok  ray ok none
+combine Exclude fdi=none ex=nil in=FA box ok A ray ok A
+combine Exclude fdi=none ex=nil in=AC box ok A,C ray ok A
+combine Exclude fdi=none ex=nil in=FB box ok B ray ok B
+combine Exclude fdi=none ex=empty in=nil box ok A,B,C ray ok A
+combine Exclude fdi=none ex=empty in=empty box ok  ray ok none
+combine Exclude fdi=none ex=empty in=FA box ok A ray ok A
+combine Exclude fdi=none ex=empty in=AC box ok A,C ray ok A
+combine Exclude fdi=none ex=empty in=FB box ok B ray ok B
+combine Exclude fdi=none ex=FA in=nil box ok B,C ray ok B
+combine Exclude fdi=none ex=FA in=empty box ok  ray ok none
+combine Exclude fdi=none ex=FA in=FA box ok  ray ok none
+combine Exclude fdi=none ex=FA in=AC box ok A,C ray ok A
+combine Exclude fdi=none ex=FA in=FB box ok B ray ok B
+combine Exclude fdi=none ex=B in=nil box ok A,C ray ok A
+combine Exclude fdi=none ex=B in=empty box ok  ray ok none
+combine Exclude fdi=none ex=B in=FA box ok A ray ok A
+combine Exclude fdi=none ex=B in=AC box ok A,C ray ok A
+combine Exclude fdi=none ex=B in=FB box ok  ray ok none
+combine Exclude fdi=none ex=A in=nil box ok B,C ray ok B
+combine Exclude fdi=none ex=A in=empty box ok  ray ok none
+combine Exclude fdi=none ex=A in=FA box ok  ray ok none
+combine Exclude fdi=none ex=A in=AC box ok C ray ok C
+combine Exclude fdi=none ex=A in=FB box ok B ray ok B
+combine Exclude fdi=FA ex=nil in=nil box ok B,C ray ok B
+combine Exclude fdi=FA ex=nil in=empty box ok  ray ok none
+combine Exclude fdi=FA ex=nil in=FA box ok  ray ok none
+combine Exclude fdi=FA ex=nil in=AC box ok C ray ok C
+combine Exclude fdi=FA ex=nil in=FB box ok B ray ok B
+combine Exclude fdi=FA ex=empty in=nil box ok B,C ray ok B
+combine Exclude fdi=FA ex=empty in=empty box ok  ray ok none
+combine Exclude fdi=FA ex=empty in=FA box ok  ray ok none
+combine Exclude fdi=FA ex=empty in=AC box ok C ray ok C
+combine Exclude fdi=FA ex=empty in=FB box ok B ray ok B
+combine Exclude fdi=FA ex=FA in=nil box ok B,C ray ok B
+combine Exclude fdi=FA ex=FA in=empty box ok  ray ok none
+combine Exclude fdi=FA ex=FA in=FA box ok  ray ok none
+combine Exclude fdi=FA ex=FA in=AC box ok C ray ok C
+combine Exclude fdi=FA ex=FA in=FB box ok B ray ok B
+combine Exclude fdi=FA ex=B in=nil box ok C ray ok C
+combine Exclude fdi=FA ex=B in=empty box ok  ray ok none
+combine Exclude fdi=FA ex=B in=FA box ok  ray ok none
+combine Exclude fdi=FA ex=B in=AC box ok C ray ok C
+combine Exclude fdi=FA ex=B in=FB box ok  ray ok none
+combine Exclude fdi=FA ex=A in=nil box ok B,C ray ok B
+combine Exclude fdi=FA ex=A in=empty box ok  ray ok none
+combine Exclude fdi=FA ex=A in=FA box ok  ray ok none
+combine Exclude fdi=FA ex=A in=AC box ok C ray ok C
+combine Exclude fdi=FA ex=A in=FB box ok B ray ok B
+combine Exclude fdi=A ex=nil in=nil box ok B,C ray ok B
+combine Exclude fdi=A ex=nil in=empty box ok  ray ok none
+combine Exclude fdi=A ex=nil in=FA box ok  ray ok none
+combine Exclude fdi=A ex=nil in=AC box ok C ray ok C
+combine Exclude fdi=A ex=nil in=FB box ok B ray ok B
+combine Exclude fdi=A ex=empty in=nil box ok B,C ray ok B
+combine Exclude fdi=A ex=empty in=empty box ok  ray ok none
+combine Exclude fdi=A ex=empty in=FA box ok  ray ok none
+combine Exclude fdi=A ex=empty in=AC box ok C ray ok C
+combine Exclude fdi=A ex=empty in=FB box ok B ray ok B
+combine Exclude fdi=A ex=FA in=nil box ok B,C ray ok B
+combine Exclude fdi=A ex=FA in=empty box ok  ray ok none
+combine Exclude fdi=A ex=FA in=FA box ok  ray ok none
+combine Exclude fdi=A ex=FA in=AC box ok C ray ok C
+combine Exclude fdi=A ex=FA in=FB box ok B ray ok B
+combine Exclude fdi=A ex=B in=nil box ok C ray ok C
+combine Exclude fdi=A ex=B in=empty box ok  ray ok none
+combine Exclude fdi=A ex=B in=FA box ok  ray ok none
+combine Exclude fdi=A ex=B in=AC box ok C ray ok C
+combine Exclude fdi=A ex=B in=FB box ok  ray ok none
+combine Exclude fdi=A ex=A in=nil box ok B,C ray ok B
+combine Exclude fdi=A ex=A in=empty box ok  ray ok none
+combine Exclude fdi=A ex=A in=FA box ok  ray ok none
+combine Exclude fdi=A ex=A in=AC box ok C ray ok C
+combine Exclude fdi=A ex=A in=FB box ok B ray ok B
+combine Include fdi=none ex=nil in=nil box ok  ray ok none
+combine Include fdi=none ex=nil in=empty box ok  ray ok none
+combine Include fdi=none ex=nil in=FA box ok  ray ok none
+combine Include fdi=none ex=nil in=AC box ok  ray ok none
+combine Include fdi=none ex=nil in=FB box ok  ray ok none
+combine Include fdi=none ex=empty in=nil box ok  ray ok none
+combine Include fdi=none ex=empty in=empty box ok  ray ok none
+combine Include fdi=none ex=empty in=FA box ok  ray ok none
+combine Include fdi=none ex=empty in=AC box ok  ray ok none
+combine Include fdi=none ex=empty in=FB box ok  ray ok none
+combine Include fdi=none ex=FA in=nil box ok  ray ok none
+combine Include fdi=none ex=FA in=empty box ok  ray ok none
+combine Include fdi=none ex=FA in=FA box ok  ray ok none
+combine Include fdi=none ex=FA in=AC box ok  ray ok none
+combine Include fdi=none ex=FA in=FB box ok  ray ok none
+combine Include fdi=none ex=B in=nil box ok  ray ok none
+combine Include fdi=none ex=B in=empty box ok  ray ok none
+combine Include fdi=none ex=B in=FA box ok  ray ok none
+combine Include fdi=none ex=B in=AC box ok  ray ok none
+combine Include fdi=none ex=B in=FB box ok  ray ok none
+combine Include fdi=none ex=A in=nil box ok  ray ok none
+combine Include fdi=none ex=A in=empty box ok  ray ok none
+combine Include fdi=none ex=A in=FA box ok  ray ok none
+combine Include fdi=none ex=A in=AC box ok  ray ok none
+combine Include fdi=none ex=A in=FB box ok  ray ok none
+combine Include fdi=FA ex=nil in=nil box ok A ray ok A
+combine Include fdi=FA ex=nil in=empty box ok  ray ok none
+combine Include fdi=FA ex=nil in=FA box ok A ray ok A
+combine Include fdi=FA ex=nil in=AC box ok A ray ok A
+combine Include fdi=FA ex=nil in=FB box ok  ray ok none
+combine Include fdi=FA ex=empty in=nil box ok A ray ok A
+combine Include fdi=FA ex=empty in=empty box ok  ray ok none
+combine Include fdi=FA ex=empty in=FA box ok A ray ok A
+combine Include fdi=FA ex=empty in=AC box ok A ray ok A
+combine Include fdi=FA ex=empty in=FB box ok  ray ok none
+combine Include fdi=FA ex=FA in=nil box ok  ray ok none
+combine Include fdi=FA ex=FA in=empty box ok  ray ok none
+combine Include fdi=FA ex=FA in=FA box ok  ray ok none
+combine Include fdi=FA ex=FA in=AC box ok A ray ok A
+combine Include fdi=FA ex=FA in=FB box ok  ray ok none
+combine Include fdi=FA ex=B in=nil box ok A ray ok A
+combine Include fdi=FA ex=B in=empty box ok  ray ok none
+combine Include fdi=FA ex=B in=FA box ok A ray ok A
+combine Include fdi=FA ex=B in=AC box ok A ray ok A
+combine Include fdi=FA ex=B in=FB box ok  ray ok none
+combine Include fdi=FA ex=A in=nil box ok  ray ok none
+combine Include fdi=FA ex=A in=empty box ok  ray ok none
+combine Include fdi=FA ex=A in=FA box ok  ray ok none
+combine Include fdi=FA ex=A in=AC box ok  ray ok none
+combine Include fdi=FA ex=A in=FB box ok  ray ok none
+combine Include fdi=A ex=nil in=nil box ok A ray ok A
+combine Include fdi=A ex=nil in=empty box ok  ray ok none
+combine Include fdi=A ex=nil in=FA box ok A ray ok A
+combine Include fdi=A ex=nil in=AC box ok A ray ok A
+combine Include fdi=A ex=nil in=FB box ok  ray ok none
+combine Include fdi=A ex=empty in=nil box ok A ray ok A
+combine Include fdi=A ex=empty in=empty box ok  ray ok none
+combine Include fdi=A ex=empty in=FA box ok A ray ok A
+combine Include fdi=A ex=empty in=AC box ok A ray ok A
+combine Include fdi=A ex=empty in=FB box ok  ray ok none
+combine Include fdi=A ex=FA in=nil box ok  ray ok none
+combine Include fdi=A ex=FA in=empty box ok  ray ok none
+combine Include fdi=A ex=FA in=FA box ok  ray ok none
+combine Include fdi=A ex=FA in=AC box ok A ray ok A
+combine Include fdi=A ex=FA in=FB box ok  ray ok none
+combine Include fdi=A ex=B in=nil box ok A ray ok A
+combine Include fdi=A ex=B in=empty box ok  ray ok none
+combine Include fdi=A ex=B in=FA box ok A ray ok A
+combine Include fdi=A ex=B in=AC box ok A ray ok A
+combine Include fdi=A ex=B in=FB box ok  ray ok none
+combine Include fdi=A ex=A in=nil box ok  ray ok none
+combine Include fdi=A ex=A in=empty box ok  ray ok none
+combine Include fdi=A ex=A in=FA box ok  ray ok none
+combine Include fdi=A ex=A in=AC box ok  ray ok none
+combine Include fdi=A ex=A in=FB box ok  ray ok none
