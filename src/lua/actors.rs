@@ -12,9 +12,11 @@
 //! `task.synchronize()`, then the synchronized threads run serially in that order up to their next
 //! `task.desynchronize()`, then the desynchronized ones, and so on until all have finished (the order a
 //! Studio client printed for two Actors: both "parallel", both "synchronized", both "desynchronized",
-//! newest connection first). `task.synchronize` and `task.desynchronize` anywhere else are no-ops, as
-//! they are in a script that is not in a parallel phase. Results are the same as Studio's as long as no
-//! Actor reads what another writes in the same step (Studio does not order Actors against each other).
+//! newest connection first). `task.synchronize` and `task.desynchronize` in an Actor's script that is not in a parallel
+//! phase are no-ops; outside an Actor they raise (`task.synchronize() may only be called from a script that is a descendant
+//! of an Actor`, also where the thread cannot yield: measured in a 0.747 playing client and a server,
+//! tools/parity/probes/yield_refused.luau). Results are the same as Studio's as long as no Actor reads what another
+//! writes in the same step (Studio does not order Actors against each other).
 
 use std::collections::VecDeque;
 use std::rc::Rc;
@@ -149,7 +151,14 @@ pub fn park(lua: &Lua, engine: &Engine, to_serial: bool) -> Result<bool, Flow> {
     let thread = lua.current_thread();
     let mut modules = engine.modules.borrow_mut();
     let parallel = &mut modules.parallel;
-    let Some(&in_parallel) = parallel.modes.get(&key(&thread)) else { return Ok(false) };
+    let Some(&in_parallel) = parallel.modes.get(&key(&thread)) else {
+        drop(modules);
+        if !caller_in_actor(lua) {
+            let name = if to_serial { "synchronize" } else { "desynchronize" };
+            return super::raise_plain(format!("task.{name}() may only be called from a script that is a descendant of an Actor"));
+        }
+        return Ok(false);
+    };
     let Some(phase) = parallel.phases.last_mut() else { return Ok(false) };
     if in_parallel != to_serial {
         return Ok(false);
@@ -199,8 +208,37 @@ pub fn parallel_phase(lua: &Lua, engine: &Rc<Engine>, threads: Vec<(LuaThread, L
     }
 }
 
-/// Whether a function runs in an Actor's VM: its environment is one of Actor VM environments (prelude.luau `Environment` gives
-/// those their own `_G`).
-pub fn runs_in_actor(function: &LuaFunction) -> bool {
-    function.environment().is_some_and(|env| env.raw_get::<LuaValue>("_G").is_ok_and(|globals| !globals.is_nil()))
+/// Whether the running thread's innermost script frame (C functions and the engine's own Luau skipped) runs in an Actor's VM, whose
+/// environments have their own `_G` (prelude.luau `Environment`): the calling script is one under an Actor, or a module such a
+/// script required.
+pub fn caller_in_actor(lua: &Lua) -> bool {
+    use mlua::ffi;
+    // SAFETY: the running thread's state, valid while the callback runs; each frame's function is pushed and popped again
+    unsafe {
+        let state = lua.state();
+        let mut debug: ffi::lua_Debug = std::mem::zeroed();
+        let mut level = 0;
+        while level < 128 && ffi::lua_getinfo(state, level, c"sf".as_ptr(), &mut debug) != 0 {
+            level += 1;
+            let script = !debug.source.is_null() && {
+                let source = std::ffi::CStr::from_ptr(debug.source).to_string_lossy();
+                let chunk = source.strip_prefix('=').or_else(|| source.strip_prefix('@')).unwrap_or(&source);
+                chunk != "[C]" && !chunk.starts_with("rur.") && !chunk.starts_with("ree.")
+            };
+            if !script {
+                ffi::lua_pop(state, 1);
+                continue;
+            }
+            ffi::lua_getfenv(state, -1);
+            let mut actor = false;
+            if ffi::lua_type(state, -1) == ffi::LUA_TTABLE {
+                ffi::lua_rawgetfield(state, -1, c"_G".as_ptr());
+                actor = ffi::lua_type(state, -1) != ffi::LUA_TNIL;
+                ffi::lua_pop(state, 1);
+            }
+            ffi::lua_pop(state, 2);
+            return actor;
+        }
+        false
+    }
 }

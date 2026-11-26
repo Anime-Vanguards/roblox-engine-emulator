@@ -223,6 +223,19 @@ pub fn load(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
             }
         })?,
     )?;
+    // an instance's event fired from the engine's Luau, its values as a property holds them (a table as it is): HumanoidDescription's
+    // EmotesChanged and EquippedEmotesChanged (services.luau)
+    let e = engine.clone();
+    r.set(
+        "FireEvent",
+        super::lua_fn(lua, move |_, (target, name, values): (LuaValue, String, LuaMultiValue)| {
+            let id = instance_of(&target)?;
+            let Some(name) = e.reflection.name_id(&name) else { return Ok(()) };
+            let values = values.iter().map(convert::from_lua).collect();
+            core::fire_event(&mut e.state.borrow_mut(), id, name, values);
+            Ok(())
+        })?,
+    )?;
     let e = engine.clone();
     r.set(
         "Children",

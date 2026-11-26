@@ -1,0 +1,25 @@
+# engine: Roblox Studio 0.747.0.7471481, the server of a headless play session (a Script in ServerScriptService, script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-26
+model none set error Model:SetPrimaryPartCFrame() failed because no PrimaryPart has been set, or the PrimaryPart no longer exists. Please set Model.PrimaryPart before using this. A 1 2 3 1 0 0 0 1 0 0 0 1
+model none get error Model:GetPrimaryPartCFrame() failed because no PrimaryPart has been set, or the PrimaryPart no longer exists. Please set Model.PrimaryPart before using this.
+model none set-nil error Argument 1 missing or nil
+model none set-string error Unable to cast string to CoordinateFrame
+model none set-none error Argument 1 missing or nil
+model set-nil error Argument 1 missing or nil
+model set-string error Unable to cast string to CoordinateFrame
+model set-vector error Unable to cast Vector3 to CoordinateFrame
+model set-none error Argument 1 missing or nil
+model plain set ok  A 0 10 0 1 0 0 0 1 0 0 0 1 B 4 10 0 1 0 0 0 1 0 0 0 1
+model plain get ok 0 10 0 1 0 0 0 1 0 0 0 1 pivot 0 10 0 1 0 0 0 1 0 0 0 1
+model offset get ok 0 10 0 1 0 0 0 1 0 0 0 1 pivot 0 11 0 -4.37113883e-08 0 1 0 1 0 -1 0 -4.37113883e-08
+model offset set ok  A 0 20 0 1 0 0 0 1 0 0 0 1 B 4 20 0 1 0 0 0 1 0 0 0 1
+model worldpivot get ok 0 20 0 1 0 0 0 1 0 0 0 1 pivot 0 21 0 -4.37113883e-08 0 1 0 1 0 -1 0 -4.37113883e-08
+model worldpivot set ok  A 0 30 0 1 0 0 0 1 0 0 0 1 B 4 30 0 1 0 0 0 1 0 0 0 1
+model gone primary nil
+model gone set error Model:SetPrimaryPartCFrame() failed because no PrimaryPart has been set, or the PrimaryPart no longer exists. Please set Model.PrimaryPart before using this. A 0 30 0 1 0 0 0 1 0 0 0 1 B 4 30 0 1 0 0 0 1 0 0 0 1
+model gone get error Model:GetPrimaryPartCFrame() failed because no PrimaryPart has been set, or the PrimaryPart no longer exists. Please set Model.PrimaryPart before using this.
+model destroyed primary nil
+model destroyed set error Model:SetPrimaryPartCFrame() failed because no PrimaryPart has been set, or the PrimaryPart no longer exists. Please set Model.PrimaryPart before using this. B 4 30 0 1 0 0 0 1 0 0 0 1
+model loose set ok  C 0 60 0 1 0 0 0 1 0 0 0 1
+model loose none error Model:SetPrimaryPartCFrame() failed because no PrimaryPart has been set, or the PrimaryPart no longer exists. Please set Model.PrimaryPart before using this.
+model loose none get error Model:GetPrimaryPartCFrame() failed because no PrimaryPart has been set, or the PrimaryPart no longer exists. Please set Model.PrimaryPart before using this.

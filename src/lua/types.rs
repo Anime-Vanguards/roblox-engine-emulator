@@ -640,6 +640,18 @@ fn wait_misuse<T>(engine: &Engine, value: &LuaValue) -> Result<T, Flow> {
     super::raise_at_caller(format!("invalid argument #1 to 'Wait' (RBXScriptSignal expected, got {})", typeof_value(engine, value)))
 }
 
+/// RunService.RenderStepped:Wait on a server: "RenderStepped event can only be used from local scripts", as Connect raises
+/// there (measured, a 0.747 server's Script: tools/parity/probes/arg_checks.luau)
+fn render_stepped_on_server(engine: &Engine, signal: Option<SignalId>) -> Result<(), Flow> {
+    if let Some(id) = signal
+        && engine.options.server()
+        && engine.state.borrow().signals.get(id).label.as_bytes() == b"RunService.RenderStepped"
+    {
+        return raise("RenderStepped event can only be used from local scripts");
+    }
+    Ok(())
+}
+
 fn connect(lua: &Lua, engine: &Rc<Engine>, args: LuaMultiValue, once: bool) -> Ret {
     connect_as(lua, engine, args, once, false)
 }
@@ -656,9 +668,21 @@ fn connect_as(lua: &Lua, engine: &Rc<Engine>, args: LuaMultiValue, once: bool, p
             typeof_value(engine, args.get(0))
         ));
     };
+    // ConnectParallel outside an Actor, before the signal is looked at (measured, a 0.747 server's Script and a playing client,
+    // tools/parity/probes/arg_checks.luau: RenderStepped's and Heartbeat's alike): "Event.ConnectParallel: The calling script must
+    // be rooted under an Actor.", or where no script calls (a client's job) "Function Event.ConnectParallel can only be used
+    // inside scripts"
+    if parallel && !super::actors::caller_in_actor(lua) {
+        // SAFETY: the running thread's state, valid while the callback runs
+        return raise(if unsafe { super::script_of_thread(lua.state()) }.is_some() {
+            "Event.ConnectParallel: The calling script must be rooted under an Actor."
+        } else {
+            "Function Event.ConnectParallel can only be used inside scripts"
+        });
+    }
     // A server's scripts may read RunService.RenderStepped but not connect to it (Connect and Once measured, a Studio 0.744
-    // server's game script: tools/parity/probes/run_service_sides.luau; ConnectParallel takes the same path, Wait is not
-    // measured and waits). PreRender and BindToRenderStep are taken there and never run, as here.
+    // server's game script: tools/parity/probes/run_service_sides.luau; Wait raises the same, a 0.747 server's Script:
+    // arg_checks.luau). PreRender and BindToRenderStep are taken there and never run, as here.
     if let Some(id) = signal {
         if engine.options.server() && engine.state.borrow().signals.get(id).label.as_bytes() == b"RunService.RenderStepped" {
             return raise("RenderStepped event can only be used from local scripts");
@@ -684,11 +708,6 @@ fn connect_as(lua: &Lua, engine: &Rc<Engine>, args: LuaMultiValue, once: bool, p
         let userdata = lua.create_any_userdata(LConnection(ConnectionId::DISCONNECTED))?;
         return Ok(values([LuaValue::UserData(userdata)]));
     };
-    if parallel && !super::actors::runs_in_actor(&callback) {
-        // (Studio's message for a call from the mux, which is no script: "Function Event.ConnectParallel can only be used inside scripts";
-        // what a script outside an Actor gets was not measured)
-        return raise("Function Event.ConnectParallel can only be used inside scripts");
-    }
     let noted = crate::census::active(engine).then(|| callback.clone());
     engine.state.borrow().sched.charge(crate::cost::CONNECT);
     if crate::boundary::active() && !engine.state.borrow().sched.is_muted() {
@@ -735,6 +754,7 @@ fn register_signals(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
         let Some(signal) = signal_of(&e, args.get(0)) else {
             return wait_misuse(&e, args.get(0));
         };
+        render_stepped_on_server(&e, signal)?;
         // (where the thread cannot yield: raised before the thread waits on the signal, lua/mod.rs NOT_YIELDABLE)
         let thread = lua.current_thread();
         super::refuse_unyieldable(&thread, super::NOT_YIELDABLE_WAIT)?;
@@ -841,7 +861,7 @@ fn register_signals(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
         let outcome = match signal_of(&e, args.get(0)) {
             Some(signal) => {
                 let thread = lua.current_thread();
-                super::refuse_unyieldable(&thread, super::NOT_YIELDABLE_WAIT).and_then(|()| match signal {
+                render_stepped_on_server(&e, signal).and_then(|()| super::refuse_unyieldable(&thread, super::NOT_YIELDABLE_WAIT)).and_then(|()| match signal {
                     Some(signal) => refs::admit(&e, Hold::Wait, "Wait").and_then(|()| {
                         e.state.borrow_mut().signals.wait(signal, thread);
                         Err(Flow::Yield)

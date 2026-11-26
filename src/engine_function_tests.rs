@@ -170,3 +170,156 @@ fn enum_arguments_take_a_fraction_cut_toward_zero() {
     );
     assert!(lines.iter().any(|line| line == "print: done") && errors(&lines).is_empty(), "{lines:?}");
 }
+
+/// Outside an Actor task.synchronize and desynchronize raise (where the thread can yield or not); ConnectParallel there raises
+/// that the calling script must be under an Actor; a server's RenderStepped:Wait raises as its Connect does. A client's
+/// RemoteFunction:InvokeClient checks the player, then refuses where it cannot yield, then refuses on a client; PreloadAsync of
+/// nothing to load returns at once.
+#[test]
+fn calls_a_script_may_not_make_where_it_runs() {
+    let client = run(
+        RunContext::Client,
+        r##"
+        assert(select(2, pcall(task.synchronize)) == "task.synchronize() may only be called from a script that is a descendant of an Actor")
+        assert(select(2, pcall(task.desynchronize)) == "task.desynchronize() may only be called from a script that is a descendant of an Actor")
+        local Ok, Message = pcall(function() return game:GetService("RunService").Heartbeat:ConnectParallel(function() end) end)
+        assert(not Ok and Message == "Event.ConnectParallel: The calling script must be rooted under an Actor.", Message)
+        local Remote = Instance.new("RemoteFunction")
+        local Player = game:GetService("Players").LocalPlayer
+        assert(select(2, pcall(Remote.InvokeClient, Remote, nil)) == "Argument 1 missing or nil")
+        assert(select(2, pcall(Remote.InvokeClient, Remote, workspace)) == "Argument 1 is invalid: expected 'Player' instance type")
+        assert(select(2, pcall(Remote.InvokeClient, Remote, Player)) == "InvokeClient can only be called from the server")
+        local Refused
+        table.sort({ 2, 1 }, function(A, B)
+            Refused = Refused or select(2, pcall(Remote.InvokeClient, Remote, Player))
+            return A < B
+        end)
+        assert(Refused == "thread is not yieldable", Refused)
+        local Deferred = false
+        task.defer(function() Deferred = true end)
+        game:GetService("ContentProvider"):PreloadAsync({})
+        assert(not Deferred, "PreloadAsync of nothing returns at once")
+        print("done")
+        "##,
+        0.1,
+    );
+    assert!(client.iter().any(|line| line == "print: done") && errors(&client).is_empty(), "{client:?}");
+    let server = run(
+        RunContext::Server,
+        r##"
+        local Ok, Message = pcall(function() return game:GetService("RunService").RenderStepped:Wait() end)
+        assert(not Ok and Message == "RenderStepped event can only be used from local scripts", Message)
+        print("done")
+        "##,
+        0.1,
+    );
+    assert!(server.iter().any(|line| line == "print: done") && errors(&server).is_empty(), "{server:?}");
+}
+
+/// Model:SetPrimaryPartCFrame puts the primary part at the CFrame exactly (its PivotOffset and the WorldPivot play no part), the
+/// model's other parts moved with it; with no PrimaryPart, or one taken out of the model, both methods raise.
+#[test]
+fn primary_part_cframe_is_the_primary_parts_own() {
+    let lines = run(
+        RunContext::Client,
+        r##"
+        local Model = Instance.new("Model")
+        local A, B = Instance.new("Part"), Instance.new("Part")
+        A.Anchored, B.Anchored = true, true
+        A.CFrame, B.CFrame = CFrame.new(1, 2, 3), CFrame.new(5, 2, 3)
+        A.Parent, B.Parent = Model, Model
+        Model.Parent = workspace
+        local Message = "Model:SetPrimaryPartCFrame() failed because no PrimaryPart has been set, or the PrimaryPart no longer exists. Please set Model.PrimaryPart before using this."
+        assert(select(2, pcall(Model.SetPrimaryPartCFrame, Model, CFrame.new())) == Message)
+        assert(select(2, pcall(Model.GetPrimaryPartCFrame, Model)) == string.gsub(Message, "SetPrimaryPartCFrame", "GetPrimaryPartCFrame"))
+        assert(select(2, pcall(Model.SetPrimaryPartCFrame, Model)) == "Argument 1 missing or nil")
+        assert(select(2, pcall(Model.SetPrimaryPartCFrame, Model, "x")) == "Unable to cast string to CoordinateFrame")
+        Model.PrimaryPart = A
+        A.PivotOffset = CFrame.new(0, 1, 0) * CFrame.Angles(0, math.pi / 2, 0)
+        Model:SetPrimaryPartCFrame(CFrame.new(0, 20, 0))
+        assert(A.CFrame == CFrame.new(0, 20, 0) and B.CFrame == CFrame.new(4, 20, 0), tostring(A.CFrame) .. " / " .. tostring(B.CFrame))
+        assert(Model:GetPrimaryPartCFrame() == CFrame.new(0, 20, 0))
+        A.Parent = workspace
+        assert(select(2, pcall(Model.SetPrimaryPartCFrame, Model, CFrame.new())) == Message)
+        print("done")
+        "##,
+        0.1,
+    );
+    assert!(lines.iter().any(|line| line == "print: done") && errors(&lines).is_empty(), "{lines:?}");
+}
+
+/// HumanoidDescription keeps its emotes (ids rounded, each once, ascending) and equipped emotes (names take slots 1, 2, ...; slot
+/// tables kept, the later of a slot), fires their events, and a clone keeps them.
+#[test]
+fn humanoid_description_emotes() {
+    let lines = run(
+        RunContext::Client,
+        r##"
+        local D = Instance.new("HumanoidDescription")
+        local Events = {}
+        D.EmotesChanged:Connect(function(Value) table.insert(Events, "E") end)
+        D.EquippedEmotesChanged:Connect(function(Value) table.insert(Events, "Q") end)
+        D:SetEmotes({ Salute = { 3, 1.5, 1, "x" }, Empty = {}, Bad = "x" })
+        D:AddEmote("Salute", 2.4)
+        D:AddEmote(5, 6)
+        D:RemoveEmote("Nope")
+        D:RemoveEmote("5")
+        local Emotes = D:GetEmotes()
+        assert(table.concat(Emotes.Salute, ",") == "1,2,3" and Emotes.Empty == nil and Emotes.Bad == nil and Emotes["5"] == nil)
+        assert(not rawequal(D:GetEmotes(), D:GetEmotes()))
+        D:SetEquippedEmotes({ "A", { Slot = 5, Name = "B" }, "C", 7, { Slot = 2.5, Name = "D" } })
+        local Equipped = D:GetEquippedEmotes()
+        local Text = {}
+        for _, Entry in Equipped do table.insert(Text, Entry.Slot .. Entry.Name) end
+        assert(table.concat(Text, ",") == "1A,2C,3D,5B", table.concat(Text, ","))
+        assert(select(2, pcall(D.SetEmotes, D, { { 1 } })) == "Unable to cast Array to Dictionary")
+        assert(select(2, pcall(D.SetEquippedEmotes, D, { a = 1 })) == "Unable to cast Dictionary to Array")
+        assert(select(2, pcall(D.AddEmote, D, "X", "x")) == "Unable to cast string to int64")
+        assert(select(2, pcall(D.AddEmote, D, nil, 5)) == "Argument 1 missing or nil")
+        local Copy = D:Clone()
+        assert(table.concat(Copy:GetEmotes().Salute, ",") == "1,2,3" and #Copy:GetEquippedEmotes() == 4)
+        task.wait()
+        assert(table.concat(Events, "") == "EEEEQ", table.concat(Events, ""))
+        print("done")
+        "##,
+        0.1,
+    );
+    assert!(lines.iter().any(|line| line == "print: done") && errors(&lines).is_empty(), "{lines:?}");
+}
+
+/// AnalyticsService's Log methods, Chat:Chat and PromptSubscriptionPurchase cast their arguments from the last; the Log methods
+/// then warn as a client and a server do.
+#[test]
+fn stubs_cast_their_arguments_from_the_last() {
+    for (context, warning) in [(RunContext::Client, "warn: AnalyticsService can only be executed on the game server."), (RunContext::Server, "warn: AnalyticsService: Invalid status.")] {
+        let lines = run(
+            context,
+            r##"
+            local Analytics = game:GetService("AnalyticsService")
+            local function A(Name, ...) return select(2, pcall(Analytics[Name], Analytics, ...)) end
+            assert(A("LogCustomEvent") == "Argument 2 missing or nil")
+            assert(A("LogCustomEvent", nil, "evt", "x") == "Unable to cast string to double")
+            assert(A("LogCustomEvent", "x", "evt") == "Unable to cast value to Object")
+            assert(A("LogEconomyEvent") == "Argument 6 missing or nil")
+            assert(A("LogEconomyEvent", nil, 5, "Coins", 10, 100, "Gameplay") == "Unable to cast double to AnalyticsEconomyFlowType")
+            assert(A("LogProgressionEvent", nil, "path", Enum.AnalyticsProgressionStatus.Begin, 1) == "Unable to cast AnalyticsProgressionStatus to AnalyticsProgressionType")
+            assert(A("LogOnboardingFunnelStepEvent", nil, "x") == "Unable to cast string to int")
+            Analytics:LogCustomEvent(nil, "evt")
+            local Chat = game:GetService("Chat")
+            local Part = Instance.new("Part")
+            assert(select(2, pcall(Chat.Chat, Chat, Part, "hi", 5)) == "Unable to cast double to ChatColor")
+            assert(select(2, pcall(Chat.Chat, Chat, nil, "hi")) == "partOrCharacter must be non-nil")
+            assert(select(2, pcall(Chat.Chat, Chat, Part, "hi")) == "partOrCharacter must be in the Workspace")
+            Part.Parent = workspace
+            assert(select(2, pcall(Chat.Chat, Chat, Part, "")) == "message must be non-empty")
+            local Market = game:GetService("MarketplaceService")
+            assert(select(2, pcall(Market.PromptSubscriptionPurchase, Market)) == "Argument 2 missing or nil")
+            assert(select(2, pcall(Market.PromptSubscriptionPurchase, Market, workspace, "EXP-1")) == "First argument to PromptSubscriptionPurchase must be a player")
+            print("done")
+            "##,
+            0.1,
+        );
+        assert!(lines.iter().any(|line| line == "print: done") && errors(&lines).is_empty(), "{context:?}: {lines:?}");
+        assert!(lines.iter().any(|line| line == warning), "{context:?}: {lines:?}");
+    }
+}

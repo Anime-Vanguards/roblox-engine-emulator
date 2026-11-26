@@ -6904,7 +6904,7 @@ fn actors_run_their_scripts_in_a_vm_of_their_own_in_studios_order() {
         "Actor2 start actor=true module-actor=none bump=1 _G.Seen=1 sync=true",
         "placed Actor2",
         "main bump=1 _G.Seen=nil",
-        "main ConnectParallel false Function Event.ConnectParallel can only be used inside scripts",
+        "main ConnectParallel false Event.ConnectParallel: The calling script must be rooted under an Actor.",
         "late placed",
         "Late start actor=true module-actor=none bump=1 _G.Seen=1 sync=true",
         "late enabled",

@@ -1,18 +1,6 @@
 {
 	"arg_checks": [
 		{
-			"line": "analytics ",
-			"why": "AnalyticsService's Log methods check their arguments in a client and a server (`Argument <n> missing or nil`, `Unable to cast ...`) and a client warns that they run on the server only (a server warns `AnalyticsService: Invalid status.` offline); ree's stubs take anything silently"
-		},
-		{
-			"line": "chat ",
-			"why": "Chat:Chat checks its arguments in a client and a server (`partOrCharacter must be non-nil`, `... must be in the Workspace`, `message must be non-empty`, the casts); ree reports it as not emulated"
-		},
-		{
-			"line": "subscription ",
-			"why": "MarketplaceService:PromptSubscriptionPurchase checks its arguments (`Argument 2 missing or nil`, `First argument to PromptSubscriptionPurchase must be a player`, `Invalid SubscriptionId`); ree reports it as not emulated"
-		},
-		{
 			"line": "translator-for-locale ",
 			"why": "LocalizationService:GetTranslatorForLocaleAsync casts a non-string locale and waits for the web in a client and a server (and refuses where the thread cannot yield); ree answers a translator at once"
 		},
@@ -35,6 +23,14 @@
 		{
 			"line": "Fire",
 			"why": "a remote call with a table inside itself raises `tables cannot be cyclic` before the refusal to wait, the player check and the side checks (a server's InvokeServer says it is for clients); ree checks the cycle after them or not at all"
+		},
+		{
+			"line": "renderstepped-connectparallel",
+			"why": "the client capture runs the probe as a job with no script (a LocalScript's or a Script's thread starts with its script's Name, as the server measured): its ConnectParallel outside an Actor reads \"Function Event.ConnectParallel can only be used inside scripts\", a script's \"Event.ConnectParallel: The calling script must be rooted under an Actor.\""
+		},
+		{
+			"line": "heartbeat-connectparallel",
+			"why": "the client capture runs the probe as a job with no script (a LocalScript's or a Script's thread starts with its script's Name, as the server measured): its ConnectParallel outside an Actor reads \"Function Event.ConnectParallel can only be used inside scripts\", a script's \"Event.ConnectParallel: The calling script must be rooted under an Actor.\""
 		}
 	],
 	"assembly_motion": [
@@ -319,14 +315,6 @@
 		{
 			"line": "step sound-",
 			"why": "a Sound's Play / Pause / Resume / Stop fire Played / Paused / Resumed / Stopped in a client and a server, with no SoundId; ree fires none"
-		},
-		{
-			"line": "step emotes",
-			"why": "HumanoidDescription:SetEmotes / SetEquippedEmotes fire EmotesChanged / EquippedEmotesChanged; ree does not emulate the methods"
-		},
-		{
-			"line": "step equipped-emotes",
-			"why": "HumanoidDescription:SetEmotes / SetEquippedEmotes fire EmotesChanged / EquippedEmotesChanged; ree does not emulate the methods"
 		}
 	],
 	"global_settings_tree": [
@@ -1541,50 +1529,14 @@
 			"why": "a string for TweenService:Create's TweenInfo gives a client's tween a style and direction that are no enum item (reading them raises `Invalid value for enum EasingStyle`, tostring leaves them empty) and \" \" a Time of 1; ree's is Linear, In and the string's number or 0, so the tween completes at once as there"
 		}
 	],
-	"yield_refused": [
+	"primary_part_cframe": [
 		{
-			"line": "sort-synchronize",
-			"why": "task.synchronize / task.desynchronize outside an Actor: a client raises that only an Actor's script may call them (also where the thread cannot yield); ree lets them pass (not emulated, not a yield)"
+			"line": "model gone primary",
+			"why": "Model.PrimaryPart reads nil on a client once the part is no longer under the model (taken out or destroyed); ree keeps answering the part (SetPrimaryPartCFrame and GetPrimaryPartCFrame refuse it as a client does)"
 		},
 		{
-			"line": "sort-desynchronize",
-			"why": "task.synchronize / task.desynchronize outside an Actor: a client raises that only an Actor's script may call them (also where the thread cannot yield); ree lets them pass (not emulated, not a yield)"
-		},
-		{
-			"line": "sort-InvokeClient",
-			"why": "RemoteFunction:InvokeClient on a client: a client raises (a nil player first, then the refusal); ree's client run does not emulate it and returns nothing"
-		},
-		{
-			"line": "gsub-synchronize",
-			"why": "task.synchronize / task.desynchronize outside an Actor: a client raises that only an Actor's script may call them (also where the thread cannot yield); ree lets them pass (not emulated, not a yield)"
-		},
-		{
-			"line": "gsub-desynchronize",
-			"why": "task.synchronize / task.desynchronize outside an Actor: a client raises that only an Actor's script may call them (also where the thread cannot yield); ree lets them pass (not emulated, not a yield)"
-		},
-		{
-			"line": "gsub-InvokeClient",
-			"why": "RemoteFunction:InvokeClient on a client: a client raises (a nil player first, then the refusal); ree's client run does not emulate it and returns nothing"
-		},
-		{
-			"line": "index-synchronize",
-			"why": "task.synchronize / task.desynchronize outside an Actor: a client raises that only an Actor's script may call them (also where the thread cannot yield); ree lets them pass (not emulated, not a yield)"
-		},
-		{
-			"line": "index-desynchronize",
-			"why": "task.synchronize / task.desynchronize outside an Actor: a client raises that only an Actor's script may call them (also where the thread cannot yield); ree lets them pass (not emulated, not a yield)"
-		},
-		{
-			"line": "index-InvokeClient",
-			"why": "RemoteFunction:InvokeClient on a client: a client raises (a nil player first, then the refusal); ree's client run does not emulate it and returns nothing"
-		},
-		{
-			"line": "yieldable-InvokeClient-nil",
-			"why": "RemoteFunction:InvokeClient on a client: a client raises (a nil player first, then the refusal); ree's client run does not emulate it and returns nothing"
-		},
-		{
-			"line": "yieldable-PreloadAsync",
-			"why": "ContentProvider:PreloadAsync of a list with nothing to load returns at once in a client; ree waits a frame where the thread can yield (where it cannot, it returns at once, as a client does)"
+			"line": "model destroyed primary",
+			"why": "Model.PrimaryPart reads nil on a client once the part is no longer under the model (taken out or destroyed); ree keeps answering the part (SetPrimaryPartCFrame and GetPrimaryPartCFrame refuse it as a client does)"
 		}
 	]
 }

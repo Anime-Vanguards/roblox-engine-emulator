@@ -436,12 +436,12 @@ Method("Model", "ScaleTo", Priced(function(Self, Scale)
 	end
 	Charge(Cost_)
 end))
+local PrimaryPartCFrame -- Model:GetPrimaryPartCFrame and SetPrimaryPartCFrame (defined at this file's end: it moves no line)
 Method("Model", "GetPrimaryPartCFrame", function(Self)
-	return Self:GetPivot()
+	return PrimaryPartCFrame(Self)
 end)
-Method("Model", "SetPrimaryPartCFrame", function(Self, Target)
-	Self:PivotTo(Target)
-end)
+Method("Model", "SetPrimaryPartCFrame", function(Self, ...)
+	PrimaryPartCFrame(Self, select("#", ...), ...) end)
 Method("Model", "MoveTo", function(Self, Position)
 	if Self:IsDescendantOf(game) then R.MoveModel(Self, Position) end -- (the pivot's position to Position, its rotation kept: R.MoveModel)
 end)
@@ -1048,9 +1048,9 @@ Method("ContentProvider", "PreloadAsync", function(_, Items, Callback)
 	local Wait, Animations = R.PreloadAnimations(Items)
 	if Wait > 0 then
 		task.wait(Wait)
-	elseif coroutine.isyieldable() then -- (with nothing to load a client returns at once, also where the thread cannot yield: tools/parity/probes/yield_refused.luau; here one that can still waits a frame)
-		task.wait()
-	end
+	elseif coroutine.isyieldable() and (function() for _, Item in Items do if type(Item) == "string" then return true end end return false end)() then
+		task.wait() -- (a content id is fetched: a frame here, not measured. With nothing to load, an empty list or instances, a 0.747 client and
+	end -- server return at once, where the thread can yield or not: no frame passes, a task.defer before has not run; yield_refused.luau)
 	if Callback then
 		for Index, Item in Items do
 			local Held = Animations[Index]
@@ -1241,7 +1241,7 @@ end
 Method("MarketplaceService", "GetDeveloperProductsAsync", function()
 	Missing("MarketplaceService", "GetDeveloperProductsAsync") return EmptyPages()
 end)
-for _, Name in { "PromptPurchase", "PromptProductPurchase", "PromptGamePassPurchase", "PromptPremiumPurchase", "PromptSubscriptionPurchase", "PromptBundlePurchase" } do
+for _, Name in { "PromptPurchase", "PromptProductPurchase", "PromptGamePassPurchase", "PromptPremiumPurchase", "PromptBundlePurchase" } do -- (PromptSubscriptionPurchase: at the end)
 	Method("MarketplaceService", Name, function() Missing("MarketplaceService", Name) end)
 end
 
@@ -1309,9 +1309,9 @@ end)
 for _, Name in { "SetCameraYInvertVisible", "SetGamepadCameraSensitivityVisible", "SetOnboardingCompleted" } do
 	Method("UserGameSettings", Name, function() if Name == "SetOnboardingCompleted" then Missing("UserGameSettings", Name) end end) -- (the other two only show options in Roblox's own settings menu, which no script reads)
 end
-for _, Name in { "LogCustomEvent", "LogEconomyEvent", "LogProgressionEvent", "LogFunnelStepEvent", "LogOnboardingFunnelStepEvent" } do
-	Method("AnalyticsService", Name, function() end) -- (the events go to the creator's analytics dashboard; nothing a script can read changes: Roblox's AnalyticsService documentation)
-end
+-- AnalyticsService's Log methods: defined at this file's end, with their argument casts (the events go to the creator's analytics
+-- dashboard; nothing a script can read changes but their warning: Roblox's AnalyticsService documentation, measured in a 0.747
+-- playing client and a server)
 -- (SoundService:PlayLocalSound is Rust: engine::world reports the play)
 
 -- Remotes never reach a server offline; invocations yield forever like a dropped connection.
@@ -1784,5 +1784,349 @@ end
 for _, Name in { "SetIdentityOrientation", "ResetOrientationToIdentity" } do
 	Method("Model", Name, function() end)
 end
+
+-- A method argument as a client's methods cast it (measured in a 0.747 playing client and a server: tools/parity/probes/
+-- arg_checks.luau, humanoid_description_emotes.luau, primary_part_cframe.luau): the arguments are cast from the last to the
+-- first, and a value that is no argument's type raises "Unable to cast <value> to <type>", the value named "double", "bool",
+-- "Array" (a table with an array part, or empty) or "Dictionary", "Function", an item's enum, "null" for a userdata of no type,
+-- else its type; nil, where the argument has no default, "Argument <n> missing or nil". An Object takes nil and any Instance
+-- ("Unable to cast value to Object" for anything else); a string takes a number as its text (StringParam).
+local CastName = function(Value)
+	local Kind = typeof(Value)
+	if Kind == "number" then
+		return "double"
+	elseif Kind == "boolean" then
+		return "bool"
+	elseif Kind == "table" then
+		return if rawlen(Value) > 0 or next(Value) == nil then "Array" else "Dictionary"
+	elseif Kind == "function" then
+		return "Function"
+	elseif Kind == "EnumItem" then
+		return tostring(Value.EnumType)
+	elseif Kind == "CFrame" then
+		return "CoordinateFrame"
+	elseif Kind == "userdata" then
+		return "null"
+	end
+	return Kind
+end
+local Cast = {}
+function Cast.Object(Value)
+	if Value ~= nil and typeof(Value) ~= "Instance" then
+		error("Unable to cast value to Object", 0)
+	end
+	return Value
+end
+function Cast.string(Value, Index, Default)
+	if Value == nil and Default ~= nil then
+		return Default
+	end
+	return StringParam.Read(Value, Index)
+end
+-- (a number, or a string that reads as one; int and int64 round half away from zero: AddEmote's 1.5 is 2, 2.5 is 3)
+local function Number(Value, Index, Default, Type)
+	if Value == nil then
+		if Default ~= nil then
+			return Default
+		end
+		error(`Argument {Index} missing or nil`, 0)
+	end
+	local Read = if type(Value) == "number" then Value elseif type(Value) == "string" then tonumber(Value) else nil
+	if Read == nil then
+		error(`Unable to cast {CastName(Value)} to {Type}`, 0)
+	end
+	if Type == "int" or Type == "int64" then
+		Read = if Read < 0 then -math.floor(-Read + 0.5) else math.floor(Read + 0.5)
+	end
+	return Read
+end
+for _, Type in { "double", "float", "int", "int64" } do
+	Cast[Type] = function(Value, Index, Default)
+		return Number(Value, Index, Default, Type)
+	end
+end
+-- (a table without an array part; its keys strings or numbers, else "Invalid table key type used", as TweenService:Create's goals)
+function Cast.Dictionary(Value, Index, Default)
+	if Value == nil then
+		if Default ~= nil then
+			return Default
+		end
+		error(`Argument {Index} missing or nil`, 0)
+	elseif type(Value) ~= "table" or rawlen(Value) > 0 then
+		error(`Unable to cast {CastName(Value)} to Dictionary`, 0)
+	end
+	for Key in Value do
+		if type(Key) ~= "string" and type(Key) ~= "number" then
+			error("Invalid table key type used", 0)
+		end
+	end
+	return Value
+end
+function Cast.Array(Value, Index)
+	if Value == nil then
+		error(`Argument {Index} missing or nil`, 0)
+	elseif type(Value) ~= "table" or (rawlen(Value) == 0 and next(Value) ~= nil) then
+		error(`Unable to cast {CastName(Value)} to Array`, 0)
+	end
+	return Value
+end
+-- (an item of the enum, an item's name, or a number cut toward zero to an item's value: lua/convert.rs coerce_enum_arg)
+local function CastEnum(EnumName, Value, Index, Default)
+	if Value == nil then
+		if Default ~= nil then
+			return Default
+		end
+		error(`Argument {Index} missing or nil`, 0)
+	end
+	local Type = Enum[EnumName]
+	local Kind = typeof(Value)
+	if Kind == "EnumItem" and Value.EnumType == Type then
+		return Value
+	end
+	for _, Item in Type:GetEnumItems() do
+		if (Kind == "string" and Item.Name == Value) or (Kind == "number" and Value == Value and math.abs(Value) ~= math.huge and Item.Value == (if Value < 0 then math.ceil(Value) else math.floor(Value))) then
+			return Item
+		end
+	end
+	error(`Unable to cast {CastName(Value)} to {EnumName}`, 0)
+end
+-- A method's arguments by their types (`{ Type, Default }`, an enum's name for its items), cast from the last to the first
+local function CastAll(Types, ...)
+	local Values = table.pack(...)
+	for Index = #Types, 1, -1 do
+		local Type, Default = Types[Index][1], Types[Index][2]
+		local Caster = Cast[Type]
+		if Caster then
+			Values[Index] = Caster(Values[Index], Index, Default)
+		else
+			Values[Index] = CastEnum(Type, Values[Index], Index, Default)
+		end
+	end
+	return table.unpack(Values, 1, #Types)
+end
+
+-- Model:GetPrimaryPartCFrame and SetPrimaryPartCFrame (measured in a 0.747 playing client and a server:
+-- tools/parity/probes/primary_part_cframe.luau): the CFrame is cast first ("Argument 1 missing or nil", "Unable to cast string to
+-- CoordinateFrame"), then a model whose PrimaryPart is unset, or no longer under the model (taken out or destroyed), raises
+-- "Model:SetPrimaryPartCFrame() failed because no PrimaryPart has been set, or the PrimaryPart no longer exists. Please set
+-- Model.PrimaryPart before using this." (GetPrimaryPartCFrame's names itself). They read and set the primary part's own CFrame,
+-- not the model's pivot: its PivotOffset and the model's WorldPivot play no part, and the part is put at the CFrame exactly, the
+-- model's other parts moved with it as one (priced as PivotTo's move).
+PrimaryPartCFrame = Priced(function(Self, Count, Target)
+	local Name = if Count then "SetPrimaryPartCFrame" else "GetPrimaryPartCFrame"
+	if Count then
+		if Target == nil then
+			error("Argument 1 missing or nil", 0)
+		elseif typeof(Target) ~= "CFrame" then
+			error(`Unable to cast {CastName(Target)} to CoordinateFrame`, 0)
+		end
+	end
+	local Primary = RawGet(Self, "PrimaryPart")
+	if not Primary or not Primary:IsDescendantOf(Self) then
+		error(`Model:{Name}() failed because no PrimaryPart has been set, or the PrimaryPart no longer exists. Please set Model.PrimaryPart before using this.`, 0)
+	end
+	if not Count then
+		Charge(Cost.ModelQuery)
+		return Primary.CFrame
+	end
+	local Delta = Target * Primary.CFrame:Inverse()
+	local Stored = StoredPivot(Self)
+	local Moved, Others = 0, 0
+	Together(function()
+		Moved, Others = MoveDescendants(Self, Delta)
+		Primary.CFrame = Target
+	end)
+	Charge(Cost.PivotBase + Moved * (if Self:IsDescendantOf(workspace) then Cost.PivotPart else Cost.PivotLoose) + Others * Cost.PivotDescendant)
+	if Stored then
+		StorePivot(Self, Delta * Stored)
+	end
+	return nil
+end)
+
+-- HumanoidDescription's emotes (measured in a 0.747 playing client and a server: tools/parity/probes/humanoid_description_emotes.luau),
+-- kept in its EmotesDataInternal and EquippedEmotesDataInternal (which a clone copies and a script cannot read) as JSON:
+-- - The emotes are a dictionary of names, each a list of asset ids: ids are numbers (other values are dropped, a name left with
+--   none is dropped), rounded half away from zero, each once, in ascending order; a number for a name is its text. GetEmotes gives
+--   a new copy each call. SetEmotes replaces them (a table with an array part "Unable to cast Array to Dictionary"); AddEmote adds
+--   an id to a name's list; RemoveEmote takes a name out (one it lacks changes nothing). Each fires EmotesChanged with a copy,
+--   SetEmotes and AddEmote even when nothing changed, RemoveEmote only when it took one out.
+-- - The equipped emotes are a list of { Slot, Name } in slot order: SetEquippedEmotes takes a list (a dictionary "Unable to cast
+--   Dictionary to Array") of names, which take the slots 1, 2, ... in the order they come, and { Slot = <number>, Name = <string> }
+--   tables (the slot rounded; any number), the later of two for one slot kept; other entries are dropped, and no slot is checked
+--   against the emotes. It fires EquippedEmotesChanged with a copy every time.
+local function EmoteData(Self, Property)
+	local Text = RawGet(Self, Property)
+	if type(Text) == "string" and Text ~= "" then
+		local Ok, Data = R.JsonDecode(Text)
+		if Ok and type(Data) == "table" then
+			return Data
+		end
+	end
+	return {}
+end
+local function Round(Value)
+	return if Value < 0 then -math.floor(-Value + 0.5) else math.floor(Value + 0.5)
+end
+local function EmotesCopy(Emotes)
+	local Copy = {}
+	for Name, Ids in Emotes do
+		Copy[Name] = table.clone(Ids)
+	end
+	return Copy
+end
+local function SetEmoteData(Self, Emotes)
+	local Kept = {}
+	for Name, Ids in Emotes do
+		if #Ids > 0 then
+			Kept[Name] = Ids
+		end
+	end
+	RawSet(Self, "EmotesDataInternal", R.JsonEncode(Kept), true)
+	R.FireEvent(Self, "EmotesChanged", EmotesCopy(Kept))
+end
+local function EmoteIds(List)
+	local Seen, Ids = {}, {}
+	if type(List) == "table" then
+		for Index = 1, rawlen(List) do
+			local Id = rawget(List, Index)
+			if type(Id) == "number" and Id == Id then
+				Id = Round(Id)
+				if not Seen[Id] then
+					Seen[Id] = true
+					table.insert(Ids, Id)
+				end
+			end
+		end
+	end
+	table.sort(Ids)
+	return Ids
+end
+Method("HumanoidDescription", "GetEmotes", function(Self)
+	return EmotesCopy(EmoteData(Self, "EmotesDataInternal"))
+end)
+Method("HumanoidDescription", "SetEmotes", function(Self, ...)
+	local Emotes = CastAll({ { "Dictionary" } }, ...)
+	local Kept = {}
+	for Name, Ids in Emotes do
+		Kept[tostring(Name)] = EmoteIds(Ids)
+	end
+	SetEmoteData(Self, Kept)
+end)
+Method("HumanoidDescription", "AddEmote", function(Self, ...)
+	local Name, Id = CastAll({ { "string" }, { "int64" } }, ...)
+	local Emotes = EmoteData(Self, "EmotesDataInternal")
+	local Ids = Emotes[Name] or {}
+	table.insert(Ids, Id)
+	Emotes[Name] = EmoteIds(Ids)
+	SetEmoteData(Self, Emotes)
+end)
+Method("HumanoidDescription", "RemoveEmote", function(Self, ...)
+	local Name = CastAll({ { "string" } }, ...)
+	local Emotes = EmoteData(Self, "EmotesDataInternal")
+	if Emotes[Name] ~= nil then
+		Emotes[Name] = nil
+		SetEmoteData(Self, Emotes)
+	end
+end)
+local function EquippedList(Self)
+	local List = {}
+	for _, Entry in EmoteData(Self, "EquippedEmotesDataInternal") do
+		table.insert(List, { Slot = Entry[1], Name = Entry[2] })
+	end
+	return List
+end
+Method("HumanoidDescription", "GetEquippedEmotes", function(Self)
+	return EquippedList(Self)
+end)
+Method("HumanoidDescription", "SetEquippedEmotes", function(Self, ...)
+	local Given = CastAll({ { "Array" } }, ...)
+	local Slots, Next = {}, 0
+	for Index = 1, rawlen(Given) do
+		local Entry = rawget(Given, Index)
+		if type(Entry) == "string" then
+			Next += 1
+			Slots[Next] = Entry
+		elseif type(Entry) == "table" and type(rawget(Entry, "Slot")) == "number" and type(rawget(Entry, "Name")) == "string" then
+			Slots[Round(rawget(Entry, "Slot"))] = rawget(Entry, "Name")
+		end
+	end
+	local Order = {}
+	for Slot in Slots do
+		table.insert(Order, Slot)
+	end
+	table.sort(Order)
+	local Stored = {}
+	for _, Slot in Order do
+		table.insert(Stored, { Slot, Slots[Slot] })
+	end
+	RawSet(Self, "EquippedEmotesDataInternal", R.JsonEncode(Stored), true)
+	R.FireEvent(Self, "EquippedEmotesChanged", EquippedList(Self))
+end)
+
+-- RemoteFunction:InvokeClient in a client's run (a loopback run's is loopback.luau's, a server's server.luau's): the player is
+-- checked first ("Argument 1 missing or nil", "Argument 1 is invalid: expected 'Player' instance type"), then where the thread
+-- cannot yield "thread is not yieldable", then "InvokeClient can only be called from the server" (measured in a 0.747 playing
+-- client: tools/parity/probes/yield_refused.luau, loopback/remote_wrong_side.luau)
+Method("RemoteFunction", "InvokeClient", function(_, Player)
+	if Player == nil then
+		error("Argument 1 missing or nil", 0)
+	elseif typeof(Player) ~= "Instance" or not Player:IsA("Player") then
+		error("Argument 1 is invalid: expected 'Player' instance type", 0)
+	elseif not coroutine.isyieldable() then
+		error("thread is not yieldable", 0)
+	end
+	error("InvokeClient can only be called from the server", 0)
+end)
+
+-- AnalyticsService's Log methods (measured in a 0.747 playing client and a server: tools/parity/probes/arg_checks.luau): their
+-- arguments cast by their API types from the last to the first, then the warning "AnalyticsService can only be executed on the
+-- game server." on a client and "AnalyticsService: Invalid status." on a server that is no published game's. (LogJourneyEvent and
+-- the three LogProgression*Event ones were not called there: they take the same casts by their types.)
+local AnalyticsTypes = {
+	LogCustomEvent = { { "Object" }, { "string" }, { "double", 1 }, { "Dictionary", {} } },
+	LogEconomyEvent = { { "Object" }, { "AnalyticsEconomyFlowType" }, { "string" }, { "float" }, { "float" }, { "string" }, { "string", "" }, { "Dictionary", {} } },
+	LogFunnelStepEvent = { { "Object" }, { "string" }, { "string", "" }, { "int", 1 }, { "string", "" }, { "Dictionary", {} } },
+	LogJourneyEvent = { { "Object" }, { "string" }, { "string" }, { "string", "" }, { "Dictionary", {} } },
+	LogOnboardingFunnelStepEvent = { { "Object" }, { "int" }, { "string", "" }, { "Dictionary", {} } },
+	LogProgressionCompleteEvent = { { "Object" }, { "string" }, { "int" }, { "string", "" }, { "Dictionary", {} } },
+	LogProgressionEvent = { { "Object" }, { "string" }, { "AnalyticsProgressionType" }, { "int" }, { "string", "" }, { "Dictionary", {} } },
+	LogProgressionFailEvent = { { "Object" }, { "string" }, { "int" }, { "string", "" }, { "Dictionary", {} } },
+	LogProgressionStartEvent = { { "Object" }, { "string" }, { "int" }, { "string", "" }, { "Dictionary", {} } },
+}
+for Name, Types in AnalyticsTypes do
+	Method("AnalyticsService", Name, function(_, ...)
+		CastAll(Types, ...)
+		warn(if game:GetService("RunService"):IsServer() then "AnalyticsService: Invalid status." else "AnalyticsService can only be executed on the game server.")
+	end)
+end
+
+-- Chat:Chat(partOrCharacter, message, color) (measured likewise): its casts (a color is a ChatColor, Blue when left off), then
+-- "partOrCharacter must be non-nil", "partOrCharacter must be in the Workspace", "message must be non-empty". The bubble it
+-- shows is a client's GUI, not emulated.
+Method("Chat", "Chat", function(_, ...)
+	local Part, Message = CastAll({ { "Object" }, { "string" }, { "ChatColor", Enum.ChatColor.Blue } }, ...)
+	if Part == nil then
+		error("partOrCharacter must be non-nil", 0)
+	elseif not Part:IsDescendantOf(workspace) then
+		error("partOrCharacter must be in the Workspace", 0)
+	elseif Message == "" then
+		error("message must be non-empty", 0)
+	end
+	Missing("Chat", "Chat")
+end)
+
+-- MarketplaceService:PromptSubscriptionPurchase(user, subscriptionId) (measured likewise): its casts, then "First argument to
+-- PromptSubscriptionPurchase must be a player" for anything that is no Player, "Invalid SubscriptionId" for an id that does not
+-- start "EXP-" ("EXP-1" was taken, "5" and a table's text refused; the order of the two checks was not measured). The prompt is
+-- a client's GUI, not emulated.
+Method("MarketplaceService", "PromptSubscriptionPurchase", function(_, ...)
+	local User, Id = CastAll({ { "Object" }, { "string" } }, ...)
+	if User == nil or not User:IsA("Player") then
+		error("First argument to PromptSubscriptionPurchase must be a player", 0)
+	elseif string.sub(Id, 1, 4) ~= "EXP-" then
+		error("Invalid SubscriptionId", 0)
+	end
+	Missing("MarketplaceService", "PromptSubscriptionPurchase")
+end)
 
 return true

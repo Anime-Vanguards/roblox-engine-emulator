@@ -165,7 +165,8 @@ end
         &[],
     );
     assert_eq!(summary["status"], "ok", "{summary}");
-    assert_eq!(other_lines(&summary), ["print: Part"]);
+    // (AnalyticsService warns as a 0.747 client does: tools/parity/probes/arg_checks.luau)
+    assert_eq!(other_lines(&summary), ["warn: AnalyticsService can only be executed on the game server.", "print: Part"]);
     assert!(missing_lines(&summary).is_empty(), "{summary}");
     let keys: Vec<&str> = summary.as_object().unwrap().keys().map(String::as_str).collect();
     assert_eq!(keys, ["duration", "errors", "fps", "frames", "harness", "mode", "output", "status"]);

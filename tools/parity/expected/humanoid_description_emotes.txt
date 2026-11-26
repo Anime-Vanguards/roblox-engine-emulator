@@ -1,0 +1,85 @@
+# engine: Roblox Studio 0.747.0.7471481, a headless playing client (script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-26
+emotes get-start ok {} []
+emotes get-equipped-start ok {} []
+emotes emotes-property error EmotesDataInternal is not a valid member of HumanoidDescription "HumanoidDescription" []
+emotes set ok  [EmotesChanged(table)]
+emotes get ok {Salute={1=number:3360689775}} []
+emotes get-twice-same ok boolean:false []
+emotes set-same ok  [EmotesChanged(table)]
+emotes set-two ok  [EmotesChanged(table)]
+emotes get-two ok {Salute={1=number:3360689775,2=number:3360692915},Wave={1=number:3576686446}} []
+emotes set-equipped ok  [EquippedEmotesChanged(table)]
+emotes get-equipped ok {1={Name=string:Salute,Slot=number:1}} []
+emotes set-equipped-tables ok  [EquippedEmotesChanged(table)]
+emotes get-equipped-tables ok {1={Name=string:Wave,Slot=number:3}} []
+emotes set-equipped-unknown ok  [EquippedEmotesChanged(table)]
+emotes get-equipped-unknown ok {1={Name=string:Nope,Slot=number:1}} []
+emotes set-equipped-many ok  [EquippedEmotesChanged(table)]
+emotes get-equipped-many ok {1={Name=string:Salute,Slot=number:1},2={Name=string:Wave,Slot=number:2},3={Name=string:Salute,Slot=number:3},4={Name=string:Wave,Slot=number:4},5={Name=string:Salute,Slot=number:5},6={Name=string:Wave,Slot=number:6},7={Name=string:Salute,Slot=number:7},8={Name=string:Wave,Slot=number:8},9={Name=string:Salute,Slot=number:9}} []
+emotes add ok  [EmotesChanged(table)]
+emotes add-again ok  [EmotesChanged(table)]
+emotes get-after-add ok {Dance={1=number:3360692915,2=number:3576686446},Salute={1=number:3360689775,2=number:3360692915},Wave={1=number:3576686446}} []
+emotes remove ok  [EmotesChanged(table)]
+emotes remove-missing ok  []
+emotes get-after-remove ok {Dance={1=number:3360692915,2=number:3576686446},Salute={1=number:3360689775,2=number:3360692915}} []
+emotes get-equipped-after-remove ok {1={Name=string:Salute,Slot=number:1},2={Name=string:Wave,Slot=number:2},3={Name=string:Salute,Slot=number:3},4={Name=string:Wave,Slot=number:4},5={Name=string:Salute,Slot=number:5},6={Name=string:Wave,Slot=number:6},7={Name=string:Salute,Slot=number:7},8={Name=string:Wave,Slot=number:8},9={Name=string:Salute,Slot=number:9}} []
+emotes set-nil error Argument 1 missing or nil []
+emotes set-string error Unable to cast string to Dictionary []
+emotes set-bad-ids ok  [EmotesChanged(table)]
+emotes set-bad-id ok  [EmotesChanged(table)]
+emotes set-number-key error Unable to cast Array to Dictionary []
+emotes set-empty ok  [EmotesChanged(table)]
+emotes get-empty ok {} []
+emotes get-equipped-after-empty ok {1={Name=string:Salute,Slot=number:1},2={Name=string:Wave,Slot=number:2},3={Name=string:Salute,Slot=number:3},4={Name=string:Wave,Slot=number:4},5={Name=string:Salute,Slot=number:5},6={Name=string:Wave,Slot=number:6},7={Name=string:Salute,Slot=number:7},8={Name=string:Wave,Slot=number:8},9={Name=string:Salute,Slot=number:9}} []
+emotes set-equipped-nil error Argument 1 missing or nil []
+emotes set-equipped-string error Unable to cast string to Array []
+emotes set-equipped-number ok  [EquippedEmotesChanged(table)]
+emotes set-equipped-bad-slot ok  [EquippedEmotesChanged(table)]
+emotes set-equipped-empty ok  [EquippedEmotesChanged(table)]
+emotes add-nil error Argument 1 missing or nil []
+emotes add-noid error Argument 2 missing or nil []
+emotes add-string-id error Unable to cast string to int64 []
+emotes remove-nil error Argument 1 missing or nil []
+emotes emotes-property-end error EmotesDataInternal is not a valid member of HumanoidDescription "HumanoidDescription" []
+emotes add-order ok  | {X={1=number:1,2=number:2,3=number:3}} | {} | E{X={1=number:2}} E{X={1=number:1,2=number:2}} E{X={1=number:1,2=number:2,3=number:3}}
+emotes add-dupe ok  | {X={1=number:1,2=number:2,3=number:3}} | {} | E{X={1=number:1,2=number:2,3=number:3}}
+emotes add-float ok  | {X={1=number:1,2=number:2,3=number:3},Y={1=number:2}} | {} | E{X={1=number:1,2=number:2,3=number:3},Y={1=number:2}}
+emotes add-numstring ok  | {X={1=number:1,2=number:2,3=number:3},Y={1=number:2},Z={1=number:12}} | {} | E{X={1=number:1,2=number:2,3=number:3},Y={1=number:2},Z={1=number:12}}
+emotes add-neg ok  | {N={1=number:-4},X={1=number:1,2=number:2,3=number:3},Y={1=number:2},Z={1=number:12}} | {} | E{N={1=number:-4},X={1=number:1,2=number:2,3=number:3},Y={1=number:2},Z={1=number:12}}
+emotes add-number-name ok  | {5={1=number:6},N={1=number:-4},X={1=number:1,2=number:2,3=number:3},Y={1=number:2},Z={1=number:12}} | {} | E{5={1=number:6},N={1=number:-4},X={1=number:1,2=number:2,3=number:3},Y={1=number:2},Z={1=number:12}}
+emotes set-order ok  | {X={1=number:1,2=number:2,3=number:3}} | {} | E{X={1=number:1,2=number:2,3=number:3}}
+emotes set-strings ok  | {} | {} | E{}
+emotes set-string-ids ok  | {} | {} | E{}
+emotes set-floats ok  | {F={1=number:-3,2=number:2}} | {} | E{F={1=number:-3,2=number:2}}
+emotes set-dict-ids ok  | {} | {} | E{}
+emotes set-holes ok  | {H={1=number:1,2=number:3}} | {} | E{H={1=number:1,2=number:3}}
+emotes set-nested ok  | {} | {} | E{}
+emotes set-bool ok  | {} | {} | E{}
+emotes set-mixed-keys error Unable to cast Array to Dictionary | {} | {} | 
+emotes set-empty-list ok  | {} | {} | E{}
+emotes set-instance error Unable to cast Instance to Dictionary | {} | {} | 
+emotes equip-number ok  | {} | {} | Q{}
+emotes equip-bad-slot ok  | {} | {1={Name=string:S,Slot=number:9}} | Q{1={Name=string:S,Slot=number:9}}
+emotes equip-slot-string ok  | {} | {} | Q{}
+emotes equip-slot-float ok  | {} | {1={Name=string:S,Slot=number:3}} | Q{1={Name=string:S,Slot=number:3}}
+emotes equip-no-slot ok  | {} | {} | Q{}
+emotes equip-no-name ok  | {} | {} | Q{}
+emotes equip-name-number ok  | {} | {} | Q{}
+emotes equip-same-slot ok  | {} | {1={Name=string:B,Slot=number:2}} | Q{1={Name=string:B,Slot=number:2}}
+emotes equip-mixed ok  | {} | {1={Name=string:A,Slot=number:1},2={Name=string:C,Slot=number:2},3={Name=string:B,Slot=number:5}} | Q{1={Name=string:A,Slot=number:1},2={Name=string:C,Slot=number:2},3={Name=string:B,Slot=number:5}}
+emotes equip-holes ok  | {} | {1={Name=string:A,Slot=number:1},2={Name=string:C,Slot=number:2}} | Q{1={Name=string:A,Slot=number:1},2={Name=string:C,Slot=number:2}}
+emotes equip-dict error Unable to cast Dictionary to Array | {} | {1={Name=string:A,Slot=number:1},2={Name=string:C,Slot=number:2}} | 
+emotes equip-bool ok  | {} | {} | Q{}
+emotes equip-zero-slot ok  | {} | {1={Name=string:Z,Slot=number:0}} | Q{1={Name=string:Z,Slot=number:0}}
+emotes equip-instance error Unable to cast Instance to Array | {} | {1={Name=string:Z,Slot=number:0}} | 
+emotes remove-number ok  | {} | {1={Name=string:Z,Slot=number:0}} | 
+emotes event-table-copy ok false false | {W={1=number:1}} | {1={Name=string:Z,Slot=number:0}} | E{W={1=number:1}}
+emotes clone {W={1=number:1}} | {1={Name=string:Z,Slot=number:0}}
+emotes number-name string:5=6
+emotes set-number-key ok  string:5=1
+emotes set-mixed-ids ok  string:M=1,3
+emotes add-to-mixed ok  string:M=1,3
+emotes equip-collide ok  string:Name=S string:Slot=1 / 
+emotes equip-collide-2 ok  string:Name=T string:Slot=1 / 
+emotes equip-order ok  string:Name=B string:Slot=2 / string:Name=A string:Slot=5
