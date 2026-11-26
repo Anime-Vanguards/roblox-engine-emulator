@@ -1,0 +1,27 @@
+# engine: Roblox Studio 0.747.0.7471481, a headless playing client (script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-26
+debug dumpcodesize,dumpheap,dumprefs,getmemorycategory,info,loadmodule,profilebegin,profileend,resetmemorycategory,setmemorycategory,traceback,tracerefs
+type setmemorycategory function
+type resetmemorycategory function
+type getmemorycategory function
+type dumpcodesize function
+type profilebegin function
+type profileend function
+get-start ok =<chunk>
+set ok =<chunk>
+get-after-set ok abc
+set-again ok abc
+reset ok 
+get-after-reset ok def
+set-none error missing argument #1 to 'setmemorycategory' (string expected) get ok def
+set-nil error invalid argument #1 to 'setmemorycategory' (string expected, got nil) get ok def
+set-number ok def get ok 5
+set-table error invalid argument #1 to 'setmemorycategory' (string expected, got table) get ok 5
+set-true error invalid argument #1 to 'setmemorycategory' (string expected, got boolean) get ok 5
+set-empty ok 5 get ok 
+set-long ok  get ok xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+set-spaces ok xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx get ok a b
+set-vector error invalid argument #1 to 'setmemorycategory' (string expected, got Vector3) get ok a b
+reset-args ok 
+thread-get ok outer
+after-thread ok outer

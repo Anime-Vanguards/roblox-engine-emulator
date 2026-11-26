@@ -1,0 +1,37 @@
+# engine: Roblox Studio 0.747.0.7471481, a headless playing client (script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-26
+dead status dead
+dead spawn ok thread: ADDR []
+dead status-after dead
+dead defer ok thread []
+dead delay ok thread []
+dead spawn-args error cannot spawn non-suspended coroutine with arguments []
+dead resume ok false cannot resume dead coroutine []
+dead cancel ok  []
+dead close ok true []
+errored status dead
+errored spawn ok thread: ADDR [cannot resume non-suspended coroutine]
+errored status-after dead
+errored defer ok thread [cannot resume non-suspended coroutine]
+errored delay ok thread [cannot resume non-suspended coroutine]
+errored spawn-args error cannot spawn non-suspended coroutine with arguments []
+errored resume ok false cannot resume dead coroutine []
+errored cancel ok  []
+errored close ok false inner []
+cancelled status dead
+cancelled spawn ok thread: ADDR []
+cancelled status-after dead
+cancelled defer ok thread []
+cancelled delay ok thread []
+cancelled spawn-args error cannot spawn non-suspended coroutine with arguments []
+cancelled resume ok false cannot resume dead coroutine []
+cancelled cancel ok  []
+cancelled close ok true []
+running spawn ok thread: ADDR [cannot resume non-suspended coroutine]
+running spawn-args error cannot spawn non-suspended coroutine with arguments []
+running defer ok thread []
+normal spawn ok thread: ADDR [cannot resume non-suspended coroutine]
+waiting spawn error Cannot call task.spawn on a thread that is already 'waiting' in the task library []
+waiter resumed 1 number
+waiting after dead []
+wrap-dead error cannot resume dead coroutine []

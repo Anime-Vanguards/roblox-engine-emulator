@@ -499,6 +499,28 @@
 			"why": "the ScriptContext.Error trace records each harness's chunk name and raw line numbers (probe only normalizes MessageOut, not trace)"
 		}
 	],
+	"memory_category": [
+		{
+			"line": "debug ",
+			"why": "debug.setmemorycategory in a client: it answers the category it replaces, takes a string or a number (`invalid argument #1 to 'setmemorycategory' (string expected, got <type>)`, `missing argument #1 ...`), getmemorycategory reads it back (a script's own category starts as its name), a new thread starts in its creator's, and debug also has dumpheap, dumprefs and tracerefs; ree's are stubs that answer nothing and read \"default\""
+		},
+		{
+			"line": "get-",
+			"why": "debug.setmemorycategory in a client: it answers the category it replaces, takes a string or a number (`invalid argument #1 to 'setmemorycategory' (string expected, got <type>)`, `missing argument #1 ...`), getmemorycategory reads it back (a script's own category starts as its name), a new thread starts in its creator's, and debug also has dumpheap, dumprefs and tracerefs; ree's are stubs that answer nothing and read \"default\""
+		},
+		{
+			"line": "set",
+			"why": "debug.setmemorycategory in a client: it answers the category it replaces, takes a string or a number (`invalid argument #1 to 'setmemorycategory' (string expected, got <type>)`, `missing argument #1 ...`), getmemorycategory reads it back (a script's own category starts as its name), a new thread starts in its creator's, and debug also has dumpheap, dumprefs and tracerefs; ree's are stubs that answer nothing and read \"default\""
+		},
+		{
+			"line": "thread-get",
+			"why": "debug.setmemorycategory in a client: it answers the category it replaces, takes a string or a number (`invalid argument #1 to 'setmemorycategory' (string expected, got <type>)`, `missing argument #1 ...`), getmemorycategory reads it back (a script's own category starts as its name), a new thread starts in its creator's, and debug also has dumpheap, dumprefs and tracerefs; ree's are stubs that answer nothing and read \"default\""
+		},
+		{
+			"line": "after-thread",
+			"why": "debug.setmemorycategory in a client: it answers the category it replaces, takes a string or a number (`invalid argument #1 to 'setmemorycategory' (string expected, got <type>)`, `missing argument #1 ...`), getmemorycategory reads it back (a script's own category starts as its name), a new thread starts in its creator's, and debug also has dumpheap, dumprefs and tracerefs; ree's are stubs that answer nothing and read \"default\""
+		}
+	],
 	"path2d_layout": [
 		{
 			"line": "screen Vector2(1920 1080) frame Vector2(50 -28) Vector2(200 100)",
@@ -841,6 +863,44 @@
 			"why": "ree stops a copy past its own guard of 4,194,304 values (lua/bindable.rs COPY_VALUES); a 0.747 client and server wrote all 10,000,000"
 		}
 	],
+	"task_spawn_dead": [
+		{
+			"line": "dead spawn-args",
+			"why": "task.spawn / defer / delay of a thread that cannot be resumed: a client raises `cannot spawn non-suspended coroutine with arguments` when arguments are given, logs `cannot resume non-suspended coroutine` for a thread that died on an error, the running thread or a normal one, raises `Cannot call task.spawn on a thread that is already 'waiting' in the task library` for a thread in task.wait; ree resumes or skips them silently"
+		},
+		{
+			"line": "errored spawn",
+			"why": "task.spawn / defer / delay of a thread that cannot be resumed: a client raises `cannot spawn non-suspended coroutine with arguments` when arguments are given, logs `cannot resume non-suspended coroutine` for a thread that died on an error, the running thread or a normal one, raises `Cannot call task.spawn on a thread that is already 'waiting' in the task library` for a thread in task.wait; ree resumes or skips them silently"
+		},
+		{
+			"line": "errored defer",
+			"why": "task.spawn / defer / delay of a thread that cannot be resumed: a client raises `cannot spawn non-suspended coroutine with arguments` when arguments are given, logs `cannot resume non-suspended coroutine` for a thread that died on an error, the running thread or a normal one, raises `Cannot call task.spawn on a thread that is already 'waiting' in the task library` for a thread in task.wait; ree resumes or skips them silently"
+		},
+		{
+			"line": "errored delay",
+			"why": "task.spawn / defer / delay of a thread that cannot be resumed: a client raises `cannot spawn non-suspended coroutine with arguments` when arguments are given, logs `cannot resume non-suspended coroutine` for a thread that died on an error, the running thread or a normal one, raises `Cannot call task.spawn on a thread that is already 'waiting' in the task library` for a thread in task.wait; ree resumes or skips them silently"
+		},
+		{
+			"line": "cancelled spawn-args",
+			"why": "task.spawn / defer / delay of a thread that cannot be resumed: a client raises `cannot spawn non-suspended coroutine with arguments` when arguments are given, logs `cannot resume non-suspended coroutine` for a thread that died on an error, the running thread or a normal one, raises `Cannot call task.spawn on a thread that is already 'waiting' in the task library` for a thread in task.wait; ree resumes or skips them silently"
+		},
+		{
+			"line": "running spawn",
+			"why": "task.spawn / defer / delay of a thread that cannot be resumed: a client raises `cannot spawn non-suspended coroutine with arguments` when arguments are given, logs `cannot resume non-suspended coroutine` for a thread that died on an error, the running thread or a normal one, raises `Cannot call task.spawn on a thread that is already 'waiting' in the task library` for a thread in task.wait; ree resumes or skips them silently"
+		},
+		{
+			"line": "normal spawn",
+			"why": "task.spawn / defer / delay of a thread that cannot be resumed: a client raises `cannot spawn non-suspended coroutine with arguments` when arguments are given, logs `cannot resume non-suspended coroutine` for a thread that died on an error, the running thread or a normal one, raises `Cannot call task.spawn on a thread that is already 'waiting' in the task library` for a thread in task.wait; ree resumes or skips them silently"
+		},
+		{
+			"line": "waiting spawn",
+			"why": "task.spawn / defer / delay of a thread that cannot be resumed: a client raises `cannot spawn non-suspended coroutine with arguments` when arguments are given, logs `cannot resume non-suspended coroutine` for a thread that died on an error, the running thread or a normal one, raises `Cannot call task.spawn on a thread that is already 'waiting' in the task library` for a thread in task.wait; ree resumes or skips them silently"
+		},
+		{
+			"line": "waiter resumed",
+			"why": "task.spawn / defer / delay of a thread that cannot be resumed: a client raises `cannot spawn non-suspended coroutine with arguments` when arguments are given, logs `cannot resume non-suspended coroutine` for a thread that died on an error, the running thread or a normal one, raises `Cannot call task.spawn on a thread that is already 'waiting' in the task library` for a thread in task.wait; ree resumes or skips them silently"
+		}
+	],
 	"text_bounds": [
 		{
 			"line": "Size = 0.5 reads 1 measures 4 1",
@@ -1001,6 +1061,56 @@
 		{
 			"line": "coordinates inset 0,58/0,0 ignore=true screen 0,-58/1920,1080 box 10,-38/960,540 | ignore=false screen 0,0/1920,1022 box 10,20/960,511",
 			"why": "plain ree has no GUI layout; rur adds one and prints this line (run.mjs --rur)"
+		}
+	],
+	"value_read_identity": [
+		{
+			"line": "Color3 ",
+			"why": "a client makes a new userdata for each read of a property holding a datatype other than Vector3 (Color3, CFrame, UDim2, Vector2, UDim, Rect, NumberRange, the sequences, PhysicalProperties, Ray), so two reads are not rawequal and the second is not found as a table key; ree hands back the value it made while the property is unchanged"
+		},
+		{
+			"line": "CFrame ",
+			"why": "a client makes a new userdata for each read of a property holding a datatype other than Vector3 (Color3, CFrame, UDim2, Vector2, UDim, Rect, NumberRange, the sequences, PhysicalProperties, Ray), so two reads are not rawequal and the second is not found as a table key; ree hands back the value it made while the property is unchanged"
+		},
+		{
+			"line": "PhysicalProperties ",
+			"why": "a client makes a new userdata for each read of a property holding a datatype other than Vector3 (Color3, CFrame, UDim2, Vector2, UDim, Rect, NumberRange, the sequences, PhysicalProperties, Ray), so two reads are not rawequal and the second is not found as a table key; ree hands back the value it made while the property is unchanged"
+		},
+		{
+			"line": "UDim2 ",
+			"why": "a client makes a new userdata for each read of a property holding a datatype other than Vector3 (Color3, CFrame, UDim2, Vector2, UDim, Rect, NumberRange, the sequences, PhysicalProperties, Ray), so two reads are not rawequal and the second is not found as a table key; ree hands back the value it made while the property is unchanged"
+		},
+		{
+			"line": "Vector2 ",
+			"why": "a client makes a new userdata for each read of a property holding a datatype other than Vector3 (Color3, CFrame, UDim2, Vector2, UDim, Rect, NumberRange, the sequences, PhysicalProperties, Ray), so two reads are not rawequal and the second is not found as a table key; ree hands back the value it made while the property is unchanged"
+		},
+		{
+			"line": "UDim ",
+			"why": "a client makes a new userdata for each read of a property holding a datatype other than Vector3 (Color3, CFrame, UDim2, Vector2, UDim, Rect, NumberRange, the sequences, PhysicalProperties, Ray), so two reads are not rawequal and the second is not found as a table key; ree hands back the value it made while the property is unchanged"
+		},
+		{
+			"line": "Rect ",
+			"why": "a client makes a new userdata for each read of a property holding a datatype other than Vector3 (Color3, CFrame, UDim2, Vector2, UDim, Rect, NumberRange, the sequences, PhysicalProperties, Ray), so two reads are not rawequal and the second is not found as a table key; ree hands back the value it made while the property is unchanged"
+		},
+		{
+			"line": "NumberSequence ",
+			"why": "a client makes a new userdata for each read of a property holding a datatype other than Vector3 (Color3, CFrame, UDim2, Vector2, UDim, Rect, NumberRange, the sequences, PhysicalProperties, Ray), so two reads are not rawequal and the second is not found as a table key; ree hands back the value it made while the property is unchanged"
+		},
+		{
+			"line": "ColorSequence ",
+			"why": "a client makes a new userdata for each read of a property holding a datatype other than Vector3 (Color3, CFrame, UDim2, Vector2, UDim, Rect, NumberRange, the sequences, PhysicalProperties, Ray), so two reads are not rawequal and the second is not found as a table key; ree hands back the value it made while the property is unchanged"
+		},
+		{
+			"line": "NumberRange ",
+			"why": "a client makes a new userdata for each read of a property holding a datatype other than Vector3 (Color3, CFrame, UDim2, Vector2, UDim, Rect, NumberRange, the sequences, PhysicalProperties, Ray), so two reads are not rawequal and the second is not found as a table key; ree hands back the value it made while the property is unchanged"
+		},
+		{
+			"line": "Ray ",
+			"why": "RayValue.Value reads a Ray in a client; ree reads nil"
+		},
+		{
+			"line": "cframevalue",
+			"why": "a client makes a new userdata for each read of a property holding a datatype other than Vector3 (Color3, CFrame, UDim2, Vector2, UDim, Rect, NumberRange, the sequences, PhysicalProperties, Ray), so two reads are not rawequal and the second is not found as a table key; ree hands back the value it made while the property is unchanged"
 		}
 	],
 	"yield_refused": [

@@ -1,0 +1,29 @@
+# engine: Roblox Studio 0.747.0.7471481, a headless playing client (script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-26
+Color3 rawequal false key false eq true after-write false
+Vector3 rawequal true key true eq true after-write true
+CFrame rawequal false key false eq true after-write false
+Position rawequal true key true eq true after-write true
+BrickColor rawequal false key false eq true after-write false
+PhysicalProperties rawequal false key false eq true after-write false
+UDim2 rawequal false key false eq true after-write false
+Vector2 rawequal false key false eq true after-write false
+UDim rawequal false key false eq true after-write false
+Rect rawequal false key false eq true after-write false
+Font rawequal false key false eq true after-write false
+NumberSequence rawequal false key false eq true after-write false
+ColorSequence rawequal false key false eq true after-write false
+NumberRange rawequal false key false eq true after-write false
+Ray rawequal false key false eq true after-write false
+EnumItem rawequal true key true eq true after-write true
+string rawequal true key true eq true after-write true
+written-color false
+written-size true
+written-udim2 false
+attribute Color3 rawequal false given false
+attribute Vector3 rawequal true given true
+attribute UDim2 rawequal false given false
+attribute CFrame rawequal false given false
+attribute NumberRange rawequal false given false
+vector3value true
+cframevalue false
