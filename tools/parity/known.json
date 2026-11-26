@@ -201,6 +201,88 @@
 			"why": "ree answers a service a plugin or the command bar may use (identity 4 gets it in the same capture), since edit-mode code that Studio runs as a plugin parents its previews to CoreGui; a game script (identity 2) gets nil"
 		}
 	],
+	"datatype_edges": [
+		{
+			"line": "numbersequence both-ends",
+			"why": "NumberSequence / ColorSequence with both ends wrong: a client names the start first (`must start at time=0.0`); ree names the end"
+		},
+		{
+			"line": "colorsequence both-ends",
+			"why": "NumberSequence / ColorSequence with both ends wrong: a client names the start first (`must start at time=0.0`); ree names the end"
+		},
+		{
+			"line": "numbersequence ends-off",
+			"why": "NumberSequence / ColorSequence with both ends wrong: a client names the start first (`must start at time=0.0`); ree names the end"
+		},
+		{
+			"line": "colorsequence ends-off",
+			"why": "NumberSequence / ColorSequence with both ends wrong: a client names the start first (`must start at time=0.0`); ree names the end"
+		},
+		{
+			"line": "numbersequence-element",
+			"why": "a sequence's entry that is no keypoint: a client says `<Type>.new(): expected '<Type>Keypoint' at index <n>` (ColorSequence's with a full stop); ree says `table of <Type>Keypoints expected.`"
+		},
+		{
+			"line": "colorsequence-element",
+			"why": "a sequence's entry that is no keypoint: a client says `<Type>.new(): expected '<Type>Keypoint' at index <n>` (ColorSequence's with a full stop); ree says `table of <Type>Keypoints expected.`"
+		},
+		{
+			"line": "keypoint-envelope -",
+			"why": "NumberSequenceKeypoint.new takes a negative envelope in a client and keeps it; ree raises `envelope must be non-negative`"
+		},
+		{
+			"line": "brickcolor-",
+			"why": "BrickColor.new(Color3) and a part's Color read as BrickColor pick the colour with the least sum of absolute channel differences computed in float32 (each difference, then |r| + |g|, then + |b|), over every BrickColor by number, the lowest on a tie (all 8,128 palette midpoints); ree's sum and order pick another colour for some"
+		},
+		{
+			"line": "size ",
+			"why": "a part's Size in a client holds each axis at 2048 or less, and a write with a not-a-number axis changes nothing; ree keeps the larger axes and stores the not-a-number write (0.001 and inf)"
+		},
+		{
+			"line": "millis-range ",
+			"why": "DateTime.fromUnixTimestampMillis out of range: a client says `Error interpreting timestampMillis as a precise point in time. Fields out of range. UnixTimestampMillis should be between -17987443200000 and 253402300799999.`; ree gives the seconds' message"
+		},
+		{
+			"line": "rolled ",
+			"why": "DateTime.fromUniversalTime with units that roll below year 1400: a client raises `Below the min DateTime supported: 1400-01-01T00:00:00Z` (and a millisecond count past the int32 range of microseconds is clamped: -19008000000000 ms gives 946682652516); ree raises the fields' out-of-range message"
+		},
+		{
+			"line": "iso ",
+			"why": "DateTime.fromIsoDate in a client: text after a complete time is ignored (\"...Zjunk\", a trailing space), hours, minutes and seconds past their range roll over (25:00, 99:00, 23:60, 23:59:61), an offset that takes the time out of 1400-9999 gives nil, and an offset of +24:00 or more gives nil; ree differs on each"
+		},
+		{
+			"line": "euler ",
+			"why": "Euler angles at gimbal lock: a client's ToEulerAnglesXYZ / YXZ / ToOrientation put the whole free rotation in the first angle and 0 in the last (0.5 1.5707964 0), an exact lock keeps +0; ree splits it (-2.84 1.57 -2.94) and gives -0"
+		},
+		{
+			"line": "lookat ",
+			"why": "CFrame.lookAt with an up vector other than Y: a client normalises in another float order (last digits differ), falls back to an axis when looking along the up vector and gives not-a-number for a zero up vector; ree gives not-a-number for the first and a frame for the second"
+		},
+		{
+			"line": "frommatrix ",
+			"why": "CFrame.fromMatrix without a Z column: a client's Z is the normalised cross product, or zero when it is zero (parallel or zero columns); ree gives not-a-number"
+		},
+		{
+			"line": "metatable ",
+			"why": "getmetatable of a CFrame or a Color3 is the lock text `The metatable is locked` in a client, as for the other datatypes; ree answers a boolean"
+		},
+		{
+			"line": "font-unknown",
+			"why": "Font.fromEnum(Enum.Font.Unknown) raises `Enum.Font.Unknown can't be passed to Font.fromEnum` with the caller's position in a client; ree words it otherwise, without a position"
+		},
+		{
+			"line": "content-",
+			"why": "Content.fromAssetId in a client: 0 is rbxassetid://0, a fraction rounds (1.5 is rbxassetid://2), a non-finite id raises `Invalid id. Expected a finite value.`; fromObject(nil) raises `Expected Object, got nil.` and a number `invalid argument #1 to 'fromObject' (Object expected, got number)` with a position; ree answers and words them otherwise"
+		},
+		{
+			"line": "catalog-",
+			"why": "CatalogSearchParams' text lists AssetTypes and BundleTypes as their items' Values joined by commas (8,11,12) in a client; ree prints their names"
+		},
+		{
+			"line": "clone-attribute ",
+			"why": "an attribute holding an instance inside the cloned tree points at the copy's instance in a clone (a client); ree keeps the original"
+		}
+	],
 	"engine_functions": [
 		{
 			"line": "same signal.Connect false",
