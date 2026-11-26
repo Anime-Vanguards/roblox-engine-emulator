@@ -507,6 +507,26 @@ impl Store {
             return;
         }
         let Ok(_guard) = self.flush_lock.lock() else { return };
+        // Serialize refresh-filter-publish across sibling processes on a dedicated flush lock
+        // (distinct from COMPACT_LOCK so an in-progress compaction never blocks a delta flush) so
+        // concurrent batch workers flushing overlapping cold compiles write each shared entry once
+        // instead of leaving duplicate delta packs on disk. Deferred mid-run flushes use try_lock
+        // so workers keep working while a peer publishes; final flushes wait so every unique entry
+        // persists without duplicating peers' packs.
+        const FLUSH_LOCK: &str = "flush.lock";
+        let _ = std::fs::create_dir_all(&self.packs_dir);
+        let cross_lock = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(self.packs_dir.join(FLUSH_LOCK))
+            .ok();
+        if let Some(ref lock) = cross_lock {
+            let acquired = if defer { lock.try_lock().is_ok() } else { lock.lock().is_ok() };
+            if !acquired {
+                return;
+            }
+        }
         // Pick up any pack another process just published before deciding what is still missing.
         self.refresh_from_disk();
         let mut to_write: Vec<(EntryKey, Arc<[u8]>)> = {
@@ -533,7 +553,9 @@ impl Store {
         to_write.sort_by_key(|(key, _)| *key);
         let entries: Vec<(EntryKey, &[u8], u64)> = to_write.iter().map(|(k, v)| (*k, &**v, payload_check(v))).collect();
         let Some(buf) = serialize_pack(&entries, &self.abi) else { return };
-        if let Some(pack) = self.publish_pack(&buf) {
+        let published = self.publish_pack(&buf);
+        drop(cross_lock);
+        if let Some(pack) = published {
             let (need_compact, pruned) = match self.packs.write() {
                 Ok(mut packs) => {
                     packs.push(pack);
@@ -1621,6 +1643,52 @@ mod tests {
         assert_eq!(reader.get(&stress_key(888)).as_deref(), Some(b"tiny-unique".as_slice()));
         assert_eq!(reader.get(&stress_key(999)).as_deref(), Some(b"tail".as_slice()));
         assert_eq!(reader.get(&stress_key(0)).as_deref(), Some(b"small-0".as_slice()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn concurrent_flushes_deduplicate_overlapping_entries_on_disk() {
+        let dir = temp_dir("flush-dedup");
+        let (abi, _) = abi_info();
+        let shared_payload: Arc<[u8]> = Arc::from(vec![0x5au8; 8192]);
+        let workers = 8usize;
+        let shared_count = 32usize;
+        let barrier = Arc::new(std::sync::Barrier::new(workers));
+        let mut handles = Vec::with_capacity(workers);
+        for w in 0..workers {
+            let dir = dir.clone();
+            let abi = *abi;
+            let shared_payload = shared_payload.clone();
+            let barrier = barrier.clone();
+            handles.push(std::thread::spawn(move || {
+                let store = Store::open_at(dir, abi);
+                for idx in 0..shared_count {
+                    store.put(stress_key(idx), shared_payload.clone());
+                }
+                store.put(stress_key(10_000 + w), Arc::from(format!("unique-{w}").into_bytes()));
+                barrier.wait();
+                store.flush();
+            }));
+        }
+        for handle in handles {
+            handle.join().unwrap();
+        }
+        let total_pack_bytes: u64 = pack_files(&dir)
+            .iter()
+            .map(|p| std::fs::metadata(p).map(|m| m.len()).unwrap_or(0))
+            .sum();
+        let unique_bytes = (shared_count * 8192) as u64;
+        assert!(
+            total_pack_bytes < unique_bytes + 65_536,
+            "overlapping concurrent flushes duplicated entries: total_pack_bytes={total_pack_bytes} unique_bytes={unique_bytes}"
+        );
+        let reader = Store::open_at(dir.clone(), *abi);
+        for idx in 0..shared_count {
+            assert_eq!(reader.get(&stress_key(idx)).as_deref(), Some(shared_payload.as_ref()));
+        }
+        for w in 0..workers {
+            assert_eq!(reader.get(&stress_key(10_000 + w)).as_deref(), Some(format!("unique-{w}").as_bytes()));
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
