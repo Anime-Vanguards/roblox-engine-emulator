@@ -6,7 +6,7 @@
 // The sizes are chosen so the store matters to the figures: a store that rewrote itself on every flush multiplies the
 // data written, and processes that read each new compacted pack whole raise the summed memory and the page faults well
 // past their budgets. The recording runs a scene of its own (fixtures/Scene.luau), the parity probes what the repository
-// already has (tools/parity/probes: a fifth of them in CI, chosen by name, all of them in the full suite).
+// already has (tools/parity/probes: 23 of them in CI, chosen by name, all of them in the full suite).
 //
 // Options: --ree <exe> (default: target/release/ree beside this checkout, or REE_BIN).
 
@@ -158,16 +158,22 @@ function batchWorkload({ id, title, about, size, processes, workers, stateOf, fr
 	};
 }
 
-// Whether a probe is in the sample of one in `sample`: by a hash of its name (FNV-1a), not its place in the list, so a
-// probe added or removed moves only itself in or out (by place, three new probes once changed 20 of the 25 sampled and
-// the figures with them)
-function sampled(name, sample) {
-	let hash = 0x811c9dc5;
-	for (const byte of Buffer.from(name, "utf8")) hash = Math.imul(hash ^ byte, 0x01000193) >>> 0;
-	return hash % sample === 0;
+// The sample of `size` probes: the ones whose names hash lowest (FNV-1a), in name order. A hash, not a place in the list,
+// so a probe added or removed moves at most itself in and one other out (by place, three new probes once changed 20 of
+// the 25 sampled and the figures with them); a fixed size, not a fraction of the hashes, so the sample does not grow
+// with the probes (one in five by hash, a day of new probes took it from 23 to 30, and its processes, two a probe, over
+// their budget)
+export function sampled(names, size) {
+	const hash = name => {
+		let value = 0x811c9dc5;
+		for (const byte of Buffer.from(name, "utf8")) value = Math.imul(value ^ byte, 0x01000193) >>> 0;
+		return value;
+	};
+	const ranked = names.map(name => ({ name, hash: hash(name) })).sort((a, b) => a.hash - b.hash || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+	return ranked.slice(0, size).map(entry => entry.name).sort();
 }
 
-// `node tools/parity/run.mjs` over the probes `sampled` picks (all of them when `sample` is 1)
+// `node tools/parity/run.mjs` over the `sample` probes `sampled` picks (all of them when `sample` is not given)
 function parityWorkload({ id, title, about, sample }) {
 	return {
 		id, title, about,
@@ -177,7 +183,7 @@ function parityWorkload({ id, title, about, sample }) {
 			fs.rmSync(state, { recursive: true, force: true });
 			fs.mkdirSync(state, { recursive: true });
 			const probes = fs.readdirSync(path.join(context.repo, "tools", "parity", "probes")).filter(name => name.endsWith(".luau")).map(name => name.slice(0, -5)).sort();
-			const chosen = sample > 1 ? probes.filter(name => sampled(name, sample)) : [];
+			const chosen = sample ? sampled(probes, sample) : [];
 			return { argv: [context.node, path.join(context.repo, "tools", "parity", "run.mjs"), ...chosen, "--ree", ree], cwd: context.repo, folders: folders(context, id, state), env: { RUR_STATE_DIR: state } };
 		},
 	};
@@ -260,13 +266,12 @@ export function workloads() {
 		},
 		parityWorkload({
 			id: "parity-sample", title: "A sample of the parity probes",
-			about: "`node tools/parity/run.mjs` with a fifth of the probes in tools/parity/probes (chosen by name, so a new probe moves only itself in or out), each in a `ree run` process of its own, compared with what a Roblox client printed.",
-			sample: 5,
+			about: "`node tools/parity/run.mjs` with 23 of the probes in tools/parity/probes (chosen by name, so the sample keeps its size as probes are added, and a new probe moves only itself in and one other out), each in a `ree run` process of its own, compared with what a Roblox client printed.",
+			sample: 23,
 		}),
 		parityWorkload({
 			id: "parity-probes", title: "The parity probes",
 			about: "`node tools/parity/run.mjs`: every probe in tools/parity/probes, each in a `ree run` process of its own, compared with what a Roblox client printed.",
-			sample: 1,
 		}),
 	];
 }

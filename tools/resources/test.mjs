@@ -15,7 +15,7 @@ import { compare, watch } from "./lib/dirs.mjs";
 import { METRIC, METRICS, format } from "./lib/metrics.mjs";
 import { markdown, text } from "./lib/report.mjs";
 import { measure } from "./lib/tree.mjs";
-import { SUITES, workloads } from "./suite.mjs";
+import { SUITES, sampled, workloads } from "./suite.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const temp = prefix => fs.mkdtempSync(path.join(os.tmpdir(), `resources-test-${prefix}-`));
@@ -148,6 +148,25 @@ test("baseline.json names only workloads and metrics that exist, and covers the 
 		}
 	}
 	for (const id of SUITES.ci.workloads) assert.ok(baseline.platforms?.["win32-x64"]?.[id], `win32-x64 has no baseline for ${id}`);
+});
+
+test("the parity sample keeps its size as probes are added: a new probe moves at most itself in and one other out", () => {
+	const names = Array.from({ length: 150 }, (_, index) => `probe_${index}`);
+	let sample = sampled(names, 23);
+	assert.equal(sample.length, 23);
+	assert.deepEqual(sample, [...sample].sort(), "in name order");
+	assert.deepEqual(sampled([...names].reverse(), 23), sample, "the list's order does not matter");
+	for (let index = 0; index < 100; index++) {
+		const added = `added_${index}`;
+		names.push(added);
+		const next = sampled(names, 23);
+		const into = next.filter(name => !sample.includes(name));
+		const out = sample.filter(name => !next.includes(name));
+		assert.equal(next.length, 23);
+		assert.ok(into.length === out.length && (into.length === 0 || (into.length === 1 && into[0] === added)), `${added}: in ${into}, out ${out}`);
+		sample = next;
+	}
+	assert.deepEqual(sampled(["b", "a"], 23), ["a", "b"], "fewer probes than the size: all of them");
 });
 
 test("a measured process tree reports its processes, the data they wrote and their memory", { skip: !["win32", "linux"].includes(process.platform) }, async () => {
