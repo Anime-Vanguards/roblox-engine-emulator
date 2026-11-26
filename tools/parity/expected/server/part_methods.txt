@@ -1,0 +1,48 @@
+# engine: Roblox Studio 0.747.0.7471481, the server of a headless play session (a Script in ServerScriptService, script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-26
+part-break Weld_A_B@nil WeldConstraint_A_C@nil Motor6D_B_A@nil Snap_A_C@nil HingeConstraint_A_B@A NoCollisionConstraint_A_B@A Weld_B_C@B Rotate_A_B@A Weld_A_nil@A Weld_A_C@A WeldInRS@ReplicatedStorage
+part-break events Weld_A_B,Motor6D_B_A,Snap_A_C,WeldConstraint_A_C
+out-break Weld_A_B@A
+lower-break Weld_A_B@nil
+model-break Weld_A_B@nil WeldConstraint_B_C@nil Weld_C_nil@C Motor6D_A_B@nil
+make smooth true  0  root A
+make weld true  0  root A
+make studs-inlet true  0  root A
+make glue true  0  root A
+make universal true  0  root A
+make hinge true  0  root A
+make motor true  0  root A
+make weld-gap true  0  root A
+model-make nil root A B
+out-make nil 0 0
+active weld true
+active disabled false
+active enabled true
+active part1-nil false
+active in-rs false
+active in-js true
+active second false true
+active rotate false
+active motor-to-anchored true
+active anchored-pair false
+active part-out false false false
+active loose false
+active glue true
+nocollide {NoCollisionConstraint_B_A,NoCollisionConstraint_A_C} {NoCollisionConstraint_B_A} {NoCollisionConstraint_A_C}
+axis 1 0 0 0 1 0
+setaxis nil 0 1 0 0 1 0 -1 0 0
+setsecondary nil 0 1 0 0 0 1 0 0 0 0 0 1 1 0 0 0 1 0
+setaxis-bad error Unable to cast string to Vector3 error Argument 1 missing or nil nil 0 0 0 0 0 1 1 0 0 0 1 0
+constraints {H,Rope,Off,VF} {H,Rope}
+part-joints {VF,Rope,H} {H,Rope}
+motor start 0 0 0
+motor set nil 1 0
+motor frame 1 0 500 60 43 1 0 0 0 1 0 0 0 1
+motor frame 2 0 500 60 43 1 0 0 0 1 0 0 0 1
+motor frame 3 0 500 60 43 1 0 0 0 1 0 0 0 1
+motor frame 4 0 500 60 43 1 0 0 0 1 0 0 0 1
+motor frame 5 0 500 60 43 1 0 0 0 1 0 0 0 1
+motor frame 6 0 500 60 43 1 0 0 0 1 0 0 0 1
+motor write current 0.25 500 60 43 0.968912423 -0.247403964 0 0.247403964 0.968912423 0 0 0 1
+motor casts nil 2 error Argument 1 missing or nil error Unable to cast Array to float
+motor loose 0

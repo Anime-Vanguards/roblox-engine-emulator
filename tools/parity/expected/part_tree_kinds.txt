@@ -1,0 +1,34 @@
+# engine: Roblox Studio 0.747.0.7471481, a headless playing client (script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-26
+tree kind-tri root H cpt H,B,A inactive HA
+tree kind-tri2 root H cpt H,A,B inactive HB
+tree kind-tri3 root H cpt H,B,A inactive AB
+tree kind-tri4 root H cpt H,B,A inactive HA
+tree kind-sq root H cpt H,B,X,A inactive AX
+tree kind-sq2 root H cpt H,B,A,X inactive BX
+tree kind-wc root H cpt H,B,X,A inactive 
+tree kind-wc2 root H cpt H,B,A,X inactive 
+tree kind-root root H cpt H,B,X,A inactive HA
+tree kind-root2 root H cpt H,B,X,A inactive AX
+tree kind-big root H cpt H,B,X,A inactive AX
+tree kind-snap root H cpt H,B,A inactive AB
+pivot-part volume-vs-face P1
+pivot-part face-vs-volume P2
+pivot-part equal P1
+pivot-part equal-rev P1
+pivot-part long-thin P1
+pivot-part hrp P2
+pivot-part seat P2
+pivot-part massless P1
+pivot-part ball P1
+m6d start 476 60 43 0.921060979 -0.389418334 0 0.389418334 0.921060979 0 0 0 1
+m6d transform 476 59.5567207 42.9330063 1 0 0 0 0.955336452 -0.295520216 0 0.295520216 0.955336452
+m6d angle-after 476 60 43 1 0 0 0 1 0 0 0 1
+m6d angle-after-frame 476 60 43 1 0 0 0 1 0 0 0 1
+m6d transform-with-desired 0.600000024 476.298004 60 42.9701004 0.980066597 0 0.198669314 0 1 0 -0.198669314 0 0.980066597
+single made V2,T4,R3,H1,S5
+single v2-off T4,S5,R3,H1
+single v2-on T4,V2,R3,H1,S5
+single h1-off T4,V2,R3,S5
+single weld T4,V2,R3,S5,W6 A,B
+single hinge-one T4,V2,R3,S5,W6

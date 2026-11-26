@@ -12500,12 +12500,11 @@ fn workspace_and_world_root_engine_only_methods_raise_a_game_scripts_capability_
             let both = if root { " true true" } else { "" };
             want.push(format!("print: {name} function false string The current thread cannot call '{name}' (lacking capability {capability}) true{both}"));
         }
+        // (Model's BreakJoints and MakeJoints, and the Workspace's lower-case twins of them, are emulated: world/parts.rs)
         for name in ["BreakJoints", "MakeJoints"] {
-            want.push(format!("missing: Model.{name} is not emulated"));
             want.push(format!("print: Model {name} function true true"));
         }
         for name in ["breakJoints", "makeJoints"] {
-            want.push(format!("missing: Workspace.{name} is not emulated"));
             want.push(format!("print: workspace {name} true"));
         }
         want.push("print: Selection remove true".into());

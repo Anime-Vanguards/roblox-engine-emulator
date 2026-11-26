@@ -977,6 +977,13 @@ pub const DESTROYED_PART: f64 = 0.22e-6;
 /// One element of a list a method returns (the parity bench: GetChildren of 20 0.34 us,
 /// GetDescendants of 110 1.94 us; EditableMesh GetFaces and GetColors 0.01-0.02 us an id in a Studio capture)
 pub const LISTED: f64 = 0.0135e-6;
+/// A part BasePart:GetConnectedParts lists, either way, beyond [`method`]'s price for the call (world/parts.rs; a headless 0.747 client,
+/// two sessions, the median of 9 samples of 200 calls less an empty loop: a lone part 0.32 to 0.44 us, a hub and 20 welded leaves 1.43
+/// to 2.21, a chain of 101 parts recursively 6.91 to 7.00)
+pub const CONNECTED_PART: f64 = 0.068e-6;
+/// A joint BasePart:GetJoints (or a constraint GetNoCollisionConstraints and Attachment:GetConstraints) lists, beyond the call (the same
+/// sessions: a part with no joints 0.13 to 0.22 us, a hub with 20 welds 1.19 to 1.92)
+pub const JOINT_LISTED: f64 = 0.069e-6;
 /// ReflectionService: a class's entry GetClass or GetClasses makes ([`REFLECTED_CLASS`]), what its Display table adds, and a class
 /// GetClasses tests against its filter. A playing client (roblox-sim, Studio 0.744, a headless client of an empty place; os.clock
 /// around single calls, the median of 15; the parity bench's ReflectionService rows are newer than its reference sessions):
@@ -2376,6 +2383,17 @@ pub fn method(name: &str) -> f64 {
         "GetClass" => 0.28,
         // the Luau-served model queries add their own MODEL_QUERY
         "GetPivot" | "GetScale" | "GetBoundingBox" | "GetExtentsSize" | "PivotTo" | "ScaleTo" => 0.0,
+        // (the part methods of world/parts.rs and gravity.rs: a headless 0.747 client, two sessions, the median of 9 samples of 200 calls
+        // less an empty loop; what they list: [`CONNECTED_PART`], [`JOINT_LISTED`])
+        "GetRootPart" => 0.055,
+        "GetConnectedParts" => 0.278,
+        "GetJoints" => 0.175,
+        "GetNoCollisionConstraints" => 0.14,
+        "IsGrounded" => 0.055,
+        "GetRenderCFrame" | "GetClosestPointOnSurface" => 0.07,
+        "GetVelocityAtPosition" => 0.065,
+        "AngularAccelerationToTorque" | "TorqueToAngularAcceleration" => 0.085,
+        "CanCollideWith" => 0.09,
         // EditableMesh (capture, a 13,515-vertex mesh; playtest the two weights calls 0.84 us)
         "GetVertexBoneWeights" => 0.44,
         "GetVertexBones" => 0.55,
@@ -2420,7 +2438,9 @@ pub fn method_kinds(name: &str) -> u8 {
         | "Blockcast" | "Spherecast" | "GetPartBoundsInBox" | "GetPartBoundsInRadius" | "GetPartsInPart" | "JSONEncode" | "JSONDecode"
         | "GetValue" | "GetClass" | "Fire" | "GetPivot" | "GetScale" | "GetBoundingBox" | "GetExtentsSize" | "PivotTo" | "ScaleTo"
         | "FindPartsInRegion3" | "FindPartsInRegion3WithIgnoreList" | "FindPartsInRegion3WithWhiteList"
-        | "findPartsInRegion3" | "IsRegion3Empty" | "IsRegion3EmptyWithIgnoreList" | "ArePartsTouchingOthers" => 0,
+        | "findPartsInRegion3" | "IsRegion3Empty" | "IsRegion3EmptyWithIgnoreList" | "ArePartsTouchingOthers" | "GetRootPart" | "GetConnectedParts"
+        | "GetJoints" | "GetNoCollisionConstraints" | "IsGrounded" | "GetRenderCFrame" | "GetClosestPointOnSurface" | "GetVelocityAtPosition"
+        | "AngularAccelerationToTorque" | "TorqueToAngularAcceleration" | "CanCollideWith" => 0,
         "Shapecast" => kind::DEFAULTED,
         "IsDescendantOf" | "IsAncestorOf" | "GetVertexBoneWeights" | "GetVertexBones" | "GetFaceVertices" | "GetFaceColors" | "GetFaceNormals"
         | "GetFaceUVs" | "GetPosition" | "GetNormal" | "GetUV" | "GetBoneName" | "GetColor" | "GetColorAlpha" | "SetColorAlpha" | "SetColor"

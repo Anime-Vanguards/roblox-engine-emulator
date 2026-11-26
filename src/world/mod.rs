@@ -28,6 +28,7 @@ pub mod gravity;
 pub mod grid;
 pub mod joints;
 pub mod mouse;
+mod parts;
 pub mod query;
 mod region;
 
@@ -763,6 +764,7 @@ pub fn install(engine: &Rc<Engine>) {
     keep_homes(engine);
     joints::install(engine);
     gravity::install(engine);
+    parts::install(engine);
     engine.clear_member_cache();
 }
 

@@ -1,0 +1,131 @@
+# engine: Roblox Studio 0.747.0.7471481, a headless playing client (script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-26
+lone A root A arp A cp {A} cpf {A} cpt {A} joints {}
+lone B root B arp B cp {B} cpf {B} cpt {B} joints {}
+lone C root nil arp nil cp {C} cpf {C} cpt {} joints {}
+lone D root nil arp nil cp {D} cpf {D} cpt {} joints {}
+pair A root B arp B cp {A,B} cpf {A,B} cpt {B,A} joints {Weld_A_B}
+pair B root B arp B cp {B,A} cpf {B,A} cpt {B,A} joints {Weld_A_B}
+chain A root D arp D cp {A,B} cpf {A,B} cpt {D,C,B,A} joints {Weld_A_B}
+chain B root D arp D cp {B,A,C} cpf {B,A,C} cpt {D,C,B,A} joints {Weld_A_B,Weld_B_C}
+chain C root D arp D cp {C,B,D} cpf {C,B,D} cpt {D,C,B,A} joints {Weld_B_C,Weld_C_D}
+chain D root D arp D cp {D,C} cpf {D,C} cpt {D,C,B,A} joints {Weld_C_D}
+anchored-chain A root A arp A cp {A,U} cpf {A,U} cpt {A,U,V} joints {Weld_A_U}
+anchored-chain U root A arp A cp {U,A,V} cpf {U,A,V} cpt {U,A,V} joints {Weld_A_U,Weld_U_V}
+anchored-chain V root A arp A cp {V,U} cpf {V,U} cpt {V,U,A} joints {Weld_U_V}
+two-anchored A root A arp A cp {A,B} cpf {A,B} cpt {A,B} joints {Weld_A_B}
+two-anchored B root B arp B cp {B,A} cpf {B,A} cpt {B,A} joints {Weld_A_B}
+anchored-bridge A root A arp A cp {A,U} cpf {A,U} cpt {A,U,B,V} joints {Weld_A_U}
+anchored-bridge U root B arp B cp {U,A,B} cpf {U,A,B} cpt {U,A,B,V} joints {Weld_A_U,Weld_U_B}
+anchored-bridge B root B arp B cp {B,U,V} cpf {B,U,V} cpt {B,U,V,A} joints {Weld_U_B,Weld_B_V}
+anchored-bridge V root B arp B cp {V,B} cpf {V,B} cpt {V,B,U,A} joints {Weld_B_V}
+kind-Weld A root B arp B cp {A,B} cpf {A,B} cpt {B,A} joints {Weld_A_B}
+kind-Weld B root B arp B cp {B,A} cpf {B,A} cpt {B,A} joints {Weld_A_B}
+kind-Snap A root B arp B cp {A,B} cpf {A,B} cpt {B,A} joints {Snap_A_B}
+kind-Snap B root B arp B cp {B,A} cpf {B,A} cpt {B,A} joints {Snap_A_B}
+kind-ManualWeld A root B arp B cp {A,B} cpf {A,B} cpt {B,A} joints {ManualWeld_A_B}
+kind-ManualWeld B root B arp B cp {B,A} cpf {B,A} cpt {B,A} joints {ManualWeld_A_B}
+kind-Glue A root B arp B cp {A,B} cpf {A,B} cpt {B,A} joints {Glue_A_B}
+kind-Glue B root B arp B cp {B,A} cpf {B,A} cpt {B,A} joints {Glue_A_B}
+kind-ManualGlue A root B arp B cp {A,B} cpf {A,B} cpt {B,A} joints {ManualGlue_A_B}
+kind-ManualGlue B root B arp B cp {B,A} cpf {B,A} cpt {B,A} joints {ManualGlue_A_B}
+kind-Motor A root B arp B cp {A,B} cpf {A,B} cpt {B,A} joints {Motor_A_B}
+kind-Motor B root B arp B cp {B,A} cpf {B,A} cpt {B,A} joints {Motor_A_B}
+kind-Motor6D A root B arp B cp {A,B} cpf {A,B} cpt {B,A} joints {Motor6D_A_B}
+kind-Motor6D B root B arp B cp {B,A} cpf {B,A} cpt {B,A} joints {Motor6D_A_B}
+kind-WeldConstraint A root B arp B cp {A,B} cpf {A,B} cpt {B,A} joints {WeldConstraint_A_B}
+kind-WeldConstraint B root B arp B cp {B,A} cpf {B,A} cpt {B,A} joints {WeldConstraint_A_B}
+kind-Rotate A root A arp A cp {A} cpf {A} cpt {A} joints {Rotate_A_B}
+kind-Rotate B root B arp B cp {B} cpf {B} cpt {B} joints {Rotate_A_B}
+kind-RotateP A root A arp A cp {A} cpf {A} cpt {A} joints {RotateP_A_B}
+kind-RotateP B root B arp B cp {B} cpf {B} cpt {B} joints {RotateP_A_B}
+kind-RotateV A root A arp A cp {A} cpf {A} cpt {A} joints {RotateV_A_B}
+kind-RotateV B root B arp B cp {B} cpf {B} cpt {B} joints {RotateV_A_B}
+kind-VelocityMotor A root A arp A cp {A} cpf {A} cpt {A} joints {}
+kind-VelocityMotor B root B arp B cp {B} cpf {B} cpt {B} joints {}
+con-HingeConstraint A root A arp A cp {A} cpf {A} cpt {A} joints {HingeConstraint_A_B}
+con-HingeConstraint B root B arp B cp {B} cpf {B} cpt {B} joints {HingeConstraint_A_B}
+con-BallSocketConstraint A root A arp A cp {A} cpf {A} cpt {A} joints {BallSocketConstraint_A_B}
+con-BallSocketConstraint B root B arp B cp {B} cpf {B} cpt {B} joints {BallSocketConstraint_A_B}
+con-RopeConstraint A root A arp A cp {A} cpf {A} cpt {A} joints {RopeConstraint_A_B}
+con-RopeConstraint B root B arp B cp {B} cpf {B} cpt {B} joints {RopeConstraint_A_B}
+con-RodConstraint A root A arp A cp {A} cpf {A} cpt {A} joints {RodConstraint_A_B}
+con-RodConstraint B root B arp B cp {B} cpf {B} cpt {B} joints {RodConstraint_A_B}
+con-SpringConstraint A root A arp A cp {A} cpf {A} cpt {A} joints {SpringConstraint_A_B}
+con-SpringConstraint B root B arp B cp {B} cpf {B} cpt {B} joints {SpringConstraint_A_B}
+con-PrismaticConstraint A root A arp A cp {A} cpf {A} cpt {A} joints {PrismaticConstraint_A_B}
+con-PrismaticConstraint B root B arp B cp {B} cpf {B} cpt {B} joints {PrismaticConstraint_A_B}
+con-RigidConstraint A root B arp B cp {A,B} cpf {A,B} cpt {B,A} joints {RigidConstraint_A_B}
+con-RigidConstraint B root B arp B cp {B,A} cpf {B,A} cpt {B,A} joints {RigidConstraint_A_B}
+con-NoCollisionConstraint A root A arp A cp {A} cpf {A} cpt {A} joints {}
+con-NoCollisionConstraint B root B arp B cp {B} cpf {B} cpt {B} joints {}
+con-AlignPosition A root A arp A cp {A} cpf {A} cpt {A} joints {AlignPosition_A_B}
+con-AlignPosition B root B arp B cp {B} cpf {B} cpt {B} joints {AlignPosition_A_B}
+con-AlignOrientation A root A arp A cp {A} cpf {A} cpt {A} joints {AlignOrientation_A_B}
+con-AlignOrientation B root B arp B cp {B} cpf {B} cpt {B} joints {AlignOrientation_A_B}
+con-UniversalConstraint A root A arp A cp {A} cpf {A} cpt {A} joints {UniversalConstraint_A_B}
+con-UniversalConstraint B root B arp B cp {B} cpf {B} cpt {B} joints {UniversalConstraint_A_B}
+con-CylindricalConstraint A root A arp A cp {A} cpf {A} cpt {A} joints {CylindricalConstraint_A_B}
+con-CylindricalConstraint B root B arp B cp {B} cpf {B} cpt {B} joints {CylindricalConstraint_A_B}
+con-PlaneConstraint A root A arp A cp {A} cpf {A} cpt {A} joints {PlaneConstraint_A_B}
+con-PlaneConstraint B root B arp B cp {B} cpf {B} cpt {B} joints {PlaneConstraint_A_B}
+con-TorsionSpringConstraint A root A arp A cp {A} cpf {A} cpt {A} joints {TorsionSpringConstraint_A_B}
+con-TorsionSpringConstraint B root B arp B cp {B} cpf {B} cpt {B} joints {TorsionSpringConstraint_A_B}
+constraint SlidingBallConstraint error Unable to create an Instance of type "SlidingBallConstraint"
+con-SlidingBallConstraint A root A arp A cp {A} cpf {A} cpt {A} joints {}
+con-SlidingBallConstraint B root B arp B cp {B} cpf {B} cpt {B} joints {}
+one-attachment A root A arp A cp {A} cpf {A} cpt {A} joints {VectorForce_A_nil}
+in-folder A root B arp B cp {A,B} cpf {A,B} cpt {B,A} joints {HingeConstraint_A_B,Weld_A_B}
+in-folder B root B arp B cp {B,A} cpf {B,A} cpt {B,A} joints {HingeConstraint_A_B,Weld_A_B}
+disabled A root A arp A cp {A} cpf {A} cpt {A} joints {}
+disabled B root B arp B cp {B} cpf {B} cpt {B} joints {}
+part1-nil A root A arp A cp {A} cpf {A} cpt {A} joints {}
+weld-in-rs A root A arp A cp {A} cpf {A} cpt {A} joints {}
+weld-in-rs B root B arp B cp {B} cpf {B} cpt {B} joints {}
+weld-in-js A root B arp B cp {A,B} cpf {A,B} cpt {B,A} joints {Weld_A_B}
+weld-in-js B root B arp B cp {B,A} cpf {B,A} cpt {B,A} joints {Weld_A_B}
+wc-in-js A root A arp A cp {A} cpf {A} cpt {A} joints {}
+wc-in-js B root B arp B cp {B} cpf {B} cpt {B} joints {}
+out-of-world A root nil arp nil cp {A} cpf {A} cpt {} joints {}
+out-of-world B root nil arp nil cp {B} cpf {B} cpt {} joints {}
+in-rs A root nil arp nil cp {A} cpf {A} cpt {} joints {}
+in-rs B root nil arp nil cp {B} cpf {B} cpt {} joints {}
+worlds-apart A root A arp A cp {A} cpf {A} cpt {A} joints {}
+worlds-apart B root nil arp nil cp {B} cpf {B} cpt {} joints {}
+hinge-disabled A root A arp A cp {A} cpf {A} cpt {A} joints {}
+hinge-disabled B root B arp B cp {B} cpf {B} cpt {B} joints {}
+worldmodel A root C arp C cp {A,B} cpf {A,B} cpt {A,B,C} joints {Weld_A_B}
+worldmodel B root C arp C cp {B,A,C} cpf {B,A,C} cpt {B,A,C} joints {Weld_A_B,Weld_B_C}
+worldmodel C root C arp C cp {C,B} cpf {C,B} cpt {C,B,A} joints {Weld_B_C}
+worldmodel-rs A root B arp B cp {A,B} cpf {A,B} cpt {B,A} joints {Weld_A_B}
+worldmodel-rs B root B arp B cp {B,A} cpf {B,A} cpt {B,A} joints {Weld_A_B}
+star H root H arp H cp {H,L1,L2,L3,L4} cpf {H,L1,L2,L3,L4} cpt {H,L4,L3,L2,L1} joints {Weld_H_L1,Weld_L2_H,WeldConstraint_H_L3,Motor6D_L4_H}
+star L1 root H arp H cp {L1,H} cpf {L1,H} cpt {H,L4,L3,L2,L1} joints {Weld_H_L1}
+star L2 root H arp H cp {L2,H} cpf {L2,H} cpt {H,L4,L3,L2,L1} joints {Weld_L2_H}
+star L3 root H arp H cp {L3,H} cpf {L3,H} cpt {H,L4,L3,L2,L1} joints {WeldConstraint_H_L3}
+star L4 root H arp H cp {L4,H} cpf {L4,H} cpt {H,L4,L3,L2,L1} joints {Motor6D_L4_H}
+ring H root H arp H cp {H,A,C} cpf {H,A,C} cpt {H,C,D,E,B,A} joints {Weld_H_A,Weld_H_C}
+ring A root H arp H cp {A,H,B} cpf {A,H,B} cpt {H,C,D,E,B,A} joints {Weld_H_A,Weld_A_B}
+ring B root H arp H cp {B,A,E} cpf {B,A,E} cpt {H,C,D,E,B,A} joints {Weld_A_B,Weld_B_E}
+ring C root H arp H cp {C,H,D} cpf {C,H,D} cpt {H,C,D,E,B,A} joints {Weld_H_C,Weld_C_D}
+ring D root H arp H cp {D,C,E} cpf {D,C,E} cpt {H,C,D,E,B,A} joints {Weld_C_D,Weld_D_E}
+ring E root H arp H cp {E,D,B} cpf {E,D,B} cpt {H,C,D,E,B,A} joints {Weld_D_E,Weld_B_E}
+parent-order H root H arp H cp {H,C,A,B} cpf {H,C,A,B} cpt {H,B,A,C} joints {Weld_H_C,Weld_H_A,Weld_H_B}
+parent-order A root H arp H cp {A,H} cpf {A,H} cpt {H,B,A,C} joints {Weld_H_A}
+parent-order B root H arp H cp {B,H} cpf {B,H} cpt {H,B,A,C} joints {Weld_H_B}
+parent-order C root H arp H cp {C,H} cpf {C,H} cpt {H,B,A,C} joints {Weld_H_C}
+double A root B arp B cp {A,B,B} cpf {A,B,B} cpt {B,A} joints {Weld_A_B,WeldConstraint_B_A,HingeConstraint_A_B}
+double B root B arp B cp {B,A,A} cpf {B,A,A} cpt {B,A} joints {Weld_A_B,WeldConstraint_B_A,HingeConstraint_A_B}
+cast string error Unable to cast string to bool
+cast string error Unable to cast string to bool
+cast number {A,B}
+cast number {B,A}
+cast table error Unable to cast Array to bool
+cast Instance error Unable to cast Instance to bool
+cast EnumItem error Unable to cast Material to bool
+dot-self error Expected ':' not '.' calling member function GetConnectedParts
+dot-nil error Expected ':' not '.' calling member function GetConnectedParts
+dot-folder error Expected ':' not '.' calling member function GetRootPart
+dot-joints error Expected ':' not '.' calling member function GetJoints
+extra B {Weld_A_B}
+fresh-table true false 2

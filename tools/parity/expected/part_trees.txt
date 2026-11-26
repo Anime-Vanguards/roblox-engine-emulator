@@ -1,0 +1,15 @@
+# engine: Roblox Studio 0.747.0.7471481, a headless playing client (script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-26
+tree prio-ring root H cpt H,E,D,C,B,A inactive AB
+tree prio-ring2 root H cpt H,E,D,C,B,A inactive AB
+tree prio-sq root H cpt H,B,X,A inactive AX
+tree prio-sq3 root H cpt H,B,A,X inactive BX
+tree big-ring root H cpt H,E,D,A,B,C inactive CD
+tree big-sq root H cpt H,B,X,A inactive AX
+tree big-sq3 root H cpt H,B,A,X inactive BX
+tree big-sq-a root H cpt H,B,A,X inactive BX
+tree two-big-sq root H cpt H,B,A,X inactive BX
+tree two-big-sq3 root H cpt H,B,A,X inactive BX
+tree far-tri root H cpt H,A,C,B inactive AB
+tree far-tri2 root H cpt H,A,B,C inactive CA
+tree far-sq root H cpt H,A,C,D,B inactive AB

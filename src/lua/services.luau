@@ -223,12 +223,12 @@ local function GetPivotInner(Self)
 	if Stored then
 		return Stored
 	end
-	local Center = PartBounds(Self)
+	local Center = PartBounds(Self, R.PivotBasis(Self)) -- (the bounding box about the part covering the most ground: R.PivotBasis, at the end)
 	return Center or CFrame.new()
 end
 local function GetBoundingBoxInner(Self)
 	local Pivot = GetPivotInner(Self)
-	local Center, Size = PartBounds(Self, Pivot.Rotation)
+	local Center, Size = PartBounds(Self, Pivot) -- (about the pivot itself, its position too: measured to the bit, 0.747)
 	return Center or Pivot, Size
 end
 
@@ -259,16 +259,16 @@ local function Together(Body)
 end
 -- Every part under Self moves by Delta, and every nested model's stored pivot with it (measured: a nested model's stored
 -- pivot moves with its ancestor). The parts it moved, and how many other descendants it looked at.
-local function MoveDescendants(Self, Delta)
+local function MoveDescendants(Self, Delta, Target, Pivot) -- (a Model's PivotTo: each part to Target * Pivot:ToObjectSpace(it), measured to the bit)
 	local Parts, Descendants = 0, Self:GetDescendants()
 	for _, Descendant in Descendants do
 		if Descendant:IsA("BasePart") then
 			Parts += 1
-			Descendant.CFrame = Delta * Descendant.CFrame
+			Descendant.CFrame = if Target then R.PivotPlace(Self, Descendant, Target, Pivot, RawGet(Descendant, "CFrame")) else Delta * Descendant.CFrame
 		elseif Descendant:IsA("Model") then
 			local Inner = StoredPivot(Descendant)
 			if Inner then
-				StorePivot(Descendant, Delta * Inner)
+				StorePivot(Descendant, if Target then R.PivotPlace(Self, Descendant, Target, Pivot, Inner) else Delta * Inner)
 			end
 		end
 	end
@@ -290,18 +290,18 @@ Method("PVInstance", "PivotTo", Priced(function(Self, Target) if typeof(Target) 
 		end)
 		Charge(Cost.PivotSingle + Below * if Self:IsDescendantOf(workspace) then Cost.PivotPart else Cost.PivotLoose)
 	else
-		local Delta = Target * GetPivotInner(Self):Inverse()
+		local Pivot = GetPivotInner(Self) R.PivotBegin(Self, Pivot)
 		local Stored = StoredPivot(Self)
 		local Moved, Others = 0, 0
 		Together(function()
-			Moved, Others = MoveDescendants(Self, Delta)
+			Moved, Others = MoveDescendants(Self, nil, Target, Pivot)
 		end)
-		Charge(Cost.PivotBase + Moved * (if Self:IsDescendantOf(workspace) then Cost.PivotPart else Cost.PivotLoose) + Others * Cost.PivotDescendant) -- (each descendant that is no part: cost.rs PIVOT_DESCENDANT)
+		Charge(Cost.PivotBase + Moved * (if Self:IsDescendantOf(workspace) then Cost.PivotPart else Cost.PivotLoose) + Others * Cost.PivotDescendant) R.PivotDone(Self, Target) -- (each descendant that is no part: cost.rs PIVOT_DESCENDANT)
 		-- (a model whose pivot is its own stores the target; one whose PrimaryPart sets it carries its stored pivot along)
 		if not (Self:IsA("Model") and RawGet(Self, "PrimaryPart")) then
 			StorePivot(Self, Target)
 		elseif Stored then
-			StorePivot(Self, Delta * Stored)
+			StorePivot(Self, Target * Pivot:ToObjectSpace(Stored))
 		end
 	end
 end))
@@ -443,7 +443,7 @@ Method("Model", "SetPrimaryPartCFrame", function(Self, Target)
 	Self:PivotTo(Target)
 end)
 Method("Model", "MoveTo", function(Self, Position)
-	if Self:IsDescendantOf(game) then Self:PivotTo(CFrame.new(Position)) end
+	if Self:IsDescendantOf(game) then R.MoveModel(Self, Position) end -- (the pivot's position to Position, its rotation kept: R.MoveModel)
 end)
 Method("Model", "TranslateBy", function(Self, Offset)
 	Self:PivotTo(Self:GetPivot() + Offset)
@@ -1634,5 +1634,155 @@ Method("InsertService", "CreateMeshPartAsync", function(_, MeshId)
 	ContentIdArg(MeshId)
 	Missing("InsertService", "CreateMeshPartAsync")
 end)
+
+
+-- Model methods, measured in a Studio 0.747 playing client and its server (tools/parity/probes/model_methods.luau). The lines
+-- above refer to these through R, so no line above moved (engine Luau line numbers are in traces scripts see).
+
+-- A primary-less model's pivot while unset (GetPivotInner): the bounding box about the part whose box across the world's axes
+-- covers the most ground (its X by Z extent; the first of equal ones), oriented as that part: 26 models of two and three turned
+-- parts, one made larger along one axis or another, matched to the bit (no part's own size, volume or face area does).
+R.PivotBasis = function(Self)
+	local Best, Most = nil, -1
+	local function Visit(Node)
+		if Node:IsA("BasePart") then
+			local Frame, Size = RawGet(Node, "CFrame"), RawGet(Node, "Size")
+			local _, _, _, R00, R01, R02, _, _, _, R20, R21, R22 = Frame:GetComponents()
+			local Ground = (math.abs(R00) * Size.X + math.abs(R01) * Size.Y + math.abs(R02) * Size.Z) * (math.abs(R20) * Size.X + math.abs(R21) * Size.Y + math.abs(R22) * Size.Z)
+			if Ground > Most then
+				Best, Most = Frame, Ground
+			end
+		end
+		for _, Child in Children(Node) do
+			Visit(Child)
+		end
+	end
+	Visit(Self)
+	return Best
+end
+
+-- How far MoveTo raises a model so no part of it overlaps a part that can collide (measured: a model moved into a floor stands on
+-- it, a turned part by its box across the world's axes, and onto what it then meets in turn; parts with CanCollide off are passed
+-- through). A client lands a few float steps higher (62.0000076 for 62): not followed.
+local function Lift(Self, Parts, Delta)
+	local Params = OverlapParams.new()
+	Params.FilterType = Enum.RaycastFilterType.Exclude
+	Params.FilterDescendantsInstances = { Self }
+	Params.RespectCanCollide = true
+	local Root = Self:FindFirstAncestorWhichIsA("WorldRoot") or workspace
+	local function Reach(Frame, Size)
+		local _, _, _, R00, R01, R02, R10, R11, R12, R20, R21, R22 = Frame:GetComponents()
+		return Vector3.new(math.abs(R00) * Size.X + math.abs(R01) * Size.Y + math.abs(R02) * Size.Z, math.abs(R10) * Size.X + math.abs(R11) * Size.Y + math.abs(R12) * Size.Z, math.abs(R20) * Size.X + math.abs(R21) * Size.Y + math.abs(R22) * Size.Z) / 2
+	end
+	local Raised = 0
+	for _ = 1, 64 do
+		local Need = 0
+		for _, Part in Parts do
+			local Frame = RawGet(Part, "CFrame") + Delta + Vector3.new(0, Raised, 0)
+			local Half = Reach(Frame, RawGet(Part, "Size"))
+			local Bottom = Frame.Position.Y - Half.Y
+			for _, Hit in Root:GetPartBoundsInBox(CFrame.new(Frame.Position), Half * 2, Params) do
+				local HitFrame = RawGet(Hit, "CFrame")
+				Need = math.max(Need, HitFrame.Position.Y + Reach(HitFrame, RawGet(Hit, "Size")).Y - Bottom)
+			end
+		end
+		if Need <= 0 then
+			break
+		end
+		Raised += Need
+	end
+	return Raised
+end
+
+-- Model:MoveTo and Model:move: the pivot's position to Position, every part translated by the same amount (their rotations kept to
+-- the bit), raised clear of what can collide (Lift). A model whose pivot is unset then stores its new box's pivot moved once more
+-- (the old pivot plus twice the move, measured: the box moves with the parts, then the move is added); a stored pivot moves once;
+-- a PrimaryPart's moves with it. Nothing for a model outside the DataModel or with no parts. Priced as PivotTo (not measured).
+R.MoveModel = Priced(function(Self, Position)
+	local Parts, Others, Models = {}, 0, {}
+	for _, Descendant in Self:GetDescendants() do
+		if Descendant:IsA("BasePart") then
+			table.insert(Parts, Descendant)
+		else
+			Others += 1
+			if Descendant:IsA("Model") then
+				table.insert(Models, Descendant)
+			end
+		end
+	end
+	if #Parts == 0 then
+		Charge(Cost.PivotBase + Others * Cost.PivotDescendant)
+		return
+	end
+	local Delta = Position - GetPivotInner(Self).Position
+	Delta += Vector3.new(0, Lift(Self, Parts, Delta), 0)
+	Together(function()
+		for _, Part in Parts do
+			Part.CFrame = RawGet(Part, "CFrame") + Delta
+		end
+		for _, Inner in Models do
+			local Stored = StoredPivot(Inner)
+			if Stored then
+				StorePivot(Inner, Stored + Delta)
+			end
+		end
+	end)
+	Charge(Cost.PivotBase + #Parts * (if Self:IsDescendantOf(workspace) then Cost.PivotPart else Cost.PivotLoose) + Others * Cost.PivotDescendant)
+	if not (Self:IsA("Model") and RawGet(Self, "PrimaryPart")) then
+		StorePivot(Self, GetPivotInner(Self) + Delta)
+	end
+end)
+Method("Model", "move", function(Self, Position)
+	if Self:IsDescendantOf(game) then R.MoveModel(Self, Position) end
+end)
+-- The old box methods: GetModelCFrame is GetBoundingBox's CFrame, GetModelSize its size (an empty model's the identity and zero)
+Method("Model", "GetModelCFrame", Priced(function(Self)
+	Charge(Cost.ModelQuery)
+	return (GetBoundingBoxInner(Self))
+end))
+Method("Model", "GetModelSize", Priced(function(Self)
+	Charge(Cost.ModelExtentsQuery)
+	local _, Size = GetBoundingBoxInner(Self)
+	return Size
+end))
+-- Model:PivotTo puts each part at Target * Pivot:ToObjectSpace(it), the primary part too (so a model's pivot after it carries the
+-- float steps of that product), and keeps each part's offset from the pivot: a later PivotTo, while the pivot is the one the last
+-- left and the part is where it put it, uses the kept offset, so PivotTo to the same target again changes nothing (measured to the
+-- bit, 0.747: models with and without a PrimaryPart, a PivotOffset, three targets, each twice; a Part's PivotTo composes as before).
+local PivotOffsets = setmetatable({}, { __mode = "k" })
+local PivotsLeft = setmetatable({}, { __mode = "k" })
+-- (a call whose pivot is not the one the last left forgets the offsets)
+R.PivotBegin = function(Self, Pivot)
+	if PivotsLeft[Self] ~= Pivot then
+		PivotOffsets[Self] = setmetatable({}, { __mode = "k" })
+	end
+	PivotsLeft[Self] = nil
+end
+R.PivotPlace = function(Self, Item, Target, Pivot, Current)
+	local Kept = PivotOffsets[Self]
+	if not Kept then
+		Kept = setmetatable({}, { __mode = "k" })
+		PivotOffsets[Self] = Kept
+	end
+	local Entry = Kept[Item]
+	local Offset = if Entry and Entry.At == Current then Entry.Offset else Pivot:ToObjectSpace(Current)
+	Kept[Item] = { Offset = Offset, Placed = true }
+	return Target * Offset
+end
+-- (once the call's parts are written and settled: where each part is now, as stored, and the pivot the call leaves, the target or
+-- with a PrimaryPart its pivot where the call put it; a target written orthonormalized keeps its offset: cframe_writes.luau)
+R.PivotDone = function(Self, Target)
+	for Item, Entry in PivotOffsets[Self] or {} do
+		if Entry.Placed then
+			Entry.At = if Item:IsA("BasePart") then RawGet(Item, "CFrame") else StoredPivot(Item)
+			Entry.Placed = nil
+		end
+	end
+	PivotsLeft[Self] = if Self:IsA("Model") and RawGet(Self, "PrimaryPart") then GetPivotInner(Self) else Target
+end
+-- SetIdentityOrientation and ResetOrientationToIdentity change nothing a script sees (a model turned between them stays turned)
+for _, Name in { "SetIdentityOrientation", "ResetOrientationToIdentity" } do
+	Method("Model", Name, function() end)
+end
 
 return true

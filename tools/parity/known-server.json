@@ -115,8 +115,12 @@
 	],
 	"cframe_writes": [
 		{
-			"line": "write ",
-			"why": "Model:PivotTo puts the primary part exactly at the asked CFrame in a client, where ree's part carries float noise and rotation residues (FIX-R23, package G2): that column differs on 26 of the 27 write lines. An Attachment's CFrame write matches but for the scaled write of 0.1 and the skew of 2e-5, one ulp off in its normalized columns (the client's reciprocal square root); a joint's C0 matches on every line"
+			"line": "write scaled 0.10000000000000001 ",
+			"why": "an Attachment's CFrame write matches but for the scaled write of 0.1 and the skew of 2e-5, one ulp off in its normalized columns (the client's reciprocal square root); a joint's C0 and Model:PivotTo (FIX-R23) match on every line"
+		},
+		{
+			"line": "write skew 2.0000000000000002e-05 ",
+			"why": "an Attachment's CFrame write matches but for the scaled write of 0.1 and the skew of 2e-5, one ulp off in its normalized columns (the client's reciprocal square root); a joint's C0 and Model:PivotTo (FIX-R23) match on every line"
 		}
 	],
 	"chunknames": [
@@ -421,6 +425,320 @@
 		{
 			"line": "after-thread",
 			"why": "debug.setmemorycategory in a client: it answers the category it replaces, takes a string or a number (`invalid argument #1 to 'setmemorycategory' (string expected, got <type>)`, `missing argument #1 ...`), getmemorycategory reads it back (a script's own category starts as its name), a new thread starts in its creator's, and debug also has dumpheap, dumprefs and tracerefs; ree's are stubs that answer nothing and read \"default\""
+		}
+	],
+	"part_connected": [
+		{
+			"line": "con-RigidConstraint ",
+			"why": "a RigidConstraint joins its attachments' parts into one assembly on a client (root, connected parts); ree does not model RigidConstraint"
+		},
+		{
+			"line": "in-folder A ",
+			"why": "a client keeps a part's joints, constraints and Rotate joints in one list (one-attachment constraints first, each going to the end of its part when it becomes active and leaving by the last one taking its place), so a constraint coming and going reorders the joints too; ree keeps the joints' list exactly and lists the constraints and Rotate joints around it in the order they were made (docs/engine.md Part, model and attachment methods, Not followed)"
+		},
+		{
+			"line": "in-folder B ",
+			"why": "a client keeps a part's joints, constraints and Rotate joints in one list (one-attachment constraints first, each going to the end of its part when it becomes active and leaving by the last one taking its place), so a constraint coming and going reorders the joints too; ree keeps the joints' list exactly and lists the constraints and Rotate joints around it in the order they were made (docs/engine.md Part, model and attachment methods, Not followed)"
+		}
+	],
+	"part_joint_lists": [
+		{
+			"line": "list made ",
+			"why": "a client keeps a part's joints, constraints and Rotate joints in one list (one-attachment constraints first, each going to the end of its part when it becomes active and leaving by the last one taking its place), so a constraint coming and going reorders the joints too; ree keeps the joints' list exactly and lists the constraints and Rotate joints around it in the order they were made (docs/engine.md Part, model and attachment methods, Not followed)"
+		},
+		{
+			"line": "list weld1-off ",
+			"why": "a client keeps a part's joints, constraints and Rotate joints in one list (one-attachment constraints first, each going to the end of its part when it becomes active and leaving by the last one taking its place), so a constraint coming and going reorders the joints too; ree keeps the joints' list exactly and lists the constraints and Rotate joints around it in the order they were made (docs/engine.md Part, model and attachment methods, Not followed)"
+		},
+		{
+			"line": "list weld1-on ",
+			"why": "a client keeps a part's joints, constraints and Rotate joints in one list (one-attachment constraints first, each going to the end of its part when it becomes active and leaving by the last one taking its place), so a constraint coming and going reorders the joints too; ree keeps the joints' list exactly and lists the constraints and Rotate joints around it in the order they were made (docs/engine.md Part, model and attachment methods, Not followed)"
+		},
+		{
+			"line": "list hinge-off ",
+			"why": "a client keeps a part's joints, constraints and Rotate joints in one list (one-attachment constraints first, each going to the end of its part when it becomes active and leaving by the last one taking its place), so a constraint coming and going reorders the joints too; ree keeps the joints' list exactly and lists the constraints and Rotate joints around it in the order they were made (docs/engine.md Part, model and attachment methods, Not followed)"
+		},
+		{
+			"line": "list wc-off ",
+			"why": "a client keeps a part's joints, constraints and Rotate joints in one list (one-attachment constraints first, each going to the end of its part when it becomes active and leaving by the last one taking its place), so a constraint coming and going reorders the joints too; ree keeps the joints' list exactly and lists the constraints and Rotate joints around it in the order they were made (docs/engine.md Part, model and attachment methods, Not followed)"
+		},
+		{
+			"line": "list hinge-on ",
+			"why": "a client keeps a part's joints, constraints and Rotate joints in one list (one-attachment constraints first, each going to the end of its part when it becomes active and leaving by the last one taking its place), so a constraint coming and going reorders the joints too; ree keeps the joints' list exactly and lists the constraints and Rotate joints around it in the order they were made (docs/engine.md Part, model and attachment methods, Not followed)"
+		},
+		{
+			"line": "list wc-on ",
+			"why": "a client keeps a part's joints, constraints and Rotate joints in one list (one-attachment constraints first, each going to the end of its part when it becomes active and leaving by the last one taking its place), so a constraint coming and going reorders the joints too; ree keeps the joints' list exactly and lists the constraints and Rotate joints around it in the order they were made (docs/engine.md Part, model and attachment methods, Not followed)"
+		},
+		{
+			"line": "list rotate-out ",
+			"why": "a client keeps a part's joints, constraints and Rotate joints in one list (one-attachment constraints first, each going to the end of its part when it becomes active and leaving by the last one taking its place), so a constraint coming and going reorders the joints too; ree keeps the joints' list exactly and lists the constraints and Rotate joints around it in the order they were made (docs/engine.md Part, model and attachment methods, Not followed)"
+		},
+		{
+			"line": "list rotate-in ",
+			"why": "a client keeps a part's joints, constraints and Rotate joints in one list (one-attachment constraints first, each going to the end of its part when it becomes active and leaving by the last one taking its place), so a constraint coming and going reorders the joints too; ree keeps the joints' list exactly and lists the constraints and Rotate joints around it in the order they were made (docs/engine.md Part, model and attachment methods, Not followed)"
+		},
+		{
+			"line": "list motor-repointed ",
+			"why": "a client keeps a part's joints, constraints and Rotate joints in one list (one-attachment constraints first, each going to the end of its part when it becomes active and leaving by the last one taking its place), so a constraint coming and going reorders the joints too; ree keeps the joints' list exactly and lists the constraints and Rotate joints around it in the order they were made (docs/engine.md Part, model and attachment methods, Not followed)"
+		},
+		{
+			"line": "list motor-back ",
+			"why": "a client keeps a part's joints, constraints and Rotate joints in one list (one-attachment constraints first, each going to the end of its part when it becomes active and leaving by the last one taking its place), so a constraint coming and going reorders the joints too; ree keeps the joints' list exactly and lists the constraints and Rotate joints around it in the order they were made (docs/engine.md Part, model and attachment methods, Not followed)"
+		},
+		{
+			"line": "list rope-att-moved ",
+			"why": "a client keeps a part's joints, constraints and Rotate joints in one list (one-attachment constraints first, each going to the end of its part when it becomes active and leaving by the last one taking its place), so a constraint coming and going reorders the joints too; ree keeps the joints' list exactly and lists the constraints and Rotate joints around it in the order they were made (docs/engine.md Part, model and attachment methods, Not followed)"
+		},
+		{
+			"line": "list rope-att-back ",
+			"why": "a client keeps a part's joints, constraints and Rotate joints in one list (one-attachment constraints first, each going to the end of its part when it becomes active and leaving by the last one taking its place), so a constraint coming and going reorders the joints too; ree keeps the joints' list exactly and lists the constraints and Rotate joints around it in the order they were made (docs/engine.md Part, model and attachment methods, Not followed)"
+		},
+		{
+			"line": "list weld7-js ",
+			"why": "a client keeps a part's joints, constraints and Rotate joints in one list (one-attachment constraints first, each going to the end of its part when it becomes active and leaving by the last one taking its place), so a constraint coming and going reorders the joints too; ree keeps the joints' list exactly and lists the constraints and Rotate joints around it in the order they were made (docs/engine.md Part, model and attachment methods, Not followed)"
+		},
+		{
+			"line": "list rope-rs ",
+			"why": "a client keeps a part's joints, constraints and Rotate joints in one list (one-attachment constraints first, each going to the end of its part when it becomes active and leaving by the last one taking its place), so a constraint coming and going reorders the joints too; ree keeps the joints' list exactly and lists the constraints and Rotate joints around it in the order they were made (docs/engine.md Part, model and attachment methods, Not followed)"
+		},
+		{
+			"line": "list rope-js ",
+			"why": "a client keeps a part's joints, constraints and Rotate joints in one list (one-attachment constraints first, each going to the end of its part when it becomes active and leaving by the last one taking its place), so a constraint coming and going reorders the joints too; ree keeps the joints' list exactly and lists the constraints and Rotate joints around it in the order they were made (docs/engine.md Part, model and attachment methods, Not followed)"
+		},
+		{
+			"line": "list rope-nil ",
+			"why": "a client keeps a part's joints, constraints and Rotate joints in one list (one-attachment constraints first, each going to the end of its part when it becomes active and leaving by the last one taking its place), so a constraint coming and going reorders the joints too; ree keeps the joints' list exactly and lists the constraints and Rotate joints around it in the order they were made (docs/engine.md Part, model and attachment methods, Not followed)"
+		},
+		{
+			"line": "list rope-ws ",
+			"why": "a client keeps a part's joints, constraints and Rotate joints in one list (one-attachment constraints first, each going to the end of its part when it becomes active and leaving by the last one taking its place), so a constraint coming and going reorders the joints too; ree keeps the joints' list exactly and lists the constraints and Rotate joints around it in the order they were made (docs/engine.md Part, model and attachment methods, Not followed)"
+		},
+		{
+			"line": "list c-out ",
+			"why": "a client keeps a part's joints, constraints and Rotate joints in one list (one-attachment constraints first, each going to the end of its part when it becomes active and leaving by the last one taking its place), so a constraint coming and going reorders the joints too; ree keeps the joints' list exactly and lists the constraints and Rotate joints around it in the order they were made (docs/engine.md Part, model and attachment methods, Not followed)"
+		},
+		{
+			"line": "list c-in ",
+			"why": "a client keeps a part's joints, constraints and Rotate joints in one list (one-attachment constraints first, each going to the end of its part when it becomes active and leaving by the last one taking its place), so a constraint coming and going reorders the joints too; ree keeps the joints' list exactly and lists the constraints and Rotate joints around it in the order they were made (docs/engine.md Part, model and attachment methods, Not followed)"
+		},
+		{
+			"line": "list same-part-hinge ",
+			"why": "a client keeps a part's joints, constraints and Rotate joints in one list (one-attachment constraints first, each going to the end of its part when it becomes active and leaving by the last one taking its place), so a constraint coming and going reorders the joints too; ree keeps the joints' list exactly and lists the constraints and Rotate joints around it in the order they were made (docs/engine.md Part, model and attachment methods, Not followed)"
+		},
+		{
+			"line": "list nested-attachment ",
+			"why": "a client keeps a part's joints, constraints and Rotate joints in one list (one-attachment constraints first, each going to the end of its part when it becomes active and leaving by the last one taking its place), so a constraint coming and going reorders the joints too; ree keeps the joints' list exactly and lists the constraints and Rotate joints around it in the order they were made (docs/engine.md Part, model and attachment methods, Not followed)"
+		},
+		{
+			"line": "list a-out-in ",
+			"why": "a client keeps a part's joints, constraints and Rotate joints in one list (one-attachment constraints first, each going to the end of its part when it becomes active and leaving by the last one taking its place), so a constraint coming and going reorders the joints too; ree keeps the joints' list exactly and lists the constraints and Rotate joints around it in the order they were made (docs/engine.md Part, model and attachment methods, Not followed)"
+		}
+	],
+	"part_methods": [
+		{
+			"line": "setaxis-bad ",
+			"why": "Attachment.Axis written the zero vector leaves the attachment as it was on a client; ree's Axis view turns it (derived.rs)"
+		},
+		{
+			"line": "part-joints ",
+			"why": "a client keeps a part's joints, constraints and Rotate joints in one list (one-attachment constraints first, each going to the end of its part when it becomes active and leaving by the last one taking its place), so a constraint coming and going reorders the joints too; ree keeps the joints' list exactly and lists the constraints and Rotate joints around it in the order they were made (docs/engine.md Part, model and attachment methods, Not followed)"
+		}
+	],
+	"part_rules": [
+		{
+			"line": "obstacle move touching ",
+			"why": "MoveTo raises a model onto what it meets a few float steps higher on a client (62.0000076 for 62)"
+		},
+		{
+			"line": "obstacle MoveTo touching ",
+			"why": "MoveTo raises a model onto what it meets a few float steps higher on a client (62.0000076 for 62)"
+		},
+		{
+			"line": "obstacle turned-unanchored ",
+			"why": "MoveTo raises a model onto what it meets a few float steps higher on a client (62.3570328 for 62.3570099)"
+		},
+		{
+			"line": "m6d angle+transform ",
+			"why": "a Motor6D's C0 * Transform composed in float: the client's turn reads a step lower (0.87758255 where ree's is 0.87758261); the Transform's arithmetic, not CurrentAngle"
+		},
+		{
+			"line": "m6d transform ",
+			"why": "a Motor6D's C0 * Transform composed in float: the client's turn reads a step lower (0.87758255 where ree's is 0.87758261); the Transform's arithmetic, not CurrentAngle"
+		},
+		{
+			"line": "m6d c1-write ",
+			"why": "a Motor6D's C0 * Transform composed in float: the client's turn reads a step lower (0.87758255 where ree's is 0.87758261); the Transform's arithmetic, not CurrentAngle"
+		},
+		{
+			"line": "shared 4 ",
+			"why": "a client keeps a part's joints, constraints and Rotate joints in one list (one-attachment constraints first, each going to the end of its part when it becomes active and leaving by the last one taking its place), so a constraint coming and going reorders the joints too; ree keeps the joints' list exactly and lists the constraints and Rotate joints around it in the order they were made (docs/engine.md Part, model and attachment methods, Not followed)"
+		},
+		{
+			"line": "shared 5 ",
+			"why": "a client keeps a part's joints, constraints and Rotate joints in one list (one-attachment constraints first, each going to the end of its part when it becomes active and leaving by the last one taking its place), so a constraint coming and going reorders the joints too; ree keeps the joints' list exactly and lists the constraints and Rotate joints around it in the order they were made (docs/engine.md Part, model and attachment methods, Not followed)"
+		},
+		{
+			"line": "shared 6 ",
+			"why": "a client keeps a part's joints, constraints and Rotate joints in one list (one-attachment constraints first, each going to the end of its part when it becomes active and leaving by the last one taking its place), so a constraint coming and going reorders the joints too; ree keeps the joints' list exactly and lists the constraints and Rotate joints around it in the order they were made (docs/engine.md Part, model and attachment methods, Not followed)"
+		},
+		{
+			"line": "shared 7 ",
+			"why": "a client keeps a part's joints, constraints and Rotate joints in one list (one-attachment constraints first, each going to the end of its part when it becomes active and leaving by the last one taking its place), so a constraint coming and going reorders the joints too; ree keeps the joints' list exactly and lists the constraints and Rotate joints around it in the order they were made (docs/engine.md Part, model and attachment methods, Not followed)"
+		}
+	],
+	"part_tree_kinds": [
+		{
+			"line": "m6d transform ",
+			"why": "a Motor6D's C0 * Transform composed in float: the client's turn reads a step lower (0.87758255 where ree's is 0.87758261); the Transform's arithmetic, not CurrentAngle"
+		},
+		{
+			"line": "m6d transform-with-desired ",
+			"why": "a Motor6D's C0 * Transform composed in float: the client's turn reads a step lower (0.87758255 where ree's is 0.87758261); the Transform's arithmetic, not CurrentAngle"
+		},
+		{
+			"line": "single made ",
+			"why": "a client keeps a part's joints, constraints and Rotate joints in one list (one-attachment constraints first, each going to the end of its part when it becomes active and leaving by the last one taking its place), so a constraint coming and going reorders the joints too; ree keeps the joints' list exactly and lists the constraints and Rotate joints around it in the order they were made (docs/engine.md Part, model and attachment methods, Not followed)"
+		},
+		{
+			"line": "single v2-off ",
+			"why": "a client keeps a part's joints, constraints and Rotate joints in one list (one-attachment constraints first, each going to the end of its part when it becomes active and leaving by the last one taking its place), so a constraint coming and going reorders the joints too; ree keeps the joints' list exactly and lists the constraints and Rotate joints around it in the order they were made (docs/engine.md Part, model and attachment methods, Not followed)"
+		},
+		{
+			"line": "single v2-on ",
+			"why": "a client keeps a part's joints, constraints and Rotate joints in one list (one-attachment constraints first, each going to the end of its part when it becomes active and leaving by the last one taking its place), so a constraint coming and going reorders the joints too; ree keeps the joints' list exactly and lists the constraints and Rotate joints around it in the order they were made (docs/engine.md Part, model and attachment methods, Not followed)"
+		},
+		{
+			"line": "single h1-off ",
+			"why": "a client keeps a part's joints, constraints and Rotate joints in one list (one-attachment constraints first, each going to the end of its part when it becomes active and leaving by the last one taking its place), so a constraint coming and going reorders the joints too; ree keeps the joints' list exactly and lists the constraints and Rotate joints around it in the order they were made (docs/engine.md Part, model and attachment methods, Not followed)"
+		},
+		{
+			"line": "single weld ",
+			"why": "a client keeps a part's joints, constraints and Rotate joints in one list (one-attachment constraints first, each going to the end of its part when it becomes active and leaving by the last one taking its place), so a constraint coming and going reorders the joints too; ree keeps the joints' list exactly and lists the constraints and Rotate joints around it in the order they were made (docs/engine.md Part, model and attachment methods, Not followed)"
+		},
+		{
+			"line": "single hinge-one ",
+			"why": "a client keeps a part's joints, constraints and Rotate joints in one list (one-attachment constraints first, each going to the end of its part when it becomes active and leaving by the last one taking its place), so a constraint coming and going reorders the joints too; ree keeps the joints' list exactly and lists the constraints and Rotate joints around it in the order they were made (docs/engine.md Part, model and attachment methods, Not followed)"
+		}
+	],
+	"part_walks": [
+		{
+			"line": "sq3 model H ",
+			"why": "a model taken into the Workspace whole: a client adds its joints to their parts' lists in an order of its own (a weld under a part made later before one under an earlier part); ree follows the order measured through UnjoinFromOutsiders, so a cycle's tree keeps another joint"
+		},
+		{
+			"line": "chord-a model H ",
+			"why": "a model taken into the Workspace whole: a client adds its joints to their parts' lists in an order of its own (a weld under a part made later before one under an earlier part); ree follows the order measured through UnjoinFromOutsiders, so a cycle's tree keeps another joint"
+		},
+		{
+			"line": "chord-b model H ",
+			"why": "a model taken into the Workspace whole: a client adds its joints to their parts' lists in an order of its own (a weld under a part made later before one under an earlier part); ree follows the order measured through UnjoinFromOutsiders, so a cycle's tree keeps another joint"
+		},
+		{
+			"line": "chord-c model H ",
+			"why": "a model taken into the Workspace whole: a client adds its joints to their parts' lists in an order of its own (a weld under a part made later before one under an earlier part); ree follows the order measured through UnjoinFromOutsiders, so a cycle's tree keeps another joint"
+		},
+		{
+			"line": "chord-d model H ",
+			"why": "a model taken into the Workspace whole: a client adds its joints to their parts' lists in an order of its own (a weld under a part made later before one under an earlier part); ree follows the order measured through UnjoinFromOutsiders, so a cycle's tree keeps another joint"
+		},
+		{
+			"line": "chord-e model H ",
+			"why": "a model taken into the Workspace whole: a client adds its joints to their parts' lists in an order of its own (a weld under a part made later before one under an earlier part); ree follows the order measured through UnjoinFromOutsiders, so a cycle's tree keeps another joint"
+		},
+		{
+			"line": "ring-b model H ",
+			"why": "a model taken into the Workspace whole: a client adds its joints to their parts' lists in an order of its own (a weld under a part made later before one under an earlier part); ree follows the order measured through UnjoinFromOutsiders, so a cycle's tree keeps another joint"
+		}
+	],
+	"part_world": [
+		{
+			"line": "torque A ",
+			"why": "a client's assembly inertia carries float steps of its own (a 2 x 4 x 6 block's Iyy reads 111.999985 for 112), and a wedge's inertia is a wedge's, where ree's is a box's (GetMass and AssemblyMass alike)"
+		},
+		{
+			"line": "torque B ",
+			"why": "a client's assembly inertia carries float steps of its own (a 2 x 4 x 6 block's Iyy reads 111.999985 for 112), and a wedge's inertia is a wedge's, where ree's is a box's (GetMass and AssemblyMass alike)"
+		},
+		{
+			"line": "torque C ",
+			"why": "a client's assembly inertia carries float steps of its own (a 2 x 4 x 6 block's Iyy reads 111.999985 for 112), and a wedge's inertia is a wedge's, where ree's is a box's (GetMass and AssemblyMass alike)"
+		},
+		{
+			"line": "torque F ",
+			"why": "a client's assembly inertia carries float steps of its own (a 2 x 4 x 6 block's Iyy reads 111.999985 for 112), and a wedge's inertia is a wedge's, where ree's is a box's (GetMass and AssemblyMass alike)"
+		},
+		{
+			"line": "torque G ",
+			"why": "a client's assembly inertia carries float steps of its own (a 2 x 4 x 6 block's Iyy reads 111.999985 for 112), and a wedge's inertia is a wedge's, where ree's is a box's (GetMass and AssemblyMass alike)"
+		},
+		{
+			"line": "torque H ",
+			"why": "a client's assembly inertia carries float steps of its own (a 2 x 4 x 6 block's Iyy reads 111.999985 for 112), and a wedge's inertia is a wedge's, where ree's is a box's (GetMass and AssemblyMass alike)"
+		},
+		{
+			"line": "velocity-at B ",
+			"why": "the velocity at a point through a welded pair's centre: a client's centre of mass carries float steps ree's does not (the centre-precision measure entry, ASM-WELD-PRECISION)"
+		},
+		{
+			"line": "velocity-at C ",
+			"why": "the velocity at a point through a welded pair's centre: a client's centre of mass carries float steps ree's does not (the centre-precision measure entry, ASM-WELD-PRECISION)"
+		},
+		{
+			"line": "closest truss ",
+			"why": "a TrussPart's closest point is its truss shape's on a client; ree's is its box's"
+		},
+		{
+			"line": "owner-set-player A ",
+			"why": "ree's server run has no player (the capture's server has its client's); lines that pass the player differ for that alone"
+		},
+		{
+			"line": "grounded A ",
+			"why": "GetTouchingParts lists a client's contacts (collision detection: PHYS-SIMULATION); ree reports it not emulated (IsGrounded and GetRenderCFrame on the line match)"
+		},
+		{
+			"line": "grounded B ",
+			"why": "GetTouchingParts lists a client's contacts (collision detection: PHYS-SIMULATION); ree reports it not emulated (IsGrounded and GetRenderCFrame on the line match)"
+		},
+		{
+			"line": "grounded C ",
+			"why": "GetTouchingParts lists a client's contacts (collision detection: PHYS-SIMULATION); ree reports it not emulated (IsGrounded and GetRenderCFrame on the line match)"
+		},
+		{
+			"line": "grounded D ",
+			"why": "GetTouchingParts lists a client's contacts (collision detection: PHYS-SIMULATION); ree reports it not emulated (IsGrounded and GetRenderCFrame on the line match)"
+		},
+		{
+			"line": "grounded E ",
+			"why": "GetTouchingParts lists a client's contacts (collision detection: PHYS-SIMULATION); ree reports it not emulated (IsGrounded and GetRenderCFrame on the line match)"
+		},
+		{
+			"line": "grounded-later A ",
+			"why": "GetTouchingParts lists a client's contacts (collision detection: PHYS-SIMULATION); ree reports it not emulated (IsGrounded and GetRenderCFrame on the line match)"
+		},
+		{
+			"line": "grounded-later B ",
+			"why": "GetTouchingParts lists a client's contacts (collision detection: PHYS-SIMULATION); ree reports it not emulated (IsGrounded and GetRenderCFrame on the line match)"
+		},
+		{
+			"line": "grounded-later C ",
+			"why": "GetTouchingParts lists a client's contacts (collision detection: PHYS-SIMULATION); ree reports it not emulated (IsGrounded and GetRenderCFrame on the line match)"
+		},
+		{
+			"line": "grounded-later D ",
+			"why": "GetTouchingParts lists a client's contacts (collision detection: PHYS-SIMULATION); ree reports it not emulated (IsGrounded and GetRenderCFrame on the line match)"
+		},
+		{
+			"line": "grounded-later E ",
+			"why": "GetTouchingParts lists a client's contacts (collision detection: PHYS-SIMULATION); ree reports it not emulated (IsGrounded and GetRenderCFrame on the line match)"
+		},
+		{
+			"line": "model-obstructed ",
+			"why": "MoveTo raises a model onto what it meets a few float steps higher on a client (62.0000038 for 62)"
+		},
+		{
+			"line": "persistent ",
+			"why": "ree's server run has no player (the capture's server has its client's); lines that pass the player differ for that alone"
 		}
 	],
 	"query_edges": [

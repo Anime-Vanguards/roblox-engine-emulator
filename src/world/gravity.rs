@@ -898,6 +898,59 @@ fn install_body(engine: &Rc<Engine>, setup: &Rc<Setup>) {
             Ok(crate::lua::convert::to_lua(lua, engine, &frame::vector_value(centre))?)
         }));
     }
+    // AngularAccelerationToTorque(acceleration, spin = 0) and TorqueToAngularAcceleration(torque, spin = 0): through the assembly's
+    // inertia about its centre of mass, I a + w x (I w) and its inverse; an anchored assembly, or a part outside every world, answers
+    // inf and 0 (Studio 0.747, a playing client and its server: a lone block, a welded pair turned, a Ball, a Massless part alone;
+    // tools/parity/probes/part_methods.luau)
+    for (method_name, to_torque) in [("AngularAccelerationToTorque", true), ("TorqueToAngularAcceleration", false)] {
+        let Some(method_id) = name(method_name) else { continue };
+        let setup = setup.clone();
+        behaviors.add_method(base_part, method_id, crate::services::method(move |lua, engine, id, args| {
+            let given = super::parts::vector_argument(engine, args, 1)?;
+            let spin = if args.get(2).is_nil() { Vec3::ZERO } else { super::parts::vector_argument(engine, args, 2)? };
+            let inertia = {
+                let mut state = engine.state.borrow_mut();
+                let root = joints::root_part(&mut state, &engine.reflection, id);
+                match root {
+                    Some(root) if state.dom.boolean(root, setup.anchored) != Some(true) => {
+                        let parts = joints::assembly_parts(&mut state, &engine.reflection, id);
+                        Some(body_of(&state, &setup, &parts).inertia)
+                    }
+                    _ => None,
+                }
+            };
+            let answer = match inertia {
+                Some(inertia) if to_torque => inertia * given + spin.cross(inertia * spin),
+                Some(inertia) => inertia.inverse() * (given - spin.cross(inertia * spin)),
+                None if to_torque => Vec3::splat(f32::INFINITY),
+                None => Vec3::ZERO,
+            };
+            Ok(crate::lua::values([crate::lua::convert::to_lua(lua, engine, &frame::vector_value(answer))?]))
+        }));
+    }
+    // GetVelocityAtPosition(point): the assembly's velocity at the point, its root's velocity (the root's Velocity) and its spin across
+    // the point's offset from the root, as a client keeps an assembly's motion (measured as above)
+    if let Some(method_id) = name("GetVelocityAtPosition") {
+        let setup = setup.clone();
+        behaviors.add_method(base_part, method_id, crate::services::method(move |lua, engine, id, args| {
+            let point = super::parts::vector_argument(engine, args, 1)?;
+            let read = |text: &str, id: InstanceId| -> Result<Vec3, crate::lua::Flow> {
+                let Some(property) = engine.reflection.name_id(text) else { return Ok(Vec3::ZERO) };
+                let class = engine.state.borrow().dom.at(id).class;
+                let getter = engine.behaviors.borrow().find_getter(&engine.reflection, class, property).cloned();
+                // (a getter's answer, else the stored value scripts read)
+                Ok(match getter {
+                    Some(getter) => super::vector_arg(&getter(lua, engine, id)?).unwrap_or(Vec3::ZERO),
+                    None => engine.state.borrow().dom.raw_get(id, property).and_then(frame::vector_of).unwrap_or(Vec3::ZERO),
+                })
+            };
+            let root = joints::root_part(&mut engine.state.borrow_mut(), &engine.reflection, id).unwrap_or(id);
+            let (velocity, spin) = (read("Velocity", root)?, read("AssemblyAngularVelocity", root)?);
+            let at = Vec3::from(frame::affine_of(engine.state.borrow().dom.raw_get(root, setup.cframe)).translation);
+            let answer = velocity + spin.cross(point - at);
+            Ok(crate::lua::values([crate::lua::convert::to_lua(lua, engine, &frame::vector_value(answer))?]))
+        }));
+    }
     let vector = |args: &crate::lua::Args, index: usize| frame::vector_of(&crate::lua::convert::from_lua(args.get(index)));
     for (method, kind) in [("ApplyImpulse", 0u8), ("ApplyAngularImpulse", 1), ("ApplyImpulseAtPosition", 2)] {
         let Some(method_name) = name(method) else { continue };

@@ -94,11 +94,9 @@
 //! order: [`refresh_attached`], [`taken_up`]). A Parent write pays what a client spends taking joints out of those lists
 //! ([`left_every_world`]; on a move between worlds too: [`relist_moved`]).
 //!
-//! A legacy Motor turns by its CurrentAngle toward its DesiredAngle ([`legacy_angle`], [`step_motors`]).
-//! Not modelled: AnimationConstraint,
-//! RigidConstraint and the other constraints (solver-driven, nothing is simulated), and the members
-//! that report assemblies other than AssemblyRootPart (GetRootPart, GetConnectedParts,
-//! JointInstance.Active).
+//! A legacy Motor turns by its CurrentAngle toward its DesiredAngle ([`legacy_angle`], [`step_motors`]). Each part's list of all its
+//! active joints ([`Joints::listed`]) answers world/parts.rs (GetJoints, GetConnectedParts, JointInstance.Active, BreakJoints).
+//! Not modelled: AnimationConstraint, RigidConstraint and the other constraints (solver-driven, nothing is simulated).
 
 use std::{
     cell::{Cell, RefCell},
@@ -202,6 +200,14 @@ pub struct Joints {
     attached: FxHashMap<InstanceId, Vec<InstanceId>>,
     /// The parts whose lists each of those joints is in, with its place in each (so a joint leaves a list without a search)
     attached_parts: FxHashMap<InstanceId, [(InstanceId, u32); 2]>,
+    /// Each part's active joints of every kind the index keeps (the rigid JointInstances and WeldConstraints: [`listed_now`]), kept
+    /// as [`Joints::attached`] is, in the one list a client keeps them in: BasePart:GetJoints and GetConnectedParts read it
+    /// (world/parts.rs; Studio 0.747, a playing client and its server, tools/parity/probes/part_joints.luau)
+    listed: FxHashMap<InstanceId, Vec<InstanceId>>,
+    listed_parts: FxHashMap<InstanceId, [(InstanceId, u32); 2]>,
+    /// When each listed joint was listed, by a count of the listings ([`Listed::stamp`]: a newer joint is the later listed)
+    listed_stamps: FxHashMap<InstanceId, u64>,
+    listings: u64,
     /// Indexed joints whose links must be worked out again before the next walk ([`relink`]): their homes or their parts' changed,
     /// or a part they name was freed
     relinks: Vec<InstanceId>,
@@ -1190,6 +1196,28 @@ impl Joints {
         }
     }
 
+    /// [`Joints::detach`] for the lists of every kind the index keeps ([`Joints::listed`]).
+    fn detach_listed(&mut self, joint: InstanceId) {
+        let Some(places) = self.listed_parts.remove(&joint) else { return };
+        self.listed_stamps.remove(&joint);
+        for (part, place) in places {
+            let Some(list) = self.listed.get_mut(&part) else { continue };
+            let place = place as usize;
+            debug_assert_eq!(list.get(place), Some(&joint), "a joint's stored place in its part's list");
+            list.swap_remove(place);
+            if let Some(&moved) = list.get(place)
+                && let Some(entry) = self.listed_parts.get_mut(&moved)
+            {
+                for slot in entry.iter_mut().filter(|slot| slot.0 == part) {
+                    slot.1 = place as u32;
+                }
+            }
+            if list.is_empty() {
+                self.listed.remove(&part);
+            }
+        }
+    }
+
     /// Forgets the kept component of `part`, for each of its parts.
     /// Notes that `part`'s assembly may have changed, while a part moves ([`Joints::regrouped`]).
     fn regroup(&mut self, part: InstanceId) {
@@ -1653,6 +1681,10 @@ fn forget(state: &mut State, id: InstanceId) {
     for joint in joints.attached.remove(&id).unwrap_or_default() {
         joints.detach(joint);
     }
+    joints.detach_listed(id);
+    for joint in joints.listed.remove(&id).unwrap_or_default() {
+        joints.detach_listed(joint);
+    }
     joints.transformed.remove(&id);
     joints.turning.remove(&id);
 }
@@ -1913,7 +1945,7 @@ fn take_homes(state: &mut State, reflection: &Reflection, setup: &Setup, mut sta
                     // between places outside every world,
                     // JointsService and ReplicatedStorage say, which costs a client nothing a joint, so none is worked out again)
                     let list = &joints.by_part[&id];
-                    if list.linking > 0 || in_world(dom, id) || joints.attached.contains_key(&id) {
+                    if list.linking > 0 || in_world(dom, id) || joints.attached.contains_key(&id) || joints.listed.contains_key(&id) {
                         joints.relinks.extend(list.homed());
                     }
                 }
@@ -2145,6 +2177,23 @@ pub(crate) fn check_index(state: &mut State, reflection: &Reflection) -> Result<
     if listed != 2 * state.joints.attached_parts.len() {
         return Err(format!("the lists of active joints hold {listed} places for {} joints", state.joints.attached_parts.len()));
     }
+    // (and so for the lists of every kind: [`Joints::listed`])
+    for &joint in state.joints.indexed.keys() {
+        let active = listed_now(state, reflection, &setup, joint, None);
+        let listed = state.joints.listed_parts.get(&joint).map(|places| places.map(|(part, _)| part));
+        if active != listed {
+            return Err(format!("{joint:?} is active between {active:?} but in GetJoints' lists under {listed:?}"));
+        }
+        for &(part, place) in state.joints.listed_parts.get(&joint).into_iter().flatten() {
+            if state.joints.listed.get(&part).and_then(|list| list.get(place as usize)) != Some(&joint) {
+                return Err(format!("{joint:?} is not at its place {place} in {part:?}'s list of joints"));
+            }
+        }
+    }
+    let listed: usize = state.joints.listed.values().map(Vec::len).sum();
+    if listed != 2 * state.joints.listed_parts.len() {
+        return Err(format!("GetJoints' lists hold {listed} places for {} joints", state.joints.listed_parts.len()));
+    }
     let joints = &state.joints;
     for (&joint, entry) in &joints.indexed {
         for side in 0..2 {
@@ -2248,10 +2297,21 @@ impl Moving {
 /// The parts of `joint` while it is active ([`Kind::unjoined`], Enabled, naming two different parts in one WorldRoot, and itself
 /// in that WorldRoot or in JointsService with the parts in the Workspace, as [`edges`] reads a link: [`homed_in`]), None while it
 /// is not. While a subtree moves, its instances count as `moving` says.
+#[cfg(test)]
 fn active_parts(state: &State, reflection: &Reflection, setup: &Setup, joint: InstanceId, moving: Option<&Moving>) -> Option<[InstanceId; 2]> {
+    let kind = setup.kind(state.dom.get(joint)?.class);
+    if !kind.unjoined() {
+        return None;
+    }
+    listed_now(state, reflection, setup, joint, moving)
+}
+
+/// The parts of `joint` while it is active, as [`active_parts`] reads it, for a joint of any kind the index keeps (a WeldConstraint
+/// too, which is never active in JointsService: [`homed_in`]): the joints a part's GetJoints lists ([`Joints::listed`]).
+fn listed_now(state: &State, reflection: &Reflection, setup: &Setup, joint: InstanceId, moving: Option<&Moving>) -> Option<[InstanceId; 2]> {
     let instance = state.dom.get(joint)?;
     let kind = setup.kind(instance.class);
-    if !kind.unjoined() || state.dom.boolean(joint, setup.enabled) == Some(false) {
+    if kind == Kind::Other || state.dom.boolean(joint, setup.enabled) == Some(false) {
         return None;
     }
     let [Some(part0), Some(part1)] = parts_of(state, setup, joint) else { return None };
@@ -2288,7 +2348,23 @@ struct Refreshed {
 /// joints, the second out and back leaves 1, 4, 3, 2); one moved into JointsService, or whose C0 changed, keeps its place.
 /// While a subtree moves into a world, its instances count as `moving` says.
 fn refresh_attached(state: &mut State, reflection: &Reflection, setup: &Setup, joint: InstanceId, moving: Option<&Moving>) -> Refreshed {
-    let now = active_parts(state, reflection, setup, joint, moving);
+    // (the list of every kind first, by the same rule: [`Joints::listed`])
+    let listed = listed_now(state, reflection, setup, joint, moving);
+    let joints = &mut state.joints;
+    if joints.listed_parts.get(&joint).map(|places| places.map(|(part, _)| part)) != listed {
+        joints.detach_listed(joint);
+        if let Some(parts) = listed {
+            let places = parts.map(|part| {
+                let list = joints.listed.entry(part).or_default();
+                list.push(joint);
+                (part, list.len() as u32 - 1)
+            });
+            joints.listed_parts.insert(joint, places);
+            joints.listings += 1;
+            joints.listed_stamps.insert(joint, joints.listings);
+        }
+    }
+    let now = listed.filter(|_| setup.kind(state.dom.at(joint).class).unjoined());
     let joints = &mut state.joints;
     let was = joints.attached_parts.get(&joint).map(|places| places.map(|(part, _)| part));
     if was == now {
@@ -2458,6 +2534,66 @@ pub fn root_part(state: &mut State, reflection: &Reflection, part: InstanceId) -
     }
     let tree = assemblies_of(state, reflection, &setup, &found, part, None, true);
     tree.of(part).map(|(assembly, ..)| assembly.nodes[0].part)
+}
+
+/// One of a part's joints as world/parts.rs reads them ([`part_joints`]).
+pub(super) struct JointEntry {
+    pub joint: InstanceId,
+    /// The part it joins the part to
+    pub other: InstanceId,
+    /// When it was listed: a newer joint was listed later ([`Joints::listed_stamps`])
+    pub stamp: u64,
+    /// Its kind's place in the order a tree takes links in ([`Setup::union_rank`]: the Weld kinds 0, WeldConstraint 1, Motor 2,
+    /// Motor6D 3)
+    pub rank: u8,
+    pub weld_constraint: bool,
+}
+
+/// `part`'s active joints of the kinds the index keeps (the rigid JointInstances and WeldConstraints), in the one list a client keeps
+/// them in ([`Joints::listed`]), the index and the lists readied first; none outside every world.
+pub(super) fn part_joints(state: &mut State, reflection: &Reflection, part: InstanceId) -> Vec<JointEntry> {
+    let Some(setup) = setup_of(state) else { return Vec::new() };
+    ensure_scanned(state, reflection, &setup);
+    let Some(list) = state.joints.listed.get(&part) else { return Vec::new() };
+    list.iter()
+        .filter_map(|&joint| {
+            let [Some(part0), Some(part1)] = parts_of(state, &setup, joint) else { return None };
+            let class = state.dom.at(joint).class;
+            Some(JointEntry {
+                joint,
+                other: if part0 == part { part1 } else { part0 },
+                stamp: state.joints.listed_stamps.get(&joint).copied().unwrap_or(0),
+                rank: setup.union_rank(class),
+                weld_constraint: setup.kind(class) == Kind::WeldConstraint,
+            })
+        })
+        .collect()
+}
+
+/// The parts `joint` joins while it is in their lists of joints ([`Joints::listed`]), the lists readied first (world/parts.rs).
+pub(super) fn listed_pair(state: &mut State, reflection: &Reflection, joint: InstanceId) -> Option<[InstanceId; 2]> {
+    let setup = setup_of(state)?;
+    ensure_scanned(state, reflection, &setup);
+    state.joints.listed_parts.get(&joint).map(|places| places.map(|(part, _)| part))
+}
+
+/// How `part` ranks as an assembly's root (world/parts.rs): anchored first, then [`root_rank`]'s (not Massless, RootPriority, size
+/// score); the size score as its bits' order (a NaN last).
+pub(super) fn part_rank(state: &State, reflection: &Reflection, part: InstanceId) -> (bool, bool, i64, f32) {
+    let Some(setup) = state.joints.setup.as_ref() else { return (false, true, 0, 0.0) };
+    let (heavy, priority, score) = root_rank(state, reflection, setup, part);
+    (anchored(state, setup, part), heavy, priority, if score.is_nan() { f32::NEG_INFINITY } else { score })
+}
+
+/// Whether `part` is Anchored (world/parts.rs).
+pub(super) fn is_anchored(state: &State, part: InstanceId) -> bool {
+    state.joints.setup.as_ref().is_some_and(|setup| anchored(state, setup, part))
+}
+
+/// The WorldRoot `id` is in (world/parts.rs): its nearest WorldRoot ancestor.
+pub(super) fn world_root(state: &State, reflection: &Reflection, id: InstanceId) -> Option<InstanceId> {
+    let setup = state.joints.setup.as_ref()?;
+    world_of(state, reflection, setup, id)
 }
 
 /// The parts linked to `start` now and their links, as a walk from it finds them, what it looked at counted in `walk`; None when
@@ -4398,7 +4534,7 @@ fn relist_moved(state: &mut State, reflection: &Reflection, setup: &Setup, id: I
             let homed: Vec<InstanceId> = state.joints.by_part[&node].homed().collect();
             let mut changing = Vec::new();
             for joint in homed {
-                if state.joints.attached_parts.contains_key(&joint) || active_parts(state, reflection, setup, joint, Some(&moving)).is_some() {
+                if state.joints.listed_parts.contains_key(&joint) || listed_now(state, reflection, setup, joint, Some(&moving)).is_some() {
                     changing.push(joint);
                 }
                 stamp(&mut state.joints, joint);
@@ -4445,6 +4581,12 @@ impl TakenOut {
 
     /// Takes the active joints of `part` out of their parts' lists, the last named first (it is in no world now).
     fn part(&mut self, joints: &mut Joints, part: InstanceId) {
+        // (the list of every kind by the same rule, no price of its own: [`Joints::listed`])
+        if let Some(list) = joints.listed.get(&part) {
+            for joint in last_named_first(joints, part, list.iter().copied()) {
+                joints.detach_listed(joint);
+            }
+        }
         let Some(list) = joints.attached.get(&part) else { return };
         let order = last_named_first(joints, part, list.iter().copied());
         for joint in order {
@@ -4473,7 +4615,7 @@ impl TakenOut {
 /// for each part whose list it takes them out of), beyond the Parent write's own price (instance.rs).
 fn left_every_world(state: &mut State, id: InstanceId) {
     // (a WorldRoot or JointsService that leaves takes its world or home along: everything below it keeps both)
-    if !state.joints.scanned || state.joints.attached_parts.is_empty() || state.dom.is_home(id) {
+    if !state.joints.scanned || state.joints.listed_parts.is_empty() || state.dom.is_home(id) {
         return;
     }
     let order = taken_up(state, id, |state, node| state.dom.is_home(node));
@@ -4483,9 +4625,10 @@ fn left_every_world(state: &mut State, id: InstanceId) {
         if let Some(places) = joints.attached_parts.get(&node) {
             out.joint(places.map(|(part, _)| part));
             joints.detach(node);
-        } else {
+        } else if !joints.listed_parts.contains_key(&node) {
             out.part(joints, node);
         }
+        joints.detach_listed(node);
     }
     let seconds = out.price();
     if seconds > 0.0 {
@@ -5080,7 +5223,7 @@ pub fn step_motors(engine: &Engine) {
             state.joints.turning.remove(&motor);
             continue;
         }
-        if active_parts(&state, &engine.reflection, &setup, motor, None).is_none() {
+        if listed_now(&state, &engine.reflection, &setup, motor, None).is_none() {
             continue;
         }
         // (in double within a step, stored as a float: 0.7 turned by eight steps of 0.0125 reads 0.800000012, a client's)
