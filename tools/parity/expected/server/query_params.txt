@@ -1,0 +1,319 @@
+# engine: Roblox Studio 0.747.0.7471481, the server of a headless play session (a Script in ServerScriptService, script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-26
+RaycastParams FilterDescendantsInstances {1} error Invalid value type; table must only contain Instances and other tables read #0 
+RaycastParams FilterDescendantsInstances {A,1} error Invalid value type; table must only contain Instances and other tables read #1 1=A
+RaycastParams FilterDescendantsInstances {x} error Invalid value type; table must only contain Instances and other tables read #0 
+RaycastParams FilterDescendantsInstances {A,{B}} ok read #2 1=A,2=B
+RaycastParams FilterDescendantsInstances {{}} ok read #0 
+RaycastParams FilterDescendantsInstances {A,nil,B} ok read #2 1=A,2=B
+RaycastParams FilterDescendantsInstances {[1]=A,[3]=B} ok read #1 1=A
+RaycastParams FilterDescendantsInstances {k=A} ok read #0 
+RaycastParams FilterDescendantsInstances {A,A} ok read #2 1=A,2=A
+RaycastParams FilterDescendantsInstances {A,k=B} ok read #1 1=A
+RaycastParams FilterDescendantsInstances 5 error Invalid value type; expected a table read #0 
+RaycastParams FilterDescendantsInstances x error Invalid value type; expected a table read #0 
+RaycastParams FilterDescendantsInstances A error Invalid value type; expected a table read #0 
+RaycastParams FilterDescendantsInstances true error Invalid value type; expected a table read #0 
+RaycastParams FilterDescendantsInstances nil error Invalid value type; expected a table read #0 
+RaycastParams FilterDescendantsInstances {} ok read #0 
+RaycastParams FilterDescendantsInstances {V} error Invalid value type; table must only contain Instances and other tables read #0 
+RaycastParams FilterDescendantsInstances {A,{B,{Inner}}} ok read #3 1=A,2=B,3=Inner
+RaycastParams ExcludeInstances {1} error Invalid value type; table must only contain Instances and other tables read #0 
+RaycastParams ExcludeInstances {A,1} error Invalid value type; table must only contain Instances and other tables read #1 1=A
+RaycastParams ExcludeInstances {x} error Invalid value type; table must only contain Instances and other tables read #0 
+RaycastParams ExcludeInstances {A,{B}} ok read #2 1=A,2=B
+RaycastParams ExcludeInstances {{}} ok read #0 
+RaycastParams ExcludeInstances {A,nil,B} ok read #2 1=A,2=B
+RaycastParams ExcludeInstances {[1]=A,[3]=B} ok read #1 1=A
+RaycastParams ExcludeInstances {k=A} ok read #0 
+RaycastParams ExcludeInstances {A,A} ok read #2 1=A,2=A
+RaycastParams ExcludeInstances {A,k=B} ok read #1 1=A
+RaycastParams ExcludeInstances 5 error Invalid value type; expected a table read #0 
+RaycastParams ExcludeInstances x error Invalid value type; expected a table read #0 
+RaycastParams ExcludeInstances A error Invalid value type; expected a table read #0 
+RaycastParams ExcludeInstances true error Invalid value type; expected a table read #0 
+RaycastParams ExcludeInstances nil ok read nil:nil
+RaycastParams ExcludeInstances {} ok read #0 
+RaycastParams ExcludeInstances {V} error Invalid value type; table must only contain Instances and other tables read #0 
+RaycastParams ExcludeInstances {A,{B,{Inner}}} ok read #3 1=A,2=B,3=Inner
+RaycastParams IncludeInstances {1} error Invalid value type; table must only contain Instances and other tables read #0 
+RaycastParams IncludeInstances {A,1} error Invalid value type; table must only contain Instances and other tables read #1 1=A
+RaycastParams IncludeInstances {x} error Invalid value type; table must only contain Instances and other tables read #0 
+RaycastParams IncludeInstances {A,{B}} ok read #2 1=A,2=B
+RaycastParams IncludeInstances {{}} ok read #0 
+RaycastParams IncludeInstances {A,nil,B} ok read #2 1=A,2=B
+RaycastParams IncludeInstances {[1]=A,[3]=B} ok read #1 1=A
+RaycastParams IncludeInstances {k=A} ok read #0 
+RaycastParams IncludeInstances {A,A} ok read #2 1=A,2=A
+RaycastParams IncludeInstances {A,k=B} ok read #1 1=A
+RaycastParams IncludeInstances 5 error Invalid value type; expected a table read #0 
+RaycastParams IncludeInstances x error Invalid value type; expected a table read #0 
+RaycastParams IncludeInstances A error Invalid value type; expected a table read #0 
+RaycastParams IncludeInstances true error Invalid value type; expected a table read #0 
+RaycastParams IncludeInstances nil ok read nil:nil
+RaycastParams IncludeInstances {} ok read #0 
+RaycastParams IncludeInstances {V} error Invalid value type; table must only contain Instances and other tables read #0 
+RaycastParams IncludeInstances {A,{B,{Inner}}} ok read #3 1=A,2=B,3=Inner
+OverlapParams FilterDescendantsInstances {1} error Invalid value type; table must only contain Instances and other tables read #0 
+OverlapParams FilterDescendantsInstances {A,1} error Invalid value type; table must only contain Instances and other tables read #1 1=A
+OverlapParams FilterDescendantsInstances {x} error Invalid value type; table must only contain Instances and other tables read #0 
+OverlapParams FilterDescendantsInstances {A,{B}} ok read #2 1=A,2=B
+OverlapParams FilterDescendantsInstances {{}} ok read #0 
+OverlapParams FilterDescendantsInstances {A,nil,B} ok read #2 1=A,2=B
+OverlapParams FilterDescendantsInstances {[1]=A,[3]=B} ok read #1 1=A
+OverlapParams FilterDescendantsInstances {k=A} ok read #0 
+OverlapParams FilterDescendantsInstances {A,A} ok read #2 1=A,2=A
+OverlapParams FilterDescendantsInstances {A,k=B} ok read #1 1=A
+OverlapParams FilterDescendantsInstances 5 error Invalid value type; expected a table read #0 
+OverlapParams FilterDescendantsInstances x error Invalid value type; expected a table read #0 
+OverlapParams FilterDescendantsInstances A error Invalid value type; expected a table read #0 
+OverlapParams FilterDescendantsInstances true error Invalid value type; expected a table read #0 
+OverlapParams FilterDescendantsInstances nil error Invalid value type; expected a table read #0 
+OverlapParams FilterDescendantsInstances {} ok read #0 
+OverlapParams FilterDescendantsInstances {V} error Invalid value type; table must only contain Instances and other tables read #0 
+OverlapParams FilterDescendantsInstances {A,{B,{Inner}}} ok read #3 1=A,2=B,3=Inner
+OverlapParams ExcludeInstances {1} error Invalid value type; table must only contain Instances and other tables read #0 
+OverlapParams ExcludeInstances {A,1} error Invalid value type; table must only contain Instances and other tables read #1 1=A
+OverlapParams ExcludeInstances {x} error Invalid value type; table must only contain Instances and other tables read #0 
+OverlapParams ExcludeInstances {A,{B}} ok read #2 1=A,2=B
+OverlapParams ExcludeInstances {{}} ok read #0 
+OverlapParams ExcludeInstances {A,nil,B} ok read #2 1=A,2=B
+OverlapParams ExcludeInstances {[1]=A,[3]=B} ok read #1 1=A
+OverlapParams ExcludeInstances {k=A} ok read #0 
+OverlapParams ExcludeInstances {A,A} ok read #2 1=A,2=A
+OverlapParams ExcludeInstances {A,k=B} ok read #1 1=A
+OverlapParams ExcludeInstances 5 error Invalid value type; expected a table read #0 
+OverlapParams ExcludeInstances x error Invalid value type; expected a table read #0 
+OverlapParams ExcludeInstances A error Invalid value type; expected a table read #0 
+OverlapParams ExcludeInstances true error Invalid value type; expected a table read #0 
+OverlapParams ExcludeInstances nil ok read nil:nil
+OverlapParams ExcludeInstances {} ok read #0 
+OverlapParams ExcludeInstances {V} error Invalid value type; table must only contain Instances and other tables read #0 
+OverlapParams ExcludeInstances {A,{B,{Inner}}} ok read #3 1=A,2=B,3=Inner
+OverlapParams IncludeInstances {1} error Invalid value type; table must only contain Instances and other tables read #0 
+OverlapParams IncludeInstances {A,1} error Invalid value type; table must only contain Instances and other tables read #1 1=A
+OverlapParams IncludeInstances {x} error Invalid value type; table must only contain Instances and other tables read #0 
+OverlapParams IncludeInstances {A,{B}} ok read #2 1=A,2=B
+OverlapParams IncludeInstances {{}} ok read #0 
+OverlapParams IncludeInstances {A,nil,B} ok read #2 1=A,2=B
+OverlapParams IncludeInstances {[1]=A,[3]=B} ok read #1 1=A
+OverlapParams IncludeInstances {k=A} ok read #0 
+OverlapParams IncludeInstances {A,A} ok read #2 1=A,2=A
+OverlapParams IncludeInstances {A,k=B} ok read #1 1=A
+OverlapParams IncludeInstances 5 error Invalid value type; expected a table read #0 
+OverlapParams IncludeInstances x error Invalid value type; expected a table read #0 
+OverlapParams IncludeInstances A error Invalid value type; expected a table read #0 
+OverlapParams IncludeInstances true error Invalid value type; expected a table read #0 
+OverlapParams IncludeInstances nil ok read nil:nil
+OverlapParams IncludeInstances {} ok read #0 
+OverlapParams IncludeInstances {V} error Invalid value type; table must only contain Instances and other tables read #0 
+OverlapParams IncludeInstances {A,{B,{Inner}}} ok read #3 1=A,2=B,3=Inner
+query exclude {{A}} ok B #1 1=A
+query-exclude-list exclude {{A}} B #1 1=A
+query exclude {B,{A}} ok nil #2 1=B,2=A
+query-exclude-list exclude {B,{A}} nil #2 1=B,2=A
+query exclude {A,nil,B} ok nil #2 1=A,2=B
+query-exclude-list exclude {A,nil,B} nil #2 1=A,2=B
+query exclude {[2]=A} ok A #0 
+query-exclude-list exclude {[2]=A} A #0 
+query include {{B}} ok B #1 1=B
+query-exclude-list include {{B}} A #1 1=B
+query include {{{B}}} ok B #1 1=B
+query-exclude-list include {{{B}}} A #1 1=B
+new IgnoreWater false
+new Filter #0 
+new Overlap MaxParts 0
+new Overlap Exclude nil:nil
+new Raycast Include nil:nil
+new 5 ok RaycastParams
+new x ok OverlapParams
+new nil,1 ok RaycastParams
+new bad key ok RaycastParams
+new FilterType Enum.RaycastFilterType.Exclude
+new hit A
+AddToFilter 5 error Expected a table or Instance #1 1=Inner
+AddToFilter {5} error Invalid value type; table must only contain Instances and other tables #1 1=Inner
+AddToFilter {A,5} error Invalid value type; table must only contain Instances and other tables #2 1=Inner,2=A
+AddToFilter {A,{B}} ok #3 1=Inner,2=A,3=B
+AddToFilter nil error Expected a table or Instance #1 1=Inner
+AddToFilter {} ok #1 1=Inner
+AddToFilter {A,nil,B} ok #3 1=Inner,2=A,3=B
+AddToFilter A ok #2 1=Inner,2=A
+AddToFilter x error Expected a table or Instance #1 1=Inner
+AddToFilter {k=A} ok #1 1=Inner
+AddToFilter none error Expected a table or Instance #0 
+write RaycastParams IgnoreWater 5 ok true
+write RaycastParams IgnoreWater x ok true
+write RaycastParams IgnoreWater nil ok false
+write RaycastParams RespectCanCollide 1 ok true
+write RaycastParams CollisionGroup 5 ok 5
+write RaycastParams CollisionGroup nil error @142: invalid argument #3 (string expected, got nil) Default
+write RaycastParams CollisionGroup Nope ok Nope
+write RaycastParams FilterType Include error Invalid value for enum 'RaycastFilterType' Enum.RaycastFilterType.Exclude
+write RaycastParams FilterType 1 error Invalid value for enum 'RaycastFilterType' Enum.RaycastFilterType.Exclude
+write RaycastParams FilterType Enum.KeyCode.A error Invalid type 'KeyCode' for enum 'RaycastFilterType' Enum.RaycastFilterType.Exclude
+write RaycastParams FilterType nil error Invalid value for enum 'RaycastFilterType' Enum.RaycastFilterType.Exclude
+write RaycastParams Margin x error @142: invalid argument #3 (number expected, got string) 0
+write RaycastParams Margin 2 ok 2
+write RaycastParams BruteForceAllSlow 1 ok true
+write OverlapParams MaxParts x ok 0
+write OverlapParams MaxParts 3 ok 3
+write OverlapParams MaxParts 2.7 ok 2
+write OverlapParams MaxParts -1 ok -1
+write OverlapParams Tolerance x error @149: invalid argument #3 (number expected, got string) 0
+write OverlapParams MaxParts nil ok 0
+RaycastParams CollisionGroup number:5 ok read string:5
+RaycastParams CollisionGroup number:5.5 ok read string:5.5
+RaycastParams CollisionGroup boolean:true error @189: invalid argument #3 (string expected, got boolean) read string:Default
+RaycastParams CollisionGroup Vector3:1, 1, 1 error @189: invalid argument #3 (string expected, got Vector3) read string:Default
+RaycastParams CollisionGroup table:#0 error @189: invalid argument #3 (string expected, got table) read string:Default
+RaycastParams CollisionGroup Instance:A error @189: invalid argument #3 (string expected, got Instance) read string:Default
+RaycastParams RespectCanCollide nil:nil ok read boolean:false
+RaycastParams RespectCanCollide table:#0 ok read boolean:true
+RaycastParams RespectCanCollide number:0 ok read boolean:true
+RaycastParams RespectCanCollide string: ok read boolean:true
+RaycastParams BruteForceAllSlow nil:nil ok read boolean:false
+RaycastParams BruteForceAllSlow string:x ok read boolean:true
+RaycastParams FilterType EnumItem:Enum.RaycastFilterType.Include ok read EnumItem:Enum.RaycastFilterType.Include
+RaycastParams FilterType EnumItem:Enum.RaycastFilterType.Include ok read EnumItem:Enum.RaycastFilterType.Include
+RaycastParams FilterType EnumItem:Enum.RaycastFilterType.Exclude ok read EnumItem:Enum.RaycastFilterType.Exclude
+RaycastParams FilterType number:0 error Invalid value for enum 'RaycastFilterType' read EnumItem:Enum.RaycastFilterType.Exclude
+RaycastParams FilterType string:Exclude error Invalid value for enum 'RaycastFilterType' read EnumItem:Enum.RaycastFilterType.Exclude
+RaycastParams FilterType table:#0 error Invalid value for enum 'RaycastFilterType' read EnumItem:Enum.RaycastFilterType.Exclude
+RaycastParams IgnoreWater number:0 ok read boolean:true
+RaycastParams IgnoreWater table:#0 ok read boolean:true
+RaycastParams Margin nil:nil error @189: invalid argument #3 (number expected, got nil) read number:0
+RaycastParams Margin boolean:true error @189: invalid argument #3 (number expected, got boolean) read number:0
+RaycastParams Margin number:1e+40 error Margin must be finite and greater than or equal to 0, got inf read number:0
+RaycastParams Margin number:-1 error Margin must be finite and greater than or equal to 0, got -1.000000 read number:0
+RaycastParams SizeGradient string:3 ok read number:3
+RaycastParams SizeGradient nil:nil error @189: invalid argument #3 (number expected, got nil) read number:0
+RaycastParams MaxParts boolean:true error MaxParts is not a valid member of RaycastParams read error MaxParts is not a valid member of RaycastParams
+RaycastParams MaxParts number:10000000000 error MaxParts is not a valid member of RaycastParams read error MaxParts is not a valid member of RaycastParams
+RaycastParams MaxParts number:-2.5 error MaxParts is not a valid member of RaycastParams read error MaxParts is not a valid member of RaycastParams
+RaycastParams MaxParts number:nan error MaxParts is not a valid member of RaycastParams read error MaxParts is not a valid member of RaycastParams
+RaycastParams MaxParts table:#0 error MaxParts is not a valid member of RaycastParams read error MaxParts is not a valid member of RaycastParams
+RaycastParams MaxParts string:2.9 error MaxParts is not a valid member of RaycastParams read error MaxParts is not a valid member of RaycastParams
+RaycastParams MaxParts number:2147483648 error MaxParts is not a valid member of RaycastParams read error MaxParts is not a valid member of RaycastParams
+RaycastParams Tolerance nil:nil error Tolerance is not a valid member of RaycastParams read error Tolerance is not a valid member of RaycastParams
+RaycastParams Tolerance string:1.5 error Tolerance is not a valid member of RaycastParams read error Tolerance is not a valid member of RaycastParams
+RaycastParams Tolerance boolean:true error Tolerance is not a valid member of RaycastParams read error Tolerance is not a valid member of RaycastParams
+OverlapParams CollisionGroup number:5 ok read string:5
+OverlapParams CollisionGroup number:5.5 ok read string:5.5
+OverlapParams CollisionGroup boolean:true error @189: invalid argument #3 (string expected, got boolean) read string:Default
+OverlapParams CollisionGroup Vector3:1, 1, 1 error @189: invalid argument #3 (string expected, got Vector3) read string:Default
+OverlapParams CollisionGroup table:#0 error @189: invalid argument #3 (string expected, got table) read string:Default
+OverlapParams CollisionGroup Instance:A error @189: invalid argument #3 (string expected, got Instance) read string:Default
+OverlapParams RespectCanCollide nil:nil ok read boolean:false
+OverlapParams RespectCanCollide table:#0 ok read boolean:true
+OverlapParams RespectCanCollide number:0 ok read boolean:true
+OverlapParams RespectCanCollide string: ok read boolean:true
+OverlapParams BruteForceAllSlow nil:nil ok read boolean:false
+OverlapParams BruteForceAllSlow string:x ok read boolean:true
+OverlapParams FilterType EnumItem:Enum.RaycastFilterType.Include ok read EnumItem:Enum.RaycastFilterType.Include
+OverlapParams FilterType EnumItem:Enum.RaycastFilterType.Include ok read EnumItem:Enum.RaycastFilterType.Include
+OverlapParams FilterType EnumItem:Enum.RaycastFilterType.Exclude ok read EnumItem:Enum.RaycastFilterType.Exclude
+OverlapParams FilterType number:0 error Invalid value for enum 'RaycastFilterType' read EnumItem:Enum.RaycastFilterType.Exclude
+OverlapParams FilterType string:Exclude error Invalid value for enum 'RaycastFilterType' read EnumItem:Enum.RaycastFilterType.Exclude
+OverlapParams FilterType table:#0 error Invalid value for enum 'RaycastFilterType' read EnumItem:Enum.RaycastFilterType.Exclude
+OverlapParams IgnoreWater number:0 error IgnoreWater is not a valid member of OverlapParams read error IgnoreWater is not a valid member of OverlapParams
+OverlapParams IgnoreWater table:#0 error IgnoreWater is not a valid member of OverlapParams read error IgnoreWater is not a valid member of OverlapParams
+OverlapParams Margin nil:nil error Margin is not a valid member of OverlapParams read error Margin is not a valid member of OverlapParams
+OverlapParams Margin boolean:true error Margin is not a valid member of OverlapParams read error Margin is not a valid member of OverlapParams
+OverlapParams Margin number:1e+40 error Margin is not a valid member of OverlapParams read error Margin is not a valid member of OverlapParams
+OverlapParams Margin number:-1 error Margin is not a valid member of OverlapParams read error Margin is not a valid member of OverlapParams
+OverlapParams SizeGradient string:3 error SizeGradient is not a valid member of OverlapParams read error SizeGradient is not a valid member of OverlapParams
+OverlapParams SizeGradient nil:nil error SizeGradient is not a valid member of OverlapParams read error SizeGradient is not a valid member of OverlapParams
+OverlapParams MaxParts boolean:true ok read number:0
+OverlapParams MaxParts number:10000000000 ok read number:-2147483648
+OverlapParams MaxParts number:-2.5 ok read number:-2
+OverlapParams MaxParts number:nan ok read number:-2147483648
+OverlapParams MaxParts table:#0 ok read number:0
+OverlapParams MaxParts string:2.9 ok read number:2
+OverlapParams MaxParts number:2147483648 ok read number:-2147483648
+OverlapParams Tolerance nil:nil error @189: invalid argument #3 (number expected, got nil) read number:0
+OverlapParams Tolerance string:1.5 error Tolerance outside bounds: Expected 0 - 0.050000, got 1.500000 read number:0
+OverlapParams Tolerance boolean:true error @189: invalid argument #3 (number expected, got boolean) read number:0
+MaxParts -1 3
+MaxParts 1 1
+MaxParts 2 2
+MaxParts 0 3
+FilterType Enum.RaycastFilterType.Include A
+FilterType Enum.RaycastFilterType.Exclude B
+deep 51 ok  1
+deep 301 error Tables are too deeply nested 0
+cycle error Tables cannot be cyclic 1
+include after error table:#0 nil
+include nil nil:nil A
+include partial table:#1 B
+copy 1 false
+read copy 1
+tostring nested RaycastParams{IgnoreWater=false, Margin=0, SizeGradient=0, BruteForceAllSlow=false, RespectCanCollide=false, CollisionGroup=Default, FilterDescendantsInstances={2 instances...}}
+tostring exclude RaycastParams{IgnoreWater=false, Margin=0, SizeGradient=0, BruteForceAllSlow=false, RespectCanCollide=false, CollisionGroup=5, FilterDescendantsInstances={2 instances...}}
+tostring overlap OverlapParams{MaxParts=3, Tolerance=0, BruteForceAllSlow=false, RespectCanCollide=false, CollisionGroup=Default, FilterDescendantsInstances={}}
+add nested 3
+add cycle error Tables cannot be cyclic 4
+add 2 ok  5
+add dot ok  6
+add wrong self error @280: invalid argument #1 to 'AddToFilter' (RaycastParams expected, got OverlapParams) 6
+add no self error @281: invalid argument #1 to 'AddToFilter' (RaycastParams expected, got Instance)
+add 5 self error @282: invalid argument #1 to 'AddToFilter' (RaycastParams expected, got number)
+depth 100 ok  1
+depth 256 ok  1
+depth 297 ok  1
+depth 298 error Tables are too deeply nested 0
+depth 300 error Tables are too deeply nested 0
+add depth 100 ok  1
+add depth 298 ok  1
+add depth 299 error Tables are too deeply nested 0
+dag ok  2
+dag nested ok  2
+cycle deep error Tables cannot be cyclic 1
+exclude dag ok  2
+overlap Tolerance 0.05 ok  0.05000000074505806
+overlap Tolerance 0.0500001 ok  0.05000010132789612
+overlap Tolerance -0.01 error Tolerance outside bounds: Expected 0 - 0.050000, got -0.010000 0
+overlap Tolerance nan error Tolerance outside bounds: Expected 0 - 0.050000, got -nan(ind) 0
+overlap Tolerance 0.01 ok  0.009999999776482582
+ray SizeGradient -1 ok  -1
+ray SizeGradient 1e+40 error SizeGradient must be finite and greater than or equal to -1, got inf 0
+ray SizeGradient nan error SizeGradient must be finite and greater than or equal to -1, got -nan(ind) 0
+ray Margin 0 ok  0
+ray Margin nan error Margin must be finite and greater than or equal to 0, got -nan(ind) 0
+ray Margin 1e+30 ok  1.0000000150474662e+30
+ray Margin 2.5 ok  2.5
+tostring RaycastParams{IgnoreWater=false, Margin=0.333333343, SizeGradient=2.5, BruteForceAllSlow=false, RespectCanCollide=false, CollisionGroup=Default, FilterDescendantsInstances={A}}
+tostring OverlapParams{MaxParts=-7, Tolerance=0.00999999978, BruteForceAllSlow=false, RespectCanCollide=false, CollisionGroup=Default, FilterDescendantsInstances={}}
+catalog MaxPrice 1000000000000 ok  -2147483648
+catalog MaxPrice -5 ok  -5
+catalog MinPrice nan ok  -2147483648
+catalog CreatorId -3 ok  -3
+catalog CreatorId 2.7 ok  2
+catalog CreatorId x error @339: invalid argument #3 (number expected, got string) 0
+catalog MinPrice true error @339: invalid argument #3 (number expected, got boolean) 0
+catalog MinPrice nil error @339: invalid argument #3 (number expected, got nil) 0
+new CatalogSearchParams{SearchKeyword=, CategoryFilter=None, SortType=Relevance, SortAggregation=AllTime, SalesTypeFilter=All, CreatorName=, Limit=30, CreatorType=All, BundleTypes=, AssetTypes=, IncludeOffSale=false}
+MinPrice 5 CatalogSearchParams{SearchKeyword=, MinPrice=5, CategoryFilter=None, SortType=Relevance, SortAggregation=AllTime, SalesTypeFilter=All, CreatorName=, Limit=30, CreatorType=All, BundleTypes=, AssetTypes=, IncludeOffSale=false}
+MinPrice 0 CatalogSearchParams{SearchKeyword=, CategoryFilter=None, SortType=Relevance, SortAggregation=AllTime, SalesTypeFilter=All, CreatorName=, Limit=30, CreatorType=All, BundleTypes=, AssetTypes=, IncludeOffSale=false}
+MaxPrice 100 CatalogSearchParams{SearchKeyword=, MaxPrice=100, CategoryFilter=None, SortType=Relevance, SortAggregation=AllTime, SalesTypeFilter=All, CreatorName=, Limit=30, CreatorType=All, BundleTypes=, AssetTypes=, IncludeOffSale=false}
+MaxPrice default CatalogSearchParams{SearchKeyword=, CategoryFilter=None, SortType=Relevance, SortAggregation=AllTime, SalesTypeFilter=All, CreatorName=, Limit=30, CreatorType=All, BundleTypes=, AssetTypes=, IncludeOffSale=false}
+CreatorId 7 CatalogSearchParams{SearchKeyword=, CategoryFilter=None, SortType=Relevance, SortAggregation=AllTime, SalesTypeFilter=All, CreatorName=, Limit=30, CreatorId=7, CreatorType=All, BundleTypes=, AssetTypes=, IncludeOffSale=false}
+CreatorId 0 CatalogSearchParams{SearchKeyword=, CategoryFilter=None, SortType=Relevance, SortAggregation=AllTime, SalesTypeFilter=All, CreatorName=, Limit=30, CreatorType=All, BundleTypes=, AssetTypes=, IncludeOffSale=false}
+all CatalogSearchParams{SearchKeyword=, MinPrice=5, MaxPrice=100, CategoryFilter=None, SortType=Relevance, SortAggregation=AllTime, SalesTypeFilter=All, CreatorName=, Limit=30, CreatorId=7, CreatorType=All, BundleTypes=, AssetTypes=, IncludeOffSale=false}
+all reversed CatalogSearchParams{SearchKeyword=, MinPrice=5, MaxPrice=100, CategoryFilter=None, SortType=Relevance, SortAggregation=AllTime, SalesTypeFilter=All, CreatorName=, Limit=30, CreatorId=7, CreatorType=All, BundleTypes=, AssetTypes=, IncludeOffSale=false}
+MinPrice 5 then 0 CatalogSearchParams{SearchKeyword=, CategoryFilter=None, SortType=Relevance, SortAggregation=AllTime, SalesTypeFilter=All, CreatorName=, Limit=30, CreatorType=All, BundleTypes=, AssetTypes=, IncludeOffSale=false}
+MinPrice 2.5 CatalogSearchParams{SearchKeyword=, MinPrice=2, CategoryFilter=None, SortType=Relevance, SortAggregation=AllTime, SalesTypeFilter=All, CreatorName=, Limit=30, CreatorType=All, BundleTypes=, AssetTypes=, IncludeOffSale=false}
+MinPrice -1 CatalogSearchParams{SearchKeyword=, MinPrice=-1, CategoryFilter=None, SortType=Relevance, SortAggregation=AllTime, SalesTypeFilter=All, CreatorName=, Limit=30, CreatorType=All, BundleTypes=, AssetTypes=, IncludeOffSale=false}
+MinPrice x error @363: invalid argument #3 (number expected, got string)
+MinPrice '3' CatalogSearchParams{SearchKeyword=, MinPrice=3, CategoryFilter=None, SortType=Relevance, SortAggregation=AllTime, SalesTypeFilter=All, CreatorName=, Limit=30, CreatorType=All, BundleTypes=, AssetTypes=, IncludeOffSale=false}
+CreatorId 1e12 CatalogSearchParams{SearchKeyword=, CategoryFilter=None, SortType=Relevance, SortAggregation=AllTime, SalesTypeFilter=All, CreatorName=, Limit=30, CreatorId=1000000000000, CreatorType=All, BundleTypes=, AssetTypes=, IncludeOffSale=false}
+MaxPrice 1e12 CatalogSearchParams{SearchKeyword=, MaxPrice=-2147483648, CategoryFilter=None, SortType=Relevance, SortAggregation=AllTime, SalesTypeFilter=All, CreatorName=, Limit=30, CreatorType=All, BundleTypes=, AssetTypes=, IncludeOffSale=false}
+keyword+min CatalogSearchParams{SearchKeyword=hat, MinPrice=5, CategoryFilter=None, SortType=Relevance, SortAggregation=AllTime, SalesTypeFilter=All, CreatorName=, Limit=30, CreatorType=All, BundleTypes=, AssetTypes=, IncludeOffSale=false}
+Limit 10 CatalogSearchParams{SearchKeyword=, CategoryFilter=None, SortType=Relevance, SortAggregation=AllTime, SalesTypeFilter=All, CreatorName=, Limit=10, CreatorType=All, BundleTypes=, AssetTypes=, IncludeOffSale=false}
+IncludeOffSale CatalogSearchParams{SearchKeyword=, CategoryFilter=None, SortType=Relevance, SortAggregation=AllTime, SalesTypeFilter=All, CreatorName=, Limit=30, CreatorType=All, BundleTypes=, AssetTypes=, IncludeOffSale=true}
+CreatorName CatalogSearchParams{SearchKeyword=, CategoryFilter=None, SortType=Relevance, SortAggregation=AllTime, SalesTypeFilter=All, CreatorName=x, Limit=30, CreatorType=All, BundleTypes=, AssetTypes=, IncludeOffSale=false}
+AssetTypes CatalogSearchParams{SearchKeyword=, CategoryFilter=None, SortType=Relevance, SortAggregation=AllTime, SalesTypeFilter=All, CreatorName=, Limit=30, CreatorType=All, BundleTypes=, AssetTypes=8,11, IncludeOffSale=false}
+BundleTypes CatalogSearchParams{SearchKeyword=, CategoryFilter=None, SortType=Relevance, SortAggregation=AllTime, SalesTypeFilter=All, CreatorName=, Limit=30, CreatorType=All, BundleTypes=1, AssetTypes=, IncludeOffSale=false}
+read 5 2147483647 0
+new({MinPrice=5}) CatalogSearchParams{SearchKeyword=, CategoryFilter=None, SortType=Relevance, SortAggregation=AllTime, SalesTypeFilter=All, CreatorName=, Limit=30, CreatorType=All, BundleTypes=, AssetTypes=, IncludeOffSale=false}
+new table CatalogSearchParams{SearchKeyword=, CategoryFilter=None, SortType=Relevance, SortAggregation=AllTime, SalesTypeFilter=All, CreatorName=, Limit=30, CreatorType=All, BundleTypes=, AssetTypes=, IncludeOffSale=false}

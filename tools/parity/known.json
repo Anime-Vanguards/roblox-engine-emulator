@@ -289,22 +289,6 @@
 			"why": "the legacy spawn and delay take a value that is no function without an error at the call in a client; ree raises invalid argument #1 there"
 		},
 		{
-			"line": "trace workspace:Raycast Argument 2 missing or nil | @307 / @349 / @306 function Trace",
-			"why": "Raycast with a string origin raises the reflection's `Argument 2 missing or nil` in a client (its direction left out); ree checks the origin and direction itself and raises its own message"
-		},
-		{
-			"line": "pcall workspace:Raycast error Argument 2 missing or nil",
-			"why": "Raycast with a string origin raises the reflection's `Argument 2 missing or nil` in a client (its direction left out); ree checks the origin and direction itself and raises its own message"
-		},
-		{
-			"line": "trace workspace.Raycast Argument 2 missing or nil | @307 / @350 / @306 function Trace",
-			"why": "Raycast with a string origin raises the reflection's `Argument 2 missing or nil` in a client (its direction left out); ree checks the origin and direction itself and raises its own message"
-		},
-		{
-			"line": "pcall workspace.Raycast error Argument 2 missing or nil",
-			"why": "Raycast with a string origin raises the reflection's `Argument 2 missing or nil` in a client (its direction left out); ree checks the origin and direction itself and raises its own message"
-		},
-		{
 			"line": "trace TweenService:Create ok",
 			"why": "TweenService:Create with a string for its TweenInfo makes a tween in a client; ree raises `Unable to cast string to TweenInfo`"
 		},

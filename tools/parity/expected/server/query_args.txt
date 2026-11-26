@@ -1,0 +1,198 @@
+# engine: Roblox Studio 0.747.0.7471481, the server of a headless play session (a Script in ServerScriptService, script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-26
+ray() error Argument 2 missing or nil
+ray(nil) error Argument 2 missing or nil
+ray(V) error Argument 2 missing or nil
+ray(nil,V) error Argument 1 missing or nil
+ray(x) error Argument 2 missing or nil
+ray(x,V) error Unable to cast string to Vector3
+ray(V,x) error Unable to cast string to Vector3
+ray(x,x) error Unable to cast string to Vector3
+ray(V,V,5) error Unable to cast double to RaycastParams
+ray(V,V,x) error Unable to cast string to RaycastParams
+ray(V,V,{}) error Unable to cast Array to RaycastParams
+ray(V,V,dict) error Unable to cast Dictionary to RaycastParams
+ray(V,V,OP) error Unable to cast OverlapParams to RaycastParams
+ray(V,V,inst) error Unable to cast Instance to RaycastParams
+ray(V,V,nil) ok nil
+ray(V,V,RP,5) ok nil
+ray(1,2) error Unable to cast double to Vector3
+ray(true,V) error Unable to cast bool to Vector3
+ray(arr,V) error Unable to cast Array to Vector3
+ray(dict,V) error Unable to cast Dictionary to Vector3
+ray(key,V) error Unable to cast KeyCode to Vector3
+ray(cf,V) error Unable to cast CoordinateFrame to Vector3
+ray(v2,V) error Unable to cast Vector2 to Vector3
+ray(inst,V) error Unable to cast Instance to Vector3
+ray(5,x,5) error Unable to cast double to RaycastParams
+ray(nil,nil,5) error Unable to cast double to RaycastParams
+ray(V,nil,5) error Unable to cast double to RaycastParams
+ray(fn,V) error Unable to cast Function to Vector3
+ray(sig,V) error Unable to cast EventInstance to Vector3
+ray(color,V) error Unable to cast Color3 to Vector3
+block() error Argument 3 missing or nil
+block(CF) error Argument 3 missing or nil
+block(CF,S) error Argument 3 missing or nil
+block(nil,S,D) error Argument 1 missing or nil
+block(CF,nil,D) error Argument 2 missing or nil
+block(V,S,D) error Unable to cast Vector3 to CoordinateFrame
+block(x,S,D) error Unable to cast string to CoordinateFrame
+block(CF,x,D) error Unable to cast string to Vector3
+block(CF,S,x) error Unable to cast string to Vector3
+block(CF,S,D,5) error Unable to cast double to RaycastParams
+block(CF,S,D,{}) error Unable to cast Array to RaycastParams
+block(CF,S,D,OP) error Unable to cast OverlapParams to RaycastParams
+block(x,x,x,5) error Unable to cast double to RaycastParams
+block(x,x) error Argument 3 missing or nil
+sphere() error Argument 3 missing or nil
+sphere(V) error Argument 3 missing or nil
+sphere(V,1) error Argument 3 missing or nil
+sphere(nil,1,D) error Argument 1 missing or nil
+sphere(V,nil,D) error Argument 2 missing or nil
+sphere(V,x,D) error Unable to cast string to float
+sphere(V,'2',D) ok nil
+sphere(V,true,D) ok nil
+sphere(V,V,D) error Unable to cast Vector3 to float
+sphere(x,1,D) error Unable to cast string to Vector3
+sphere(V,1,x) error Unable to cast string to Vector3
+sphere(V,1,D,5) error Unable to cast double to RaycastParams
+sphere(V,1,D,OP) error Unable to cast OverlapParams to RaycastParams
+sphere(V,1,D,{}) error Unable to cast Array to RaycastParams
+sphere(x,x,x) error Unable to cast string to Vector3
+shape() error Argument 2 missing or nil
+shape(part) error Argument 2 missing or nil
+shape(nil,D) error Shapecast argument #1 expects a BasePart
+shape(x,D) error Unable to cast value to Object
+shape(folder,D) error Shapecast argument #1 expects a BasePart
+shape(part,x) error Unable to cast string to Vector3
+shape(part,D,5) error Unable to cast double to RaycastParams
+shape(part,D,OP) error Unable to cast OverlapParams to RaycastParams
+shape(part,D,{}) error Unable to cast Array to RaycastParams
+shape(part,D,nil,x) error Unable to cast string to CoordinateFrame
+shape(part,D,nil,nil,x) error Unable to cast string to Vector3
+shape(part,D,nil,CF,S) ok nil
+shape(part,D,RP,V) error Unable to cast Vector3 to CoordinateFrame
+shape(x,x,x,x,x) error Unable to cast string to Vector3
+box() error Argument 1 missing or nil
+box(CF) error Argument 2 missing or nil
+box(nil,S) error Argument 1 missing or nil
+box(x,S) error Unable to cast string to CoordinateFrame
+box(V,S) error Unable to cast Vector3 to CoordinateFrame
+box(CF,x) error Unable to cast string to Vector3
+box(CF,S,5) error Unable to cast double to OverlapParams
+box(CF,S,RP) error Unable to cast RaycastParams to OverlapParams
+box(CF,S,{}) error Unable to cast Array to OverlapParams
+box(x,x,x) error Unable to cast string to CoordinateFrame
+radius() error Argument 1 missing or nil
+radius(V) error Argument 2 missing or nil
+radius(nil,1) error Argument 1 missing or nil
+radius(x,1) error Unable to cast string to Vector3
+radius(V,x) error Unable to cast string to float
+radius(V,'3') ok #0
+radius(V,true) ok #0
+radius(V,1,5) error Unable to cast double to OverlapParams
+radius(V,1,RP) error Unable to cast RaycastParams to OverlapParams
+radius(x,x,x) error Unable to cast string to Vector3
+inpart() error Argument 1 missing or nil
+inpart(nil) error Part parameter must be BasePart
+inpart(x) error Unable to cast value to Object
+inpart(folder) error Part parameter must be BasePart
+inpart(part,5) error Unable to cast double to OverlapParams
+inpart(part,RP) error Unable to cast RaycastParams to OverlapParams
+inpart(part,{}) error Unable to cast Array to OverlapParams
+inpart(x,x) error Unable to cast value to Object
+fpor() error Argument 1 missing or nil
+fpor(x) error Unable to cast string to Ray
+fpor(V) error Unable to cast Vector3 to Ray
+fpor(R,5) error Unable to cast value to Object
+fpor(R,{}) error Unable to cast value to Object
+fpor(R,nil,x) error Unable to cast string to bool
+fpor(R,nil,5,5) ok Part,Vector3,Vector3,EnumItem
+fpor(x,x,x,x) error Unable to cast string to bool
+fporil(R) error Argument 2 missing or nil
+fporil(R,5) error Expected table argument, got number
+fporil(R,{5}) error Unable to cast value to Object
+fporil(R,part) error Expected table argument, got userdata
+fporil(R,{part,5}) error Unable to cast value to Object
+fporil(x,{}) error Unable to cast string to Ray
+fporwl(R) error Argument 2 missing or nil
+fporwl(R,5) error Expected table argument, got number
+fporwl(R,{5}) error Unable to cast value to Object
+fporwl(R,{},x) error Unable to cast string to bool
+fpor(R) ok Part,Vector3,Vector3,EnumItem
+fpor(R,nil) ok Part,Vector3,Vector3,EnumItem
+fpor(R,Part) ok nil,Vector3,Vector3,EnumItem
+fpor(R,nil,nil,nil) ok Part,Vector3,Vector3,EnumItem
+fpor(R,nil,true) ok Part,Vector3,Vector3,EnumItem
+fpor(R,nil,false,true) ok Part,Vector3,Vector3,EnumItem
+fpor(R,nil,0) ok Part,Vector3,Vector3,EnumItem
+fpor(R,nil,false,0) ok Part,Vector3,Vector3,EnumItem
+fpor(R,nil,1) ok Part,Vector3,Vector3,EnumItem
+fpor(R,nil,false,1) ok Part,Vector3,Vector3,EnumItem
+fpor(R,nil,'true') ok Part,Vector3,Vector3,EnumItem
+fpor(R,nil,false,'true') ok Part,Vector3,Vector3,EnumItem
+fpor(R,nil,'1') error Unable to cast string to bool
+fpor(R,nil,false,'1') error Unable to cast string to bool
+fpor(R,nil,{}) error Unable to cast Array to bool
+fpor(R,nil,false,{}) error Unable to cast Array to bool
+fpor(R,nil,{1}) error Unable to cast Array to bool
+fpor(R,nil,false,{1}) error Unable to cast Array to bool
+fpor(R,nil,part) error Unable to cast Instance to bool
+fpor(R,nil,false,part) error Unable to cast Instance to bool
+fpor(R,nil,V) error Unable to cast Vector3 to bool
+fpor(R,nil,false,V) error Unable to cast Vector3 to bool
+fpor(R,nil,CF) error Unable to cast CoordinateFrame to bool
+fpor(R,nil,false,CF) error Unable to cast CoordinateFrame to bool
+fpor(R,nil,key) error Unable to cast KeyCode to bool
+fpor(R,nil,false,key) error Unable to cast KeyCode to bool
+fpor(R,nil,fn) error Unable to cast Function to bool
+fpor(R,nil,false,fn) error Unable to cast Function to bool
+fpor(R,nil,nan) ok Part,Vector3,Vector3,EnumItem
+fpor(R,nil,false,nan) ok Part,Vector3,Vector3,EnumItem
+fporil(R,{}) ok Part,Vector3,Vector3,EnumItem
+fporil(R,nil) error Expected table argument, got nil
+fporil(R,{part},x) error Unable to cast string to bool
+fporil(R,{nil,part}) ok nil,Vector3,Vector3,EnumItem
+fporil(R,{k=part}) ok Part,Vector3,Vector3,EnumItem
+fporil(R,{{part}}) error Unable to cast value to Object
+fporwl(R,{}) ok nil,Vector3,Vector3,EnumItem
+fporwl(R,{part}) ok Part,Vector3,Vector3,EnumItem
+fporwl(R,{{part}}) error Unable to cast value to Object
+fpor(nil) error Argument 1 missing or nil
+fpor(nil,5) error Unable to cast value to Object
+fporil(nil,5) error Expected table argument, got number
+fporil(x,5) error Expected table argument, got number
+shape(nil,x) error Unable to cast string to Vector3
+shape(folder,D,5) error Unable to cast double to RaycastParams
+shape(nil,D,5) error Unable to cast double to RaycastParams
+shape(part,D,nil,nil,V(-1,1,1)) error Invalid sizeOverride. Must contain values greater than or equal to 0.
+shape(part,V(0,-2000,0)) error Attempt to shapecast with distance 2000.000000. The maximum distance is 1024.
+shape(part,D,5,nil,V(-1,1,1)) error Unable to cast double to RaycastParams
+shape(model,D) error Shapecast argument #1 expects a BasePart
+shape(loose,D) ok nil
+shape(part,D,nil,nil,V(600,1,1)) error Attempt to shapecast with side length 600.000000. The maximum side length is 512.000000.
+shape(part,D,nil,nil,nil) ok nil
+inpart(folder,5) error Part parameter must be BasePart
+inpart(nil,5) error Part parameter must be BasePart
+inpart(model) error Part parameter must be BasePart
+inpart(loose) ok #1
+inpart(part,nil) ok #0
+sphere(V,-1,D,5) error Unable to cast double to RaycastParams
+sphere(V,300,D,5) error Unable to cast double to RaycastParams
+sphere(V,1,V(0,-2000,0),5) error Unable to cast double to RaycastParams
+sphere(V,-1,x) error Unable to cast string to Vector3
+sphere(V,nan,D) error Invalid Radius. Must contain finite values.
+sphere(V,{},D) error Unable to cast Array to float
+sphere(V,key,D) error Unable to cast KeyCode to float
+block(CF,V(600,1,1),D,5) error Unable to cast double to RaycastParams
+block(CF,V(600,1,1),x) error Unable to cast string to Vector3
+block(CF,S,V(0,-2000,0),5) error Unable to cast double to RaycastParams
+ray(V,V(inf),5) error Unable to cast double to RaycastParams
+box(CF,V(nan),5) error Unable to cast double to OverlapParams
+radius(V,nan,5) error Unable to cast double to OverlapParams
+radius(V,{},nil) error Unable to cast Array to float
+radius(V,1,nil,5) ok #0
+box(CF,S,nil,5) ok #0
+ray(V,D,nil,5,6) ok hit Part
+ray(V,D,RP) hit ok hit Part
+ray(V,D,gone+part) ok nil

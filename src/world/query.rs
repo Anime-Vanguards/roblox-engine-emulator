@@ -205,14 +205,13 @@ impl Filter {
         (self.unqueryable || entry.can_query) && (!self.respect_can_collide || entry.can_collide)
     }
 
-    /// RaycastParams / OverlapParams (a prelude proxy, or a table passed in its place) read into this
-    /// filter, its lists' storage kept: a query reading its params allocates nothing.
-    fn read(&mut self, engine: &Engine, params: &LuaValue) {
-        let data = params_data(engine, params);
+    /// RaycastParams / OverlapParams (a prelude proxy of the type `kind`; nil for the default params) read into this filter, its
+    /// lists' storage kept: a query reading its params allocates nothing.
+    fn read(&mut self, engine: &Engine, kind: Params, params: &LuaValue) {
+        let data = params_data(engine, kind, params);
         // (a proxy's stored fields are a plain table: raw reads, without mlua's protected call)
         let get = |key: &str| match &data {
-            Some((data, true)) => data.raw_get::<LuaValue>(key).unwrap_or(LuaValue::Nil),
-            Some((data, false)) => data.get::<LuaValue>(key).unwrap_or(LuaValue::Nil),
+            Some(data) => data.raw_get::<LuaValue>(key).unwrap_or(LuaValue::Nil),
             None => LuaValue::Nil,
         };
         self.unqueryable = false;
@@ -242,8 +241,13 @@ impl Filter {
         pairs.clear();
         let mut read = 0;
         match value {
+            // (from 1 to its length, nil holes skipped: a legacy list as a client reads it, measured; a params list holds no holes)
             LuaValue::Table(table) => {
-                for value in table.sequence_values::<LuaValue>().filter_map(|v| v.ok()) {
+                for index in 1..=table.raw_len() {
+                    let value = table.raw_get::<LuaValue>(index).unwrap_or(LuaValue::Nil);
+                    if value.is_nil() {
+                        continue;
+                    }
                     read += 1;
                     if let Some(id) = instance_id(&value) {
                         pairs.push((id, pairs.len() as u32));
@@ -325,9 +329,9 @@ fn query_cache(engine: &Engine) -> &QueryCache {
 
 /// A query's filter, read from its params into the spare filter's storage; [`keep_filter`] hands it
 /// back for the next query.
-fn take_filter(engine: &Engine, params: &LuaValue) -> Filter {
+fn take_filter(engine: &Engine, kind: Params, params: &LuaValue) -> Filter {
     let mut filter = query_cache(engine).spare.take();
-    filter.read(engine, params);
+    filter.read(engine, kind, params);
     filter
 }
 
@@ -803,17 +807,135 @@ fn method(f: impl Fn(&Lua, &Rc<Engine>, InstanceId, &Args) -> Result<LuaMultiVal
     Rc::new(f)
 }
 
-/// The fields of a RaycastParams / OverlapParams: what a prelude proxy stores (the prelude's
-/// `ParamsData`, read without the proxy's copies of its lists; true: a plain table read raw), or a
-/// table passed in its place (read as a script reads it).
-fn params_data(engine: &Engine, params: &LuaValue) -> Option<(LuaTable, bool)> {
-    match params {
-        LuaValue::UserData(ud) => {
-            let stored: LuaTable = engine.prelude().exports.raw_get("ParamsData").ok()?;
-            stored.raw_get::<Option<LuaTable>>(ud.clone()).ok().flatten().map(|data| (data, true))
+/// The fields of a RaycastParams / OverlapParams: what a prelude proxy of the type `kind` stores (the prelude's `ParamsData`,
+/// one table for each type, read without the proxy's copies of its lists), None for any other value.
+fn params_data(engine: &Engine, kind: Params, params: &LuaValue) -> Option<LuaTable> {
+    let LuaValue::UserData(ud) = params else { return None };
+    let stored: LuaTable = engine.prelude().exports.raw_get("ParamsData").ok()?;
+    let stored: LuaTable = stored.raw_get(kind.name()).ok()?;
+    stored.raw_get::<Option<LuaTable>>(ud.clone()).ok().flatten()
+}
+
+/// The params type a query takes
+#[derive(Clone, Copy, PartialEq)]
+enum Params {
+    Raycast,
+    Overlap,
+}
+
+impl Params {
+    fn name(self) -> &'static str {
+        match self {
+            Params::Raycast => "RaycastParams",
+            Params::Overlap => "OverlapParams",
         }
-        LuaValue::Table(table) => Some((table.clone(), false)),
+    }
+}
+
+// A query's arguments as a playing client casts them (measured, Studio 0.747, a client and a server alike:
+// tools/parity/probes/query_args.luau): each value cast to its parameter's type, the casts' order the method's own: from the
+// last to the first for the casts (Raycast, Blockcast, Spherecast, Shapecast) and the FindPartOnRay family, as the reflection's
+// methods take them, from the first to the last for the overlap queries (GetPartBoundsInBox, GetPartBoundsInRadius,
+// GetPartsInPart, whose part is checked before its params). A Vector3, CFrame, float, Ray or Instances
+// parameter left out or nil raises "Argument <n> missing or nil"; a params parameter or a bool takes nil as its default; an
+// Instance parameter takes nil as no instance (raising "Argument <n> missing or nil" only when the call leaves it out). A value of
+// another type raises "Unable to cast <type> to <Type>", the type as camera.rs cast_name names it ("double", "Array",
+// "CoordinateFrame", "OverlapParams"), "Unable to cast value to Object" for an Instance parameter. The method's own checks of the
+// values (a part that is no BasePart, a shape cast's limits) come after every cast. A call that raises costs a client what an
+// engine error costs (lua/cfunction.rs charge_raised).
+
+/// A Vector3 argument.
+fn vector3(engine: &Engine, args: &Args, at: usize) -> Result<Vec3, Flow> {
+    let value = args.get(at);
+    if value.is_nil() {
+        return raise(format!("Argument {at} missing or nil"));
+    }
+    vector_arg(value).map_or_else(|| raise(format!("Unable to cast {} to Vector3", super::camera::cast_name(engine, value))), Ok)
+}
+
+/// A CFrame argument.
+fn frame_argument(engine: &Engine, args: &Args, at: usize) -> Result<Affine3A, Flow> {
+    let value = args.get(at);
+    if value.is_nil() {
+        return raise(format!("Argument {at} missing or nil"));
+    }
+    cframe_arg(value).map_or_else(|| raise(format!("Unable to cast {} to CoordinateFrame", super::camera::cast_name(engine, value))), Ok)
+}
+
+/// An optional argument of a type `cast` reads: nil is None (Shapecast's cframeOverride and sizeOverride).
+fn optional<T>(engine: &Engine, args: &Args, at: usize, kind: &str, cast: impl Fn(&LuaValue) -> Option<T>) -> Result<Option<T>, Flow> {
+    let value = args.get(at);
+    if value.is_nil() {
+        return Ok(None);
+    }
+    cast(value).map_or_else(|| raise(format!("Unable to cast {} to {kind}", super::camera::cast_name(engine, value))), |value| Ok(Some(value)))
+}
+
+/// A RaycastParams or OverlapParams argument: nil (the default params), or a params object of that type.
+fn params_argument(engine: &Engine, args: &Args, at: usize, kind: Params) -> Result<LuaValue, Flow> {
+    let value = args.get(at);
+    if value.is_nil() || params_data(engine, kind, value).is_some() {
+        return Ok(value.clone());
+    }
+    raise(format!("Unable to cast {} to {}", super::camera::cast_name(engine, value), kind.name()))
+}
+
+/// An Instance argument: nil or an Instance; one the call leaves out raises.
+fn object_argument(args: &Args, at: usize) -> Result<Option<InstanceId>, Flow> {
+    if args.len() <= at {
+        return raise(format!("Argument {at} missing or nil"));
+    }
+    optional_object(args, at)
+}
+
+/// An Instance argument that may be left out (FindPartOnRay's ignored instance)
+fn optional_object(args: &Args, at: usize) -> Result<Option<InstanceId>, Flow> {
+    match args.get(at) {
+        LuaValue::Nil => Ok(None),
+        value => instance_id(value).map_or_else(|| raise("Unable to cast value to Object"), |id| Ok(Some(id))),
+    }
+}
+
+/// A bool argument (FindPartOnRay's terrainCellsAreCubes and ignoreWater, which ree's world has no use for): nil, a boolean, a
+/// number, or the string "true" or "false" (measured: "1" raises "Unable to cast string to bool").
+fn bool_argument(engine: &Engine, args: &Args, at: usize) -> Result<(), Flow> {
+    match args.get(at) {
+        LuaValue::Nil | LuaValue::Boolean(_) | LuaValue::Number(_) | LuaValue::Integer(_) => Ok(()),
+        LuaValue::String(text) if matches!(text.as_bytes().as_ref(), b"true" | b"false") => Ok(()),
+        value => raise(format!("Unable to cast {} to bool", super::camera::cast_name(engine, value))),
+    }
+}
+
+/// A Ray argument: its origin and direction
+fn ray_argument(engine: &Engine, args: &Args, at: usize) -> Result<(Vec3, Vec3), Flow> {
+    let value = args.get(at);
+    if value.is_nil() {
+        return raise(format!("Argument {at} missing or nil"));
+    }
+    let converted = match value {
+        LuaValue::UserData(ud) => ud.borrow::<lune::Ray>().ok().map(|ray| dom::Ray::from(*ray)),
         _ => None,
+    };
+    let Some(converted) = converted else { return raise(format!("Unable to cast {} to Ray", super::camera::cast_name(engine, value))) };
+    let mut origin = Vec3::new(converted.origin.x, converted.origin.y, converted.origin.z);
+    let mut direction = Vec3::new(converted.direction.x, converted.direction.y, converted.direction.z);
+    // (the conversion rounds each component's fraction, which makes an infinity NaN: a ray that is not finite is read back
+    // through its members, so its end keeps the infinity a client's does)
+    if !(origin.is_finite() && direction.is_finite())
+        && let LuaValue::UserData(ud) = value
+        && let (Some(own_origin), Some(own_direction)) = (ud.get::<LuaValue>("Origin").ok().and_then(|v| vector_arg(&v)), ud.get::<LuaValue>("Direction").ok().and_then(|v| vector_arg(&v)))
+    {
+        (origin, direction) = (own_origin, own_direction);
+    }
+    Ok((origin, direction))
+}
+
+/// The part a Shapecast or GetPartsInPart is given, after the casts: a BasePart, else `message`
+fn base_part(engine: &Engine, part: Option<InstanceId>, message: &str) -> Result<InstanceId, Flow> {
+    let state = engine.state.borrow();
+    match part.and_then(|id| state.dom.get(id).map(|instance| (id, instance.class))) {
+        Some((id, class)) if engine.reflection.is_a(class, "BasePart") => Ok(id),
+        _ => raise(message.to_string()),
     }
 }
 
@@ -891,25 +1013,31 @@ pub(super) fn parts_table(lua: &Lua, engine: &Rc<Engine>, parts: impl IntoIterat
 
 /// The legacy FindPartOnRay family: (part, position, normal, material); the ray's end, a zero
 /// normal and Air when nothing is hit. The ray is cut at [`RAY_CUT`] as a Raycast's is (measured), and its end on a miss is the
-/// ray's own.
-fn find_part_on_ray(lua: &Lua, engine: &Rc<Engine>, world: InstanceId, ray: &LuaValue, list: &LuaValue, include: bool) -> Result<LuaMultiValue, Flow> {
-    let converted = match ray {
-        LuaValue::UserData(ud) => ud.borrow::<lune::Ray>().ok().map(|ray| dom::Ray::from(*ray)),
-        _ => None,
-    };
-    let Some(converted) = converted else { return raise("Unable to cast value to Ray") };
-    let mut origin = Vec3::new(converted.origin.x, converted.origin.y, converted.origin.z);
-    let mut direction = Vec3::new(converted.direction.x, converted.direction.y, converted.direction.z);
-    // (the conversion rounds each component's fraction, which makes an infinity NaN: a ray that is not finite is read back
-    // through its members, so its end keeps the infinity a client's does)
-    if !(origin.is_finite() && direction.is_finite())
-        && let LuaValue::UserData(ud) = ray
-        && let (Some(own_origin), Some(own_direction)) = (ud.get::<LuaValue>("Origin").ok().and_then(|v| vector_arg(&v)), ud.get::<LuaValue>("Direction").ok().and_then(|v| vector_arg(&v)))
-    {
-        (origin, direction) = (own_origin, own_direction);
+/// ray's own. Its arguments, cast as a client casts them ([`vector3`] and the rest): FindPartOnRay(ray, ignoreDescendantsInstance?,
+/// terrainCellsAreCubes?, ignoreWater?), FindPartOnRayWithIgnoreList(ray, ignoreDescendantsTable, terrainCellsAreCubes?,
+/// ignoreWater?) and FindPartOnRayWithWhitelist(ray, whitelistDescendantsTable, ignoreWater?), a list read as world/mod.rs
+/// objects_arg takes one (nil holes skipped, a table in it "Unable to cast value to Object": measured).
+fn find_part_on_ray(lua: &Lua, engine: &Rc<Engine>, world: InstanceId, args: &Args, listed: bool, include: bool) -> Result<LuaMultiValue, Flow> {
+    let bools = if include { 3 } else { 4 };
+    for at in (3..=bools).rev() {
+        bool_argument(engine, args, at)?;
     }
+    let list = if listed {
+        let table = super::objects_arg(args, 2)?;
+        for index in 1..=table.raw_len() {
+            let entry: LuaValue = table.raw_get(index).map_err(Flow::from)?;
+            if !entry.is_nil() && instance_id(&entry).is_none() {
+                return raise("Unable to cast value to Object");
+            }
+        }
+        LuaValue::Table(table)
+    } else {
+        optional_object(args, 2)?;
+        args.get(2).clone()
+    };
+    let (origin, direction) = ray_argument(engine, args, 1)?;
     let mut filter = query_cache(engine).spare.take();
-    filter.read_list(list, include);
+    filter.read_list(&list, include);
     let index = take_in_of(engine, world);
     // (a ray that is not finite finds nothing and tests no part: its end is still origin + direction, an infinity kept)
     let hit = match index {
@@ -1184,10 +1312,10 @@ pub fn install(engine: &Rc<Engine>) {
     let Some(world_root) = engine.reflection.class_id("WorldRoot") else { return };
     let mut members: Vec<(&str, MethodFn)> = Vec::new();
     members.push(("Raycast", method(|lua, engine, world, args| {
-        let (Some(origin), Some(direction)) = (vector_arg(args.get(1)), vector_arg(args.get(2))) else {
-            return raise("Raycast: origin and direction must be Vector3s");
-        };
-        let filter = take_filter(engine, args.get(3));
+        let params = params_argument(engine, args, 3, Params::Raycast)?;
+        let direction = vector3(engine, args, 2)?;
+        let origin = vector3(engine, args, 1)?;
+        let filter = take_filter(engine, Params::Raycast, &params);
         if !finite_path(origin, direction) {
             return missed(lua, engine, world, filter);
         }
@@ -1196,11 +1324,11 @@ pub fn install(engine: &Rc<Engine>) {
         hit_values(lua, engine, hit)
     })));
     members.push(("Spherecast", method(|lua, engine, world, args| {
-        let (Some(center), Some(radius), Some(direction)) = (vector_arg(args.get(1)), args.number(2), vector_arg(args.get(3))) else {
-            return raise("Spherecast: position, radius and direction expected");
-        };
+        let params = params_argument(engine, args, 4, Params::Raycast)?;
+        let direction = vector3(engine, args, 3)?;
+        let radius = super::camera::float_argument(lua, engine, args, 2)?;
+        let center = vector3(engine, args, 1)?;
         // (a client checks the radius, then the direction, then the position: measured, tools/parity/probes/query_finite.luau)
-        let radius = radius as f32;
         if !radius.is_finite() {
             return raise("Invalid Radius. Must contain finite values.");
         } else if radius < 0.0 {
@@ -1212,7 +1340,7 @@ pub fn install(engine: &Rc<Engine>) {
         if !center.is_finite() {
             return raise("Invalid position. Must contain finite values.");
         }
-        let filter = take_filter(engine, args.get(4));
+        let filter = take_filter(engine, Params::Raycast, &params);
         if !finite_path(center, direction) {
             return missed(lua, engine, world, filter);
         }
@@ -1224,14 +1352,15 @@ pub fn install(engine: &Rc<Engine>) {
         hit_values(lua, engine, hit)
     })));
     members.push(("Blockcast", method(|lua, engine, world, args| {
-        let (Some(frame), Some(size), Some(direction)) = (cframe_arg(args.get(1)), vector_arg(args.get(2)), vector_arg(args.get(3))) else {
-            return raise("Blockcast: cframe, size and direction expected");
-        };
+        let params = params_argument(engine, args, 4, Params::Raycast)?;
+        let direction = vector3(engine, args, 3)?;
+        let size = vector3(engine, args, 2)?;
+        let frame = frame_argument(engine, args, 1)?;
         // (the size, then the direction, then the frame: measured)
         shapecast_size(size)?;
         shapecast_direction(direction)?;
         shapecast_frame(&frame)?;
-        let filter = take_filter(engine, args.get(4));
+        let filter = take_filter(engine, Params::Raycast, &params);
         if !finite_path(frame::translation(&frame), direction) {
             return missed(lua, engine, world, filter);
         }
@@ -1245,16 +1374,19 @@ pub fn install(engine: &Rc<Engine>) {
         hit_values(lua, engine, hit)
     })));
     members.push(("Shapecast", method(|lua, engine, world, args| {
-        let (Some(part), Some(direction)) = (args.instance(1), vector_arg(args.get(2))) else {
-            return raise("Shapecast: part and direction expected");
-        };
+        let size_override = optional(engine, args, 5, "Vector3", vector_arg)?;
+        let frame_override = optional(engine, args, 4, "CoordinateFrame", cframe_arg)?;
+        let params = params_argument(engine, args, 3, Params::Raycast)?;
+        let direction = vector3(engine, args, 2)?;
+        let part = object_argument(args, 1)?;
+        let part = base_part(engine, part, "Shapecast argument #1 expects a BasePart")?;
         // the part's shape where it is, or where cframeOverride puts it and at sizeOverride's size
         // (WorldRoot:Shapecast's optional parameters; Roblox's reference), checked as a client checks them: a negative side of
         // sizeOverride, then the size as a Blockcast's, the direction and the frame (measured)
         let (frame, size) = {
             let state = engine.state.borrow();
-            let frame = cframe_arg(args.get(4)).unwrap_or_else(|| frame::affine_of(state.dom.raw_get(part, cframe_name(engine))));
-            let size = match vector_arg(args.get(5)) {
+            let frame = frame_override.unwrap_or_else(|| frame::affine_of(state.dom.raw_get(part, cframe_name(engine))));
+            let size = match size_override {
                 Some(size) => {
                     if size.x < 0.0 || size.y < 0.0 || size.z < 0.0 {
                         return raise("Invalid sizeOverride. Must contain values greater than or equal to 0.");
@@ -1271,17 +1403,17 @@ pub fn install(engine: &Rc<Engine>) {
         shapecast_size(size)?;
         shapecast_direction(direction)?;
         shapecast_frame(&frame)?;
-        let filter = take_filter(engine, args.get(3));
+        let filter = take_filter(engine, Params::Raycast, &params);
         if !finite_path(frame::translation(&frame), direction) {
             return missed(lua, engine, world, filter);
         }
         let cast = {
             let state = engine.state.borrow();
             let mut cast = solid(&state, engine, part);
-            if let Some(frame) = cframe_arg(args.get(4)) {
+            if let Some(frame) = frame_override {
                 cast.frame = unit_frame(&frame);
             }
-            if let Some(size) = vector_arg(args.get(5)) {
+            if let Some(size) = size_override {
                 cast.shape = shape_of(&state, engine, part, size);
             }
             cast
@@ -1301,10 +1433,11 @@ pub fn install(engine: &Rc<Engine>) {
         hit_values(lua, engine, hit)
     })));
     members.push(("GetPartBoundsInBox", method(|lua, engine, world, args| {
-        let (Some(frame), Some(size)) = (cframe_arg(args.get(1)), vector_arg(args.get(2))) else {
-            return raise("GetPartBoundsInBox: cframe and size expected");
-        };
-        let filter = take_filter(engine, args.get(3));
+        // (the overlap queries cast their arguments from the first to the last: measured)
+        let frame = frame_argument(engine, args, 1)?;
+        let size = vector3(engine, args, 2)?;
+        let params = params_argument(engine, args, 3, Params::Overlap)?;
+        let filter = take_filter(engine, Params::Overlap, &params);
         // (a frame that is not finite finds nothing, rotation or position: measured; it and a side that is not finite cost a
         // client what it spends on them, cost.rs QUERY_NOT_FINITE, QUERY_SIDE_NOT_FINITE)
         if !finite_frame(&frame) {
@@ -1321,10 +1454,10 @@ pub fn install(engine: &Rc<Engine>) {
         parts_table(lua, engine, parts)
     })));
     members.push(("GetPartBoundsInRadius", method(|lua, engine, world, args| {
-        let (Some(center), Some(radius)) = (vector_arg(args.get(1)), args.number(2)) else {
-            return raise("GetPartBoundsInRadius: position and radius expected");
-        };
-        let filter = take_filter(engine, args.get(3));
+        let center = vector3(engine, args, 1)?;
+        let radius = f64::from(super::camera::float_argument(lua, engine, args, 2)?);
+        let params = params_argument(engine, args, 3, Params::Overlap)?;
+        let filter = take_filter(engine, Params::Overlap, &params);
         // (a NaN radius or a position that is not finite finds nothing: measured, at what a client spends on it; an infinite
         // radius every part)
         if radius.is_nan() || !center.is_finite() {
@@ -1336,8 +1469,11 @@ pub fn install(engine: &Rc<Engine>) {
         parts_table(lua, engine, parts)
     })));
     members.push(("GetPartsInPart", method(|lua, engine, world, args| {
-        let Some(part) = args.instance(1) else { return raise("GetPartsInPart: part expected") };
-        let filter = take_filter(engine, args.get(2));
+        // (its part checked before its params are cast: measured)
+        let part = object_argument(args, 1)?;
+        let part = base_part(engine, part, "Part parameter must be BasePart")?;
+        let params = params_argument(engine, args, 2, Params::Overlap)?;
+        let filter = take_filter(engine, Params::Overlap, &params);
         let query = solid(&engine.state.borrow(), engine, part);
         // (its walk over the part's world box grown a little: PART_QUERY_GROWTH)
         let (center, extent) = match query.shape {
@@ -1359,9 +1495,9 @@ pub fn install(engine: &Rc<Engine>) {
         charge_query(engine, parts.len() as f64 * crate::cost::QUERY_PART_EXACT + f64::from(area.max(0.0)).sqrt() * crate::cost::QUERY_PART_SIZE);
         parts_table(lua, engine, parts)
     })));
-    members.push(("FindPartOnRay", method(|lua, engine, world, args| find_part_on_ray(lua, engine, world, args.get(1), args.get(2), false))));
-    members.push(("FindPartOnRayWithIgnoreList", method(|lua, engine, world, args| find_part_on_ray(lua, engine, world, args.get(1), args.get(2), false))));
-    members.push(("FindPartOnRayWithWhitelist", method(|lua, engine, world, args| find_part_on_ray(lua, engine, world, args.get(1), args.get(2), true))));
+    members.push(("FindPartOnRay", method(|lua, engine, world, args| find_part_on_ray(lua, engine, world, args, false, false))));
+    members.push(("FindPartOnRayWithIgnoreList", method(|lua, engine, world, args| find_part_on_ray(lua, engine, world, args, true, false))));
+    members.push(("FindPartOnRayWithWhitelist", method(|lua, engine, world, args| find_part_on_ray(lua, engine, world, args, true, true))));
     let mut behaviors = engine.behaviors.borrow_mut();
     for (member, function) in members {
         if let Some(name) = engine.reflection.name_id(member) {

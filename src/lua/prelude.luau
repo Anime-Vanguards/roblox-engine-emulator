@@ -459,7 +459,7 @@ local Path2DControlPoint = {}
 --
 --
 
-local function ParamsType(TypeName, Defaults, ReadOnly, Meta) -- (Defaults has every member; its key, quoted, for any other key)
+local function ParamsType(TypeName, Defaults, ReadOnly, Meta, Casts) -- (Defaults has every member; its key, quoted, for any other key; Casts a member's write)
 	return {
 		new = function(Initial)
 			local Data = table.clone(Defaults)
@@ -469,7 +469,7 @@ local function ParamsType(TypeName, Defaults, ReadOnly, Meta) -- (Defaults has e
 			return Proxy(TypeName, function(_, Key)
 				if Defaults[Key] == nil then Members.ReadMiss(TypeName, Key, true) end return Data[Key]
 			end, function(_, Key, Value)
-				if ReadOnly or Defaults[Key] == nil then Members.WriteMiss(TypeName, Key, Defaults[Key] ~= nil) end Data[Key] = Value
+				if ReadOnly or Defaults[Key] == nil then Members.WriteMiss(TypeName, Key, Defaults[Key] ~= nil) end Data[Key] = if Casts and Casts[Key] then Casts[Key](Value) else Value
 			end, Meta and Meta(Data))
 		end,
 	}
@@ -707,39 +707,31 @@ local function Environment(Shared, Script, Vm)
 	return setmetatable(Env, { __index = Shared })
 end
 
--- RaycastParams / OverlapParams:AddToFilter(Instance | {Instance}) adds to FilterDescendantsInstances (documented), in place
--- (the object's own list, a copy of the one assigned), each entry checked first, at what a client spends appending them
--- (cost.rs PARAMS_LIST_WRITE, PARAMS_WRITTEN an entry). (Below the traced functions: rur's goldens record prelude lines.)
-local FilterMethods = {
-	AddToFilter = function(Data, Instances)
-		local List = if type(Data.FilterDescendantsInstances) == "table" then Data.FilterDescendantsInstances else table.clone(Data.FilterDescendantsInstances or {})
-		local Added = if Typeof(Instances) == "Instance" then { Instances } else Instances
-		if type(Added) ~= "table" then
-			error(`Unable to cast {Typeof(Instances)} to Instance`, 3)
-		end
-		local Count = 0
-		for _, Item in Added do
-			if Typeof(Item) ~= "Instance" then
-				error(`Unable to cast {Typeof(Item)} to Instance`, 3)
-			end
-			Count += 1
-		end
-		for _, Item in Added do
-			table.insert(List, Item)
-		end
-		R.Charge(R.ParamsListWriteCost + Count * R.ParamsWrittenCost)
-		Data.FilterDescendantsInstances = List
-	end,
-}
-
--- RaycastParams / OverlapParams. Their instance lists, FilterDescendantsInstances and Roblox's spatial query filters of April
--- 2026, ExcludeInstances and IncludeInstances ({Instance}?, nil until assigned), hold a copy of the table assigned and answer
--- a copy, as Roblox's array properties do: changing a table afterwards changes no filter (a script assigns it again, as
--- Roblox's engineer advises in the announcement's thread). The queries read what is stored through ParamsData
--- (world/query.rs), not through the proxy. A copy costs what a client spends on it past the proxy's host call: written,
--- cost.rs PARAMS_LIST_WRITE and the list's price an entry (PARAMS_WRITTEN, PARAMS_FILTER_WRITTEN); read, PARAMS_LIST_READ and
--- PARAMS_READ an entry; the copy of the table given to `new` nothing (a client ignores that table).
-local ParamsData = setmetatable({}, { __mode = "k" })
+-- RaycastParams / OverlapParams, as a 0.747 playing client and server take them (tools/parity/probes/query_params.luau;
+-- below the traced functions: rur's goldens record prelude lines). The queries read what is stored through ParamsData, one
+-- table for each type (world/query.rs), not through the proxy; RaycastParams.new and OverlapParams.new ignore a table given to
+-- them (the new object reads its defaults).
+-- - The instance lists, FilterDescendantsInstances and Roblox's spatial query filters of April 2026, ExcludeInstances and
+--   IncludeInstances ({Instance}?, nil until assigned, and nil may be assigned to them), take a table and hold a copy of the
+--   Instances it lists, read by ParamsListRead: a table nested in it is read in its place, so `{a, {b}}` holds a and b. A
+--   value that is no table raises "Invalid value type; expected a table", a list holding anything but Instances and tables
+--   "Invalid value type; table must only contain Instances and other tables"; either leaves the list holding what was read
+--   before the error (an empty list for no table). Read, a list answers a copy, as Roblox's array properties do: changing a
+--   table afterwards changes no filter.
+-- - CollisionGroup takes a string, a number as its text; IgnoreWater, RespectCanCollide and BruteForceAllSlow any value's
+--   truth; FilterType only a RaycastFilterType item ("Invalid type 'KeyCode' for enum 'RaycastFilterType'" for another
+--   enum's, "Invalid value for enum 'RaycastFilterType'" for anything else). Margin, SizeGradient and Tolerance take a number
+--   or a string that reads as one, held as a float32 and checked: Margin finite and not below 0, SizeGradient finite and not
+--   below -1, Tolerance from 0 to 0.0501 ("Tolerance outside bounds: Expected 0 - 0.050000, got 0.051000"). MaxParts is a
+--   number cast to an int32 (truncated; NaN or out of range -2147483648), anything else 0. A value of a wrong type for a
+--   string or number member raises "invalid argument #3 (string expected, got boolean)" at the script's line.
+-- - AddToFilter(Instance | {Instance}) appends to FilterDescendantsInstances (documented), in place, an Instance or a table's
+--   Instances as an assignment reads them ("Expected a table or Instance" for anything else), what it read before an error
+--   kept; its self must be a params object of its own type.
+-- What a copy costs a client past the proxy's host call: written, cost.rs PARAMS_LIST_WRITE and the list's price an entry
+-- (PARAMS_WRITTEN, PARAMS_FILTER_WRITTEN), and a write or AddToFilter that raises RAISED as well (a list of 10 Instances and a
+-- number 3.8 us, of 1,000 17.9); read, PARAMS_LIST_READ and PARAMS_READ an entry.
+local ParamsData = { RaycastParams = setmetatable({}, { __mode = "k" }), OverlapParams = setmetatable({}, { __mode = "k" }) }
 local FilterLists = { FilterDescendantsInstances = R.ParamsWrittenCost, ExcludeInstances = R.ParamsFilterWrittenCost, IncludeInstances = R.ParamsFilterWrittenCost }
 local function ListCopy(Value, Base, Each)
 	if type(Value) == "table" and Base then
@@ -747,6 +739,145 @@ local function ListCopy(Value, Base, Each)
 	end
 	return if type(Value) == "table" then table.move(Value, 1, #Value, 1, table.create(#Value)) else Value
 end
+-- The Instances of the table `Value` appended to `List`: its entries from 1 to its length, nil holes skipped, a table among them
+-- read in its place; tables `Limit` deep at most (an assignment's 297, AddToFilter's 298: measured, "Tables are too deeply
+-- nested"), and none read inside itself ("Tables cannot be cyclic"; the same table twice side by side is read twice). How many
+-- it appended, and the error that stopped it.
+local function ParamsListRead(List, Value, Limit)
+	local Path, Count = {}, 0
+	local function Read(Table, Depth)
+		if Depth > Limit then
+			return "Tables are too deeply nested"
+		elseif Path[Table] then
+			return "Tables cannot be cyclic"
+		end
+		Path[Table] = true
+		for Index = 1, rawlen(Table) do
+			local Item = rawget(Table, Index)
+			local Kind = Typeof(Item)
+			if Kind == "Instance" then
+				Count += 1
+				List[#List + 1] = Item
+			elseif Kind == "table" then
+				local Why = Read(Item, Depth + 1)
+				if Why then
+					return Why
+				end
+			elseif Item ~= nil then
+				return "Invalid value type; table must only contain Instances and other tables"
+			end
+		end
+		Path[Table] = nil
+		return nil
+	end
+	-- (read before Count is: its value is the reader's)
+	local Why = Read(Value, 1)
+	return Count, Why
+end
+local function Float32(Number)
+	return (string.unpack("f", string.pack("f", Number)))
+end
+-- A float as a client's %f writes it (its C runtime's: NaN as "-nan(ind)", or "nan" when its sign is clear)
+local function Fixed(Number)
+	if Number ~= Number then
+		return if string.byte(string.pack(">d", Number), 1) >= 128 then "-nan(ind)" else "nan"
+	end
+	return string.format("%f", Number)
+end
+local function NumberOf(Value)
+	return if type(Value) == "number" then Value elseif type(Value) == "string" then tonumber(Value) else nil
+end
+-- A number cast to an int32 (`Bits` 32) or int64 as a client casts one: truncated, NaN or out of range the type's least
+local function Integer(Number, Bits)
+	local Whole = if Number >= 0 then math.floor(Number) else math.ceil(Number)
+	local Least = -2 ^ (Bits - 1)
+	return if Whole >= Least and Whole < 2 ^ (Bits - 1) then Whole else Least
+end
+-- Member casts: each called by a proxy's __newindex through a table (so never inlined: level 3 is the script's line)
+local function NumberExpected(Value)
+	return `invalid argument #3 (number expected, got {Typeof(Value)})`
+end
+local function BoundedFloat(Name, Least)
+	return function(Value)
+		local Number = NumberOf(Value)
+		if Number == nil then
+			error(NumberExpected(Value), 3)
+		end
+		Number = Float32(Number)
+		if not (Number >= Least and Number < math.huge) then
+			error(`{Name} must be finite and greater than or equal to {Least}, got {Fixed(Number)}`, 0)
+		end
+		return Number
+	end
+end
+local function Truth(Value)
+	return not not Value
+end
+local ParamsCasts = {
+	CollisionGroup = function(Value)
+		if type(Value) == "number" then
+			return tostring(Value)
+		elseif type(Value) ~= "string" then
+			error(`invalid argument #3 (string expected, got {Typeof(Value)})`, 3)
+		end
+		return Value
+	end,
+	FilterType = function(Value)
+		local Kind = EnumItemType(Value)
+		if Kind == "RaycastFilterType" then
+			return Value
+		end
+		error(if Kind then `Invalid type '{Kind}' for enum 'RaycastFilterType'` else "Invalid value for enum 'RaycastFilterType'", 0)
+	end,
+	IgnoreWater = Truth,
+	RespectCanCollide = Truth,
+	BruteForceAllSlow = Truth,
+	Margin = BoundedFloat("Margin", 0),
+	SizeGradient = BoundedFloat("SizeGradient", -1),
+	Tolerance = function(Value)
+		local Number = NumberOf(Value)
+		if Number == nil then
+			error(NumberExpected(Value), 3)
+		end
+		Number = Float32(Number)
+		if not (Number >= 0 and Number <= 0.0501) then
+			error(`Tolerance outside bounds: Expected 0 - 0.050000, got {Fixed(Number)}`, 0)
+		end
+		return Number
+	end,
+	MaxParts = function(Value)
+		local Number = NumberOf(Value)
+		return if Number then Integer(Number, 32) else 0
+	end,
+}
+-- `Value`'s Instances as a list (ParamsListRead, `Limit` deep) appended to `List`, at what a client spends on them (`Each` an entry
+-- and the list's own `Base`; an error RAISED as well), raising the error that stopped it.
+local function ParamsListWrite(List, Value, Limit, Base, Each)
+	local Count, Why = ParamsListRead(List, Value, Limit)
+	R.Charge(Base + Count * Each + (if Why then R.RaisedCost else 0))
+	if Why then
+		error(Why, 0)
+	end
+end
+local FilterMethods = {
+	AddToFilter = function(TypeName, Self, Added)
+		local Data = ParamsData[TypeName][Self]
+		if Data == nil then
+			error(`invalid argument #1 to 'AddToFilter' ({TypeName} expected, got {Typeof(Self)})`, 3)
+		end
+		local List = Data.FilterDescendantsInstances
+		local Kind = Typeof(Added)
+		if Kind == "Instance" then
+			R.Charge(R.ParamsListWriteCost + R.ParamsWrittenCost)
+			List[#List + 1] = Added
+		elseif Kind == "table" then
+			ParamsListWrite(List, Added, 298, R.ParamsListWriteCost, R.ParamsWrittenCost)
+		else
+			R.Charge(R.RaisedCost)
+			error("Expected a table or Instance", 0)
+		end
+	end,
+}
 -- `Fields`: every member a script reads and writes besides AddToFilter, with the default a new one reads (FilterType's,
 -- Exclude, is set at the first call, once the enums exist; the two filter lists of April 2026 are nil). Any other key raises
 -- unquoted ("Nope is not a valid member of RaycastParams"), a key that is not a string too ("invalid argument #2 (string
@@ -756,9 +887,16 @@ local function FilterParamsType(TypeName, Fields, Meta)
 	for Key in Fields do
 		Known[Key] = true
 	end
+	local Stored = ParamsData[TypeName]
 	local Defaults
+	local function Method(Function)
+		return function(...)
+			return Function(TypeName, ...)
+		end
+	end
+	local Methods = { AddToFilter = Method(FilterMethods.AddToFilter) }
 	return {
-		new = function(Initial)
+		new = function()
 			if not Defaults then
 				Defaults = table.clone(Fields)
 				Defaults.FilterType = GetEnumItem("RaycastFilterType", "Exclude")
@@ -766,15 +904,10 @@ local function FilterParamsType(TypeName, Fields, Meta)
 			local Data = table.clone(Defaults)
 			-- (a list of its own, which AddToFilter adds to)
 			Data.FilterDescendantsInstances = {}
-			for Key, Value in Initial or {} do
-				Data[Key] = if FilterLists[Key] then ListCopy(Value) else Value
-			end
 			local Object = Proxy(TypeName, function(_, Key)
-				local Method = FilterMethods[Key]
-				if Method then
-					return function(_Self, ...)
-						return Method(Data, ...)
-					end
+				local Found = Methods[Key]
+				if Found then
+					return Found
 				elseif not Known[Key] then
 					Members.ReadMiss(TypeName, Key, false)
 				end
@@ -784,9 +917,25 @@ local function FilterParamsType(TypeName, Fields, Meta)
 				if not Known[Key] then
 					Members.WriteMiss(TypeName, Key, false)
 				end
-				Data[Key] = if FilterLists[Key] then ListCopy(Value, R.ParamsListWriteCost, FilterLists[Key]) else Value
+				local Each = FilterLists[Key]
+				if Each then
+					if Value == nil and Key ~= "FilterDescendantsInstances" then
+						Data[Key] = nil
+						return
+					end
+					local List = {}
+					Data[Key] = List
+					if Typeof(Value) ~= "table" then
+						R.Charge(R.RaisedCost)
+						error("Invalid value type; expected a table", 0)
+					end
+					ParamsListWrite(List, Value, 297, R.ParamsListWriteCost, Each)
+					return
+				end
+				local Cast = ParamsCasts[Key]
+				Data[Key] = if Cast then Cast(Value) else Value
 			end, Meta and Meta(Data))
-			ParamsData[Object] = Data
+			Stored[Object] = Data
 			return Object
 		end,
 	}
@@ -798,8 +947,9 @@ local Coroutine = table.clone(coroutine)
 --
 
 -- tostring of the parameter objects as a playing client prints them (Studio 0.744): Roblox's fields in its order, an
--- instance list as {Name} for one instance and {N instances...} for more, an empty enum list as nothing, numbers with 9
--- significant digits. (A list of enum items with members is printed by name, comma-separated: not measured.)
+-- instance list as {Name} for one instance and {N instances...} for more, a list of enum items as their values joined by
+-- commas ("AssetTypes=8,11": 0.747), numbers with 9 significant digits. A field marked (its third entry) is shown only away
+-- from its default, as an integer (CatalogSearchParams' MinPrice, MaxPrice and CreatorId: 0.747, query_params.luau).
 local function ParamsText(TypeName, Fields)
 	return function(Data)
 		return {
@@ -811,20 +961,24 @@ local function ParamsText(TypeName, Fields)
 						Value = Field[2]
 					end
 					local Text
-					if type(Value) == "table" and Name == "FilterDescendantsInstances" then
+					if Field[3] then
+						Text = if Value ~= Field[2] then string.format("%d", Value) else nil
+					elseif type(Value) == "table" and Name == "FilterDescendantsInstances" then
 						Text = if #Value == 0 then "{}" elseif #Value == 1 then `\{{Value[1]}\}` else `\{{#Value} instances...\}`
 					elseif type(Value) == "table" then
 						local Names = {}
 						for _, Item in Value do
-							table.insert(Names, EnumItemName(Item) or tostring(Item))
+							table.insert(Names, if EnumItemName(Item) then tostring(Item.Value) else tostring(Item))
 						end
-						Text = table.concat(Names, ", ")
+						Text = table.concat(Names, ",")
 					elseif type(Value) == "number" then
 						Text = string.format("%.9g", Value)
 					else
 						Text = EnumItemName(Value) or tostring(Value)
 					end
-					table.insert(Parts, `{Name}={Text}`)
+					if Text then
+						table.insert(Parts, `{Name}={Text}`)
+					end
 				end
 				return `{TypeName}\{{table.concat(Parts, ", ")}\}`
 			end,
@@ -835,22 +989,35 @@ local RaycastParamsText = ParamsText("RaycastParams", { { "IgnoreWater", false }
 	{ "RespectCanCollide", false }, { "CollisionGroup", "Default" }, { "FilterDescendantsInstances", {} } })
 local OverlapParamsText = ParamsText("OverlapParams", { { "MaxParts", 0 }, { "Tolerance", 0 }, { "BruteForceAllSlow", false }, { "RespectCanCollide", false },
 	{ "CollisionGroup", "Default" }, { "FilterDescendantsInstances", {} } })
--- CatalogSearchParams.new(): Roblox's defaults as its tostring shows them (made at the first call, once the enums exist)
+-- CatalogSearchParams.new(): Roblox's defaults as its tostring shows them (made at the first call, once the enums exist; a table
+-- given to it is ignored). MinPrice, MaxPrice and CreatorId take a number or a string that reads as one ("invalid argument #3
+-- (number expected, got string)" at the script's line), held cast to an int32 (MinPrice, MaxPrice) or an int64 (CreatorId)
+-- as Integer casts one (1e12 MaxPrice reads -2147483648); its tostring shows each only away from its default, MinPrice and
+-- MaxPrice after SearchKeyword and CreatorId after Limit (a 0.747 client and server, tools/parity/probes/query_params.luau).
 local CatalogSearchParamsType
 local CatalogSearchParamsLibrary = {
-	new = function(Initial)
+	new = function()
 		if not CatalogSearchParamsType then
-			local Fields = { { "SearchKeyword", "" }, { "CategoryFilter", GetEnumItem("CatalogCategoryFilter", "None") }, { "SortType", GetEnumItem("CatalogSortType", "Relevance") },
-				{ "SortAggregation", GetEnumItem("CatalogSortAggregation", "AllTime") }, { "SalesTypeFilter", GetEnumItem("SalesTypeFilter", "All") }, { "CreatorName", "" },
-				{ "Limit", 30 }, { "CreatorType", GetEnumItem("CreatorTypeFilter", "All") }, { "BundleTypes", {} }, { "AssetTypes", {} }, { "IncludeOffSale", false } }
-			-- (and three members its tostring leaves out at their defaults: a 0.747 client, tools/parity/probes/proxy_values.luau)
-			local Defaults = { MinPrice = 0, MaxPrice = 2147483647, CreatorId = 0 }
+			local Fields = { { "SearchKeyword", "" }, { "MinPrice", 0, true }, { "MaxPrice", 2147483647, true }, { "CategoryFilter", GetEnumItem("CatalogCategoryFilter", "None") },
+				{ "SortType", GetEnumItem("CatalogSortType", "Relevance") }, { "SortAggregation", GetEnumItem("CatalogSortAggregation", "AllTime") },
+				{ "SalesTypeFilter", GetEnumItem("SalesTypeFilter", "All") }, { "CreatorName", "" }, { "Limit", 30 }, { "CreatorId", 0, true },
+				{ "CreatorType", GetEnumItem("CreatorTypeFilter", "All") }, { "BundleTypes", {} }, { "AssetTypes", {} }, { "IncludeOffSale", false } }
+			local Defaults = {}
 			for _, Field in Fields do
 				Defaults[Field[1]] = Field[2]
 			end
-			CatalogSearchParamsType = ParamsType("CatalogSearchParams", Defaults, false, ParamsText("CatalogSearchParams", Fields))
+			local function Whole(Bits)
+				return function(Value)
+					local Number = NumberOf(Value)
+					if Number == nil then
+						error(NumberExpected(Value), 3)
+					end
+					return Integer(Number, Bits)
+				end
+			end
+			CatalogSearchParamsType = ParamsType("CatalogSearchParams", Defaults, false, ParamsText("CatalogSearchParams", Fields), { MinPrice = Whole(32), MaxPrice = Whole(32), CreatorId = Whole(64) })
 		end
-		return CatalogSearchParamsType.new(Initial)
+		return CatalogSearchParamsType.new()
 	end,
 }
 -- PathWaypoint.new(Position, Action, Label): tostring "{0.333333343, 2, 3}, Jump, label" (Studio 0.744); its three members

@@ -377,7 +377,9 @@ fn add_to_filter_extends_the_filter() {
         assert(#List == 2 and List[1] == Top and List[2] == Middle, "the list")
         assert(workspace:Raycast(Vector3.new(0, 10, 0), Down, Params).Instance == Bottom, "an array")
         assert(not pcall(function() Params:AddToFilter(5) end), "a number is not an instance")
-        assert(not pcall(function() Params:AddToFilter({Bottom, 5}) end) and #Params.FilterDescendantsInstances == 2, "a table with an entry that is no Instance adds none")
+        -- (an entry that is no Instance raises, after the entries before it were added: measured)
+        assert(not pcall(function() Params:AddToFilter({Bottom, 5}) end) and #Params.FilterDescendantsInstances == 3, "a table with an entry that is no Instance adds what came before it")
+        Params.FilterDescendantsInstances = {Top, Middle}
         local Fresh = RaycastParams.new()
         Fresh:AddToFilter(Top)
         assert(#Fresh.FilterDescendantsInstances == 1 and #RaycastParams.new().FilterDescendantsInstances == 0, "a new object's list is its own")
@@ -385,6 +387,142 @@ fn add_to_filter_extends_the_filter() {
         Overlap:AddToFilter({Top, Bottom})
         local Parts = workspace:GetPartBoundsInBox(CFrame.new(0, 3, 0), Vector3.new(4, 10, 4), Overlap)
         assert(#Parts == 1 and Parts[1] == Middle, "OverlapParams")
+        "#,
+    );
+}
+
+/// A spatial query casts its arguments as a playing client does (Studio 0.747, a client and a server alike:
+/// tools/parity/probes/query_args.luau): from the last to the first for the casts and the FindPartOnRay family, from the first to
+/// the last for the overlap queries, "Argument <n> missing or nil" for a required one left out or nil, "Unable to cast <type> to
+/// <Type>" for a value of the wrong type (a table or another params type given as params too), and the method's own checks after.
+#[test]
+fn query_arguments_are_cast_as_a_client_casts_them() {
+    check(
+        r#"
+        local function Fails(Message, Method, ...)
+            local Ok, E = pcall(workspace[Method], workspace, ...)
+            if Ok or tostring(E) ~= Message then
+                error(`{Method} {Message}: got {Ok} {E}`, 2)
+            end
+        end
+        local function Passes(Method, ...)
+            local Ok, E = pcall(workspace[Method], workspace, ...)
+            if not Ok then
+                error(`{Method}: {E}`, 2)
+            end
+        end
+        local Part = Instance.new("Part")
+        Part.Anchored, Part.Size, Part.Position = true, Vector3.new(10, 1, 10), Vector3.new(300, 90, 300)
+        Part.Parent = workspace
+        local V, D, CF, S = Vector3.new(300, 100, 300), Vector3.new(0, -20, 0), CFrame.new(300, 100, 300), Vector3.one
+        local R = Ray.new(V, D)
+        Fails("Argument 2 missing or nil", "Raycast")
+        Fails("Argument 2 missing or nil", "Raycast", "x")
+        Fails("Argument 1 missing or nil", "Raycast", nil, V)
+        Fails("Unable to cast string to Vector3", "Raycast", "x", V)
+        Fails("Unable to cast double to RaycastParams", "Raycast", 5, "x", 5)
+        Fails("Unable to cast Dictionary to RaycastParams", "Raycast", V, D, { IgnoreWater = true })
+        Fails("Unable to cast OverlapParams to RaycastParams", "Raycast", V, D, OverlapParams.new())
+        Fails("Unable to cast CoordinateFrame to Vector3", "Raycast", CF, V)
+        Fails("Argument 3 missing or nil", "Blockcast", CF, S)
+        Fails("Unable to cast Vector3 to CoordinateFrame", "Blockcast", V, S, D)
+        Fails("Unable to cast double to RaycastParams", "Blockcast", CF, Vector3.new(600, 1, 1), D, 5)
+        Fails("Unable to cast string to float", "Spherecast", V, "x", D)
+        Passes("Spherecast", V, "2", D)
+        Passes("Spherecast", V, true, D)
+        Fails("Unable to cast double to RaycastParams", "Spherecast", V, -1, D, 5)
+        Fails("Argument 2 missing or nil", "Shapecast", Part)
+        Fails("Shapecast argument #1 expects a BasePart", "Shapecast", nil, D)
+        Fails("Shapecast argument #1 expects a BasePart", "Shapecast", workspace, D)
+        Fails("Unable to cast value to Object", "Shapecast", "x", D)
+        Fails("Unable to cast string to Vector3", "Shapecast", "x", "x", "x", "x", "x")
+        Fails("Unable to cast Vector3 to CoordinateFrame", "Shapecast", Part, D, nil, V)
+        Fails("Argument 1 missing or nil", "GetPartBoundsInBox")
+        Fails("Unable to cast string to CoordinateFrame", "GetPartBoundsInBox", "x", "x", "x")
+        Fails("Unable to cast RaycastParams to OverlapParams", "GetPartBoundsInBox", CF, S, RaycastParams.new())
+        Fails("Unable to cast string to Vector3", "GetPartBoundsInRadius", "x", "x", "x")
+        Fails("Argument 1 missing or nil", "GetPartsInPart")
+        Fails("Part parameter must be BasePart", "GetPartsInPart", nil, 5)
+        Fails("Unable to cast value to Object", "GetPartsInPart", "x", "x")
+        Fails("Unable to cast Array to OverlapParams", "GetPartsInPart", Part, {})
+        Fails("Unable to cast string to Ray", "FindPartOnRay", "x")
+        Fails("Unable to cast value to Object", "FindPartOnRay", nil, 5)
+        Fails("Unable to cast string to bool", "FindPartOnRay", R, nil, "1")
+        Fails("Unable to cast Array to bool", "FindPartOnRay", R, nil, false, {})
+        Passes("FindPartOnRay", R, nil, "true", 0)
+        Fails("Argument 2 missing or nil", "FindPartOnRayWithIgnoreList", R)
+        Fails("Expected table argument, got userdata", "FindPartOnRayWithIgnoreList", R, Part)
+        Fails("Unable to cast value to Object", "FindPartOnRayWithIgnoreList", R, { { Part } })
+        assert(workspace:FindPartOnRayWithIgnoreList(R, { nil, Part }) == nil, "a hole is skipped")
+        assert(workspace:FindPartOnRay(R) == Part, "FindPartOnRay with only its ray")
+        "#,
+    );
+}
+
+/// RaycastParams and OverlapParams members cast what a script writes as a playing client does (Studio 0.747, a client and a
+/// server alike: tools/parity/probes/query_params.luau): a list takes a table only, nested tables read in their place and nil
+/// holes skipped, and keeps what it read before an error; the other members' casts and checks; new() ignores a table.
+#[test]
+fn params_members_cast_as_a_client_does() {
+    check(
+        r#"
+        -- (the casts' argument errors carry the script's position: the message's end is compared)
+        local function Fails(Message, F)
+            local Ok, E = pcall(F)
+            if Ok or string.sub(tostring(E), -#Message) ~= Message then
+                error(`{Message}: got {Ok} {E}`, 2)
+            end
+        end
+        local A, B, C = Instance.new("Folder"), Instance.new("Folder"), Instance.new("Folder")
+        local R, O = RaycastParams.new(), OverlapParams.new()
+        R.FilterDescendantsInstances = { A, { B, { C } } }
+        assert(#R.FilterDescendantsInstances == 3, "nested tables")
+        R.FilterDescendantsInstances = { A, nil, B }
+        assert(#R.FilterDescendantsInstances == 2, "a hole")
+        local List = "Invalid value type; table must only contain Instances and other tables"
+        Fails(List, function() R.FilterDescendantsInstances = { A, 1, B } end)
+        assert(#R.FilterDescendantsInstances == 1, "what came before the error stays")
+        Fails("Invalid value type; expected a table", function() R.FilterDescendantsInstances = A end)
+        assert(#R.FilterDescendantsInstances == 0, "no table leaves an empty list")
+        Fails("Invalid value type; expected a table", function() R.FilterDescendantsInstances = nil end)
+        R.ExcludeInstances = nil
+        Fails("Invalid value type; expected a table", function() O.IncludeInstances = 5 end)
+        assert(type(O.IncludeInstances) == "table" and #O.IncludeInstances == 0, "an empty Include list")
+        local Cycle = { A }
+        Cycle[2] = Cycle
+        Fails("Tables cannot be cyclic", function() R.ExcludeInstances = Cycle end)
+        local Deep = { A }
+        for _ = 2, 298 do
+            Deep = { Deep }
+        end
+        Fails("Tables are too deeply nested", function() R.FilterDescendantsInstances = Deep end)
+        R:AddToFilter(Deep)
+        assert(#R.FilterDescendantsInstances == 1, "AddToFilter reads one level deeper")
+        Fails("Expected a table or Instance", function() R:AddToFilter(5) end)
+        Fails("invalid argument #1 to 'AddToFilter' (RaycastParams expected, got OverlapParams)", function() R.AddToFilter(O, A) end)
+        R.CollisionGroup = 5.5
+        assert(R.CollisionGroup == "5.5", "a number group is its text")
+        Fails("invalid argument #3 (string expected, got boolean)", function() R.CollisionGroup = true end)
+        R.IgnoreWater = 0
+        assert(R.IgnoreWater == true, "a value's truth")
+        Fails("Invalid value for enum 'RaycastFilterType'", function() R.FilterType = "Include" end)
+        Fails("Invalid type 'KeyCode' for enum 'RaycastFilterType'", function() R.FilterType = Enum.KeyCode.A end)
+        R.Margin = "2"
+        assert(R.Margin == 2, "a number's text")
+        R.Margin = 1 / 3
+        assert(string.format("%.9g", R.Margin) == "0.333333343", "a float32")
+        Fails("Margin must be finite and greater than or equal to 0, got -1.000000", function() R.Margin = -1 end)
+        Fails("SizeGradient must be finite and greater than or equal to -1, got inf", function() R.SizeGradient = 1e40 end)
+        Fails("Tolerance outside bounds: Expected 0 - 0.050000, got 0.051000", function() O.Tolerance = 0.051 end)
+        O.Tolerance = 0.0501
+        O.MaxParts = "2.9"
+        assert(O.MaxParts == 2, "an int")
+        O.MaxParts = 1e10
+        assert(O.MaxParts == -2147483648, "an int32 out of range")
+        O.MaxParts = true
+        assert(O.MaxParts == 0, "no number")
+        assert(RaycastParams.new({ IgnoreWater = true }).IgnoreWater == false, "new ignores its table")
+        assert(#OverlapParams.new({ FilterDescendantsInstances = { A } }).FilterDescendantsInstances == 0, "new ignores its table")
         "#,
     );
 }
@@ -9970,6 +10108,10 @@ fn params_lists_cost_what_a_client_spends_copying_them() {
             Ray.FilterDescendantsInstances = List
             return Cost(function() Ray:AddToFilter(Pool[1]) end)
         end
+        -- (a list refused at an entry after ten Instances: the ten read, and the error)
+        local Ten = table.move(Pool, 1, 10, 1, table.create(11))
+        local Refused = table.clone(Ten)
+        Refused[11] = 5
         shared.Copies = {
             Descendants = Write(Ray, "FilterDescendantsInstances"),
             Overlap = Write(Overlap, "FilterDescendantsInstances"),
@@ -9982,6 +10124,7 @@ fn params_lists_cost_what_a_client_spends_copying_them() {
             Added = Cost(function() Ray.FilterDescendantsInstances = Empty Ray:AddToFilter(Thousand) end)
                 - Cost(function() Ray.FilterDescendantsInstances = Empty Ray:AddToFilter(Empty) end),
             Appended = Append(Pool) - Append(Empty),
+            Refused = Cost(function() pcall(function() Ray.ExcludeInstances = Refused end) end) - Cost(function() pcall(function() Ray.ExcludeInstances = Ten end) end),
         }
         "##,
     );
@@ -9996,6 +10139,7 @@ fn params_lists_cost_what_a_client_spends_copying_them() {
         ("Copied", crate::cost::PARAMS_LIST_READ),
         ("Added", 1_000.0 * crate::cost::PARAMS_WRITTEN),
         ("Appended", 0.0),
+        ("Refused", crate::cost::RAISED),
     ];
     for (name, price) in checks {
         run(&lua, &engine, &format!("assert(math.abs(shared.Copies.{name} - {price:e}) < 1e-9, `{name}: {{shared.Copies.{name}}} s more work, not {price:e}`)"));
