@@ -1,0 +1,61 @@
+# engine: Roblox Studio 0.747.0.7471481, a headless playing client (script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-26
+order 1 a,b
+order-service 1 a,b
+order 2 a,b
+order-service 2 a,b
+order 3 a,b,c
+order-service 3 a,b,c
+order 4 B,C,a
+order-service 4 B,C,a
+order 5 B,a,c
+order-service 5 B,a,c
+order 6 1,10,100,2,9
+order-service 6 1,10,100,2,9
+order 7 Alpha,Mid,_under,alpha,beta,e,f,space x,x space,zeta,~tilde,é
+order-service 7 Alpha,Mid,_under,alpha,beta,e,f,space x,x space,zeta,~tilde,é
+order 8 t01,t02,t03,t04,t05,t06,t07,t08,t09,t10,t11,t12,t13,t14,t15,t16,t17,t18,t19,t20
+order-service 8 t01,t02,t03,t04,t05,t06,t07,t08,t09,t10,t11,t12,t13,t14,t15,t16,t17,t18,t19,t20
+order 9 t01,t02,t03,t04,t05,t06,t07,t08,t09,t10,t11,t12,t13,t14,t15,t16,t17,t18,t19,t20
+order-service 9 t01,t02,t03,t04,t05,t06,t07,t08,t09,t10,t11,t12,t13,t14,t15,t16,t17,t18,t19,t20
+random-first arrvoh7,bys24,bzeatk38,c9,cty18,cxegp5,dc3,ddngk30,dk21,e2,emxvo11,fjsl19,gdn20,gfe6,gfw36,gi25,gzozjq8,hof31,jdyc14,jg28,jguokz22,ji17,jrt10,kakzz16,kkjxji35,lldn1,mfgr12,mucemi26,nceg37,poy40,sgv32,ssrbv34,tc15,whpz13,wttzun27,x23,x39,xjwlvv29,ymwrbx4,zvsxj33
+random-second arrvoh7,bys24,bzeatk38,c9,cty18,cxegp5,dc3,ddngk30,dk21,e2,emxvo11,fjsl19,gdn20,gfe6,gfw36,gi25,gzozjq8,hof31,jdyc14,jg28,jguokz22,ji17,jrt10,kakzz16,kkjxji35,lldn1,mfgr12,mucemi26,nceg37,poy40,sgv32,ssrbv34,tc15,whpz13,wttzun27,x23,x39,xjwlvv29,ymwrbx4,zvsxj33
+random-same true
+removed b,c,d
+added-again a,b,c,d
+added-twice a,b,c,d
+readded a,b,c,d
+clone a,b,c,d
+all-tags q-m,q-c,q-a,q-B,q-x
+tagged shareda,sharedb,sharedc,sharedd,sharede,sharedf
+service-tags-start 
+has-instance ok false [argument #1 expects a string, but Instance was passed]
+add-instance ok  [argument #1 expects a string, but Instance was passed]
+after-add-instance Instance folder 
+has-instance-2 ok true [argument #1 expects a string, but Instance was passed]
+has-workspace ok true [argument #1 expects a string, but Instance was passed]
+has-text ok true []
+tagged-instance 1 true
+remove-workspace ok  [argument #1 expects a string, but Instance was passed]
+after-remove 
+add-text ok  []
+after-add-text q-solo
+has-text-2 ok true []
+add-number ok  []
+add-vector ok  [argument #1 expects a string, but Vector3 was passed]
+after-add-number 1, 2, 3,5,q-solo
+remove-text ok  []
+remove-number ok  []
+remove-vector ok  [argument #1 expects a string, but Vector3 was passed]
+after-remove-all 
+add-none error Argument 1 missing or nil []
+has-none error Argument 1 missing or nil []
+remove-none error Argument 1 missing or nil []
+add-nil error Argument 2 missing or nil []
+has-nil error Argument 2 missing or nil []
+add-instance-nil error Argument 3 missing or nil []
+has-instance-nil error Argument 3 missing or nil []
+gettags-instance ok  []
+gettags-none ok  []
+gettags-text ok  []
+service-tags-end 
