@@ -1828,6 +1828,11 @@ pub const LINK_CHANGED: f64 = 1.7e-6;
 pub const LINK_REJOINED: f64 = 7e-6;
 pub const LINK_REJOINED_AFTER_JOIN: f64 = 2e-6;
 pub const LINK_SPLIT_AGAIN: f64 = 2.6e-6;
+/// The frame's third link change that ends a link, when none started one before, costs a client more too (the same client and sessions:
+/// 12 pairs' welds disabled in turn, the third 7.4 us where the later ones cost 5.4 to 7.0; two anchored hubs of 1,000 leaves, a leaf of
+/// each disabled in turn and then a second of the first 5.3, at 10,000 9.9): [`LINK_SPLIT_THIRD`]. Fitted: x0.98 for the pairs, x0.87 at
+/// 1,000; at 10,000 x0.46 (that change of a hub changed before another's costs a client more with its size).
+pub const LINK_SPLIT_THIRD: f64 = 2.0e-6;
 pub const LINK_SPLIT_FIRST: f64 = 8e-6;
 pub const LINK_FRAME: f64 = 34e-6;
 /// What the first link change of an assembly in a frame costs (2026-11-25, the same client, two or three sessions, the geometric mean
@@ -1855,8 +1860,15 @@ pub const LINK_ANCHORED: f64 = 0.005e-6;
 /// What the first link change of an assembly in a frame costs it ([`LINK_ASSEMBLY`]): `parts` parts, `free` when none of them is
 /// anchored ([`LINK_FREE_PART`] more each), and `anchored` links from its anchored parts to other anchored parts ([`LINK_ANCHORED`]).
 pub fn link_assembly(parts: usize, free: bool, anchored: usize) -> f64 {
-    LINK_ASSEMBLY + parts as f64 * (LINK_PART + if free { LINK_FREE_PART } else { 0.0 }) + anchored as f64 * LINK_ANCHORED
+    LINK_ASSEMBLY + parts as f64 * (LINK_PART + if free { LINK_FREE_PART } else { 0.0 }) + parts.min(LINK_SMALL_PARTS) as f64 * LINK_SMALL_PART + anchored as f64 * LINK_ANCHORED
 }
+/// A small assembly's first link change in a frame costs a client more a part than [`LINK_PART`] says (roblox-sim, Studio 0.747,
+/// headless, three sessions, the geometric mean of their medians; package I, 2026-11-26): four anchored hubs of n leaves, a leaf's weld
+/// of each disabled in turn after three pairs' were, 6.8 to 8.7 us at n = 1, 6.6 to 9.0 at 3, 9.2 to 12.4 at 10, 13.0 to 16.5 at 30, 16.1
+/// to 24.3 at 100, where [`link_assembly`] read x0.44 to x0.82 (and 1,000 leaves' 86 us fitted [`LINK_PART`]): each of its first
+/// [`LINK_SMALL_PARTS`] parts pays [`LINK_SMALL_PART`] more. Fitted: x0.60 to x1.13 of those, 12 pairs' later splits x0.74 to x0.98.
+pub const LINK_SMALL_PART: f64 = 0.2e-6;
+pub const LINK_SMALL_PARTS: usize = 24;
 /// A write that ends or starts several links at once (a Parent write or Destroy that takes a part, a joint or a Folder of them out
 /// of a world or into one; world/joints.rs charge_link), beyond its first link change's price: each further link that reaches a part
 /// in a world ([`LINK_MORE`]) and each further piece holding no anchored part that it splits off or joins ([`LINK_PIECE`]), whether
@@ -1900,6 +1912,65 @@ pub const LINK_KEPT_PARALLEL: f64 = 0.025e-6;
 /// between two parts another of them links ([`LINK_PARALLEL`] more each).
 pub fn links_more(links: usize, pieces: usize, parallel: usize) -> f64 {
     links as f64 * LINK_MORE + pieces as f64 * LINK_PIECE + parallel as f64 * LINK_PARALLEL
+}
+/// What a link change spends on the parts it gives another root (world/joints.rs `Shape`, split_pieces), beyond the first of each side
+/// it re-roots, a part split off alone or joined alone costing what the other prices say (roblox-sim, Studio 0.747, headless, three
+/// sessions, the geometric mean of their medians; package I, 2026-11-26):
+/// - a piece that leaves an assembly holding an anchored part ([`LINK_PIECE_PART`]): an anchored hub's arm of K parts in a chain, its weld
+///   to the hub disabled at a frame's start, 300 / 548 us at K = 10 / 100 among 1,000 parts and 526 at K = 30 among 3,000, where a leaf's
+///   costs 154; a chain hanging from an anchored part, the weld a quarter, half and three quarters along disabled at a frame's start, 326 /
+///   237 / 173 us at 100 parts and 4.2 / 3.0 / 1.4 ms at 1,000; 10 and 100 such arms of 4 and 2 parts split off by their welds' Folder 198
+///   and 827 us (a write ending several links: each piece's parts beyond its first). Fitted: x0.54 to x1.25 for the arms (of 10, x0.54 to
+///   x0.59), x0.81 to x1.22 for the chains, x1.02 and x1.03 for the Folders, where ree read x0.04 to x0.57;
+/// - a piece that joins one ([`LINK_PIECE_JOINED_PART`]): the arms' welds enabled again in the frame they were disabled 32 / 200 / 70 us,
+///   the Folders parented back right after 95 and 548 us. Fitted: x0.90 to x1.13, the Folders x1.05 and x0.65;
+/// - a side none of whose parts is anchored that a split leaves without its root ([`LINK_REROOTED_SPLIT`]): a free star whose root is a
+///   leaf (all its parts alike, the later made the root), that leaf's weld disabled at a frame's start, 217 / 890 / 2,936 us at 100 /
+///   1,000 / 3,000 parts (where another leaf's costs 84 / 186 / 495); a free chain's weld a quarter, half and three quarters along
+///   disabled at a frame's start, the side without its root leaving, 490 / 676 / 992 us at 1,000 parts. Fitted: x1.02 and x1.16 at 3,000
+///   and 1,000, x0.67 at 100, x0.82 to x0.91 for the chain, where ree read x0.15 to x0.36;
+/// - a side a join hangs from the other's root, among parts none of which is anchored ([`LINK_REROOTED_JOIN`]): the star's leaf enabled
+///   again in the frame 46 / 286 / 1,048 us, the chain's welds at the next frame's start 333 / 424 / 573. Fitted: x0.99 to x1.29, x0.79 to
+///   x0.85, where ree read x0.01 to x0.53.
+///
+/// Not matched: a client spends far more on these at 10,000 parts (the star's leaf 20 ms out and 11.4 ms back: x0.50 and x0.32), on a
+/// piece joined at the frame after it split off (a chain's three quarters back at the next frame's start 4.1 ms at 1,000: x0.43), and on
+/// chains hanging from an anchored part at 3,000 (x0.26 to x0.51: their cost grows faster than their parts).
+pub const LINK_PIECE_PART: f64 = 4.5e-6;
+pub const LINK_PIECE_JOINED_PART: f64 = 2.2e-6;
+pub const LINK_REROOTED_SPLIT: f64 = 0.85e-6;
+pub const LINK_REROOTED_JOIN: f64 = 0.36e-6;
+/// What a link change spends re-rooting `parts` parts (beyond the first of each side it re-roots): split off an assembly holding an
+/// `anchored` part ([`LINK_PIECE_PART`]) or joined to one ([`LINK_PIECE_JOINED_PART`]), else split off ([`LINK_REROOTED_SPLIT`]) or
+/// joined ([`LINK_REROOTED_JOIN`]) among parts none of which is anchored.
+pub fn link_rerooted(parts: usize, split: bool, anchored: bool) -> f64 {
+    parts as f64
+        * match (split, anchored) {
+            (true, true) => LINK_PIECE_PART,
+            (false, true) => LINK_PIECE_JOINED_PART,
+            (true, false) => LINK_REROOTED_SPLIT,
+            (false, false) => LINK_REROOTED_JOIN,
+        }
+}
+/// Links one write starts or ends that each close or open a cycle in an assembly holding an anchored part (both parts in it before and
+/// after; not a link another joint between the same two parts keeps, LINK_PARALLEL's), beyond the link prices (the same client and
+/// sessions; package I, 2026-11-26): an anchored hub's N leaves and a Folder of N - 1 welds between neighbouring leaves, parented back right
+/// after it was taken out, 1,186 us at N = 100 and 94.5 ms at 1,000 (where ree charged 133 and 1,137: x0.11 and x0.01): each pair of
+/// those links [`LINK_CYCLE_PAIR`]; taken out at a frame's start 362 us and 4.1 ms (x0.37 and x0.24): each beyond the first
+/// [`LINK_CYCLE_ENDED`]. Fitted: x0.89 to x1.20; 10 such welds among 1,000 leaves x0.87 and x0.88. A single link that closes or opens a
+/// cycle costs what any link change does; a cycle among parts none of which is anchored changes no assembly, as a parallel link does
+/// (world/joints.rs `Shape`: a free star's weld between two leaves enabled 26 us at a frame's start, 7 later, disabled 2 to 3, and 10 such
+/// welds in a Folder taken out 43 us and put back 23, where ree charged the assembly 142 to 185 us).
+pub const LINK_CYCLE_PAIR: f64 = 0.19e-6;
+pub const LINK_CYCLE_ENDED: f64 = 3.0e-6;
+/// What one write's `cycles` links closing (or, `ended`, opening) cycles in assemblies holding an anchored part cost
+/// ([`LINK_CYCLE_PAIR`] for each pair of those it starts, [`LINK_CYCLE_ENDED`] for each beyond the first it ends).
+pub fn link_cycles(cycles: usize, ended: bool) -> f64 {
+    if ended {
+        cycles.saturating_sub(1) as f64 * LINK_CYCLE_ENDED
+    } else {
+        (cycles * cycles.saturating_sub(1) / 2) as f64 * LINK_CYCLE_PAIR
+    }
 }
 /// Each part of an assembly an AssemblyCenterOfMass read (an AssemblyMass read too, when none of its parts is anchored) works out
 /// after a link change in the same frame (world/joints.rs pay_body): the same client read the centre at 0.08 us a part of the hub's

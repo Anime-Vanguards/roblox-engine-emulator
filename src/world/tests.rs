@@ -1894,7 +1894,7 @@ fn unjoin_from_outsiders_takes_out_the_joints_to_unlisted_parts() {
         -- a Weld between two anchored parts, each an assembly of its own, which changes no assembly, as a client's call pays each
         -- split's assembly price; a Glue, a rigid joint, pays what a Weld does)
         local Welded, Fixed = OwnParts("Weld", false), OwnParts("Weld")
-        local Want = LINK_FRAME + 400 * (LINK_ASSEMBLY + LINK_PART) + 200 * LINK_FREE_PART
+        local Want = LINK_FRAME + 400 * (LINK_ASSEMBLY + LINK_PART + LINK_SMALL_PART) + 200 * LINK_FREE_PART
         assert(math.abs(Welded - Fixed - Want) < 1e-7, string.format("200 Welds taken out cost %.4g more than 200 between anchored parts, not %.4g", Welded - Fixed, Want))
         local Glued, FixedGlue = OwnParts("Glue", false), OwnParts("Glue")
         assert(math.abs(Glued - Welded) < 1e-7 and math.abs(FixedGlue - Fixed) < 1e-7, string.format("200 Glue taken out cost %.4g and %.4g more than 200 Welds", Glued - Welded, FixedGlue - Fixed))
@@ -2000,6 +2000,7 @@ fn unjoin_from_outsiders_takes_out_the_joints_to_unlisted_parts() {
         "##
         .replace("LINK_FRAME", &format!("{:e}", crate::cost::LINK_FRAME))
         .replace("LINK_FREE_PART", &format!("{:e}", crate::cost::LINK_FREE_PART))
+        .replace("LINK_SMALL_PART", &format!("{:e}", crate::cost::LINK_SMALL_PART))
         .replace("LINK_PART", &format!("{:e}", crate::cost::LINK_PART))
         .replace("LINK_CHANGED", &format!("{:e}", crate::cost::LINK_CHANGED))
         .replace("LINK_SPLIT_AGAIN", &format!("{:e}", crate::cost::LINK_SPLIT_AGAIN))
@@ -4548,8 +4549,8 @@ fn assembly_writes_pay_for_the_parts_and_joints_they_change() {
             "Free.Bulk" => crate::cost::assembly_moved(1, 0),
             "Hub.Position" => crate::cost::joints_rewritten(100, 100, 101),
             "Free.Position" => crate::cost::joints_rewritten(100, 1, 2),
-            "Hub.Anchored" => crate::cost::joints_reanchored(100, 100) + crate::cost::LINK_CHANGED,
-            "Free.Anchored" => crate::cost::joints_reanchored(0, 100) + crate::cost::LINK_CHANGED,
+            "Hub.Anchored" => crate::cost::joints_reanchored(100, 100),
+            "Free.Anchored" => crate::cost::joints_reanchored(0, 100),
             "Hub.Velocity" => 100.0 * crate::cost::ASSEMBLY_VELOCITY_PART,
             "Free.Velocity" => crate::cost::ASSEMBLY_VELOCITY_PART,
             _ => unreachable!(),
@@ -4603,6 +4604,8 @@ fn link_changes_pay_for_their_assembly_once_a_frame() {
             -- first touch and use of the frame are not what is compared)
             local Spare, Lone = Instance.new("Weld"), Part(false)
             Spare.Parent = workspace
+            -- (outside every world, where its Anchored write is no link change)
+            Lone.Parent = game:GetService("ReplicatedStorage")
             local function Touch()
                 local _ = Weld.Enabled, Leaf.Anchored, Hub.Anchored
                 Spare.Enabled = not Spare.Enabled
@@ -4629,12 +4632,13 @@ fn link_changes_pay_for_their_assembly_once_a_frame() {
         "#,
     );
     let more = 990.0;
+    let assembly = crate::cost::link_assembly(1000, false, 0) - crate::cost::link_assembly(10, false, 0);
     for (name, want) in [
-        ("First", more * crate::cost::LINK_PART),
+        ("First", assembly),
         ("Again", 0.0),
         ("Centre", more * crate::cost::BODY_REBUILT_PART),
         ("CentreAgain", 0.0),
-        ("Anchor", more * crate::cost::LINK_PART),
+        ("Anchor", assembly),
         ("Unanchor", 0.0),
     ] {
         run(&lua, &engine, &format!("local Extra = shared.Big.{name} - shared.Small.{name} assert(math.abs(Extra - {want:e}) < 1e-9, `{name}: {{Extra}} s more for 1,001 parts than 11, not {want:e}`)"));
@@ -4780,6 +4784,8 @@ fn link_changes_of_every_kind_pay_for_their_assembly_once_a_frame() {
             -- first touch and use of the frame are not what is compared)
             local Spare, Lone = Instance.new("Weld"), Part(false)
             Spare.Parent = workspace
+            -- (outside every world, where its Anchored write is no link change)
+            Lone.Parent = game:GetService("ReplicatedStorage")
             local First, Later, Before = Kinds[Kind](S)
             if Before then
                 Before()
@@ -4801,11 +4807,12 @@ fn link_changes_of_every_kind_pay_for_their_assembly_once_a_frame() {
         end
         "#,
     );
-    let more = 990.0 * crate::cost::LINK_PART;
+    // (the hub's assembly after the change: 1,000 and 10 parts, 1,001 and 11 when its weld was re-pointed to a spare part)
+    let assembly = |parts: usize| crate::cost::link_assembly(parts + 990, false, 0) - crate::cost::link_assembly(parts, false, 0);
     // (a weld taken in pays for the joints its walks look at, a later change in the frame the same at either size)
     run(&lua, &engine, "local Extra = shared.Big.WeldIn.Later - shared.Small.WeldIn.Later assert(math.abs(Extra) < 1e-9, `WeldIn Later: {Extra} s more for 1,001 parts than 11`)");
     for kind in ["Part1", "Nil", "Part0", "WeldOut", "WeldDestroyed", "LeafOut", "LeafDestroyed", "Enabled", "WeldBack", "LeafBack"] {
-        for (name, want) in [("First", more), ("Later", 0.0)] {
+        for (name, want) in [("First", assembly(if kind == "Part1" { 11 } else { 10 })), ("Later", 0.0)] {
             run(&lua, &engine, &format!("local Extra = shared.Big.{kind}.{name} - shared.Small.{kind}.{name} assert(math.abs(Extra - {want:e}) < 1e-9, `{kind} {name}: {{Extra}} s more for 1,001 parts than 11, not {want:e}`)"));
         }
         // (the frame's first change pays LINK_FRAME and the assemblies it changes, a later one LINK_CHANGED, and LINK_REJOINED when it
@@ -4823,8 +4830,10 @@ fn link_changes_of_every_kind_pay_for_their_assembly_once_a_frame() {
 /// same writes with the welds disabled, an anchored hub welded to 100 unanchored parts taken out at a frame's start, put back and
 /// taken out again in that frame; the same with 100 anchored parts, whose links change no assembly (no frame's or assembly's price,
 /// as a client's cost it 4 to 8 us for one); and a Folder of 100 welds among a star's leaves taken out at a frame's start, which
-/// splits nothing. The joins read within x0.7 to x1.5 of the client's and the anchored leaves within x2 (x3.2 and x2.5 to x2.6
-/// with the prices fitted before the list prices).
+/// splits nothing but opens 100 cycles in an anchored assembly (LINK_CYCLE_ENDED), and put back right after, which closes them
+/// (LINK_CYCLE_PAIR for each pair: a client's cost grows with their square, 94.5 ms for 999 among 1,000 leaves). The joins read
+/// within x0.7 to x1.5 of the client's and the anchored leaves within x2 (x3.2 and x2.5 to x2.6 with the prices fitted before the
+/// list prices).
 #[test]
 fn a_write_that_changes_several_links_pays_for_each_and_each_piece() {
     let (lua, engine) = start_play();
@@ -4843,7 +4852,9 @@ fn a_write_that_changes_several_links_pays_for_each_and_each_piece() {
     let free_again = LINK_CHANGED + more + (n - 1) as f64 * LINK_PIECE + listed;
     let fixed_out = LINK_CHANGED + more + listed;
     let fixed_in = n as f64 * (JOINT_LOOKED_AT + JOINT_LINKED) + LINK_CHANGED + more;
-    let one_out = LINK_FRAME + LINK_CHANGED + link_assembly(n + 1, false, 0) + more + n as f64 * (JOINT_TAKEN_OUT + JOINT_LIST_LEFT);
+    let one_out = LINK_FRAME + LINK_CHANGED + link_assembly(n + 1, false, 0) + more + n as f64 * (JOINT_TAKEN_OUT + JOINT_LIST_LEFT) + link_cycles(n, true);
+    // (welds between parts in the world: each a link made beyond the joints looked at alike with the welds disabled)
+    let one_in = n as f64 * JOINT_LINKED + LINK_CHANGED + LINK_REJOINED + more + link_cycles(n, false);
     run(
         &lua,
         &engine,
@@ -4918,6 +4929,204 @@ fn a_write_that_changes_several_links_pays_for_each_and_each_piece() {
         Near("anchored leaves joined", Fixed[2] - FixedOff[2], 47e-6, 0.5, 2)
         local One, OneOff = Rounds(Star(false, true, Instance.new("Folder"))), Rounds(Star(false, false, Instance.new("Folder")))
         Is("welds among leaves taken out", One[1] - OneOff[1], {one_out:e})
+        Is("welds among leaves put back", One[2] - OneOff[2], {one_in:e})
+        "#
+        ),
+    );
+    super::joints::check_index(&mut engine.state.borrow_mut(), &engine.reflection).expect("the joint index");
+}
+
+/// An Anchored write of a part that links no other part costs a link change of its assembly of one, as a playing client's does
+/// (joints.rs lone_reanchored, cost.rs charge_link; roblox-sim, Studio 0.747, three sessions, the geometric mean of their medians: a
+/// lone part's Anchored written at a frame's start 39 us more than its CastShadow, then in turn 4.6, 3.0 and 2.5 more; a part in a
+/// WorldModel alike, one in ReplicatedStorage as its CastShadow): beyond the same part's CastShadow, at a frame's start and in turn,
+/// in the Workspace and a WorldModel; in ReplicatedStorage nothing. It cost the write's price alone.
+#[test]
+fn an_anchored_write_of_a_part_that_links_nothing_pays_a_link_change() {
+    let (lua, engine) = start_play();
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    use crate::cost::*;
+    let (first, later) = (LINK_FRAME + LINK_CHANGED + link_assembly(1, false, 0), LINK_CHANGED);
+    run(
+        &lua,
+        &engine,
+        &format!(
+            r#"
+        workspace.Gravity = 0
+        local Storage = game:GetService("ReplicatedStorage")
+        local Model = Instance.new("WorldModel")
+        Model.Parent = Storage
+        local function Part(Parent)
+            local P = Instance.new("Part")
+            P.Anchored, P.CanCollide, P.CFrame = false, false, CFrame.new(0, 300, 0)
+            P.Parent = Parent
+            return P
+        end
+        local function Time(F)
+            local Start = os.clock()
+            F()
+            return os.clock() - Start
+        end
+        -- (two writes, at a frame's start and in turn; a round first, whose first touches are not what is compared)
+        local function Writes(P, Property)
+            local Got
+            for _ = 1, 2 do
+                task.wait()
+                task.wait()
+                Got = {{ Time(function() P[Property] = not P[Property] end), Time(function() P[Property] = not P[Property] end) }}
+            end
+            return Got
+        end
+        for _, Case in {{ {{ "Workspace", workspace, {first:e}, {later:e} }}, {{ "WorldModel", Model, {first:e}, {later:e} }}, {{ "ReplicatedStorage", Storage, 0, 0 }} }} do
+            local Anchored, Shadow = Writes(Part(Case[2]), "Anchored"), Writes(Part(Case[2]), "CastShadow")
+            for Index = 1, 2 do
+                local Extra = Anchored[Index] - Shadow[Index]
+                -- (to 0.05 us: the walk's lookups in a WorldModel cost a few ns more)
+                assert(math.abs(Extra - Case[2 + Index]) < 5e-8, `{{Case[1]}}: write {{Index}} cost {{Extra * 1e6}} us more than CastShadow, not {{Case[2 + Index] * 1e6}}`)
+            end
+        end
+        "#
+        ),
+    );
+}
+
+/// A link change pays for the parts it gives another root, beyond the first of each side it re-roots, as a playing client's does
+/// (cost.rs link_rerooted, joints.rs Shape; roblox-sim, Studio 0.747, three sessions, the geometric mean of their medians: a free
+/// star of 1,000 parts alike, whose root is its last made leaf, that leaf's weld disabled at a frame's start 890 us and enabled
+/// again 286, where another leaf's cost 186 and 11; an anchored hub's arm of 100 parts disabled at a frame's start 548 us and
+/// enabled again in the frame 200, a leaf's 154 and 11): the free star's root leaf against another leaf at 200 leaves, and an
+/// anchored hub's arm of 10 parts against a leaf. ree charged none of it.
+#[test]
+fn a_link_change_pays_for_the_parts_it_roots_elsewhere() {
+    let (lua, engine) = start_play();
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    use crate::cost::*;
+    let (split, join) = (199.0 * LINK_REROOTED_SPLIT, 199.0 * LINK_REROOTED_JOIN);
+    let arm_out = 9.0 * LINK_PIECE_PART + link_assembly(2, false, 0) + link_assembly(10, true, 0) - link_assembly(11, false, 0) - link_assembly(1, true, 0);
+    let arm_in = 9.0 * LINK_PIECE_JOINED_PART;
+    run(
+        &lua,
+        &engine,
+        &format!(
+            r#"
+        workspace.Gravity = 0
+        local Spot = 0
+        local function Part(Anchored)
+            Spot += 1
+            local P = Instance.new("Part")
+            P.Anchored, P.CanCollide, P.Size = Anchored, false, Vector3.one
+            P.CFrame = CFrame.new(300 + Spot % 40 * 2, 300 + Spot // 40 * 2, 300)
+            P.Parent = workspace
+            return P
+        end
+        local function Weld(P0, P1)
+            local W = Instance.new("Weld")
+            W.Part0, W.Part1, W.C0 = P0, P1, P0.CFrame:ToObjectSpace(P1.CFrame)
+            W.Parent = P1
+            return W
+        end
+        local function Time(F)
+            local Start = os.clock()
+            F()
+            return os.clock() - Start
+        end
+        -- (a weld disabled at a frame's start and enabled in turn; a round first, whose first touches are not what is compared)
+        local function Pair(W)
+            local Got
+            for _ = 1, 2 do
+                task.wait()
+                task.wait()
+                Got = {{ Time(function() W.Enabled = false end), Time(function() W.Enabled = true end) }}
+            end
+            return Got
+        end
+        local function Is(Name, Got, Want)
+            assert(math.abs(Got - Want) < 1e-9, `{{Name}}: {{Got * 1e6}} us more, not {{Want * 1e6}}`)
+        end
+        local Hub, Welds = Part(false), {{}}
+        for Index = 1, 200 do
+            Welds[Index] = Weld(Hub, Part(false))
+        end
+        local Root, Other = Pair(Welds[200]), Pair(Welds[1])
+        Is("the root leaf split off", Root[1] - Other[1], {split:e})
+        Is("the root leaf joined", Root[2] - Other[2], {join:e})
+        local Anchor = Part(true)
+        local Leaf = Weld(Anchor, Part(false))
+        local Arm, Last = nil, Anchor
+        for Index = 1, 10 do
+            local P = Part(false)
+            local W = Weld(Last, P)
+            Arm = Arm or W
+            Last = P
+        end
+        local Piece, One = Pair(Arm), Pair(Leaf)
+        Is("the arm split off", Piece[1] - One[1], {arm_out:e})
+        Is("the arm joined", Piece[2] - One[2], {arm_in:e})
+        "#
+        ),
+    );
+    super::joints::check_index(&mut engine.state.borrow_mut(), &engine.reflection).expect("the joint index");
+}
+
+/// A link that closes or opens a cycle among parts none of which is anchored changes no assembly and costs a link change alone, as a
+/// playing client's does (joints.rs Shape; roblox-sim, Studio 0.747, three sessions, the geometric mean of their medians: a free
+/// star of 1,000 leaves, its hub the root, a weld between two leaves enabled at a frame's start 26 us, where a weld with no Part1
+/// costs 16; an anchored hub's 136 to 144): beyond a weld with no Part1 enabled at a frame's start, a free star's such weld
+/// LINK_CHANGED alone, an anchored star's the frame's and its assembly's prices too. ree charged the free star's assembly.
+#[test]
+fn a_cycle_among_free_parts_changes_no_assembly() {
+    let (lua, engine) = start_play();
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    use crate::cost::*;
+    let (free, fixed) = (LINK_CHANGED, LINK_FRAME + LINK_CHANGED + link_assembly(301, false, 0));
+    run(
+        &lua,
+        &engine,
+        &format!(
+            r#"
+        workspace.Gravity = 0
+        local Spot = 0
+        local function Part(Anchored, Size)
+            Spot += 1
+            local P = Instance.new("Part")
+            P.Anchored, P.CanCollide, P.Size = Anchored, false, Size or Vector3.one
+            P.CFrame = CFrame.new(300 + Spot % 40 * 2, 300 + Spot // 40 * 2, 300)
+            P.Parent = workspace
+            return P
+        end
+        local function Weld(P0, P1)
+            local W = Instance.new("Weld")
+            W.Part0, W.Part1, W.C0 = P0, P1, if P1 then P0.CFrame:ToObjectSpace(P1.CFrame) else CFrame.identity
+            W.Enabled = P1 ~= nil
+            W.Parent = P0
+            return W
+        end
+        local function Star(Anchored)
+            local Hub, Leaves = Part(Anchored, Vector3.new(4, 4, 4)), {{}}
+            for Index = 1, 300 do
+                Leaves[Index] = Part(false)
+                Weld(Hub, Leaves[Index])
+            end
+            local Cycle = Weld(Leaves[1], Leaves[2])
+            Cycle.Enabled = false
+            return Cycle
+        end
+        -- (enabled at a frame's start, disabled after; a round first, whose first touches are not what is compared)
+        local function On(W)
+            local Got
+            for _ = 1, 2 do
+                task.wait()
+                task.wait()
+                local Start = os.clock()
+                W.Enabled = true
+                Got = os.clock() - Start
+                W.Enabled = false
+            end
+            return Got
+        end
+        local Free, Fixed, Loose = On(Star(false)), On(Star(true)), On(Weld(Part(false), nil))
+        assert(math.abs(Free - Loose - {free:e}) < 1e-9, `a free star's cycle: {{(Free - Loose) * 1e6}} us more than a loose weld, not {{{free:e} * 1e6}}`)
+        assert(math.abs(Fixed - Loose - {fixed:e}) < 1e-9, `an anchored star's cycle: {{(Fixed - Loose) * 1e6}} us more than a loose weld, not {{{fixed:e} * 1e6}}`)
         "#
         ),
     );
@@ -5119,14 +5328,14 @@ fn a_link_change_costs_the_assembly_a_client_keeps() {
     let (lua, engine) = start_play();
     crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
     use crate::cost::*;
-    let (part, anchored, kept, alone) = (LINK_PART, LINK_ANCHORED, LINK_KEPT_PARALLEL, link_assembly(2, false, 0) - link_assembly(1, false, 0) - link_assembly(1, true, 0));
+    let (glue, anchored, kept, alone) = (link_assembly(1001, false, 0) - link_assembly(1, false, 0), LINK_ANCHORED, LINK_KEPT_PARALLEL, link_assembly(2, false, 0) - link_assembly(1, false, 0) - link_assembly(1, true, 0));
     run(
         &lua,
         &engine,
         &format!(
             r#"
         workspace.Gravity = 0
-        local PART, ANCHORED, KEPT, ALONE = {part:e}, {anchored:e}, {kept:e}, {alone:e}
+        local GLUE, ANCHORED, KEPT, ALONE = {glue:e}, {anchored:e}, {kept:e}, {alone:e}
         local Spot = 0
         local function Part(Anchored, Size)
             Spot += 1
@@ -5192,7 +5401,7 @@ fn a_link_change_costs_the_assembly_a_client_keeps() {
         Near("anchored leaves", Anchored, 24e-6)
         Near("parallel welds made after", After, 3.4e-6)
         Near("parallel welds made before", Before, 42e-6)
-        Is("Glue", Glue - None, 1000 * PART)
+        Is("Glue", Glue - None, GLUE)
         Is("anchored leaves", Anchored - None, 1000 * ANCHORED)
         -- (the leaf stays in the hub's assembly: one assembly of two parts where the hub with none leaves two of one part)
         Is("parallel welds made before", Before - None, 1000 * KEPT + ALONE)

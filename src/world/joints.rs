@@ -489,6 +489,9 @@ struct Component {
     /// No WeldConstraint among its links waits to take its parts' relative CFrame (a walk that reads a root makes them take it:
     /// [`assemblies_of`]), so a root read from [`Component::single_root`] skips nothing a tree's would do
     derived: Cell<bool>,
+    /// Its best ranked part, whether or not one is anchored, once a link change's price worked it out ([`Side::best`]): kept while its
+    /// parts stay (a join or split forgets it; the price code gives each side it knows of its best again)
+    ranked: Cell<Option<InstanceId>>,
     /// Its assemblies, once worked out ([`assemblies_of`])
     tree: RefCell<Option<Rc<Assemblies>>>,
     /// Each part's assembly, kept from its last tree through the link changes since that left the paths from their roots as they
@@ -563,6 +566,7 @@ impl Component {
             best: Cell::new(None),
             settled: Cell::new(false),
             derived: Cell::new(false),
+            ranked: Cell::new(None),
             tree: RefCell::default(),
             roots: RefCell::default(),
             memo: RefCell::default(),
@@ -1399,6 +1403,7 @@ impl Joints {
         let Some(apart) = apart else {
             return;
         };
+        found.ranked.set(None);
         // (the side that leaves: its links, anchored parts and best ranked part go with it)
         let mut moved: FxHashMap<InstanceId, Vec<(InstanceId, InstanceId)>> = FxHashMap::default();
         let mut moved_anchored: FxHashSet<InstanceId> = FxHashSet::default();
@@ -1526,6 +1531,7 @@ impl Joints {
                 }
                 into.derived.set(into.derived.get() && from.derived.get());
                 into.best.set(None);
+                into.ranked.set(None);
                 into.settled.set(false);
                 into
             }
@@ -3357,7 +3363,19 @@ pub fn property_changed(state: &mut State, reflection: &Reflection, hooks: &Hook
 }
 
 fn changed(state: &mut State, reflection: &Reflection, hooks: &Hooks, id: InstanceId, name: NameId, old: Option<&Value>) {
-    let Some(setup) = setup_of(state) else { return };
+    let Some(setup) = setup_of(state) else {
+        // (no joint made yet: a part's Anchored write is still a link change of its assembly of one)
+        if let Some(setup) = &state.joints.setup
+            && name == setup.anchored
+            && state.joints.quiet == 0
+            && state.joints.batch == 0
+            && reflection.class(state.dom.at(id).class).is_a(setup.base_part)
+        {
+            let setup = setup.clone();
+            lone_reanchored(state, reflection, &setup, id);
+        }
+        return;
+    };
     if name == setup.cframe {
         if state.joints.quiet > 0 || !reflection.class(state.dom.at(id).class).is_a(setup.base_part) {
             return;
@@ -3439,7 +3457,13 @@ fn changed(state: &mut State, reflection: &Reflection, hooks: &Hooks, id: Instan
             None => (None, false),
         };
         // Anchoring splits or joins assemblies: a joint that links up again moves what hangs below it
-        if state.joints.quiet > 0 || !reflection.class(state.dom.at(id).class).is_a(setup.base_part) || !state.joints.by_part.contains_key(&id) {
+        if state.joints.quiet > 0 || !reflection.class(state.dom.at(id).class).is_a(setup.base_part) {
+            return;
+        }
+        if !state.joints.by_part.contains_key(&id) {
+            if state.joints.batch == 0 {
+                lone_reanchored(state, reflection, &setup, id);
+            }
             return;
         }
         if state.joints.batch > 0 {
@@ -3488,17 +3512,242 @@ fn link_changed(state: &mut State, reflection: &Reflection, hooks: &Hooks, setup
     let seeds: Vec<InstanceId> = parts_of(state, setup, joint).into_iter().flatten().collect();
     let places = state.joints.indexed[&joint].places;
     state.joints.unsettled = None;
-    if on {
+    let shape = if on {
+        let (skip, mut walked) = (FxHashSet::from_iter([joint]), Walked::default());
+        let sides = parts.map(|part| side_of(state, reflection, setup, part, &skip, &mut walked));
+        let (shape, best) = link_shape(state, reflection, setup, parts, &sides, None);
         link_started(state, reflection, hooks, setup, joint, parts, &seeds, true);
+        if let (Some(best), Some(found)) = (best, state.joints.components.get(&parts[0])) {
+            found.ranked.set(Some(best));
+        }
+        shape
     } else {
+        // (the best of the component before it splits, when known: the side that keeps it keeps its root)
+        let ranked = state.joints.components.get(&parts[0]).and_then(|found| found.ranked.get());
         if state.joints.unlink(joint, parts, places).is_none() {
             drop_flipped(&mut state.joints, &[Some((parts[0], false)), Some((parts[1], false))]);
         }
+        let (skip, mut walked) = (FxHashSet::from_iter([joint]), Walked::default());
+        let sides = parts.map(|part| side_of(state, reflection, setup, part, &skip, &mut walked));
+        let (shape, _) = link_shape(state, reflection, setup, parts, &sides, ranked);
         settle_unsettled(state, reflection, hooks, setup, &seeds);
-    }
+        shape
+    };
     let rigid = parts.iter().all(|&part| anchored(state, setup, part));
     let joint = ordered(&state.joints, joint);
-    charge_link(state, reflection, setup, &parts, Change { ends: !on, starts: on, links: 1, joined: 0, rigid, joint, parallel: 0 });
+    charge_link(state, reflection, setup, &parts, Change { ends: !on, starts: on, links: 1, rigid, joint, shape, ..Change::default() });
+}
+
+/// What a link change did to its parts' assemblies, for its price ([`charge_link`]): whether it closed or opened cycles in a
+/// component holding no anchored part (its parts in one such component before and after: no assembly changes), and how many parts
+/// it re-rooted beyond the first of each side it re-rooted (the side a split left without its root, or the side a join hangs from
+/// the other's root), with whether those left or joined an assembly holding an anchored part. Worked out from the kept components
+/// alone (nothing when they are not kept): a few lookups.
+#[derive(Clone, Copy, Default)]
+struct Shape {
+    free_cycle: bool,
+    rerooted: usize,
+    anchored: bool,
+    cycles: usize,
+}
+
+/// A side of a link change, for its price ([`Shape`]): its kept component, else its parts as a walk finds them that passes by the
+/// change's own joints, else the part alone. The same answers either way, so the price does not hang on what is kept.
+enum Side {
+    Kept(Rc<Component>),
+    Walked(Rc<WalkedSide>),
+    Lone(InstanceId),
+}
+
+/// The parts a walk for [`side_of`] found, and whether one of them is anchored.
+struct WalkedSide {
+    parts: FxHashSet<InstanceId>,
+    anchored: bool,
+}
+
+/// The sides one price's walks found, by part, so each component is walked once (None: the part alone).
+#[derive(Default)]
+struct Walked(FxHashMap<InstanceId, Option<Rc<WalkedSide>>>);
+
+impl Side {
+    /// Its parts beyond its first
+    fn beyond(&self) -> usize {
+        match self {
+            Side::Kept(found) => found.links.borrow().len().saturating_sub(1),
+            Side::Walked(walked) => walked.parts.len() - 1,
+            Side::Lone(_) => 0,
+        }
+    }
+
+    fn anchored(&self, state: &State, setup: &Setup) -> bool {
+        match self {
+            Side::Kept(found) => !found.anchored.borrow().is_empty(),
+            Side::Walked(walked) => walked.anchored,
+            Side::Lone(part) => anchored(state, setup, *part),
+        }
+    }
+
+    fn contains(&self, part: InstanceId) -> bool {
+        match self {
+            Side::Kept(found) => found.links.borrow().contains_key(&part),
+            Side::Walked(walked) => walked.parts.contains(&part),
+            Side::Lone(lone) => *lone == part,
+        }
+    }
+
+    /// Which component it is, for telling sides apart (None for a part alone)
+    fn key(&self) -> Option<usize> {
+        match self {
+            Side::Kept(found) => Some(Rc::as_ptr(found) as usize),
+            Side::Walked(walked) => Some(Rc::as_ptr(walked) as usize),
+            Side::Lone(_) => None,
+        }
+    }
+
+    /// Its best ranked part ([`ranks_better`] over its parts, whether or not one is anchored: kept in a kept component's `ranked`
+    /// once worked out); None when a rank is not a number.
+    fn best(&self, state: &State, reflection: &Reflection, setup: &Setup) -> Option<InstanceId> {
+        let best_of = |parts: &mut dyn Iterator<Item = InstanceId>| {
+            let mut best = parts.next()?;
+            (!root_rank(state, reflection, setup, best).2.is_nan()).then_some(())?;
+            for part in parts {
+                if ranks_better(state, reflection, setup, best, part)? {
+                    best = part;
+                }
+            }
+            Some(best)
+        };
+        match self {
+            Side::Kept(found) => {
+                if let Some(best) = found.ranked.get() {
+                    return Some(best);
+                }
+                let mut parts = found.links.borrow().keys().copied().collect::<Vec<_>>().into_iter();
+                let best = best_of(&mut parts)?;
+                found.ranked.set(Some(best));
+                Some(best)
+            }
+            Side::Walked(walked) => best_of(&mut walked.parts.iter().copied()),
+            Side::Lone(part) => best_of(&mut std::iter::once(*part)),
+        }
+    }
+}
+
+/// The side of a link change `part` is on ([`Side`]): its kept component, else a walk from it passing by `skip` (the change's own
+/// joints, whose links are counted already when it starts them), kept in `walked` for the price's other links.
+fn side_of(state: &State, reflection: &Reflection, setup: &Setup, part: InstanceId, skip: &FxHashSet<InstanceId>, walked: &mut Walked) -> Side {
+    if let Some(found) = state.joints.components.get(&part) {
+        return Side::Kept(found.clone());
+    }
+    if let Some(side) = walked.0.get(&part) {
+        return match side {
+            Some(side) => Side::Walked(side.clone()),
+            None => Side::Lone(part),
+        };
+    }
+    let mut parts = vec![part];
+    let mut seen: FxHashSet<InstanceId> = FxHashSet::default();
+    seen.insert(part);
+    let mut index = 0;
+    while index < parts.len() {
+        for (joint, other) in edges(state, reflection, setup, parts[index]) {
+            if !skip.contains(&joint) && seen.insert(other) {
+                parts.push(other);
+            }
+        }
+        index += 1;
+    }
+    if parts.len() == 1 {
+        walked.0.insert(part, None);
+        return Side::Lone(part);
+    }
+    let side = Rc::new(WalkedSide { anchored: parts.iter().any(|&part| anchored(state, setup, part)), parts: seen });
+    for &part in &parts {
+        walked.0.insert(part, Some(side.clone()));
+    }
+    Side::Walked(side)
+}
+
+/// The [`Shape`] of a single link between `parts` starting or ending, its `sides` before it starts or after it ends: a cycle when one
+/// side holds both parts; else the side that holds no anchored part when the other does, or of two holding none the side without the
+/// better best (`ranked`: the best of the component a split came from, when known; the side holding it keeps its root) re-roots;
+/// none when both hold anchored parts (each part keeps the anchored part a client gives it, joints.rs claims). With the joined
+/// component's best, when worked out.
+fn link_shape(state: &State, reflection: &Reflection, setup: &Setup, parts: [InstanceId; 2], sides: &[Side; 2], ranked: Option<InstanceId>) -> (Shape, Option<InstanceId>) {
+    if sides[0].contains(parts[1]) {
+        return (Shape { free_cycle: !sides[0].anchored(state, setup), ..Shape::default() }, None);
+    }
+    match [0, 1].map(|side| sides[side].anchored(state, setup)) {
+        [true, true] => (Shape::default(), None),
+        [true, false] => (Shape { rerooted: sides[1].beyond(), anchored: true, ..Shape::default() }, None),
+        [false, true] => (Shape { rerooted: sides[0].beyond(), anchored: true, ..Shape::default() }, None),
+        [false, false] => {
+            if let Some(ranked) = ranked {
+                let holder = usize::from(!sides[0].contains(ranked));
+                if sides[holder].contains(ranked) {
+                    if let Side::Kept(found) = &sides[holder] {
+                        found.ranked.set(Some(ranked));
+                    }
+                    return (Shape { rerooted: sides[1 - holder].beyond(), ..Shape::default() }, None);
+                }
+            }
+            let (Some(first), Some(second)) = (sides[0].best(state, reflection, setup), sides[1].best(state, reflection, setup)) else { return (Shape::default(), None) };
+            match ranks_better(state, reflection, setup, first, second) {
+                Some(true) => (Shape { rerooted: sides[0].beyond(), ..Shape::default() }, Some(second)),
+                Some(false) => (Shape { rerooted: sides[1].beyond(), ..Shape::default() }, Some(first)),
+                None => (Shape::default(), None),
+            }
+        }
+    }
+}
+
+/// The [`Shape`] of the links a Parent write starts (`started`, each joint with its parts), before they join: cycles among parts
+/// none of which is anchored when every one links two parts of one such component; else the parts beyond the first of each side
+/// holding no anchored part that a link joins to one holding an anchored part (pieces put back on an anchored part), and the links
+/// that each close a cycle in an assembly holding an anchored part (but parallel ones: another joint links the same two parts).
+fn started_shape(state: &State, reflection: &Reflection, setup: &Setup, started: &[(InstanceId, [InstanceId; 2])]) -> Shape {
+    if started.is_empty() {
+        return Shape::default();
+    }
+    let skip: FxHashSet<InstanceId> = started.iter().map(|&(joint, _)| joint).collect();
+    let mut walked = Walked::default();
+    let sides: Vec<[Side; 2]> = started.iter().map(|&(_, parts)| parts.map(|part| side_of(state, reflection, setup, part, &skip, &mut walked))).collect();
+    let free_cycle = sides.iter().zip(started).all(|(sides, (_, parts))| sides[0].contains(parts[1]) && !sides[0].anchored(state, setup));
+    if free_cycle {
+        return Shape { free_cycle, ..Shape::default() };
+    }
+    let mut counted: FxHashSet<usize> = FxHashSet::default();
+    let (mut rerooted, mut cycles) = (0usize, 0usize);
+    for (sides, (_, parts)) in sides.iter().zip(started) {
+        if sides[0].contains(parts[1]) {
+            let parallel = matches!(state.joints.pairs.get(&pair_key(*parts)), Some(PairLinks::Many(_)));
+            cycles += usize::from(!parallel && sides[0].anchored(state, setup));
+            continue;
+        }
+        let held = [0, 1].map(|index| sides[index].anchored(state, setup));
+        for index in 0..2 {
+            let side = &sides[index];
+            if !held[index] && held[1 - index] && side.key().is_some_and(|key| counted.insert(key)) {
+                rerooted += side.beyond();
+            }
+        }
+    }
+    Shape { rerooted, anchored: rerooted > 0, cycles, ..Shape::default() }
+}
+
+/// Whether `second` ranks better than `first` as the root of parts none of which is anchored ([`root_rank`], then the later made);
+/// None when either's rank is not a number.
+fn ranks_better(state: &State, reflection: &Reflection, setup: &Setup, first: InstanceId, second: InstanceId) -> Option<bool> {
+    let (rank_first, rank_second) = (root_rank(state, reflection, setup, first), root_rank(state, reflection, setup, second));
+    if rank_first.2.is_nan() || rank_second.2.is_nan() {
+        return None;
+    }
+    let serial = |part: InstanceId| state.dom.at(part).serial;
+    Some(
+        rank_second.0 != rank_first.0 && rank_second.0
+            || rank_second.0 == rank_first.0
+                && (rank_second.1 > rank_first.1 || rank_second.1 == rank_first.1 && (rank_second.2 > rank_first.2 || rank_second.2 == rank_first.2 && serial(second) > serial(first))),
+    )
 }
 
 /// The link of `joint` between `parts` (Part0's first) started: their kept components join ([`Joints::join`]) and the side that
@@ -3625,7 +3874,7 @@ fn repointed(state: &mut State, reflection: &Reflection, hooks: &Hooks, setup: &
         let parts: Vec<InstanceId> = ended.into_iter().flatten().chain(started.into_iter().flatten()).collect();
         let rigid = parts.iter().all(|&part| anchored(state, setup, part));
         let joint = if starts { ordered(&state.joints, joint) } else { before };
-        charge_link(state, reflection, setup, &parts, Change { ends, starts, links: 1, joined: 0, rigid, joint, parallel: 0 });
+        charge_link(state, reflection, setup, &parts, Change { ends, starts, links: 1, rigid, joint, ..Change::default() });
     }
 }
 
@@ -3784,7 +4033,9 @@ fn attach(state: &mut State, reflection: &Reflection, hooks: &Hooks, setup: &Set
 /// assembly of its own, change no assembly: a write whose links all are pays the changes alone, nothing for the frame or the
 /// assemblies, and marks nothing; so does a single link that another joint between the same two parts keeps ([`parallel_links`]),
 /// but for the last of them to name the pair ending, which pays LINK_KEPT_PARALLEL for each it keeps besides (a client picks the
-/// link again then). While [`Joints::unpriced`] is positive (UnjoinFromOutsiders' removals, whose UNJOIN_REMOVED holds each
+/// link again then), and links that close or open cycles among parts none of which is anchored ([`Shape`]). The parts a change
+/// gives another root and the cycles it closes or opens in an assembly holding an anchored part pay their prices too
+/// (cost.rs link_rerooted, link_cycles; split_pieces' parts beyond each piece's first for a write ending several links). While [`Joints::unpriced`] is positive (UnjoinFromOutsiders' removals, whose UNJOIN_REMOVED holds each
 /// change's flat prices: LINK_CHANGED, LINK_SPLIT_FIRST, LINK_SPLIT_AGAIN and LINK_REJOINED) a change that ends a single link
 /// charges the rest: the frame's first change, each assembly's first change and each part it marks, and each further link and piece
 /// (LINK_FRAME, link_assembly, links_more), the marks and the reads owed kept as ever, as a client's call pays each split's
@@ -3794,7 +4045,7 @@ fn attach(state: &mut State, reflection: &Reflection, hooks: &Hooks, setup: &Set
 /// x3.1). A removal that ends several links at once (a joint carrying others, whose pieces each pay their assembly's price) pays
 /// every link price, as the same Parent write does.
 fn charge_link(state: &mut State, reflection: &Reflection, setup: &Setup, parts: &[InstanceId], change: Change) {
-    let Change { ends, starts, links, joined, rigid, joint, parallel } = change;
+    let Change { ends, starts, links, joined, rigid, joint, parallel, shape } = change;
     let flat = state.joints.unpriced == 0 || links > 1;
     let mut work = if flat { crate::cost::LINK_CHANGED } else { 0.0 };
     // (a single link between two parts that other joints link as well: a client re-picks the link only when the last made of them
@@ -3803,7 +4054,8 @@ fn charge_link(state: &mut State, reflection: &Reflection, setup: &Setup, parts:
         (Some((joint, order)), &[first, second]) if links == 1 && !rigid => parallel_links(&state.joints, joint, order, [first, second]),
         _ => None,
     };
-    if rigid || kept.is_some_and(|(_, later)| starts || later) {
+    // (a link closing or opening a cycle among parts none of which is anchored changes no assembly either)
+    if rigid || shape.free_cycle || kept.is_some_and(|(_, later)| starts || later) {
         work += crate::cost::links_more(links.saturating_sub(1), 0, 0);
         state.sched.charge(work);
         crate::boundary::add_cost(work);
@@ -3822,6 +4074,8 @@ fn charge_link(state: &mut State, reflection: &Reflection, setup: &Setup, parts:
             work += crate::cost::LINK_SPLIT_FIRST;
         } else if flat && joints.splits == 1 && joints.joins == 0 {
             work += crate::cost::LINK_SPLIT_AGAIN;
+        } else if flat && joints.splits == 2 && joints.joins == 0 {
+            work += crate::cost::LINK_SPLIT_THIRD;
         }
         joints.splits += 1;
     }
@@ -3835,9 +4089,10 @@ fn charge_link(state: &mut State, reflection: &Reflection, setup: &Setup, parts:
         joints.joins += 1;
     }
     if links > 1 {
-        let pieces = if ends { split_pieces(state, reflection, setup, parts) } else { joined.saturating_sub(1) };
-        work += crate::cost::links_more(links - 1, pieces, parallel);
+        let (pieces, piece_parts) = if ends { split_pieces(state, reflection, setup, parts) } else { (joined.saturating_sub(1), 0) };
+        work += crate::cost::links_more(links - 1, pieces, parallel) + crate::cost::link_rerooted(piece_parts, true, true);
     }
+    work += crate::cost::link_rerooted(shape.rerooted, ends, shape.anchored) + crate::cost::link_cycles(shape.cycles, ends);
     // (a part met again is marked: its assembly is not charged twice)
     for &part in parts {
         state.joints.owed.insert(part);
@@ -3852,8 +4107,8 @@ fn charge_link(state: &mut State, reflection: &Reflection, setup: &Setup, parts:
 /// A link change [`charge_link`] prices: whether it ended links and whether it started them; how many links reaching a part in a
 /// world it ended or started (one write's, at once) and, of links it started, how many unanchored parts in a world it joined that no
 /// other link held (each a piece of its own until then); whether each of those links is between two anchored parts; the joint of a
-/// change of one link, when known; and of the links one write started between parts that were in the world, how many link two
-/// parts another of them links.
+/// change of one link, when known; of the links one write started between parts that were in the world, how many link two
+/// parts another of them links; and what it did to the assemblies ([`Shape`]).
 #[derive(Clone, Copy, Default)]
 struct Change {
     ends: bool,
@@ -3863,6 +4118,7 @@ struct Change {
     rigid: bool,
     joint: Option<(InstanceId, u64)>,
     parallel: usize,
+    shape: Shape,
 }
 
 /// The joints other than `joint` that link `parts` to each other now (parallel joints, [`Joints::pairs`]): how many, and whether one
@@ -3885,36 +4141,42 @@ fn ordered(joints: &Joints, joint: InstanceId) -> Option<(InstanceId, u64)> {
 /// The pieces a write that ended several links split off that hold no anchored part, which pay [`crate::cost::LINK_PIECE`] each
 /// ([`charge_link`]): of the components `parts` are in after it (each part's kept one, else a walk's; one alone a piece of its own),
 /// those holding no anchored part, but one; a piece the frame had not changed pays its assembly's price too
-/// ([`crate::cost::link_assembly`]). The same pieces however the components are kept.
-fn split_pieces(state: &State, reflection: &Reflection, setup: &Setup, parts: &[InstanceId]) -> usize {
+/// ([`crate::cost::link_assembly`]). With the parts of those pieces beyond each one's first, but the largest piece's (the side that
+/// keeps its root, when none of them holds an anchored part), which pay [`crate::cost::LINK_PIECE_PART`] each. The same however the
+/// components are kept.
+fn split_pieces(state: &State, reflection: &Reflection, setup: &Setup, parts: &[InstanceId]) -> (usize, usize) {
     let mut kept: FxHashSet<*const Component> = FxHashSet::default();
     let mut walked: FxHashSet<InstanceId> = FxHashSet::default();
-    let mut pieces = 0usize;
+    let (mut pieces, mut beyond, mut largest) = (0usize, 0usize, 0usize);
     for &part in parts {
         if walked.contains(&part) {
             continue;
         }
-        let free = match state.joints.components.get(&part) {
+        let (free, size) = match state.joints.components.get(&part) {
             Some(found) => {
                 if !kept.insert(Rc::as_ptr(found)) {
                     continue;
                 }
-                found.anchored.borrow().is_empty()
+                (found.anchored.borrow().is_empty(), found.links.borrow().len())
             }
             None => match walk_component(state, reflection, setup, part) {
                 Some(found) => {
                     walked.extend(found.links.borrow().keys().copied());
-                    found.anchored.borrow().is_empty()
+                    (found.anchored.borrow().is_empty(), found.links.borrow().len())
                 }
                 None => {
                     walked.insert(part);
-                    !anchored(state, setup, part)
+                    (!anchored(state, setup, part), 1)
                 }
             },
         };
-        pieces += usize::from(free);
+        if free {
+            pieces += 1;
+            beyond += size - 1;
+            largest = largest.max(size - 1);
+        }
     }
-    pieces.saturating_sub(1)
+    (pieces.saturating_sub(1), beyond - largest)
 }
 
 /// The frame's link changes are `frame`'s: whether they were another's until now (the marks and owed reads go with them).
@@ -4036,9 +4298,12 @@ fn reanchored(state: &mut State, reflection: &Reflection, hooks: &Hooks, setup: 
     }
     let before = before.or_else(|| found.as_ref().map(|found| assemblies_of(state, reflection, setup, found, part, Some(part), false)));
     settle_from_roots(state, reflection, hooks, setup, &[part]);
-    if let Some(found) = &found {
-        let parts = reanchored_parts(state, setup, found, part);
-        charge_link(state, reflection, setup, &parts, Change::default());
+    match &found {
+        Some(found) => {
+            let parts = reanchored_parts(state, setup, found, part);
+            charge_link(state, reflection, setup, &parts, Change::default());
+        }
+        None => lone_reanchored(state, reflection, setup, part),
     }
     let (Some(found), Some(before)) = (found, before) else { return };
     let after = assemblies_of(state, reflection, setup, &found, part, None, true);
@@ -4057,6 +4322,18 @@ fn reanchored(state: &mut State, reflection: &Reflection, hooks: &Hooks, setup: 
     if work > 0.0 {
         state.sched.charge(work);
         crate::boundary::add_cost(work);
+    }
+}
+
+/// An Anchored write of `part`, which links no other part (no joint, or none that links): a client rebuilds its assembly of one as a
+/// link change does, so a part in a world pays a link change's prices ([`charge_link`]: the frame's first, the part's assembly's first
+/// in the frame, each change). Studio 0.747, a headless playing client, two sessions (the geometric mean of their medians, beyond the
+/// same part's CastShadow written in turn): a lone part's Anchored written at a frame's start 41.6 us more, then in turn 5.1, 3.3 and
+/// 2.6 us more, 2.1 us more each in a loop of 50, an anchored part's alike (where ree charged the write's price alone); a part in no
+/// world as its CastShadow.
+fn lone_reanchored(state: &mut State, reflection: &Reflection, setup: &Setup, part: InstanceId) {
+    if world_of(state, reflection, setup, part).is_some() {
+        charge_link(state, reflection, setup, &[part], Change::default());
     }
 }
 
@@ -4296,6 +4573,8 @@ fn moved_home(state: &mut State, reflection: &Reflection, hooks: &Hooks, id: Ins
     // join hang from it, placed in the order a settle of the whole would place them (the larger side is settled and keeps its paths),
     // or, when they touch that component too, the joined components settle; else their components are walked again, as a link joined
     // costs about what a part walked does, and a Model of welded parts brings its links in with it)
+    // (whether the links close cycles among free parts, or put pieces back on an anchored part: their price, entering_price)
+    let shape = started_shape(state, reflection, &setup, &started);
     let mut single = None;
     let hold = started.len() == 1;
     match started.as_slice() {
@@ -4359,7 +4638,7 @@ fn moved_home(state: &mut State, reflection: &Reflection, hooks: &Hooks, id: Ins
         let ends: Vec<InstanceId> = parts_of(state, &setup, joint).into_iter().flatten().collect();
         link_started(state, reflection, hooks, &setup, joint, parts, &ends, hold);
     }
-    entering_price(state, reflection, &setup, &moved, entered);
+    entering_price(state, reflection, &setup, &moved, entered, shape);
 }
 
 /// What a Parent write into a world spends on joints, beyond the instances it carries (`moved`: the joints it carries and its parts
@@ -4371,7 +4650,7 @@ fn moved_home(state: &mut State, reflection: &Reflection, hooks: &Hooks, id: Ins
 /// and 22 us later, the leaf parented back 933 and 17, where its weld enabled costs 954 and 16; at 1,000 115 and 8, 112 and 9). A write
 /// that makes several links reaching parts that were in the world pays for each beyond the first and for each unanchored part it
 /// joins that no other link held ([`Change`]).
-fn entering_price(state: &mut State, reflection: &Reflection, setup: &Setup, moved: &[InstanceId], entered: usize) {
+fn entering_price(state: &mut State, reflection: &Reflection, setup: &Setup, moved: &[InstanceId], entered: usize, shape: Shape) {
     let carried: FxHashSet<InstanceId> = moved.iter().copied().collect();
     let (mut looked, mut made, mut reaching, mut rigid) = (0usize, 0usize, 0usize, true);
     // (the parts of the links it made that were in the world already, and a part of each link among the parts it carries; how many
@@ -4452,7 +4731,7 @@ fn entering_price(state: &mut State, reflection: &Reflection, setup: &Setup, mov
         // Folder parented back)
         let parallel = pairs.values().map(|count| count - 1).sum();
         let joint = if reaching == 1 { last.and_then(|joint| ordered(&state.joints, joint)) } else { None };
-        charge_link(state, reflection, setup, &placed, Change { ends: false, starts: true, links: reaching, joined, rigid, joint, parallel });
+        charge_link(state, reflection, setup, &placed, Change { ends: false, starts: true, links: reaching, joined, rigid, joint, parallel, shape });
     }
     if !new.is_empty() {
         link_frame(&mut state.joints, state.sched.frame);
@@ -4485,9 +4764,26 @@ fn left_world(state: &mut State, reflection: &Reflection, setup: &Setup, started
             last = Some(joint);
         }
     }
+    // (links that each joined two parts still in one component: cycles; among parts none of which is anchored no assembly changes;
+    // but for those another joint between the same two parts still links: parallel ones)
+    let (mut free_cycle, mut cycles) = (links > 1, 0usize);
+    if links > 1 {
+        let mut walked = Walked::default();
+        for (_, pair) in &ended {
+            let held = if pair.iter().all(|&part| placed_at(part)) {
+                let side = side_of(state, reflection, setup, pair[0], &FxHashSet::default(), &mut walked);
+                side.contains(pair[1]).then(|| side.anchored(state, setup))
+            } else {
+                None
+            };
+            free_cycle &= held == Some(false);
+            cycles += usize::from(held == Some(true) && !state.joints.pairs.contains_key(&pair_key(*pair)));
+        }
+    }
     let placed: Vec<InstanceId> = ended.into_iter().flat_map(|(_, pair)| pair).filter(|&part| placed_at(part)).collect();
     let joint = if links == 1 { last.and_then(|joint| ordered(&state.joints, joint)) } else { None };
-    charge_link(state, reflection, setup, &placed, Change { ends: true, starts: false, links, joined: 0, rigid: rigid && links > 0, joint, parallel: 0 });
+    let shape = Shape { free_cycle, cycles, ..Shape::default() };
+    charge_link(state, reflection, setup, &placed, Change { ends: true, starts: false, links, rigid: rigid && links > 0, joint, shape, ..Change::default() });
 }
 
 /// The lists of active joints after a Parent write took the subtree of `id` into a world, or from one world into another or into
