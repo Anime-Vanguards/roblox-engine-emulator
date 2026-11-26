@@ -1087,6 +1087,12 @@ unsafe extern "C-unwind" fn instance_new(state: *mut ffi::lua_State) -> c_int {
             bad_parent.set(true);
             return Out::Ret(0);
         }
+        // (the bundles waiting at the parent import first: they come before the new child, as in the game, where they are in
+        // place: project::model_assets before_child)
+        #[cfg(feature = "bundles")]
+        if let Some(parent) = parent {
+            crate::project::model_assets::before_child(engine, parent);
+        }
         let created = {
             let hooks = engine.hooks.borrow();
             let mut dom_state = engine.state.borrow_mut();

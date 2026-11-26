@@ -1572,6 +1572,8 @@ return {
 struct Bundles {
     files: std::rc::Rc<Vec<(String, PathBuf)>>,
     fetched: std::rc::Rc<std::cell::RefCell<Vec<String>>>,
+    /// The keys asked for without fetching ([`BundleSource::cached`])
+    peeked: std::rc::Rc<std::cell::RefCell<Vec<String>>>,
 }
 
 #[cfg(feature = "bundles")]
@@ -1582,7 +1584,21 @@ impl crate::project::model_assets::BundleSource for Bundles {
 
     fn bundle(&mut self, _: &Path, key: &str) -> Result<PathBuf, String> {
         self.fetched.borrow_mut().push(key.to_string());
-        self.files.iter().find(|(held, _)| held == key).map(|(_, file)| file.clone()).ok_or_else(|| format!("no bundle {key}"))
+        let file = self.files.iter().find(|(held, _)| held == key).map(|(_, file)| file.clone()).ok_or_else(|| format!("no bundle {key}"))?;
+        // (one the source cannot fetch while its file is missing)
+        if key.ends_with("Offline") && !file.is_file() {
+            return Err("offline and not cached".into());
+        }
+        Ok(file)
+    }
+
+    fn cached(&mut self, _: &Path, key: &str) -> Option<PathBuf> {
+        self.peeked.borrow_mut().push(key.to_string());
+        self.files.iter().find(|(held, _)| held == key).map(|(_, file)| file.clone()).filter(|file| file.is_file())
+    }
+
+    fn expected(&mut self, _: &Path, key: &str) -> Option<PathBuf> {
+        self.files.iter().find(|(held, _)| held == key).map(|(_, file)| file.clone())
     }
 
     fn shape(&self) -> crate::project::model_assets::BundleShape {
@@ -1667,12 +1683,21 @@ fn bundle_project(name: &str) -> (PathBuf, PathBuf, Vec<(String, PathBuf)>) {
 /// (`--assets-at`): the run, its emulator (which holds the server) and the bundles fetched, in order
 #[cfg(feature = "bundles")]
 fn run_bundles(name: &str, harness: &str, mount: &str, extra: &[&str]) -> (run::Done, crate::Emulator, Vec<String>, PathBuf) {
+    run_bundles_in(name, harness, mount, extra, "1", true)
+}
+
+/// [`run_bundles`] for `seconds`, a loopback run or a plain one
+#[cfg(feature = "bundles")]
+fn run_bundles_in(name: &str, harness: &str, mount: &str, extra: &[&str], seconds: &str, loopback: bool) -> (run::Done, crate::Emulator, Vec<String>, PathBuf) {
     let (dir, root, files) = bundle_project(name);
     let fetched = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
     let host = bundle_host(files, &fetched);
     let file = dir.join("Harness.luau");
     std::fs::write(&file, harness).unwrap();
-    let mut words: Vec<String> = ["--harness", &file.to_string_lossy(), "--roots", &root.to_string_lossy(), "--seconds", "1", "--run-context", "loopback", "--assets-at", mount, "--assets", "Models"].iter().map(|s| s.to_string()).collect();
+    let mut words: Vec<String> = ["--harness", &file.to_string_lossy(), "--roots", &root.to_string_lossy(), "--seconds", seconds, "--assets-at", mount, "--assets", "Models"].iter().map(|s| s.to_string()).collect();
+    if loopback {
+        words.extend(["--run-context".to_string(), "loopback".to_string()]);
+    }
     words.extend(extra.iter().map(|s| s.to_string()));
     let args = run::parse(&words, false).unwrap();
     let (done, emulator) = run::execute(&args, &host, false).unwrap();
@@ -1699,12 +1724,19 @@ fn shape(engine: &crate::Engine, id: crate::InstanceId) -> (String, usize) {
 /// A test host whose engines take their bundles from [`Bundles`], each fetch noted in `fetched`
 #[cfg(feature = "bundles")]
 fn bundle_host(files: Vec<(String, PathBuf)>, fetched: &std::rc::Rc<std::cell::RefCell<Vec<String>>>) -> Host {
+    bundle_host_peeking(files, fetched, &Default::default())
+}
+
+/// [`bundle_host`], noting in `peeked` each key the source is asked for without fetching
+#[cfg(feature = "bundles")]
+fn bundle_host_peeking(files: Vec<(String, PathBuf)>, fetched: &std::rc::Rc<std::cell::RefCell<Vec<String>>>, peeked: &std::rc::Rc<std::cell::RefCell<Vec<String>>>) -> Host {
     let files = std::rc::Rc::new(files);
     let fetched = fetched.clone();
+    let peeked = peeked.clone();
     Host {
         new_engine: std::rc::Rc::new(move |options| {
             let engine = crate::Engine::new(options)?;
-            engine.set_bundle_source(Box::new(Bundles { files: files.clone(), fetched: fetched.clone() }));
+            engine.set_bundle_source(Box::new(Bundles { files: files.clone(), fetched: fetched.clone(), peeked: peeked.clone() }));
             Ok(engine)
         }),
         ..Host::default()
@@ -1889,9 +1921,10 @@ return {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// A bundle the server imports while its client's copy is on its way reaches the client with it: one revealed in the frame
-/// its folder came into the containers goes whole in that frame's tree, and one revealed after that tree was sealed is taken by
-/// the copy when the tree arrives, before it enters (its ChildAdded and DescendantAdded include the bundle's instances)
+/// A bundle the server imports while its client's copy is on its way reaches the client with it (two frames of latency): one
+/// revealed in the frame its folder came into the containers goes whole in that frame's tree, and one revealed in the next
+/// frame, after that tree was sealed, is taken by the copy when the tree arrives, before it enters (its ChildAdded and
+/// DescendantAdded include the bundle's instances)
 #[cfg(feature = "bundles")]
 #[test]
 fn a_bundle_imported_before_its_tree_reaches_the_client_arrives_with_it() {
@@ -1906,7 +1939,7 @@ return {
 		game:GetService("ServerStorage").Library.Models.Parent = Storage
 		local Touched = Storage.Models.Machines.Touched
 		print("server touched", Touched.ClassName, #Touched:GetChildren())
-		RunService.Heartbeat:Wait()
+		task.wait()
 		local Late = Storage.Models.Machines.ServerFirst
 		print("server late", Late.ClassName, #Late:GetChildren())
 	end,
@@ -1925,7 +1958,7 @@ return {
 }
 "##,
         "ServerStorage.Library",
-        &[],
+        &["--latency", "2"],
     );
     let lines = lines(&done.summary);
     assert_eq!(done.summary["status"], "ok", "{lines:?}");
@@ -2031,10 +2064,11 @@ return {
     assert!(has(&lines, "client print: client tagged ServerFirst:Model Touched:Model Untouched:Model"), "{lines:?}");
     assert!(has(&lines, "client print: client none 0 true"), "{lines:?}");
     assert!(has(&lines, "client print: client added Model true 1 2"), "{lines:?}");
-    // (every bundle read once for its tags, each machine imported once; the placeholder AddTag took imported then, before the
-    // look inside Items)
-    assert_eq!(fetched.iter().filter(|key| *key == "Models/Machines/Untouched").count(), 2, "{fetched:?}");
-    assert_eq!(fetched[fetched.len() - 3..], ["Models/Units", "Models/Units/Nested", "Models/Items/_Loose"], "{fetched:?}");
+    // (each machine imported once, the tags read from the files the source holds; the placeholder AddTag took imported then,
+    // before the look inside Items)
+    assert_eq!(fetched.iter().filter(|key| *key == "Models/Machines/Untouched").count(), 1, "{fetched:?}");
+    let last = |key: &str| fetched.iter().rposition(|held| held == key).unwrap_or_else(|| panic!("{key} was not fetched: {fetched:?}"));
+    assert!(last("Models/Units") < last("Models/Units/Nested") && last("Models/Units/Nested") < last("Models/Items/_Loose"), "{fetched:?}");
     drop(emulator);
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -2152,5 +2186,253 @@ return {
     assert!(copy.is_none_or(|copy| emulator.engine.state.borrow().dom.get(copy).is_none_or(|instance| instance.has(crate::dom::flags::DESTROYED) && instance.children.is_empty())), "the destroyed copy took the bundle");
     drop(server);
     drop(emulator);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A waiting bundle a script destroyed (its folder cleared, the placeholders freed by the collector) is gone for
+/// CollectionService: GetTagged and GetAllTags neither read nor import it, and nothing fails
+#[cfg(feature = "bundles")]
+#[test]
+fn a_destroyed_bundle_is_gone_for_collection_service() {
+    let (done, emulator, fetched, dir) = run_bundles_in(
+        "bundles-destroyed",
+        r##"
+local Storage = game:GetService("ReplicatedStorage")
+local CollectionService = game:GetService("CollectionService")
+return {
+	Run = function(Context)
+		Storage.Library.Models:ClearAllChildren()
+		task.wait(1.5)
+		print("tagged", #CollectionService:GetTagged("Machine"), #CollectionService:GetAllTags())
+		print("@done")
+	end,
+}
+"##,
+        "ReplicatedStorage.Library",
+        &[],
+        "3",
+        false,
+    );
+    let lines = lines(&done.summary);
+    assert_eq!(done.summary["status"], "ok", "{lines:?}");
+    assert!(has(&lines, "- print: tagged 0 0"), "{lines:?}");
+    assert!(fetched.is_empty(), "a destroyed bundle was read: {fetched:?}");
+    drop(emulator);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A bundle the server imports while its client copy is on its way (two frames of latency) reaches the client as it was at the
+/// import, and what the server did after it in that frame follows as its changes: a child made under one of the bundle's
+/// instances arrives once (its ChildAdded), a part moved out of it arrives where it went, a write arrives with its Changed
+#[cfg(feature = "bundles")]
+#[test]
+fn an_import_while_its_copy_is_on_its_way_arrives_as_it_was_then() {
+    let (done, emulator, _, dir) = run_bundles(
+        "bundles-in-flight",
+        r##"
+local Storage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+return {
+	Server = function(Context)
+		task.wait(0.1)
+		game:GetService("ServerStorage").Library.Models.Parent = Storage
+		task.wait()
+		local Machine = Storage.Models.Machines.ServerFirst
+		local Extra = Instance.new("Part")
+		Extra.Name = "Extra"
+		Extra.Parent = Machine.Body
+		Machine.Lamp.Parent = Storage
+		Machine.Body.Transparency = 0.5
+	end,
+	Client = function(Context)
+		local Machine = Storage:WaitForChild("Models"):WaitForChild("Machines"):WaitForChild("ServerFirst")
+		local Body = Machine:WaitForChild("Body")
+		local Changed, Added = 0, 0
+		Body.Changed:Connect(function()
+			Changed += 1
+		end)
+		Body.ChildAdded:Connect(function()
+			Added += 1
+		end)
+		print("client arrived", Machine.ClassName, #Machine:GetChildren(), Body.Transparency, #Body:GetChildren())
+		for _ = 1, 4 do
+			RunService.Heartbeat:Wait()
+		end
+		print("client after", #Machine:GetChildren(), Body.Transparency, #Body:GetChildren(), Storage:FindFirstChild("Lamp") ~= nil, Changed > 0, Added)
+		print("@done")
+	end,
+}
+"##,
+        "ServerStorage.Library",
+        &["--latency", "2"],
+    );
+    let lines = lines(&done.summary);
+    assert_eq!(done.summary["status"], "ok", "{lines:?}");
+    assert!(has(&lines, "client print: client arrived Model 2 0 0"), "{lines:?}");
+    assert!(has(&lines, "client print: client after 1 0.5 1 true true 1"), "{lines:?}");
+    drop(emulator);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `Instance.new` with a parent where loose bundles wait imports them first, as a Parent write does: the bundles' members come
+/// before the new instance on both sides
+#[cfg(feature = "bundles")]
+#[test]
+fn instance_new_into_a_bundle_folder_comes_after_the_bundles_members() {
+    let (done, emulator, _, dir) = run_bundles(
+        "bundles-instance-new",
+        r##"
+local Storage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local function Names(Folder)
+	local Out = {}
+	for _, Child in Folder:GetChildren() do
+		table.insert(Out, Child.Name)
+	end
+	return table.concat(Out, " ")
+end
+return {
+	Server = function(Context)
+		task.wait(0.1)
+		local Items = Storage.Library.Models.Items
+		Instance.new("Model", Items).Name = "Made"
+		print("server", Names(Items))
+	end,
+	Client = function(Context)
+		-- (no look inside Items before the server's Instance.new: the parenting is what imports)
+		task.wait(0.3)
+		print("client", Names(Storage.Library.Models.Items))
+		print("@done")
+	end,
+}
+"##,
+        "ReplicatedStorage.Library",
+        &[],
+    );
+    let lines = lines(&done.summary);
+    assert_eq!(done.summary["status"], "ok", "{lines:?}");
+    assert!(has(&lines, "server print: server Sword Shield Made"), "{lines:?}");
+    assert!(has(&lines, "client print: client Sword Shield Made"), "{lines:?}");
+    drop(emulator);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A placeholder passed to an engine method read as a value and called later is the bundle's instance first, as a `:` call's is
+#[cfg(feature = "bundles")]
+#[test]
+fn a_method_read_as_a_value_takes_a_placeholder_as_its_bundle() {
+    let (done, emulator, fetched, dir) = run_bundles(
+        "bundles-method-value",
+        r##"
+local Storage = game:GetService("ReplicatedStorage")
+local CollectionService = game:GetService("CollectionService")
+return {
+	Client = function(Context)
+		-- (the machines in their mount's order: Broken, ServerFirst, Touched, Untouched; listed, not touched)
+		local Placeholder = Storage.Library.Models.Machines:GetChildren()[3]
+		local AddTag = CollectionService.AddTag
+		AddTag(CollectionService, Placeholder, "Seen")
+		local Items = #Storage.Library.Models.Items:GetChildren()
+		print("client", Placeholder.Name, Placeholder.ClassName, Placeholder:HasTag("Seen"), Items)
+		print("@done")
+	end,
+}
+"##,
+        "ReplicatedStorage.Library",
+        &[],
+    );
+    let lines = lines(&done.summary);
+    assert_eq!(done.summary["status"], "ok", "{lines:?}");
+    assert!(has(&lines, "client print: client Touched Model true 2"), "{lines:?}");
+    assert_eq!(fetched, ["Models/Machines/Touched", "Models/Items/_Loose"]);
+    drop(emulator);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A bundle whose tags cannot be read (one the source cannot fetch, one whose file does not load) is named in one warning, and
+/// its missing file is noted among the run's reads, so a run prepared from it goes stale once the file is there
+#[cfg(feature = "bundles")]
+#[test]
+fn a_bundle_whose_tags_cannot_be_read_is_warned_and_noted() {
+    let (dir, root, mut files) = bundle_project("bundles-tags-unread");
+    let offline = dir.join("offline.rbxm");
+    files.push(("Models/Machines/Offline".to_string(), offline.clone()));
+    let machine = files.iter().find(|(key, _)| key == "Models/Machines/Touched").map(|(_, file)| file.clone()).unwrap();
+    let fetched = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let host = bundle_host(files, &fetched);
+    let harness = dir.join("Harness.luau");
+    std::fs::write(&harness, "return function(Context) print('tagged', #game:GetService('CollectionService'):GetTagged('Machine')) print('@done') end").unwrap();
+    let words: Vec<String> = ["--harness", &harness.to_string_lossy(), "--roots", &root.to_string_lossy(), "--seconds", "1", "--assets-at", "ReplicatedStorage.Library", "--assets", "Models"].iter().map(|s| s.to_string()).collect();
+    let args = run::parse(&words, false).unwrap();
+    crate::files::start_noting();
+    let (done, emulator) = run::execute(&args, &host, false).unwrap();
+    let noted = crate::files::stop_noting();
+    let lines = lines(&done.summary);
+    assert_eq!(done.summary["status"], "ok", "{lines:?}");
+    assert!(has(&lines, "- print: tagged 3"), "{lines:?}");
+    let warnings: Vec<&String> = lines.iter().filter(|line| line.starts_with("- warn: modelAssets: the tags of")).collect();
+    assert_eq!(warnings.len(), 1, "{lines:?}");
+    assert!(warnings[0].contains("the tags of 2 bundle(s)") && warnings[0].contains("Models/Machines/Offline") && warnings[0].contains("Models/Machines/Broken"), "{warnings:?}");
+    assert!(noted.changed().is_none_or(|why| !why.contains("offline.rbxm")), "{:?}", noted.changed());
+    std::fs::copy(&machine, &offline).unwrap();
+    assert!(noted.changed().is_some_and(|why| why.contains("offline.rbxm")), "{:?}", noted.changed());
+    drop(emulator);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The bundles a run imported decode ahead in the next run of the same scene (the mount queues their files), a loopback run's
+/// apart from a plain one's of the same harness: a loopback run, a plain run that looks at another bundle (on its first run,
+/// the mount's list), then the loopback run again, which queues its own scene's
+#[cfg(feature = "bundles")]
+#[test]
+fn a_loopback_runs_bundles_decode_ahead_apart_from_a_plain_runs() {
+    let (dir, root, files) = bundle_project("bundles-ahead");
+    let fetched = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let peeked = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let host = bundle_host_peeking(files, &fetched, &peeked);
+    let harness = dir.join("Harness.luau");
+    std::fs::write(
+        &harness,
+        r##"
+local Storage = game:GetService("ReplicatedStorage")
+return {
+	Run = function(Context)
+		print("plain", Storage.Library.Models.Machines.Untouched.ClassName)
+		print("@done")
+	end,
+	Client = function(Context)
+		print("client", Storage.Library.Models.Machines.Touched.ClassName)
+		print("@done")
+	end,
+}
+"##,
+    )
+    .unwrap();
+    let run_once = |loopback: bool| -> (Vec<String>, Vec<String>, Vec<String>) {
+        let mut words: Vec<String> = ["--harness", &harness.to_string_lossy(), "--roots", &root.to_string_lossy(), "--seconds", "1", "--assets-at", "ReplicatedStorage.Library", "--assets", "Models"].iter().map(|s| s.to_string()).collect();
+        if loopback {
+            words.extend(["--run-context".to_string(), "loopback".to_string()]);
+        }
+        fetched.borrow_mut().clear();
+        peeked.borrow_mut().clear();
+        let args = run::parse(&words, false).unwrap();
+        let (done, emulator) = run::execute(&args, &host, false).unwrap();
+        drop(emulator);
+        (lines(&done.summary), fetched.borrow().clone(), peeked.borrow().clone())
+    };
+    // (the first: nothing to decode ahead)
+    let (first, first_fetched, first_peeked) = run_once(true);
+    assert!(has(&first, "client print: client Model"), "{first:?}");
+    assert_eq!(first_fetched, ["Models/Machines/Touched"]);
+    assert!(first_peeked.is_empty(), "{first_peeked:?}");
+    // (a plain run's first: the mount's list, which the loopback run wrote)
+    let (plain, plain_fetched, plain_peeked) = run_once(false);
+    assert!(has(&plain, "- print: plain Model"), "{plain:?}");
+    assert!(plain_fetched.iter().any(|key| key == "Models/Machines/Untouched"), "{plain_fetched:?}");
+    assert_eq!(plain_peeked, ["Models/Machines/Touched"]);
+    // (the loopback scene's own list, which the plain run did not overwrite)
+    let (again, _, again_peeked) = run_once(true);
+    assert!(has(&again, "client print: client Model"), "{again:?}");
+    assert_eq!(again_peeked, ["Models/Machines/Touched"], "the loopback run decoded ahead another scene's bundles");
     let _ = std::fs::remove_dir_all(&dir);
 }

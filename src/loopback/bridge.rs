@@ -215,9 +215,22 @@ pub struct Bridge {
     /// The client engine (the server's way to it: a bundle the server imports goes to the client's copy at once, lazy.rs)
     pub client: RefCell<std::rc::Weak<crate::Engine>>,
     /// Bundle imports at server instances whose client copies are on their way (in a tree sealed before the import): by the
-    /// server's instance, what the import made there and took out; the copy takes them when its tree arrives (lazy.rs
+    /// server's instance, what the import made there as it was then; the copy takes it when its tree arrives (lazy.rs
     /// bundle_imported, replicate.rs apply)
-    pub deferred: RefCell<rustc_hash::FxHashMap<InstanceId, (Vec<InstanceId>, Vec<InstanceId>)>>,
+    pub deferred: RefCell<rustc_hash::FxHashMap<InstanceId, Deferred>>,
+}
+
+/// What a bundle import made below a server instance whose client copy is on its way, as it was at the import: the copy takes it
+/// when its tree arrives, before the tree enters, and the server's changes after the import follow as messages
+pub struct Deferred {
+    /// The instance itself (its class and values: a copy that stood for the bundle's root takes them)
+    pub root: Node,
+    /// The import's instances, in GetDescendants' order: a root's parent is none (the instance)
+    pub nodes: Vec<Node>,
+    /// The own collision groups of the WorldModels among them, by node index
+    pub groups: Vec<(u32, crate::services::physics::Snapshot)>,
+    /// The children the import took out (the Studio-only placeholders a bundle replaces)
+    pub removed: Vec<InstanceId>,
 }
 
 impl Bridge {

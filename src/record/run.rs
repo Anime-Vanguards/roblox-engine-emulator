@@ -513,8 +513,9 @@ pub fn parse(args: &[String], record: bool) -> Result<RecordArgs, String> {
         }
         None => None,
     };
-    // (the scene: which bundles the last run like it imported, decoded ahead the next time)
-    let scene = json!([if harness.is_empty() { String::new() } else { std::path::absolute(&harness).unwrap_or_else(|_| PathBuf::from(&harness)).to_string_lossy().into_owned() }, engine.place, engine.roots, context]).to_string();
+    // (the scene: which bundles the last run like it imported, decoded ahead the next time; a loopback run's and a plain one's of
+    // one harness are scenes apart)
+    let scene = json!([if harness.is_empty() { String::new() } else { std::path::absolute(&harness).unwrap_or_else(|_| PathBuf::from(&harness)).to_string_lossy().into_owned() }, engine.place, engine.roots, context, engine.run_context]).to_string();
     let model_assets = project::ModelAssetsOverride {
         mount: value("--assets-at"),
         prefixes: value("--assets").map(|list| list.split(',').map(|p| p.trim().trim_matches('/').to_string()).filter(|p| !p.is_empty()).collect()),

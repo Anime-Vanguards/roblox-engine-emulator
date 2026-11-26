@@ -569,8 +569,11 @@ fn install(server: &Rc<Engine>, bridge: &Rc<Bridge>, filter: Rc<Filter>, exclude
 /// The client's hook: a copy it frees forgets its server instance
 pub fn install_client(client: &Rc<Engine>, bridge: &Rc<Bridge>) {
     let ids = bridge.clone();
-    client.hooks.borrow_mut().instance_freed.push(Box::new(move |_, id| {
+    client.hooks.borrow_mut().instance_freed.push(Box::new(move |state, id| {
         ids.ids.borrow_mut().to_server.remove(id);
+        let _ = &state;
+        #[cfg(feature = "bundles")]
+        state.project.model_assets.set_waits_remotely(id, false);
     }));
 }
 
@@ -737,6 +740,161 @@ fn flush_move(server: &Engine, state: &mut State, reflection: &Reflection, filte
     }
 }
 
+/// Instance `id` as a client copy is made of it (`parent`: its parent's index among the nodes made with it)
+fn node_of(state: &State, reflection: &Reflection, filter: &Filter, id: InstanceId, parent: Option<u32>) -> Node {
+    let instance = state.dom.at(id);
+    let class = instance.class;
+    // (in name order, as the instance stores them: the client's copy takes the vector as it is)
+    let mut props: Vec<(NameId, Value)> = Vec::with_capacity(instance.props.len());
+    for (name, value) in instance.props.iter() {
+        if filter.replicates(reflection, class, name)
+            && let Some(value) = super::wire::portable(value)
+        {
+            props.push((name, value));
+        }
+    }
+    let (studio, studio_flags) = studio_of(instance);
+    Node {
+        id,
+        class,
+        parent,
+        props,
+        attributes: instance.attributes.iter().filter_map(|(name, value)| super::wire::portable(value).map(|value| (name.clone(), value))).collect(),
+        tags: instance.tags.iter().cloned().collect(),
+        source: script_source(reflection, instance),
+        json: instance.flags & flags::JSON_MODULE != 0,
+        studio,
+        studio_flags,
+        waits: crate::project::bundle_waits(state, id),
+    }
+}
+
+/// What an import made below `original` (the subtrees `made`) as it is now, for a client copy of `original` still on its way
+/// ([`Deferred`]): `original` itself, the subtrees in GetDescendants' order, their WorldModels' groups, what it took out
+pub(super) fn snapshot_import(server: &Engine, filter: &Filter, original: InstanceId, made: &[InstanceId], removed: Vec<InstanceId>) -> super::bridge::Deferred {
+    let reflection = &server.reflection;
+    let (root, nodes) = {
+        let state = server.state.borrow();
+        let root = node_of(&state, reflection, filter, original, None);
+        let mut nodes: Vec<Node> = Vec::new();
+        let mut stack: Vec<(InstanceId, Option<u32>)> = made.iter().rev().map(|&made| (made, None)).collect();
+        while let Some((id, parent)) = stack.pop() {
+            if state.dom.get(id).is_none() {
+                continue;
+            }
+            let index = nodes.len() as u32;
+            nodes.push(node_of(&state, reflection, filter, id, parent));
+            stack.extend(state.dom.at(id).children.iter().rev().map(|&child| (child, Some(index))));
+        }
+        (root, nodes)
+    };
+    let groups = crate::services::physics::sent_models(server, nodes.iter().map(|node| node.id));
+    super::bridge::Deferred { root, nodes, groups, removed }
+}
+
+/// A client copy that arrived in a tree takes what a bundle import made below its server instance while the tree was on its
+/// way, as it was at the import ([`Deferred`]), before the tree enters: what the import took out leaves the copy, a copy that
+/// stood for the bundle's root takes its class and values, and the import's instances are made below it. Returns how many.
+fn take_deferred(client: &Engine, bridge: &Bridge, copy: InstanceId, deferred: super::bridge::Deferred) -> u64 {
+    let super::bridge::Deferred { mut root, mut nodes, groups, removed } = deferred;
+    let reflection = &client.reflection;
+    let mut refs: Vec<(InstanceId, NameId, InstanceId)> = Vec::new();
+    let mut attribute_refs: Vec<(InstanceId, Str, InstanceId)> = Vec::new();
+    let mut made: Vec<InstanceId> = Vec::with_capacity(nodes.len());
+    {
+        let mut state = client.state.borrow_mut();
+        let mut ids = bridge.ids.borrow_mut();
+        // (with no event, as on the server: copy_import)
+        for &child in &removed {
+            if let Some(child) = ids.to_client.get(child)
+                && state.dom.get(child).is_some_and(|instance| instance.parent == Some(copy))
+            {
+                state.dom.detach(child);
+            }
+        }
+        let placeholder = state.dom.at(copy).has(flags::BUNDLE_ROOT);
+        if placeholder {
+            state.dom.set_class(reflection, copy, root.class);
+            let kept = root.studio_flags;
+            fill_copy(&mut state, copy, &mut root, (&mut refs, &mut attribute_refs));
+            state.dom.at_mut(copy).flags &= !((flags::STUDIO_ONLY | flags::BUNDLE_ROOT) & !kept);
+            state.dom.refresh_name(reflection, copy);
+            state.dom.note_written(copy);
+        }
+        for node in nodes.iter_mut() {
+            let made_copy = core::create(&mut state, reflection, node.class);
+            fill_copy(&mut state, made_copy, node, (&mut refs, &mut attribute_refs));
+            state.dom.refresh_name(reflection, made_copy);
+            state.dom.attach(made_copy, node.parent.map_or(copy, |index| made[index as usize]));
+            ids.pair(node.id, made_copy);
+            made.push(made_copy);
+        }
+        for (node, &made_copy) in nodes.iter().zip(&made) {
+            for tag in &node.tags {
+                crate::services::tag_added(&mut state, made_copy, tag);
+            }
+        }
+        if placeholder {
+            for tag in &root.tags {
+                crate::services::tag_added(&mut state, copy, tag);
+            }
+        }
+        for (holder, name, target) in refs {
+            let value = ids.to_client.get(target).map_or(Value::Nil, Value::Instance);
+            state.dom.at_mut(holder).store(name, value);
+        }
+        for (holder, name, target) in attribute_refs {
+            set_attribute_ref(&mut state, holder, &name, ids.to_client.get(target));
+        }
+        for &made_copy in &made {
+            crate::world::joints::made_in_place(&mut state, reflection, made_copy);
+        }
+        if placeholder {
+            crate::world::joints::made_in_place(&mut state, reflection, copy);
+        }
+        #[cfg(feature = "bundles")]
+        state.project.model_assets.set_waits_remotely(copy, root.waits);
+    }
+    for (index, snapshot) in groups {
+        if let Some(&made_copy) = made.get(index as usize) {
+            crate::services::physics::apply_model_snapshot(client, made_copy, snapshot);
+        }
+    }
+    let count = made.len() as u64;
+    bridge.stats.borrow_mut().created += count;
+    count
+}
+
+/// A client copy takes a node's values (instance values noted in `refs`, set once every copy is made): its properties as one
+/// vector in the server's name order, its attributes, tags, source and flags
+fn fill_copy(state: &mut State, copy: InstanceId, node: &mut Node, (refs, attribute_refs): (&mut Vec<(InstanceId, NameId, InstanceId)>, &mut Vec<(InstanceId, Str, InstanceId)>)) {
+    let mut props = std::mem::take(&mut node.props);
+    props.retain(|(name, value)| match value.as_instance() {
+        Some(instance) => {
+            refs.push((copy, *name, instance));
+            false
+        }
+        None => true,
+    });
+    for (name, value) in node.attributes.iter() {
+        if let Value::Instance(instance) = value {
+            attribute_refs.push((copy, name.clone(), *instance));
+        }
+    }
+    let target = state.dom.at_mut(copy);
+    target.props = crate::dom::Props::from(props);
+    target.attributes = std::mem::take(&mut node.attributes).into();
+    target.tags = node.tags.clone().into();
+    if node.json {
+        target.flags |= flags::JSON_MODULE;
+    }
+    if let Some(source) = &node.source {
+        target.script = Some(Box::new(source.clone()));
+    }
+    target.studio_node = node.studio;
+    target.flags |= node.studio_flags;
+}
+
 /// `root` and its replicated descendants as the client makes them (marked sent), in GetDescendants' order
 fn tree(state: &mut State, reflection: &Reflection, filter: &Filter, root: InstanceId, whole: &mut FxHashSet<InstanceId>) -> Vec<Node> {
     let mut nodes: Vec<Node> = Vec::new();
@@ -746,30 +904,7 @@ fn tree(state: &mut State, reflection: &Reflection, filter: &Filter, root: Insta
         if instance.flags & flags::REPLICATED == 0 {
             continue;
         }
-        let class = instance.class;
-        // (in name order, as the instance stores them: the client's copy takes the vector as it is)
-        let mut props: Vec<(NameId, Value)> = Vec::with_capacity(instance.props.len());
-        for (name, value) in instance.props.iter() {
-            if filter.replicates(reflection, class, name)
-                && let Some(value) = super::wire::portable(value)
-            {
-                props.push((name, value));
-            }
-        }
-        let (studio, studio_flags) = studio_of(instance);
-        let node = Node {
-            id,
-            class,
-            parent,
-            props,
-            attributes: instance.attributes.iter().filter_map(|(name, value)| super::wire::portable(value).map(|value| (name.clone(), value))).collect(),
-            tags: instance.tags.iter().cloned().collect(),
-            source: script_source(reflection, instance),
-            json: instance.flags & flags::JSON_MODULE != 0,
-            studio,
-            studio_flags,
-            waits: crate::project::bundle_waits(state, id),
-        };
+        let node = node_of(state, reflection, filter, id, parent);
         let index = nodes.len() as u32;
         nodes.push(node);
         stack.extend(instance.children.iter().rev().map(|&child| (child, Some(index))));
@@ -817,8 +952,8 @@ pub(super) fn mark_sent(state: &mut State, original: InstanceId, made: &[Instanc
 /// meanwhile arrives as the server's changes do. What the import made is made whole on the server first ([`make_whole`]) and
 /// replicates from now on as the join's copy does. A copy that stood for the bundle's root (its placeholder) becomes that root
 /// in place, as the server's did: its class, values and flags. The children the import took out (the Studio-only placeholders
-/// a bundle's members replace) leave the copy first, as a Parent message takes them out, so both lists keep one order (the
-/// server's Parent message for them moves nothing then). Returns how many instances the client made.
+/// a bundle's members replace) leave the copy first, with no event as the server's install takes them out, so both lists keep
+/// one order. Returns how many instances the client made.
 pub(super) fn copy_import(server: &Engine, client: &Engine, bridge: &Bridge, original: InstanceId, copy: InstanceId, made: &[InstanceId], removed: &[InstanceId]) -> u64 {
     let Some(filter) = bridge.filter.borrow().clone() else { return 0 };
     // the client's copies of what the import took out, out of the copy
@@ -827,9 +962,12 @@ pub(super) fn copy_import(server: &Engine, client: &Engine, bridge: &Bridge, ori
         let ids = bridge.ids.borrow();
         removed.iter().filter_map(|&child| ids.to_client.get(child)).filter(|&child| client_state.dom.get(child).is_some_and(|instance| instance.parent == Some(copy))).collect()
     };
-    // (the server's Parent message for each, at the client's next frame, pins the copy as it pins any the server took out)
-    for child in gone {
-        let _ = crate::lua::instance::set_parent(client, child, None);
+    // (with no event, as the server's install takes them out: never in a script's view)
+    if !gone.is_empty() {
+        let mut state = client.state.borrow_mut();
+        for child in gone {
+            state.dom.detach(child);
+        }
     }
     make_whole(server, made);
     let reflection = &client.reflection;
@@ -923,35 +1061,9 @@ pub fn apply(lua: &Lua, client: &Rc<Engine>, endpoint: &Rc<Endpoint>, message: M
                 let mut ids = bridge.ids.borrow_mut();
                 for node in nodes.iter_mut() {
                     let copy = core::create(&mut state, reflection, node.class);
-                    {
-                        // (the server's values in name order, as Clone gives a copy its vector; instance values once
-                        // every copy is made)
-                        let mut props = std::mem::take(&mut node.props);
-                        props.retain(|(name, value)| match value.as_instance() {
-                            Some(instance) => {
-                                refs.push((copy, *name, instance));
-                                false
-                            }
-                            None => true,
-                        });
-                        let target = state.dom.at_mut(copy);
-                        target.props = crate::dom::Props::from(props);
-                        for (name, value) in node.attributes.iter() {
-                            if let Value::Instance(instance) = value {
-                                attribute_refs.push((copy, name.clone(), *instance));
-                            }
-                        }
-                        target.attributes = std::mem::take(&mut node.attributes).into();
-                        target.tags = node.tags.clone().into();
-                        if node.json {
-                            target.flags |= flags::JSON_MODULE;
-                        }
-                        if let Some(source) = &node.source {
-                            target.script = Some(Box::new(source.clone()));
-                        }
-                        target.studio_node = node.studio;
-                        target.flags |= node.studio_flags;
-                    }
+                    // (the server's values in name order, as Clone gives a copy its vector; instance values once every copy is
+                    // made)
+                    fill_copy(&mut state, copy, node, (&mut refs, &mut attribute_refs));
                     state.dom.refresh_name(reflection, copy);
                     if let Some(index) = node.parent {
                         state.dom.attach(copy, made[index as usize]);
@@ -987,20 +1099,16 @@ pub fn apply(lua: &Lua, client: &Rc<Engine>, endpoint: &Rc<Endpoint>, message: M
             }
             // what the server imported at an instance of the tree after the tree was sealed: in the tree before it enters, as
             // the bundle was in place (lazy.rs bundle_imported)
-            let deferred: Vec<(InstanceId, InstanceId, Vec<InstanceId>, Vec<InstanceId>)> = {
+            let deferred: Vec<(InstanceId, super::bridge::Deferred)> = {
                 let mut deferred = bridge.deferred.borrow_mut();
                 if deferred.is_empty() {
                     Vec::new()
                 } else {
-                    nodes.iter().zip(&made).filter_map(|(node, &copy)| deferred.remove(&node.id).map(|(imported, removed)| (node.id, copy, imported, removed))).collect()
+                    nodes.iter().zip(&made).filter_map(|(node, &copy)| deferred.remove(&node.id).map(|taken| (copy, taken))).collect()
                 }
             };
-            if !deferred.is_empty()
-                && let Some((_, server)) = client.peer_server()
-            {
-                for (original, copy, imported, removed) in deferred {
-                    copy_import(&server, client, bridge, original, copy, &imported, &removed);
-                }
+            for (copy, taken) in deferred {
+                take_deferred(client, bridge, copy, taken);
             }
             // the tree enters at once: its DescendantAdded, ChildAdded, the tagged instances' added signals
             if let Some(&root) = made.first() {

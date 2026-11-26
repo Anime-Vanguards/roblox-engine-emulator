@@ -165,6 +165,7 @@ fn method_function_uncached(lua: &Lua, engine: &Rc<Engine>, class: ClassId, name
             return raise(format!("Expected ':' not '.' calling member function {method_name}"));
         }
         project::before_method(&mut e.state.borrow_mut(), &e.reflection, id, name);
+        reveal_arguments(&e, &args);
         method(lua, &e, id, &args)
     })?;
     engine.lua.borrow_mut().methods.insert((owner, name), function.clone());

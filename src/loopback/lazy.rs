@@ -146,15 +146,6 @@ pub fn import_on_server(client: &Engine, id: InstanceId, own_only: bool) {
             } else {
                 crate::project::model_assets::materialize(&server, original);
             }
-            // (a copy that still stands for a bundle the server imported before the client had it: it takes it now)
-            if let Some(endpoint) = client.loopback() {
-                let deferred = endpoint.bridge.deferred.borrow_mut().remove(&original);
-                let stale = client.state.borrow().dom.get(id).is_some_and(|instance| instance.has(flags::BUNDLE_ROOT)) && !server.state.borrow().dom.at(original).has(flags::BUNDLE_ROOT);
-                if deferred.is_some() || stale {
-                    let (made, removed) = deferred.unwrap_or_default();
-                    super::replicate::copy_import(&server, client, &endpoint.bridge, original, id, &made, &removed);
-                }
-            }
             // (an import that made nothing gave the copy nothing: it takes the flag and the waiting the server's has now)
             let (waits, placeholder) = {
                 let state = server.state.borrow();
@@ -230,12 +221,28 @@ pub fn bundle_imported(server: &Engine, id: InstanceId, before: &[InstanceId]) {
             crate::timing::time("loopback: a bundle's copy", || super::replicate::copy_import(server, &client, bridge, id, copy, &made, &removed));
         }
         None => {
-            // (the client's copy is in a tree on its way: it takes them when it arrives, and the server's writes to them follow)
+            // (the client's copy is in a tree on its way: it takes them as they are now when it arrives, and the server's changes
+            // to them after this follow as messages)
+            let Some(filter) = bridge.filter.borrow().clone() else { return };
+            let snapshot = super::replicate::snapshot_import(server, &filter, id, &made, removed);
             super::replicate::mark_sent(&mut server.state.borrow_mut(), id, &made);
             let mut deferred = bridge.deferred.borrow_mut();
-            let entry = deferred.entry(id).or_default();
-            entry.0.extend(made);
-            entry.1.extend(removed);
+            match deferred.get_mut(&id) {
+                // (a second import there before the copy arrived: its root as it is now, the instances of both)
+                Some(earlier) => {
+                    earlier.root = snapshot.root;
+                    let offset = earlier.nodes.len() as u32;
+                    earlier.nodes.extend(snapshot.nodes.into_iter().map(|mut node| {
+                        node.parent = node.parent.map(|parent| parent + offset);
+                        node
+                    }));
+                    earlier.groups.extend(snapshot.groups.into_iter().map(|(index, groups)| (index + offset, groups)));
+                    earlier.removed.extend(snapshot.removed);
+                }
+                None => {
+                    deferred.insert(id, snapshot);
+                }
+            }
         }
     }
 }
@@ -245,7 +252,9 @@ pub fn bundle_imported(server: &Engine, id: InstanceId, before: &[InstanceId]) {
 #[cfg(feature = "bundles")]
 pub fn import_tagged_on_server(client: &Engine, tag: Option<&str>) {
     let (Some((_, server)), Some(endpoint)) = (client.peer_server(), client.loopback()) else { return };
-    for original in crate::project::model_assets::tagged_waiting(&server, tag) {
+    // (only the server's instances the client holds copies of: one under a container that does not replicate to it is not its)
+    let sent = |state: &crate::State, id: InstanceId| state.dom.at(id).flags & flags::SENT != 0;
+    for original in crate::project::model_assets::tagged_waiting(&server, tag, &sent) {
         let copy = endpoint.bridge.ids.borrow().to_client.get(original);
         if let Some(copy) = copy
             && client.state.borrow().project.model_assets.waits_remotely(copy)
