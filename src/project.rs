@@ -760,17 +760,29 @@ fn kept_read_json(path: &str) -> Option<std::sync::Arc<serde_json::Value>> {
             return value;
         }
     }
-    let parsed = if stamp.is_some() {
-        std::fs::read(path)
-            .ok()
-            .and_then(|bytes| crate::alloc::long_lived(|| serde_json::from_slice::<serde_json::Value>(&bytes).ok().map(Arc::new)))
-    } else {
-        None
+    let Some(stamp_before) = stamp else {
+        if let Ok(mut map) = cache.write() {
+            crate::alloc::long_lived(|| map.insert(path.to_string(), (None, None)));
+        }
+        return None;
     };
-    if let Ok(mut map) = cache.write() {
-        crate::alloc::long_lived(|| map.insert(path.to_string(), (stamp, parsed.clone())));
+    let parsed = std::fs::read(path)
+        .ok()
+        .and_then(|bytes| crate::alloc::long_lived(|| serde_json::from_slice::<serde_json::Value>(&bytes).ok().map(Arc::new)));
+    if let Some(value) = parsed {
+        // Only cache a successful parse whose file stamp did not change while reading.
+        if crate::files::stamp(file_path) == Some(stamp_before) {
+            if let Ok(mut map) = cache.write() {
+                crate::alloc::long_lived(|| map.insert(path.to_string(), (Some(stamp_before), Some(value.clone()))));
+            }
+        }
+        return Some(value);
     }
-    parsed
+    // Never cache a failed read or parse of an existing file (e.g., a file observed mid-write).
+    if let Ok(mut map) = cache.write() {
+        map.remove(path);
+    }
+    None
 }
 
 fn read_json(path: &str) -> Option<std::sync::Arc<serde_json::Value>> {
@@ -3601,6 +3613,23 @@ mod studio_index_tests {
         assert_eq!(find_module_by_path(&emu.engine, &backward), Some(a));
         assert_eq!(find_module_by_path(&emu.engine, &upper), Some(a));
         assert_eq!(find_module_by_path(&emu.engine, &format!("{forward}.missing")), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn kept_read_json_does_not_cache_failed_parses() {
+        let dir = unique_dir("kept-json");
+        let file = dir.join("config.json");
+        let path_str = file.to_string_lossy().replace('\\', "/");
+        // Missing file returns None and later creation invalidates the cached absence.
+        assert!(kept_read_json(&path_str).is_none());
+        // Write invalid JSON of exact length 11, then replace with valid JSON of the same length
+        // immediately (can share the same filesystem timestamp tick).
+        std::fs::write(&file, "{broken   !").unwrap();
+        assert!(kept_read_json(&path_str).is_none(), "malformed JSON must return None");
+        std::fs::write(&file, r#"{"ok":true}"#).unwrap();
+        let parsed = kept_read_json(&path_str).expect("valid JSON after failed parse must not stay cached as None");
+        assert_eq!(parsed["ok"], serde_json::json!(true));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

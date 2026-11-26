@@ -549,3 +549,65 @@ fn loadmodule_without_native_loads_each_chunk_in_its_own_environment() {
 fn a_test_script_is_checked_after_it_waits() {
     run(Options::default(), "task.wait(2) assert(false, 'checked after the wait')");
 }
+
+/// Requiring a file-backed ModuleScript pins the first text read on the instance so overwriting
+/// the file mid-run never changes `.Source`, a later `Clone()` require, or an Actor VM's require.
+#[test]
+fn require_pins_first_read_source_for_source_property_clones_and_actors() {
+    let folder = std::env::temp_dir().join(format!(
+        "ree-pin-source-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+    ));
+    std::fs::create_dir_all(&folder).unwrap();
+    let config_file = folder.join("Config.luau");
+    let first_text = "return \"first-read\"";
+    let second_text = "return \"second-read-modified-on-disk\"";
+    std::fs::write(&config_file, first_text).unwrap();
+
+    let engine = Engine::new(Options::default()).expect("engine");
+    let lua = Lua::new();
+    engine_lua::start(&lua, &engine).expect("start");
+    super::project::mount_at(&engine, &super::project::Mount::parse(&format!("ReplicatedStorage/Mounted={}", folder.to_string_lossy()), false).unwrap()).unwrap();
+
+    let overwrite_path = config_file.clone();
+    let overwrite_fn = lua
+        .create_function(move |_, ()| {
+            std::fs::write(&overwrite_path, second_text).map_err(LuaError::external)?;
+            Ok(())
+        })
+        .unwrap();
+    engine.lua.borrow().shared.as_ref().unwrap().raw_set("__overwriteConfig", overwrite_fn).unwrap();
+
+    let lines = script(
+        &lua,
+        &engine,
+        r##"
+        local RS = game:GetService("ReplicatedStorage")
+        local Config = RS:FindFirstChild("Config", true)
+        local Initial = require(Config)
+        __overwriteConfig()
+        local Cloned = Config:Clone()
+        Cloned.Parent = RS
+        local FromClone = require(Cloned)
+        local SourceProp = Config.Source
+        local Actor = Instance.new("Actor")
+        local Worker = Instance.new("LocalScript")
+        Worker.Source = [[
+            local Config = game:GetService("ReplicatedStorage"):FindFirstChild("Config", true)
+            print("actor", require(Config))
+        ]]
+        Worker.Parent = Actor
+        Actor.Parent = RS
+        print("main", Initial, FromClone, SourceProp)
+        "##,
+    );
+    let _ = std::fs::remove_dir_all(&folder);
+    check(
+        &lines,
+        &[
+            "actor first-read",
+            "main first-read first-read return \"first-read\"",
+        ],
+    );
+}

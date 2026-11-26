@@ -53,6 +53,9 @@ const RECORD_LEN: usize = 64;
 const COMPACT_THRESHOLD: usize = 16;
 /// The file whose lock a compacting process holds (`File::try_lock`): a process that cannot take it skips
 const COMPACT_LOCK: &str = "compact.lock";
+/// The file whose lock serializes cross-process delta refresh-filter-publish (`try_lock` for deferred
+/// flushes, blocking `lock` for final flushes), independent of [`COMPACT_LOCK`].
+const FLUSH_LOCK: &str = "flush.lock";
 /// The entry count up to which [`Pack::covers`] reads the covering pack's payloads, not only its records
 const COVER_PAYLOADS_UP_TO: usize = 64;
 const STALE_TMP_AGE: Duration = Duration::from_secs(300);
@@ -63,9 +66,17 @@ const DEFERRED_FLUSH_BYTES: usize = 4 * 1024 * 1024;
 const MISS_REFRESH_INTERVAL_MS: u64 = 500;
 
 static DEFERRED_FLUSH: AtomicBool = AtomicBool::new(false);
+/// True only during in-process `ree run --batch` where all worker threads share one `Store` and flush
+/// once at batch end. Kept separate from `is_batch_frozen()` so multi-process frozen batch workers
+/// (such as `rur-native engine-batch --frozen`) still run deferred flushes mid-run.
+static SUPPRESS_PER_RUN_FLUSH: AtomicBool = AtomicBool::new(false);
 
 pub(crate) fn set_deferred_flush(defer: bool) {
     DEFERRED_FLUSH.store(defer, Ordering::Relaxed);
+}
+
+pub(crate) fn set_suppress_per_run_flush(suppress: bool) {
+    SUPPRESS_PER_RUN_FLUSH.store(suppress, Ordering::Relaxed);
 }
 
 fn elapsed_ms() -> u64 {
@@ -363,14 +374,16 @@ impl Store {
             pending_bytes: AtomicUsize::new(0),
             has_pending: AtomicBool::new(false),
             last_dir_modified: AtomicU64::new(0),
-            last_miss_probe_ms: AtomicU64::new(0),
+            last_miss_probe_ms: AtomicU64::new(elapsed_ms()),
             flush_lock: Mutex::new(()),
         });
-        store.refresh_from_disk();
+        store.refresh_from_disk_locked();
         store
     }
 
-    fn refresh_from_disk(&self) -> bool {
+    /// Scans `packs/` for newly published `.mpack` files and adds them to `packs`.
+    /// Callers must either hold `self.flush_lock` or have exclusive access during `open_at`.
+    fn refresh_from_disk_locked(&self) -> bool {
         if let Some(stamp) = crate::files::stamp(&self.packs_dir) {
             self.last_dir_modified.store(stamp.modified, Ordering::Relaxed);
         }
@@ -394,31 +407,32 @@ impl Store {
         // Largest packs first so binary search hits the compacted main pack first.
         candidates.sort_by(|a, b| b.2.cmp(&a.2));
         let mut opened = Vec::new();
-        let mut names = Vec::new();
         for (name, path, _) in candidates {
             if let Some(pack) = Pack::open(&path, &self.abi) {
-                opened.push(pack);
-                names.push(name);
+                opened.push((name, pack));
             }
         }
         if opened.is_empty() {
             return false;
         }
-        {
-            let mut loaded = self.loaded.lock().unwrap_or_else(|e| e.into_inner());
-            for name in names {
-                loaded.insert(name);
-            }
-        }
+        let mut added = false;
         let pruned = match self.packs.write() {
             Ok(mut packs) => {
-                packs.extend(opened);
+                let mut loaded = self.loaded.lock().unwrap_or_else(|e| e.into_inner());
+                for (name, pack) in opened {
+                    loaded.insert(name);
+                    if !packs.iter().any(|existing| existing.path == pack.path) {
+                        packs.push(pack);
+                        added = true;
+                    }
+                }
+                drop(loaded);
                 prune_covered(&mut packs)
             }
             Err(_) => Vec::new(),
         };
         remove_packs(pruned);
-        true
+        added
     }
 
     fn maybe_refresh_on_miss(&self) -> bool {
@@ -427,14 +441,19 @@ impl Store {
         if now.saturating_sub(last) < MISS_REFRESH_INTERVAL_MS {
             return false;
         }
-        if self.last_miss_probe_ms.compare_exchange(last, now, Ordering::Relaxed, Ordering::Relaxed).is_err() {
+        // Serialize miss-refresh against in-process flushes and compactions without ever stalling
+        // callers if a flush or compaction is already underway.
+        let Ok(_guard) = self.flush_lock.try_lock() else { return false };
+        let last = self.last_miss_probe_ms.load(Ordering::Relaxed);
+        if now.saturating_sub(last) < MISS_REFRESH_INTERVAL_MS {
             return false;
         }
+        self.last_miss_probe_ms.store(now, Ordering::Relaxed);
         let Some(stamp) = crate::files::stamp(&self.packs_dir) else { return false };
         if stamp.modified == self.last_dir_modified.load(Ordering::Relaxed) {
             return false;
         }
-        self.refresh_from_disk()
+        self.refresh_from_disk_locked()
     }
 
     #[inline]
@@ -513,7 +532,6 @@ impl Store {
         // instead of leaving duplicate delta packs on disk. Deferred mid-run flushes use try_lock
         // so workers keep working while a peer publishes; final flushes wait so every unique entry
         // persists without duplicating peers' packs.
-        const FLUSH_LOCK: &str = "flush.lock";
         let _ = std::fs::create_dir_all(&self.packs_dir);
         let cross_lock = std::fs::OpenOptions::new()
             .create(true)
@@ -528,7 +546,7 @@ impl Store {
             }
         }
         // Pick up any pack another process just published before deciding what is still missing.
-        self.refresh_from_disk();
+        self.refresh_from_disk_locked();
         let mut to_write: Vec<(EntryKey, Arc<[u8]>)> = {
             let Ok(packs) = self.packs.read() else { return };
             let Ok(mut map) = self.pending.lock() else { return };
@@ -558,7 +576,9 @@ impl Store {
         if let Some(pack) = published {
             let (need_compact, pruned) = match self.packs.write() {
                 Ok(mut packs) => {
-                    packs.push(pack);
+                    if !packs.iter().any(|existing| existing.path == pack.path) {
+                        packs.push(pack);
+                    }
                     let pruned = prune_covered(&mut packs);
                     (packs.len() > COMPACT_THRESHOLD, pruned)
                 }
@@ -609,7 +629,7 @@ impl Store {
         if lock.try_lock().is_err() {
             return;
         }
-        self.refresh_from_disk();
+        self.refresh_from_disk_locked();
         let snapshot: Vec<Arc<Pack>> = match self.packs.read() {
             Ok(packs) => packs.clone(),
             Err(_) => return,
@@ -617,6 +637,14 @@ impl Store {
         if snapshot.len() <= COMPACT_THRESHOLD {
             return;
         }
+        self.compact_snapshot(snapshot);
+        self.sweep_stale_temps();
+        drop(lock);
+    }
+
+    /// Merges `snapshot` into one pack and drops only the packs in `snapshot` from `self.packs`,
+    /// keeping any pack added outside `snapshot`.
+    fn compact_snapshot(&self, snapshot: Vec<Arc<Pack>>) {
         // (only payloads that read as they were stored: a damaged copy is left out, or replaced by another pack's)
         let mut merged: FxHashMap<EntryKey, (&[u8], u64)> = FxHashMap::default();
         for pack in &snapshot {
@@ -631,18 +659,25 @@ impl Store {
         let Some(new_pack) = self.publish_pack(&buf) else { return };
         let new_path = new_pack.path.clone();
         let old_paths: Vec<PathBuf> = snapshot.iter().filter(|p| p.path != new_path).map(|p| p.path.clone()).collect();
-        // Drop our own mappings of the old packs before attempting to unlink them (Windows forbids
-        // removing files while mapped in any process; other processes' mappings simply leave the
-        // old file until a later compaction).
-        if let Ok(mut packs) = self.packs.write() {
-            *packs = vec![new_pack];
-        }
+        let old_set: FxHashSet<PathBuf> = old_paths.iter().cloned().collect();
+        // Drop only our mappings of the compacted snapshot packs before unlinking them, preserving
+        // any pack loaded outside `snapshot`.
+        let (extra_pruned, live): (Vec<PathBuf>, FxHashSet<PathBuf>) = match self.packs.write() {
+            Ok(mut packs) => {
+                packs.retain(|p| !old_set.contains(&p.path) && p.path != new_path);
+                packs.push(new_pack);
+                let extra_pruned = prune_covered(&mut packs);
+                let live = packs.iter().map(|p| p.path.clone()).collect();
+                (extra_pruned, live)
+            }
+            Err(_) => (Vec::new(), FxHashSet::default()),
+        };
         drop(snapshot);
-        for old in old_paths {
-            let _ = std::fs::remove_file(&old);
+        for old in old_paths.into_iter().chain(extra_pruned) {
+            if !live.contains(&old) {
+                let _ = std::fs::remove_file(&old);
+            }
         }
-        self.sweep_stale_temps();
-        drop(lock);
     }
 
     fn sweep_stale_temps(&self) {
@@ -675,7 +710,7 @@ fn prune_covered(packs: &mut Vec<Arc<Pack>>) -> Vec<PathBuf> {
     let mut pruned = Vec::new();
     packs.retain(|pack| {
         let keep = Arc::ptr_eq(pack, &largest) || !largest.covers(pack);
-        if !keep {
+        if !keep && pack.path != largest.path {
             pruned.push(pack.path.clone());
         }
         keep
@@ -792,7 +827,7 @@ fn for_each_store(mut f: impl FnMut(&Store)) {
 }
 
 pub(crate) fn flush_all() {
-    if super::is_batch_frozen() {
+    if SUPPRESS_PER_RUN_FLUSH.load(Ordering::Relaxed) {
         // In-process `ree run --batch` shares one Store across all worker threads and flushes once
         // on batch completion so concurrent workers write a single pack with zero compaction churn.
         return;
@@ -1346,15 +1381,20 @@ mod tests {
     }
 
     /// One stress worker (a child process): fills the store in rounds, as a batch worker does one job after another, and
-    /// checks every entry it can read, its own and the other workers', after each round. Returns the bad reads.
+    /// checks every entry it can read, its own and the other workers', after each round. Each round introduces a new
+    /// slice of entries so even with `flush.lock` deduplication the run publishes more than `COMPACT_THRESHOLD` packs
+    /// and exercises real cross-process compaction. Returns the bad reads.
     fn stress_worker(dir: &Path, worker: usize, entries: usize, rounds: usize) -> Vec<String> {
         let (abi, _) = abi_info();
         let store = Store::open_at(dir.to_path_buf(), *abi);
         let mut bad = Vec::new();
+        let per_round = entries / rounds;
         for round in 0..rounds {
-            // each round puts a slice of the shared entries, starting at another place for each worker
-            for step in 0..entries / rounds {
-                let index = (worker * 97 + round * (entries / rounds) + step) % entries;
+            let base = round * per_round;
+            // Every worker writes overlapping entries inside this round's brand-new slice so
+            // concurrent flushes contend on flush.lock while still advancing past COMPACT_THRESHOLD.
+            for step in 0..per_round {
+                let index = base + (worker * 7 + step) % per_round;
                 let key = stress_key(index);
                 if store.get(&key).is_none() {
                     store.put(key, Arc::from(stress_payload(index)));
@@ -1362,7 +1402,7 @@ mod tests {
             }
             store.flush();
             let fresh = Store::open_at(dir.to_path_buf(), *abi);
-            for index in 0..entries {
+            for index in 0..base + per_round {
                 for (label, reader) in [("own", &store), ("fresh", &fresh)] {
                     if let Some(found) = reader.get(&stress_key(index)) {
                         if *found != *stress_payload(index) {
@@ -1380,8 +1420,8 @@ mod tests {
     /// job, compacting when deltas pile up) never read an entry back with other bytes than were stored.
     #[test]
     fn processes_filling_an_empty_store_at_once_read_back_what_was_stored() {
-        const ENTRIES: usize = 400;
-        const ROUNDS: usize = 10;
+        const ENTRIES: usize = 600;
+        const ROUNDS: usize = 24;
         if let Some(dir) = std::env::var_os("REE_MODSTORE_STRESS_DIR") {
             let worker: usize = std::env::var("REE_MODSTORE_STRESS_WORKER").unwrap().parse().unwrap();
             let bad = stress_worker(Path::new(&dir), worker, ENTRIES, ROUNDS);
@@ -1416,6 +1456,18 @@ mod tests {
                 if !output.status.success() && !text.contains("BAD ") {
                     failures.push(format!("try {attempt}: a worker failed: {}{}", text, String::from_utf8_lossy(&output.stderr)));
                 }
+            }
+            // Verify every entry persisted and compaction kept packs bounded below ROUNDS (> COMPACT_THRESHOLD).
+            let (abi, _) = abi_info();
+            let final_reader = Store::open_at(dir.clone(), *abi);
+            for index in 0..ENTRIES {
+                if final_reader.get(&stress_key(index)).as_deref() != Some(stress_payload(index).as_slice()) {
+                    failures.push(format!("try {attempt}: final reader missing/corrupt entry {index}"));
+                }
+            }
+            let remaining_packs = final_reader.packs.read().unwrap().len();
+            if remaining_packs > COMPACT_THRESHOLD {
+                failures.push(format!("try {attempt}: expected compaction across {ROUNDS} rounds (>{COMPACT_THRESHOLD}), got {remaining_packs} active packs"));
             }
             let _ = std::fs::remove_dir_all(&dir);
         }
@@ -1607,6 +1659,9 @@ mod tests {
         let dir = temp_dir("deferred");
         let (abi, _) = abi_info();
         let store = Store::open_at(dir.clone(), *abi);
+        // Open sibling BEFORE `store` publishes anything so sibling's `put` genuinely buffers all
+        // overlapping keys in memory and exercises the flush-time refresh + deduplication path.
+        let sibling = Store::open_at(dir.clone(), *abi);
         for index in 0..4 {
             store.put(stress_key(index), Arc::from(format!("small-{index}").into_bytes()));
             store.flush_deferred();
@@ -1615,21 +1670,24 @@ mod tests {
         for index in 0..4 {
             assert_eq!(store.get(&stress_key(index)).as_deref(), Some(format!("small-{index}").as_bytes()));
         }
-        // Adding entries past DEFERRED_FLUSH_ENTRIES publishes one combined pack.
+        // Populate both stores past DEFERRED_FLUSH_ENTRIES while the directory is still empty.
         for index in 4..DEFERRED_FLUSH_ENTRIES {
             store.put(stress_key(index), Arc::from(format!("small-{index}").into_bytes()));
         }
-        store.flush_deferred();
-        assert_eq!(pack_files(&dir).len(), 1, "one pack published once threshold is reached");
-        // Another sibling store that compiled the same entries plus a tiny delta drops the
-        // already-published duplicates on refresh and keeps its tiny remainder buffered.
-        let sibling = Store::open_at(dir.clone(), *abi);
         for index in 0..DEFERRED_FLUSH_ENTRIES {
             sibling.put(stress_key(index), Arc::from(format!("small-{index}").into_bytes()));
         }
         sibling.put(stress_key(888), Arc::from(b"tiny-unique".as_slice()));
+        assert_eq!(sibling.pending_entries.load(Ordering::Relaxed), DEFERRED_FLUSH_ENTRIES + 1);
+
+        store.flush_deferred();
+        assert_eq!(pack_files(&dir).len(), 1, "one pack published once threshold is reached");
+
+        // Sibling enters flush_inner past threshold, refreshes from disk, drops the already-published
+        // duplicates via map.retain, and keeps only its 1 unique entry buffered below threshold.
         sibling.flush_deferred();
         assert_eq!(pack_files(&dir).len(), 1, "post-dedup remainder below threshold stays buffered");
+        assert_eq!(sibling.pending_entries.load(Ordering::Relaxed), 1, "only the unique entry should remain pending after dedup");
         sibling.flush();
         assert_eq!(pack_files(&dir).len(), 2);
 
@@ -1644,6 +1702,201 @@ mod tests {
         assert_eq!(reader.get(&stress_key(999)).as_deref(), Some(b"tail".as_slice()));
         assert_eq!(reader.get(&stress_key(0)).as_deref(), Some(b"small-0".as_slice()));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn deferred_flush_skips_while_another_process_holds_flush_lock() {
+        let dir = temp_dir("flush-lock-defer");
+        let (abi, _) = abi_info();
+        let store = Store::open_at(dir.clone(), *abi);
+        let packs_dir = dir.join("packs");
+        std::fs::create_dir_all(&packs_dir).unwrap();
+        let lock = std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(packs_dir.join(FLUSH_LOCK)).unwrap();
+        lock.try_lock().unwrap();
+        for index in 0..DEFERRED_FLUSH_ENTRIES {
+            store.put(stress_key(index), Arc::from(format!("locked-{index}").into_bytes()));
+        }
+        // Must return immediately without blocking or publishing while flush.lock is held.
+        store.flush_deferred();
+        assert!(pack_files(&dir).is_empty(), "deferred flush must skip while flush.lock is held");
+        assert_eq!(store.pending_entries.load(Ordering::Relaxed), DEFERRED_FLUSH_ENTRIES);
+        drop(lock);
+        store.flush_deferred();
+        assert_eq!(pack_files(&dir).len(), 1, "deferred flush publishes once flush.lock is free");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn miss_refresh_picks_up_sibling_pack_after_interval() {
+        let dir = temp_dir("miss-refresh");
+        let (abi, _) = abi_info();
+        let writer = Store::open_at(dir.clone(), *abi);
+        let reader = Store::open_at(dir.clone(), *abi);
+        let key = stress_key(42);
+        let payload = stress_payload(42);
+        writer.put(key, Arc::from(payload.as_slice()));
+        writer.flush();
+        // Immediately after open (within MISS_REFRESH_INTERVAL_MS), miss probe is throttled.
+        assert!(reader.get(&key).is_none());
+        // Once the interval passes, a cold miss refreshes from disk and finds the sibling's pack.
+        std::thread::sleep(Duration::from_millis(MISS_REFRESH_INTERVAL_MS + 60));
+        assert_eq!(reader.get(&key).as_deref(), Some(payload.as_slice()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn compaction_preserves_packs_outside_its_snapshot_and_races_cleanly_with_miss_refresh() {
+        let dir = temp_dir("compact-snapshot-race");
+        let (abi, _) = abi_info();
+        let store = Store::open_at(dir.clone(), *abi);
+        // Seed COMPACT_THRESHOLD packs and take a snapshot BEFORE an extra pack is loaded.
+        for index in 0..COMPACT_THRESHOLD {
+            store.put(stress_key(index), Arc::from(stress_payload(index)));
+            store.flush();
+        }
+        let snapshot = store.packs.read().unwrap().clone();
+        // Simulate a pack loaded into `store.packs` after `snapshot` was taken.
+        let extra_path = write_stress_pack(&dir, 900..901);
+        assert!(store.refresh_from_disk_locked());
+        assert_eq!(store.get(&stress_key(900)).as_deref(), Some(stress_payload(900).as_slice()));
+        // Compacting `snapshot` must keep `extra_path` in `store.packs` and never drop it while
+        // keeping its name in `loaded`.
+        store.compact_snapshot(snapshot);
+        {
+            let packs = store.packs.read().unwrap();
+            let paths: FxHashSet<PathBuf> = packs.iter().map(|p| p.path.clone()).collect();
+            assert_eq!(paths.len(), packs.len(), "pack list must never contain duplicate paths");
+            assert!(paths.contains(&extra_path), "pack loaded outside snapshot must survive compaction");
+        }
+        assert_eq!(store.get(&stress_key(900)).as_deref(), Some(stress_payload(900).as_slice()));
+        for index in 0..COMPACT_THRESHOLD {
+            assert_eq!(store.get(&stress_key(index)).as_deref(), Some(stress_payload(index).as_slice()));
+        }
+
+        // Also hammer concurrent compactions + miss-refreshes across threads on one shared Store.
+        let shared = Arc::clone(&store);
+        let dir_writer = dir.clone();
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_reader = Arc::clone(&stop);
+        let reader_thread = std::thread::spawn(move || {
+            for step in 0..200 {
+                if stop_reader.load(Ordering::Relaxed) {
+                    break;
+                }
+                // Force miss-refresh eligibility on every iteration to maximize lock contention.
+                shared.last_miss_probe_ms.store(0, Ordering::Relaxed);
+                let _ = shared.get(&stress_key(50_000 + step));
+                let packs = shared.packs.read().unwrap();
+                let unique: FxHashSet<PathBuf> = packs.iter().map(|p| p.path.clone()).collect();
+                assert_eq!(unique.len(), packs.len(), "concurrent miss-refresh + compaction duplicated a pack");
+            }
+        });
+        for round in 0..4 {
+            let base = 2_000 + round * (COMPACT_THRESHOLD + 2);
+            for offset in 0..=COMPACT_THRESHOLD {
+                write_stress_pack(&dir_writer, (base + offset)..(base + offset + 1));
+                store.put(stress_key(10_000 + base + offset), Arc::from(stress_payload(10_000 + base + offset)));
+                store.flush();
+            }
+        }
+        stop.store(true, Ordering::Relaxed);
+        reader_thread.join().unwrap();
+        let verify = Store::open_at(dir.clone(), *abi);
+        assert_eq!(verify.get(&stress_key(900)).as_deref(), Some(stress_payload(900).as_slice()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn killed_process_holding_flush_lock_releases_lock_for_next_flush() {
+        if let Some(lock_path) = std::env::var_os("REE_MODSTORE_HOLD_LOCK") {
+            let file = std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(&lock_path).unwrap();
+            file.lock().unwrap();
+            if let Some(ready_path) = std::env::var_os("REE_MODSTORE_HOLD_READY") {
+                let _ = std::fs::write(&ready_path, b"locked");
+            }
+            std::thread::sleep(Duration::from_secs(60));
+            return;
+        }
+        let dir = temp_dir("kill-lock");
+        let (abi, _) = abi_info();
+        let packs_dir = dir.join("packs");
+        std::fs::create_dir_all(&packs_dir).unwrap();
+        let lock_path = packs_dir.join(FLUSH_LOCK);
+        let ready_path = dir.join("locked.ready");
+        let exe = std::env::current_exe().unwrap();
+        let mut child = std::process::Command::new(&exe)
+            .args(["lua::modules::store::tests::killed_process_holding_flush_lock_releases_lock_for_next_flush", "--exact", "--nocapture", "--test-threads=1"])
+            .env("REE_MODSTORE_HOLD_LOCK", &lock_path)
+            .env("REE_MODSTORE_HOLD_READY", &ready_path)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !ready_path.is_file() {
+            assert!(Instant::now() < deadline, "lock-holder child did not acquire flush.lock in time");
+            if let Ok(Some(status)) = child.try_wait() {
+                panic!("lock-holder child exited early with {status}");
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let store = Store::open_at(dir.clone(), *abi);
+        for index in 0..DEFERRED_FLUSH_ENTRIES {
+            store.put(stress_key(index), Arc::from(format!("after-kill-{index}").into_bytes()));
+        }
+        // Deferred flush skips while the child holds flush.lock.
+        store.flush_deferred();
+        assert!(pack_files(&dir).is_empty(), "deferred flush must skip while child holds flush.lock");
+        // Kill the holder abruptly; the OS must release flush.lock so the next flush succeeds.
+        child.kill().unwrap();
+        let _ = child.wait();
+        store.flush();
+        assert_eq!(pack_files(&dir).len(), 1, "flush must succeed after killed holder releases flush.lock");
+        let reader = Store::open_at(dir.clone(), *abi);
+        assert_eq!(reader.get(&stress_key(0)).as_deref(), Some(b"after-kill-0".as_slice()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn frozen_mode_still_runs_deferred_flush_unless_in_process_batch_suppresses_it() {
+        if let Some(dir) = std::env::var_os("REE_MODSTORE_FROZEN_CHILD") {
+            let dir = PathBuf::from(dir);
+            let store = for_state_dir(&dir).unwrap();
+            for index in 0..DEFERRED_FLUSH_ENTRIES {
+                store.put(stress_key(index), Arc::from(format!("frozen-{index}").into_bytes()));
+            }
+            // Frozen mode + deferred flush (rur engine-batch --frozen) MUST still run deferred flush.
+            super::super::set_batch_frozen(true);
+            set_deferred_flush(true);
+            set_suppress_per_run_flush(false);
+            flush_all();
+            assert!(!store.has_pending.load(Ordering::Acquire), "frozen mode with deferred flush must publish past threshold");
+            // In-process batch suppression (`ree run --batch`) skips per-run flush_all().
+            for index in DEFERRED_FLUSH_ENTRIES..(DEFERRED_FLUSH_ENTRIES * 2) {
+                store.put(stress_key(index), Arc::from(format!("suppressed-{index}").into_bytes()));
+            }
+            set_suppress_per_run_flush(true);
+            flush_all();
+            assert!(store.has_pending.load(Ordering::Acquire), "SUPPRESS_PER_RUN_FLUSH must defer until explicit flush_all_now");
+            set_suppress_per_run_flush(false);
+            flush_all_now();
+            assert!(!store.has_pending.load(Ordering::Acquire));
+            return;
+        }
+        let dir = temp_dir("frozen-deferred");
+        let exe = std::env::current_exe().unwrap();
+        let output = std::process::Command::new(&exe)
+            .args(["lua::modules::store::tests::frozen_mode_still_runs_deferred_flush_unless_in_process_batch_suppresses_it", "--exact", "--nocapture", "--test-threads=1"])
+            .env("REE_MODSTORE_FROZEN_CHILD", &dir)
+            .output()
+            .unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            output.status.success(),
+            "frozen-deferred child failed:\n{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     #[test]

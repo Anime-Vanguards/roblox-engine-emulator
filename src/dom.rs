@@ -231,6 +231,9 @@ impl<'a> IntoIterator for &'a Children {
 pub struct ScriptSource {
     /// Script source (ModuleScript / Script) when held in memory
     pub source: Option<Rc<[u8]>>,
+    /// First-read source bytes borrowed from the process cache (zero-copy `Arc` clone that pins the
+    /// module's initial file text across `.Source`, `Clone()`, and Actor VMs without copying into `Rc`)
+    pub pinned_source: Option<std::sync::Arc<[u8]>>,
     /// File the source is read from (project scripts, JSON modules)
     pub source_path: Option<Rc<str>>,
     /// Offline stand-in package file this module's source comes from
@@ -242,6 +245,12 @@ impl Instance {
     #[inline]
     pub fn source(&self) -> Option<&Rc<[u8]>> {
         self.script.as_ref()?.source.as_ref()
+    }
+
+    /// Its first-read borrowed source bytes kept from the process cache.
+    #[inline]
+    pub fn pinned_source(&self) -> Option<&std::sync::Arc<[u8]>> {
+        self.script.as_ref()?.pinned_source.as_ref()
     }
 
     /// The file its source is read from.
@@ -263,7 +272,15 @@ impl Instance {
 
     pub fn set_source(&mut self, source: Option<Rc<[u8]>>) {
         if source.is_some() || self.script.is_some() {
-            self.script_mut().source = source;
+            let script = self.script_mut();
+            script.source = source;
+            script.pinned_source = None;
+        }
+    }
+
+    pub fn set_pinned_source(&mut self, source: Option<std::sync::Arc<[u8]>>) {
+        if source.is_some() || self.script.is_some() {
+            self.script_mut().pinned_source = source;
         }
     }
 

@@ -1355,13 +1355,16 @@ pub fn replace_source(engine: &Engine, module: InstanceId, source: &[u8]) -> Res
 /// A script's source text as a shared slice: its file under the mounted roots (read once), else its Source property.
 /// When `compile_bytecode` is false, reading from disk skips eager standard-`require` bytecode compilation.
 pub fn source_rc_opts(engine: &Engine, module: InstanceId, compile_bytecode: bool) -> Option<Rc<[u8]>> {
-    let (source, path) = {
+    let (source, pinned, path) = {
         let state = engine.state.borrow();
         let instance = state.dom.at(module);
-        (instance.source().cloned(), instance.source_path().cloned())
+        (instance.source().cloned(), instance.pinned_source().cloned(), instance.source_path().cloned())
     };
     if let Some(source) = source {
         return Some(source);
+    }
+    if let Some(pinned) = pinned {
+        return Some(Rc::from(&*pinned));
     }
     if let Some(path) = path {
         note_read(engine, &path);
@@ -1386,6 +1389,16 @@ pub fn source_rc(engine: &Engine, module: InstanceId) -> Option<Rc<[u8]>> {
 
 /// A script's source text: its file under the mounted roots (read once), else its Source property.
 pub fn source_of(engine: &Engine, module: InstanceId) -> Option<Vec<u8>> {
+    {
+        let state = engine.state.borrow();
+        let instance = state.dom.at(module);
+        if let Some(source) = instance.source() {
+            return Some(source.to_vec());
+        }
+        if let Some(pinned) = instance.pinned_source() {
+            return Some(pinned.to_vec());
+        }
+    }
     source_rc(engine, module).map(|source| source.to_vec())
 }
 
@@ -1776,21 +1789,31 @@ pub fn require_begin(lua: &Lua, engine: &Rc<Engine>, (target, caller, vm): (LuaV
     }
 
     // File-backed modules with no in-memory override borrow the shared `Arc<[u8]>` source and
-    // precompiled bytecode directly without copying the source bytes into a per-instance `Rc<[u8]>`.
-    let in_memory_source = engine.state.borrow().dom.at(module).source().cloned();
-    let loaded = match (&in_memory_source, &path) {
-        (Some(source), _) => Some((None, Some(source.clone()), None)),
-        (None, Some(path)) => {
+    // precompiled bytecode directly without copying the source bytes into a per-instance `Rc<[u8]>`,
+    // while storing the `Arc<[u8]>` on the instance so `.Source`, `Clone()`, and Actor VMs all keep
+    // seeing the first-read text for the rest of the session.
+    let (in_memory_source, pinned) = {
+        let state = engine.state.borrow();
+        let instance = state.dom.at(module);
+        (instance.source().cloned(), instance.pinned_source().cloned())
+    };
+    let loaded = match (&in_memory_source, &pinned, &path) {
+        (Some(source), _, _) => Some((None, Some(source.clone()), None)),
+        (None, Some(pinned), _) => Some((Some(pinned.clone()), None, None)),
+        (None, None, Some(path)) => {
             note_read(engine, path);
             match crate::timing::time("modules: read sources", || read_file_opts(engine, path, true)) {
-                Ok((bytes, bytecode)) => Some((Some(bytes), None, bytecode)),
+                Ok((bytes, bytecode)) => {
+                    engine.state.borrow_mut().dom.at_mut(module).set_pinned_source(Some(bytes.clone()));
+                    Some((Some(bytes), None, bytecode))
+                }
                 Err(_) => match engine.state.borrow().dom.raw_get(module, K::Source as NameId) {
                     Some(Value::String(source)) => Some((None, Some(Rc::from(source.as_bytes())), None)),
                     _ => None,
                 },
             }
         }
-        (None, None) => match engine.state.borrow().dom.raw_get(module, K::Source as NameId) {
+        (None, None, None) => match engine.state.borrow().dom.raw_get(module, K::Source as NameId) {
             Some(Value::String(source)) => Some((None, Some(Rc::from(source.as_bytes())), None)),
             _ => None,
         },

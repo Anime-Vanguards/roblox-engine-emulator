@@ -318,9 +318,11 @@ pub fn batch_cli(args: &[String], host: &Host) -> i32 {
 
     modules::reuse_compiled_modules();
     modules::set_batch_frozen(true);
+    modules::store::set_suppress_per_run_flush(true);
     struct BatchStoreFlushGuard;
     impl Drop for BatchStoreFlushGuard {
         fn drop(&mut self) {
+            modules::store::set_suppress_per_run_flush(false);
             modules::set_batch_frozen(false);
             modules::flush_module_store();
         }
