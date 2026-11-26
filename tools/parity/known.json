@@ -171,10 +171,6 @@
 		{
 			"line": "write DiagonalFieldOfView 120 65.661827087402344",
 			"why": "a DiagonalFieldOfView write on a wide viewport: 2 of 50 inverses (90 and 120) read FieldOfView one or two float32 steps off a client's"
-		},
-		{
-			"line": "screen new, a frame after it was made current viewport",
-			"why": "a camera made the CurrentCamera takes the screen's viewport (and a near plane 0.1 out) at the render step after the PreRender handlers; not emulated: a script's write of Workspace.CurrentCamera does not take, and only the start camera has the screen"
 		}
 	],
 	"camera_units": [

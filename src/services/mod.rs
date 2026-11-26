@@ -837,13 +837,10 @@ fn install_workspace_and_camera(behaviors: &mut Behaviors, reflection: &Reflecti
         if let Some(n) = name(reflection, "GetPhysicsThrottling") {
             behaviors.add_method(workspace, n, constant(|_| Ok(LuaValue::Number(100.0))));
         }
-        behaviors.add_getter(workspace, K::CurrentCamera as NameId, getter(|lua, engine, id| {
-            let stored = engine.state.borrow().dom.at(id).stored(K::CurrentCamera as NameId).cloned();
-            let camera = match stored {
-                Some(Value::Instance(camera)) => camera,
-                _ => engine.world().camera,
-            };
-            Ok(instance_value(lua, engine, camera)?)
+        // (nil after a nil write until the simulation step gives it a camera: world/camera.rs, which also takes the writes)
+        behaviors.add_getter(workspace, K::CurrentCamera as NameId, getter(|lua, engine, _| match crate::world::camera::current(engine) {
+            Some(camera) => Ok(instance_value(lua, engine, camera)?),
+            None => Ok(LuaValue::Nil),
         }));
     }
     if let Some(camera) = class(reflection, "Camera") {

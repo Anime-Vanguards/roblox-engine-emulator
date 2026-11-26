@@ -47,11 +47,10 @@ use mlua::prelude::*;
 
 use super::{camera, camera_fov, cframe_arg, cframe_name, frame, query, vector_arg};
 use crate::{
-    ClassId, Engine, InstanceId, K, NameId, State,
+    ClassId, Engine, InstanceId, NameId, State,
     instance as core,
     lua::{Args, Flow, raise, values},
     services::Behaviors,
-    value::Value,
 };
 
 type V = [f32; 3];
@@ -397,13 +396,6 @@ fn aim(from: V, target: V, up: V) -> f32m::Rot {
     f32m::from_columns(x, y, z)
 }
 
-fn current_camera(engine: &Engine) -> Option<InstanceId> {
-    match engine.state.borrow().dom.at(engine.world().workspace).stored(K::CurrentCamera as NameId) {
-        Some(Value::Instance(id)) => Some(*id),
-        _ => None,
-    }
-}
-
 /// The CurrentCamera's tween steps by `delta`, at the start of a client's render step (before the BindToRenderStep
 /// callbacks; services' render-step hook).
 pub fn step(engine: &Engine, delta: f64) {
@@ -421,7 +413,7 @@ pub fn step(engine: &Engine, delta: f64) {
             cameras.finished.push(id);
         }
     }
-    let Some(camera) = current_camera(engine) else { return };
+    let Some(camera) = camera::current(engine) else { return };
     let Some(mut tween) = engine.state.borrow_mut().cameras.tweens.remove(&camera) else { return };
     if !tween.ending {
         let names = names(engine);

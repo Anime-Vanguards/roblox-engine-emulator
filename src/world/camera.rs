@@ -10,8 +10,18 @@
 //! - Only the camera a run starts with has a viewport (the window) and a near plane 0.1 studs out (NearPlaneZ -0.1). Any other
 //!   camera reads ViewportSize 1, 1 and NearPlaneZ -0.5 and projects into that 1 x 1 viewport (the start camera keeps its
 //!   values when it is no longer current). A camera made the CurrentCamera reads 1 x 1 until the render step after the
-//!   PreRender handlers, which gives it the window and a near plane 0.1 out (both Changed fire) for good. Not emulated: here a
-//!   script's write of Workspace.CurrentCamera does not take, so the start camera stays the current one.
+//!   PreRender handlers, which gives it the window and a near plane 0.1 out (ViewportSize's Changed, then NearPlaneZ's) for
+//!   good, wherever it is (`Cameras::screened`, `Cameras::near`).
+//! - Workspace.CurrentCamera (Studio 0.747, a rendered and a headless playing client and a server alike:
+//!   tools/parity/probes/camera_current.luau): a write takes at once, a camera outside the Workspace or a destroyed one too, and
+//!   when it changes the current camera every other Camera that is a child of the Workspace is parented to nil, in child
+//!   order, after the Workspace's Changed (one in a Folder stays); writing the current camera again does nothing. nil reads
+//!   nil. After the PostSimulation handlers, a CurrentCamera that is nil or not in the Workspace (a descendant) is replaced
+//!   by the Workspace's first Camera child (as a write: the other children go), or else by a new Camera named "Camera" put
+//!   in the Workspace, which has the window's viewport from the start and its near plane 0.1 out from the next render step.
+//!   A wrong class raises "Expected Camera got Part for Workspace.CurrentCamera.", any other value "Unable to assign
+//!   property CurrentCamera. Camera expected, got string". Edit mode (not measured: the sim has no edit DataModel) keeps
+//!   the write as it was: it stores the camera, and nil reads the start camera.
 //! - A Camera refuses a CFrame (or CoordinateFrame) written to it that is not finite or has a rotation entry of 1.2 or more
 //!   either way, whether a script or one of its methods writes it: the write leaves it as it was and fires nothing, and
 //!   costs what an unchanged write does (measured, a client and a server alike: an entry of 1.199 is kept, scaled rotations
@@ -35,11 +45,12 @@ use lune_roblox::datatypes::types as lune;
 use lune_roblox::datatypes::types::float32 as f32m;
 use mlua::prelude::*;
 use rbx_dom_weak::types as dom;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::{cframe_name, frame, method, query, vector_arg};
 use crate::{
-    Engine, InstanceId, NameId,
+    Engine, InstanceId, K, NameId,
+    instance as core,
     lua::{Args, Flow, convert, instance_id, instance_value, raise, typeof_value, types::LEnumItem, values},
     value::Value,
 };
@@ -52,6 +63,11 @@ use crate::{
 #[derive(Default)]
 pub struct Cameras {
     rolls: FxHashMap<InstanceId, f32>,
+    /// The cameras besides the start camera that have the window for their viewport: each one a render step found current, and
+    /// the cameras the engine made to be current (they keep it)
+    screened: FxHashSet<InstanceId>,
+    /// The cameras besides the start camera whose near plane is 0.1 studs out: each one a render step found current
+    near: FxHashSet<InstanceId>,
     /// A client keeps the field of view in radians: what a DiagonalFieldOfView / MaxAxisFieldOfView write stored, with the
     /// FieldOfView it reads as (float32 bits), while FieldOfView still holds that
     pub(super) radians: FxHashMap<InstanceId, (u32, f32)>,
@@ -86,13 +102,14 @@ struct View {
     near: f32,
 }
 
-/// Whether the camera has the run's screen for its viewport: only the camera the run starts with does.
+/// Whether the camera has the run's screen for its viewport: the camera the run starts with, a camera a render step found
+/// current and a camera the engine made current (`Cameras::screened`).
 pub fn has_screen(engine: &Engine, camera: InstanceId) -> bool {
-    camera == engine.world().camera
+    camera == engine.world().camera || engine.state.borrow().cameras.screened.contains(&camera)
 }
 
-/// The camera's ViewportSize: the run's screen (`--camera` / the viewport) for the camera the run starts with, 1 x 1 for any
-/// other camera.
+/// The camera's ViewportSize: the run's screen (`--camera` / the viewport) for a camera that has it ([`has_screen`]), 1 x 1 for
+/// any other camera.
 pub fn viewport_size(engine: &Engine, camera: InstanceId) -> (f32, f32) {
     if has_screen(engine, camera) {
         let device = &engine.options.profile.device;
@@ -104,9 +121,10 @@ pub fn viewport_size(engine: &Engine, camera: InstanceId) -> (f32, f32) {
     }
 }
 
-/// How far ahead of the camera its near plane is (`-NearPlaneZ`): 0.1 for the camera the run starts with, 0.5 for others.
+/// How far ahead of the camera its near plane is (`-NearPlaneZ`): 0.1 for the camera the run starts with and a camera a render
+/// step found current (`Cameras::near`), 0.5 for others.
 pub fn near_plane(engine: &Engine, camera: InstanceId) -> f32 {
-    if has_screen(engine, camera) { 0.1 } else { 0.5 }
+    if camera == engine.world().camera || engine.state.borrow().cameras.near.contains(&camera) { 0.1 } else { 0.5 }
 }
 
 /// The top inset the camera's screen forms measure from: GuiService's (the client profile's device.topbarInset) for the camera with the screen's
@@ -278,7 +296,7 @@ fn number(number: f32) -> Result<LuaMultiValue, Flow> {
     Ok(values([LuaValue::Number(f64::from(number))]))
 }
 
-// The CFrames a camera takes (module notes)
+// The CFrames a camera takes, and the CurrentCamera (module notes)
 
 /// Whether a Camera takes a CFrame written to it: every component finite and every rotation entry under 1.2 either way.
 pub fn takes_cframe(cframe: &dom::CFrame) -> bool {
@@ -294,6 +312,103 @@ pub fn takes(value: &Value) -> bool {
             _ => true,
         },
         _ => true,
+    }
+}
+
+/// The Workspace's CurrentCamera: none after a nil write until the simulation step gives it one (in edit mode, the start camera
+/// then), or when it was freed.
+pub fn current(engine: &Engine) -> Option<InstanceId> {
+    let world = engine.world();
+    let state = engine.state.borrow();
+    match state.dom.at(world.workspace).stored(K::CurrentCamera as NameId) {
+        Some(Value::Instance(id)) if state.dom.get(*id).is_some() => Some(*id),
+        _ if engine.options.edit_mode() => state.dom.get(world.camera).is_some().then_some(world.camera),
+        _ => None,
+    }
+}
+
+/// Makes `camera` the CurrentCamera (none for nil). When that changes it, every other Camera that is a child of the Workspace is
+/// parented to nil, in child order, after the Workspace's Changed (in play mode: edit mode keeps the plain write).
+fn make_current(engine: &Engine, camera: Option<InstanceId>) {
+    let workspace = engine.world().workspace;
+    let hooks = engine.hooks.borrow();
+    let mut state = engine.state.borrow_mut();
+    let value = camera.map_or(Value::Nil, Value::Instance);
+    if !core::raw_set(&mut state, &engine.reflection, &hooks, workspace, K::CurrentCamera as NameId, value) || engine.options.edit_mode() {
+        return;
+    }
+    let Some(camera) = camera else { return };
+    let others: Vec<InstanceId> =
+        state.dom.children_of(workspace).iter().copied().filter(|&child| child != camera && engine.reflection.is_a(state.dom.at(child).class, "Camera")).collect();
+    for other in others {
+        let _ = core::set_parent(&mut state, &engine.reflection, &hooks, other, None);
+    }
+}
+
+/// A script's write of Workspace.CurrentCamera: nil or a Camera (anywhere, destroyed too); the errors a client raises otherwise.
+fn write_current(engine: &Engine, value: &LuaValue) -> Result<(), Flow> {
+    let camera = match value {
+        LuaValue::Nil => None,
+        value => match instance_id(value) {
+            Some(id) => {
+                let class = engine.state.borrow().dom.at(id).class;
+                if !engine.reflection.is_a(class, "Camera") {
+                    return raise(format!("Expected Camera got {} for Workspace.CurrentCamera.", engine.reflection.class(class).name));
+                }
+                Some(id)
+            }
+            None => return raise(format!("Unable to assign property CurrentCamera. Camera expected, got {}", typeof_value(engine, value))),
+        },
+    };
+    make_current(engine, camera);
+    Ok(())
+}
+
+/// After the PostSimulation handlers: a CurrentCamera that is nil or not in the Workspace gives way to the Workspace's first
+/// Camera child, or else to a new Camera named "Camera" put in the Workspace, which has the window for its viewport at once.
+fn settle_current(engine: &Engine) {
+    let workspace = engine.world().workspace;
+    let picked = {
+        let state = engine.state.borrow();
+        if current(engine).is_some_and(|camera| state.dom.is_descendant_of(camera, workspace)) {
+            return;
+        }
+        state.dom.children_of(workspace).iter().copied().find(|&child| engine.reflection.is_a(state.dom.at(child).class, "Camera"))
+    };
+    let camera = match picked {
+        Some(camera) => camera,
+        None => {
+            let Some(class) = engine.reflection.class_id("Camera") else { return };
+            let hooks = engine.hooks.borrow();
+            let mut state = engine.state.borrow_mut();
+            let camera = core::create_named(&mut state, &engine.reflection, class, "Camera");
+            state.cameras.screened.insert(camera);
+            if core::set_parent(&mut state, &engine.reflection, &hooks, camera, Some(workspace)).is_err() {
+                return;
+            }
+            camera
+        }
+    };
+    make_current(engine, Some(camera));
+}
+
+/// The render step, after the PreRender handlers: the CurrentCamera takes the window for its viewport and a near plane 0.1 out
+/// for good, ViewportSize's Changed and then NearPlaneZ's firing for what changed.
+fn promote_current(engine: &Engine) {
+    let Some(camera) = current(engine) else { return };
+    if camera == engine.world().camera {
+        return;
+    }
+    let before = viewport_size(engine, camera);
+    engine.state.borrow_mut().cameras.screened.insert(camera);
+    let sized = viewport_size(engine, camera) != before;
+    let mut state = engine.state.borrow_mut();
+    let near = state.cameras.near.insert(camera);
+    if sized {
+        core::fire_computed_changed(&mut state, &engine.reflection, camera, K::ViewportSize as NameId);
+    }
+    if near && let Some(name) = engine.reflection.name_id("NearPlaneZ") {
+        core::fire_computed_changed(&mut state, &engine.reflection, camera, name);
     }
 }
 
@@ -477,6 +592,8 @@ fn install_methods(engine: &Rc<Engine>, add: &mut impl FnMut(&str, super::Method
         state.cameras.rolls.remove(&id);
         state.cameras.radians.remove(&id);
         state.cameras.tweens.remove(&id);
+        state.cameras.screened.remove(&id);
+        state.cameras.near.remove(&id);
     }));
 }
 
@@ -534,6 +651,21 @@ pub fn install(engine: &Rc<Engine>) {
             }),
         );
     }
+    if let Some(workspace) = engine.reflection.class_id("Workspace") {
+        behaviors.add_setter(workspace, K::CurrentCamera as NameId, Rc::new(|_, engine, _, value| write_current(engine, &value)));
+    }
     drop(behaviors);
     super::camera_moves::install_aliases(engine);
+    // (the simulation step runs in play mode only; a server has no render step)
+    let mut state = engine.state.borrow_mut();
+    state.sched.add_hook(crate::scheduler::Phase::Simulation, Rc::new(|_, engine, _| {
+        settle_current(engine);
+        Ok(())
+    }));
+    if !engine.options.server() && !engine.options.edit_mode() {
+        state.sched.add_hook(crate::scheduler::Phase::PreRender, Rc::new(|_, engine, _| {
+            promote_current(engine);
+            Ok(())
+        }));
+    }
 }

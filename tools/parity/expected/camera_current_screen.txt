@@ -1,0 +1,19 @@
+# engine: Roblox Studio 0.747.0.7471481, a rendered desktop playing client (script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-26
+start Start[Workspace 1920 1080 -0.10000000149011612]
+new in the workspace script: wrote: current New[Workspace 1 1 -0.5] start Start[nil 1920 1080 -0.10000000149011612] watch New[Workspace 1 1 -0.5] | heartbeat: current New[Workspace 1 1 -0.5] watch New[Workspace 1 1 -0.5] | preRender: New Changed ViewportSize | preRender: New Changed NearPlaneZ | preAnimation: current New[Workspace 1920 1080 -0.10000000149011612] watch New[Workspace 1920 1080 -0.10000000149011612]
+new in the workspace after: current New[Workspace 1920 1080 -0.10000000149011612] start Start[nil 1920 1080 -0.10000000149011612] watch New[Workspace 1920 1080 -0.10000000149011612]
+back to the start camera script: wrote: current Start[nil 1920 1080 -0.10000000149011612] start Start[nil 1920 1080 -0.10000000149011612] watch New[nil 1920 1080 -0.10000000149011612] | heartbeat: current Start[nil 1920 1080 -0.10000000149011612] watch New[nil 1920 1080 -0.10000000149011612] | postSimulation: made Made1[Workspace 1920 1080 -0.5] | heartbeat: current Made1[Workspace 1920 1080 -0.5] watch New[nil 1920 1080 -0.10000000149011612] | preRender: Made1 Changed NearPlaneZ | preAnimation: current Made1[Workspace 1920 1080 -0.10000000149011612] watch New[nil 1920 1080 -0.10000000149011612]
+back to the start camera after: current Made1[Workspace 1920 1080 -0.10000000149011612] start Start[nil 1920 1080 -0.10000000149011612] watch New[nil 1920 1080 -0.10000000149011612]
+a camera in no parent script: wrote: current Loose[nil 1 1 -0.5] start Start[nil 1920 1080 -0.10000000149011612] watch Loose[nil 1 1 -0.5] | heartbeat: current Loose[nil 1 1 -0.5] watch Loose[nil 1 1 -0.5] | preRender: Loose Changed ViewportSize | preRender: Loose Changed NearPlaneZ | preAnimation: current Loose[nil 1920 1080 -0.10000000149011612] watch Loose[nil 1920 1080 -0.10000000149011612] | postSimulation: made Made2[Workspace 1920 1080 -0.5] | heartbeat: current Made2[Workspace 1920 1080 -0.5] watch Loose[nil 1920 1080 -0.10000000149011612] | preRender: Made2 Changed NearPlaneZ | preAnimation: current Made2[Workspace 1920 1080 -0.10000000149011612] watch Loose[nil 1920 1080 -0.10000000149011612]
+a camera in no parent after: current Made2[Workspace 1920 1080 -0.10000000149011612] start Start[nil 1920 1080 -0.10000000149011612] watch Loose[nil 1920 1080 -0.10000000149011612]
+the engine's camera to nil script: wrote: current Made2[nil 1920 1080 -0.10000000149011612] start Start[nil 1920 1080 -0.10000000149011612] watch Made2[nil 1920 1080 -0.10000000149011612] | heartbeat: current Made2[nil 1920 1080 -0.10000000149011612] watch Made2[nil 1920 1080 -0.10000000149011612] | postSimulation: made Made3[Workspace 1920 1080 -0.5] | heartbeat: current Made3[Workspace 1920 1080 -0.5] watch Made2[nil 1920 1080 -0.10000000149011612] | preRender: Made3 Changed NearPlaneZ | preAnimation: current Made3[Workspace 1920 1080 -0.10000000149011612] watch Made2[nil 1920 1080 -0.10000000149011612]
+the engine's camera to nil after: current Made3[Workspace 1920 1080 -0.10000000149011612] start Start[nil 1920 1080 -0.10000000149011612] watch Made2[nil 1920 1080 -0.10000000149011612]
+screen New 0 0 is the viewport ray at y + inset true
+screen New 300 100 is the viewport ray at y + inset true
+screen New 960 482 is the viewport ray at y + inset true
+screen New point is the viewport point less at y + inset true 1017.83972 405.040161 40
+screen never current 0 0 is the viewport ray at y true
+screen never current 300 100 is the viewport ray at y true
+screen never current 960 482 is the viewport ray at y true
+screen never current point is the viewport point less at y true 0.553555667 0.375037193 40

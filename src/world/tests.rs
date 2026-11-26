@@ -1193,6 +1193,95 @@ fn only_the_start_camera_has_the_viewport_and_its_near_plane() {
     );
 }
 
+/// Workspace.CurrentCamera as a playing client takes it (Studio 0.747, tools/parity/probes/camera_current.luau and
+/// camera_current_screen.luau): a write takes at once and parents the Workspace's other Camera children to nil (not a Folder's);
+/// the render step gives the current camera the window and a near plane 0.1 out for good; nil reads nil until the simulation
+/// step makes the Workspace's first Camera child current; a camera outside the Workspace gives way there to a new Camera that has
+/// the window at once and its near plane from the next render step; the errors.
+#[test]
+fn the_current_camera_takes_a_write_and_the_simulation_step_settles_it() {
+    let engine = Engine::new(Options {
+        mode: "play".into(),
+        profile: crate::client_profile::ClientProfile::parse(r#"{"device":{"camera":[908.8,895.2],"topbarInset":58}}"#).unwrap(),
+        ..Options::default()
+    })
+    .expect("engine");
+    let lua = Lua::new();
+    engine_lua::start(&lua, &engine).expect("start");
+    run(
+        &lua,
+        &engine,
+        r##"
+        local function Fails(Message, F)
+            local Ok, E = pcall(F)
+            assert(not Ok and string.gsub(tostring(E), "^[^\n]-:%d+: ", "") == Message, tostring(E))
+        end
+        local Window, Near = Vector2.new(908.8, 895.2), -0.10000000149011612
+        local Log = {}
+        local Start = workspace.CurrentCamera
+        local Folder = Instance.new("Folder")
+        Folder.Parent = workspace
+        local Nested = Instance.new("Camera")
+        Nested.Parent = Folder
+        local New = Instance.new("Camera")
+        New.Name = "New"
+        New.Parent = workspace
+        workspace.Changed:Connect(function(Prop)
+            if Prop == "CurrentCamera" then
+                table.insert(Log, "current " .. tostring(workspace.CurrentCamera))
+            end
+        end)
+        workspace.ChildRemoved:Connect(function(Child)
+            table.insert(Log, "removed " .. Child.Name)
+        end)
+        New.Changed:Connect(function(Prop)
+            if Prop == "ViewportSize" or Prop == "NearPlaneZ" then
+                table.insert(Log, "New " .. Prop)
+            end
+        end)
+        -- (from a frame's resumption point, as a game script writes: the render step comes before the next one)
+        task.wait()
+        workspace.CurrentCamera = New
+        assert(workspace.CurrentCamera == New and Start.Parent == nil and Nested.Parent == Folder)
+        assert(New.ViewportSize == Vector2.one and New.NearPlaneZ == -0.5)
+        task.wait()
+        assert(table.concat(Log, ",") == "current New,removed Camera,New ViewportSize,New NearPlaneZ", table.concat(Log, ","))
+        assert(New.ViewportSize == Window and New.NearPlaneZ == Near, tostring(New.ViewportSize))
+        assert(Start.ViewportSize == Window and Start.NearPlaneZ == Near)
+        Start.Parent = workspace
+        workspace.CurrentCamera = Start
+        assert(New.Parent == nil and New.ViewportSize == Window and New.NearPlaneZ == Near)
+        -- the current camera written again: nothing happens
+        New.Parent = workspace
+        workspace.CurrentCamera = Start
+        assert(New.Parent == workspace)
+        -- nil, then the Workspace's first Camera child (the others go)
+        workspace.CurrentCamera = nil
+        assert(workspace.CurrentCamera == nil)
+        task.wait()
+        assert(workspace.CurrentCamera == Start and New.Parent == nil and Nested.Parent == Folder, tostring(workspace.CurrentCamera))
+        -- a camera in no parent is current until the simulation step puts a new Camera in the Workspace
+        local Loose = Instance.new("Camera")
+        workspace.CurrentCamera = Loose
+        assert(workspace.CurrentCamera == Loose and Loose.Parent == nil and Start.Parent == nil)
+        task.wait()
+        local Made = workspace.CurrentCamera
+        assert(Made ~= Loose and Made.Name == "Camera" and Made.Parent == workspace and Loose.ViewportSize == Window, tostring(Made))
+        assert(Made.ViewportSize == Window and Made.NearPlaneZ == -0.5 and Made.FieldOfView == 70 and Made.CFrame == Instance.new("Camera").CFrame)
+        task.wait()
+        assert(Made.NearPlaneZ == Near)
+        -- a camera in a Folder in the Workspace stays current
+        workspace.CurrentCamera = Nested
+        task.wait()
+        assert(workspace.CurrentCamera == Nested and Made.Parent == nil)
+        Fails("Expected Camera got Part for Workspace.CurrentCamera.", function() workspace.CurrentCamera = Instance.new("Part") end)
+        Fails("Unable to assign property CurrentCamera. Camera expected, got string", function() workspace.CurrentCamera = "x" end)
+        Fails("Unable to assign property CurrentCamera. Camera expected, got CFrame", function() workspace.CurrentCamera = CFrame.new() end)
+        assert(workspace.CurrentCamera == Nested)
+        "##,
+    );
+}
+
 /// A Camera refuses a CFrame write that is not finite or has a rotation entry of 1.2 or more (Studio 0.747, a client and a server:
 /// tools/parity/probes/camera_finite.luau): CFrame and CoordinateFrame keep what they hold and fire nothing, and the write costs
 /// what an unchanged one does; Focus takes anything; PanUnits, TiltUnits and ZoomToExtents leave the CFrame as it was when theirs
