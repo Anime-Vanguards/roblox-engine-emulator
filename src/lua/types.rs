@@ -112,6 +112,13 @@ pub fn apply_pending_pins(engine: &Engine) {
     }
 }
 
+/// A TweenInfo as a script value, its metatable locked as TweenInfo.new's are.
+pub(crate) fn tween_info_value(lua: &Lua, info: LTweenInfo) -> LuaResult<LuaAnyUserData> {
+    let userdata = lua.create_any_userdata(info)?;
+    lock_metatable(lua, &userdata)?;
+    Ok(userdata)
+}
+
 pub struct LTweenInfo {
     pub time: LuaValue,
     pub easing_style: EnumItemId,
@@ -1297,11 +1304,13 @@ fn register_tween_info(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
         unknown_member(&e, args.get(1), "TweenInfo", true)
     })?;
     // "Time:0.1 DelayTime:0.333333 RepeatCount:-1 Reverses:True ..." (Studio 0.744): the times with 6 significant digits,
-    // the flag capitalized
+    // the flag capitalized, a time that is not a number as MSVC's printf writes it (0/0 "-nan(ind)", -(0/0) "nan": measured,
+    // Studio 0.747, tools/parity/probes/tween_args.luau)
     let tostring = super::lua_fn(lua, |lua, this: LuaAnyUserData| {
         let engine = engine_of(lua);
         let info = this.borrow::<LTweenInfo>()?;
         let time = |value: &LuaValue| match value {
+            LuaValue::Number(n) if n.is_nan() => Ok(msvc_nan(*n).to_string()),
             LuaValue::Number(n) => Ok(lune_roblox::datatypes::types::format_g(*n, 6)),
             LuaValue::Integer(n) => Ok(lune_roblox::datatypes::types::format_g(*n as f64, 6)),
             other => string_of(lua, other),
@@ -1389,7 +1398,7 @@ fn register_tween_info(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
                 e.reflection.enum_item("EasingDirection", "Out").unwrap_or(0)
             };
             let repeat_count = match number(3) {
-                Some(count) => count.trunc(),
+                Some(count) => repeat_count(count),
                 None if count <= 3 => 0.0,
                 None => return raise_plain("TweenInfo.new fourth arg should be a number for RepeatCount."),
             };
@@ -1418,6 +1427,30 @@ fn register_tween_info(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     )?;
     engine.lua.borrow_mut().libraries.insert("TweenInfo", library);
     Ok(())
+}
+
+/// How MSVC's printf writes a NaN: the sign, then `nan(ind)` for the quiet NaN with no payload (0/0's), `nan(snan)` for a
+/// signaling one, `nan` for any other.
+fn msvc_nan(value: f64) -> &'static str {
+    let bits = value.to_bits();
+    let negative = bits >> 63 == 1;
+    let quiet = bits & (1 << 51) != 0;
+    let payload = bits & ((1 << 51) - 1);
+    match (negative, quiet, payload) {
+        (true, true, 0) => "-nan(ind)",
+        (true, true, _) => "-nan",
+        (false, true, _) => "nan",
+        (true, false, _) => "-nan(snan)",
+        (false, false, _) => "nan(snan)",
+    }
+}
+
+/// TweenInfo's RepeatCount: a 32-bit integer, the number cut toward zero; one out of its range, an infinity or not a number,
+/// reads -2147483648, as an x86 conversion gives (measured, Studio 0.747: 2^40, math.huge and 0/0 read -2147483648, -3 reads
+/// -3; tools/parity/probes/tween_args.luau). Below 0 a tween repeats without end.
+fn repeat_count(count: f64) -> f64 {
+    let whole = count.trunc();
+    if whole.is_nan() || whole < i32::MIN as f64 || whole > i32::MAX as f64 { i32::MIN as f64 } else { whole }
 }
 
 // Random: Luau's math.random generator (PCG32), one state per object (measured: Random.new(7)

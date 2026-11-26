@@ -97,3 +97,76 @@ fn legacy_spawn_and_delay_call_any_value_when_it_is_due() {
         assert!(lines.contains(&"error: attempt to call a nil value".to_string()), "{lines:?}");
     }
 }
+
+/// TweenService:Create casts the goals, the TweenInfo and the instance in that order; a non-empty string is a TweenInfo of its
+/// number's time; no instance and no goals make a tween that plays without end. TweenInfo writes 0/0 as MSVC does and holds
+/// RepeatCount in 32 bits. The GUI tween methods cast their callback and override first, then the time, style, direction and
+/// UDim2s.
+#[test]
+fn tween_methods_cast_their_arguments_as_a_client() {
+    let lines = run(
+        RunContext::Client,
+        r##"
+        local TweenService = game:GetService("TweenService")
+        local V = Instance.new("NumberValue")
+        local function E(...) return select(2, pcall(TweenService.Create, TweenService, ...)) end
+        assert(E(nil, nil, nil) == "Argument 3 missing or nil")
+        assert(E("x", "info", "x") == "Unable to cast string to Dictionary")
+        assert(E(V, TweenInfo.new(), { 1 }) == "Unable to cast Array to Dictionary")
+        assert(E(V, 5, { [true] = 1 }) == "Invalid table key type used")
+        assert(E("x", 5, {}) == "Unable to cast double to TweenInfo")
+        assert(E(V, {}, {}) == "Unable to cast Array to TweenInfo" and E(V, { a = 1 }, {}) == "Unable to cast Dictionary to TweenInfo")
+        assert(E(V, Enum.EasingStyle.Linear, {}) == "Unable to cast EasingStyle to TweenInfo" and E(V, newproxy(), {}) == "Unable to cast null to TweenInfo")
+        assert(E(V, "", {}) == "Unable to cast string to TweenInfo")
+        assert(E(5, "info", {}) == "Unable to cast value to Object")
+        assert(E(nil, TweenInfo.new(), { Value = 1 }) == "TweenService:Create failed because Instance is null")
+        local Quick = TweenService:Create(V, "x", { Value = 10 })
+        assert(Quick.TweenInfo.Time == 0)
+        Quick:Play()
+        local Loose = TweenService:Create(nil, TweenInfo.new(0.05), {})
+        assert(Loose.Instance == nil)
+        Loose:Play()
+        task.wait(0.3)
+        assert(V.Value == 10 and Quick.PlaybackState == Enum.PlaybackState.Completed)
+        assert(Loose.PlaybackState == Enum.PlaybackState.Playing, tostring(Loose.PlaybackState))
+        Loose:Cancel()
+        assert(Loose.PlaybackState == Enum.PlaybackState.Cancelled)
+        assert(string.find(tostring(TweenInfo.new(0 / 0)), "Time:-nan(ind) ", 1, true) and string.find(tostring(TweenInfo.new(-(0 / 0))), "Time:nan ", 1, true))
+        assert(TweenInfo.new(1, Enum.EasingStyle.Linear, Enum.EasingDirection.In, 2 ^ 40).RepeatCount == -2147483648)
+        assert(TweenInfo.new(1, Enum.EasingStyle.Linear, Enum.EasingDirection.In, 0 / 0).RepeatCount == -2147483648)
+        local Frame = Instance.new("Frame")
+        Frame.Parent = game:GetService("ReplicatedStorage")
+        local To = UDim2.fromOffset(5, 5)
+        local function G(...) return select(2, pcall(Frame.TweenPosition, Frame, ...)) end
+        assert(G(To, nil, nil, nil, "x") == "Unable to cast string to bool" and G(To, nil, nil, nil, {}) == "Unable to cast Array to bool")
+        assert(G(To, nil, nil, nil, true, 5) == "Unable to cast double to Function" and G(To, nil, nil, nil, nil, setmetatable({}, { __call = print })) == "Unable to cast Array to Function")
+        assert(G("x", nil, nil, nil, "x", "x") == "Unable to cast string to Function")
+        assert(G(To, "bad", 13, "x") == "Unable to cast string to float" and G(To, "bad", 13) == "Unable to cast double to EasingStyle")
+        assert(select(2, pcall(Frame.TweenSizeAndPosition, Frame, "x", 5)) == "Unable to cast double to UDim2")
+        assert(G(To, nil, nil, 0.01, 0) == true and G(To, nil, nil, 0.01, false, print) == true)
+        print("done")
+        "##,
+        0.5,
+    );
+    assert!(lines.iter().any(|line| line == "print: done") && errors(&lines).is_empty(), "{lines:?}");
+}
+
+/// A method's enum argument takes a number cut toward zero to an item's value (SetCameraPanMode(0.5) is Classic's 0, 1.99
+/// EdgeBump's 1; 2.5 is no item); a property write did already.
+#[test]
+fn enum_arguments_take_a_fraction_cut_toward_zero() {
+    let lines = run(
+        RunContext::Client,
+        r##"
+        local Camera = workspace.CurrentCamera
+        assert(pcall(Camera.SetCameraPanMode, Camera, 0.5) and pcall(Camera.SetCameraPanMode, Camera, 1.99) and pcall(Camera.SetCameraPanMode, Camera, -0.99))
+        assert(select(2, pcall(Camera.SetCameraPanMode, Camera, 2.5)) == "Unable to cast double to CameraPanMode")
+        local Part = Instance.new("Part")
+        Part.Parent = workspace
+        assert(pcall(workspace.BulkMoveTo, workspace, { Part }, { CFrame.new() }, 0.5))
+        print("done")
+        "##,
+        0.1,
+    );
+    assert!(lines.iter().any(|line| line == "print: done") && errors(&lines).is_empty(), "{lines:?}");
+}

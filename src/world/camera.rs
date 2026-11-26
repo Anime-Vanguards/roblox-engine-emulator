@@ -572,7 +572,7 @@ fn install_methods(engine: &Rc<Engine>, add: &mut impl FnMut(&str, super::Method
     // enum named by its enum: "Unable to cast CameraType to CameraPanMode")
     add("SetCameraPanMode", method(|lua, engine, _, args| {
         let value = args.get(1);
-        if value.is_nil() || engine.reflection.enum_id("CameraPanMode").and_then(|id| convert::coerce_enum(lua, engine, id, value)).is_some() {
+        if value.is_nil() || engine.reflection.enum_id("CameraPanMode").and_then(|id| convert::coerce_enum_arg(lua, engine, id, value)).is_some() {
             return Ok(LuaMultiValue::new());
         }
         raise(format!("Unable to cast {} to CameraPanMode", cast_name(engine, value)))

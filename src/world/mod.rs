@@ -159,7 +159,7 @@ pub fn cframe_of(value: &Value) -> Option<Affine3A> {
 fn bulk_moves(lua: &Lua, engine: &Engine, args: &Args, base_part: Option<crate::ClassId>) -> Result<BulkMoves, Flow> {
     let mode = match args.get(3) {
         LuaValue::Nil => None,
-        value => match engine.reflection.enum_id("BulkMoveMode").and_then(|id| convert::coerce_enum(lua, engine, id, value)) {
+        value => match engine.reflection.enum_id("BulkMoveMode").and_then(|id| convert::coerce_enum_arg(lua, engine, id, value)) {
             Some(item) => Some(item),
             None => return raise(format!("Unable to cast {} to BulkMoveMode", camera::cast_name(engine, value))),
         },

@@ -1390,7 +1390,7 @@ fn enum_param(lua: &Lua, engine: &Engine, value: &LuaValue, index: usize, enum_n
     if value.is_nil() {
         return raise(format!("Argument {index} missing or nil"));
     }
-    if let Some(item) = engine.reflection.enum_id(enum_name).and_then(|id| convert::coerce_enum(lua, engine, id, value)) {
+    if let Some(item) = engine.reflection.enum_id(enum_name).and_then(|id| convert::coerce_enum_arg(lua, engine, id, value)) {
         return Ok(item);
     }
     raise(format!("Unable to cast {} to {enum_name}", cast_name(engine, value)))
@@ -1860,11 +1860,13 @@ pub fn install_gui_behaviors(engine: &Rc<Engine>) {
             behaviors.add_getter(gui_object, name, getter(|lua, engine, _| Ok(enum_item(lua, engine, "GuiState", "Idle")?)));
         }
         // Tween* methods apply the end values at once and report Completed at the next resumption.
-        // Their arguments are cast first, in order (Studio 0.747: a string for the UDim2 raises "Unable to cast string to
-        // UDim2", nil "Argument 1 missing or nil", then the direction, the style and the time); Spring and Bezier are
-        // refused ("GuiObject:TweenPosition does not support Enum.EasingStyle.Spring or Enum.EasingStyle.Bezier", by item,
-        // name or value, nothing moved and no callback); and an object outside the DataModel is refused last ("Can only
-        // tween objects in the workspace": a Frame with no parent, or under a ScreenGui or Folder that has none).
+        // Their arguments are cast first, from the last to the first (Studio 0.747, a playing client and a server:
+        // tools/parity/probes/tween_args.luau): the callback (nil or a function, else "Unable to cast <value> to Function"),
+        // override (nil, a boolean or a number, else "Unable to cast <value> to bool"), the time, the style, the direction and
+        // the UDim2s, the last first (a string "Unable to cast string to UDim2", nil "Argument 1 missing or nil"). Spring and
+        // Bezier are refused then ("GuiObject:TweenPosition does not support Enum.EasingStyle.Spring or Enum.EasingStyle.Bezier",
+        // by item, name or value, nothing moved and no callback); and an object outside the DataModel is refused last ("Can
+        // only tween objects in the workspace": a Frame with no parent, or under a ScreenGui or Folder that has none).
         let tweens: [(&str, &[&str]); 3] = [
             ("TweenPosition", &["Position"]),
             ("TweenSize", &["Size"]),
@@ -1874,8 +1876,25 @@ pub fn install_gui_behaviors(engine: &Rc<Engine>) {
             let Some(name) = n(member) else { continue };
             let fields: Vec<NameId> = fields.iter().filter_map(|f| n(f)).collect();
             behaviors.add_method(gui_object, name, method(move |lua, engine, id, args| {
+                let after = 1 + fields.len();
+                let callback = match args.get(after + 4) {
+                    LuaValue::Nil => None,
+                    LuaValue::Function(callback) => Some(callback.clone()),
+                    other => return raise(format!("Unable to cast {} to Function", tween::cast_name(engine, other))),
+                };
+                match args.get(after + 3) {
+                    LuaValue::Nil | LuaValue::Boolean(_) | LuaValue::Number(_) | LuaValue::Integer(_) => {}
+                    other => return raise(format!("Unable to cast {} to bool", tween::cast_name(engine, other))),
+                }
+                if !args.get(after + 2).is_nil() {
+                    tween::float_arg(lua, engine, args, after + 2)?;
+                }
+                let style = if args.get(after + 1).is_nil() { None } else { Some(tween::enum_arg(lua, engine, args, after + 1, "EasingStyle")?) };
+                if !args.get(after).is_nil() {
+                    tween::enum_arg(lua, engine, args, after, "EasingDirection")?;
+                }
                 let mut ends = Vec::with_capacity(fields.len());
-                for index in 0..fields.len() {
+                for index in (0..fields.len()).rev() {
                     let value = args.get(1 + index);
                     match convert::from_lua(value) {
                         end @ Value::UDim2(_) => ends.push(end),
@@ -1883,14 +1902,7 @@ pub fn install_gui_behaviors(engine: &Rc<Engine>) {
                         _ => return raise(format!("Unable to cast {} to UDim2", tween::cast_name(engine, value))),
                     }
                 }
-                let after = 1 + fields.len();
-                if !args.get(after).is_nil() {
-                    tween::enum_arg(lua, engine, args, after, "EasingDirection")?;
-                }
-                let style = if args.get(after + 1).is_nil() { None } else { Some(tween::enum_arg(lua, engine, args, after + 1, "EasingStyle")?) };
-                if !args.get(after + 2).is_nil() {
-                    tween::float_arg(lua, engine, args, after + 2)?;
-                }
+                ends.reverse();
                 if let Some(message) = style.and_then(|style| tween::unsupported_style(engine, style, &format!("GuiObject:{member}"))) {
                     return raise(message);
                 }
@@ -1900,8 +1912,7 @@ pub fn install_gui_behaviors(engine: &Rc<Engine>) {
                 for (field, end) in fields.iter().zip(ends) {
                     set_property(engine, id, *field, end);
                 }
-                let callback_index = 1 + fields.len() + 4;
-                if let LuaValue::Function(callback) = args.get(callback_index).clone() {
+                if let Some(callback) = callback {
                     let thread = lua.create_thread(callback)?;
                     let status = engine.reflection.enum_item("TweenStatus", "Completed").map_or(Value::Nil, Value::EnumItem);
                     super::lua::instance::defer_thread(engine, thread, vec![status]);

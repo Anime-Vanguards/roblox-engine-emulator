@@ -97,10 +97,6 @@
 		{
 			"line": "PanUnits 28 5 0 nil 58.502 -4.399",
 			"why": "PanUnits' float steps are not all a client's (its angles within about 1e-6): this position falls on the other side of a third decimal"
-		},
-		{
-			"line": "cast SetCameraPanMode fractional",
-			"why": "a fractional number cast to an enum takes the item it truncates to (0.5, 1.99 and -0.99 cast; 2.5 to CameraPanMode does not); the engine's enum casts take whole numbers only"
 		}
 	],
 	"cframe_writes": [
@@ -199,22 +195,6 @@
 		{
 			"line": "same v3.Lerp false",
 			"why": "a vector's method read as a value is a new function at every read in a client; ree's is one function a method"
-		},
-		{
-			"line": "trace TweenService:Create ok",
-			"why": "TweenService:Create with a string for its TweenInfo makes a tween in a client; ree raises `Unable to cast string to TweenInfo`"
-		},
-		{
-			"line": "pcall TweenService:Create ok Tween",
-			"why": "TweenService:Create with a string for its TweenInfo makes a tween in a client; ree raises `Unable to cast string to TweenInfo`"
-		},
-		{
-			"line": "trace TweenService.Create ok",
-			"why": "TweenService:Create with a string for its TweenInfo makes a tween in a client; ree raises `Unable to cast string to TweenInfo`"
-		},
-		{
-			"line": "pcall TweenService.Create ok Tween",
-			"why": "TweenService:Create with a string for its TweenInfo makes a tween in a client; ree raises `Unable to cast string to TweenInfo`"
 		},
 		{
 			"line": "levels invoke @ 401 ",
@@ -953,16 +933,22 @@
 			"why": "ContentProvider:PreloadAsync of a list with nothing to load returns at once in a client; ree waits a frame where the thread can yield (where it cannot, it returns at once, as a client does)"
 		}
 	],
-	"bulk_move_args": [
+	"tween_args": [
 		{
-			"line": "bulk mode number 0.5",
-			"why": "a fractional number cast to an enum takes the item it truncates to (0.5, 1.99 and -0.99 cast; 2.5 to CameraPanMode does not); the engine's enum casts take whole numbers only"
-		}
-	],
-	"tween": [
+			"line": "create info-string ok",
+			"why": "a string for TweenService:Create's TweenInfo gives a client's tween a style and direction that are no enum item (reading them raises `Invalid value for enum EasingStyle`, tostring leaves them empty) and \" \" a Time of 1; ree's is Linear, In and the string's number or 0, so the tween completes at once as there"
+		},
 		{
-			"line": "tween-errors error TweenService:Create property named 'Value' cannot be tweened due to type mismatch (property is a 'double', but given type is 'string') | ok Tween | ok Tween",
-			"why": "TweenService:Create with a string TweenInfo or nil instance returns a Tween in a client; ree rejects them (its type-mismatch text now matches)"
+			"line": "create target-nil-badinfo ok",
+			"why": "a string for TweenService:Create's TweenInfo gives a client's tween a style and direction that are no enum item (reading them raises `Invalid value for enum EasingStyle`, tostring leaves them empty) and \" \" a Time of 1; ree's is Linear, In and the string's number or 0, so the tween completes at once as there"
+		},
+		{
+			"line": "create play-string ok",
+			"why": "a string for TweenService:Create's TweenInfo gives a client's tween a style and direction that are no enum item (reading them raises `Invalid value for enum EasingStyle`, tostring leaves them empty) and \" \" a Time of 1; ree's is Linear, In and the string's number or 0, so the tween completes at once as there"
+		},
+		{
+			"line": "string-info [",
+			"why": "a string for TweenService:Create's TweenInfo gives a client's tween a style and direction that are no enum item (reading them raises `Invalid value for enum EasingStyle`, tostring leaves them empty) and \" \" a Time of 1; ree's is Linear, In and the string's number or 0, so the tween completes at once as there"
 		}
 	]
 }

@@ -605,6 +605,17 @@ pub fn warn_string_param(lua: &Lua, engine: &Engine, value: &LuaValue, argument:
     engine.output("warn", message, Some(super::script_traceback(lua)));
 }
 
+/// A method argument's cast to an enum, as a client's methods cast one: an item of the enum, an item's name, or a number cut
+/// toward zero to an item's value (0.5 and -0.99 are the item of 0, 1.99 the item of 1, 2.5 no item of CameraPanMode's;
+/// measured in a 0.747 playing client and a server: tools/parity/probes/camera_units.luau SetCameraPanMode, bulk_move_args.luau
+/// BulkMoveTo's mode). [`coerce_enum`] takes whole numbers only.
+pub fn coerce_enum_arg(lua: &Lua, engine: &Engine, enum_id: u32, value: &LuaValue) -> Option<u32> {
+    match value {
+        LuaValue::Number(n) => n.is_finite().then(|| engine.reflection.enums[enum_id as usize].by_value.get(&(n.trunc() as i64)).copied()).flatten(),
+        _ => coerce_enum(lua, engine, enum_id, value),
+    }
+}
+
 /// Enums.Coerce: an EnumItem of the type, an item name or an item value.
 pub fn coerce_enum(lua: &Lua, engine: &Engine, enum_id: u32, value: &LuaValue) -> Option<u32> {
     let _ = lua;

@@ -161,7 +161,8 @@ enum TweenPhase {
 }
 
 struct TweenData {
-    target: InstanceId,
+    /// None: made with no instance (and so no goals), which plays without end ([`create`])
+    target: Option<InstanceId>,
     properties: Vec<Property>,
     style: String,
     direction: String,
@@ -269,14 +270,27 @@ fn finish(engine: &Engine, tweens: &Shared, tween: InstanceId, name: &str) {
 }
 
 fn owns(shared: &Tweens, tween: InstanceId, data: &TweenData, name: NameId) -> bool {
-    shared.owners.get(&(data.target, name)) == Some(&tween)
+    data.target.is_some_and(|target| shared.owners.get(&(target, name)) == Some(&tween))
 }
 
+/// A script value's name in "Unable to cast X to Y" as TweenService's and GuiObject's tween methods write it (measured, Studio
+/// 0.747, a playing client and a server: tools/parity/probes/tween_args.luau): "double", "bool", "Array" for a table that is
+/// empty or has an array part, "Dictionary" for another, "Function" (a C function too), an enum item's enum ("Unable to cast
+/// EasingStyle to TweenInfo"), "null" for a userdata of no type (`newproxy()`), else the value's type ("string", "Instance").
 pub(crate) fn cast_name(engine: &Engine, value: &LuaValue) -> String {
-    match typeof_value(engine, value).as_str() {
-        "number" => "double".into(),
-        "boolean" => "bool".into(),
-        other => other.into(),
+    match value {
+        LuaValue::Number(_) | LuaValue::Integer(_) => "double".into(),
+        LuaValue::Boolean(_) => "bool".into(),
+        LuaValue::Table(table) => if table.raw_len() > 0 || table.is_empty() { "Array" } else { "Dictionary" }.into(),
+        LuaValue::Function(_) => "Function".into(),
+        LuaValue::UserData(ud) if ud.is::<crate::lua::types::LEnumItem>() => match ud.borrow::<crate::lua::types::LEnumItem>() {
+            Ok(item) => engine.reflection.enum_item_type_name(item.0).to_string(),
+            Err(_) => "EnumItem".into(),
+        },
+        other => match typeof_value(engine, other).as_str() {
+            "userdata" => "null".into(),
+            name => name.into(),
+        },
     }
 }
 
@@ -296,7 +310,7 @@ pub(crate) fn enum_arg(lua: &Lua, engine: &Engine, args: &super::Args, at: usize
     if value.is_nil() {
         return raise_plain(format!("Argument {at} missing or nil"));
     }
-    let item = engine.reflection.enum_id(enum_name).and_then(|id| convert::coerce_enum(lua, engine, id, value));
+    let item = engine.reflection.enum_id(enum_name).and_then(|id| convert::coerce_enum_arg(lua, engine, id, value));
     match item {
         Some(item) => Ok(item),
         None => {
@@ -323,31 +337,60 @@ pub(crate) fn float_arg(lua: &Lua, engine: &Engine, args: &super::Args, at: usiz
     }
 }
 
+/// TweenService:Create(instance, tweenInfo, goals), measured in Studio 0.747 (a playing client and a server's Script:
+/// tools/parity/probes/tween_args.luau). The arguments are cast from the last to the first: the goals ("Argument 3 missing or
+/// nil", "Unable to cast <value> to Dictionary", a table with an array part being an Array; a key that is no string or number
+/// "Invalid table key type used"), the TweenInfo ("Argument 2 missing or nil", "Unable to cast <value> to TweenInfo"), the
+/// instance (nil is taken; any other value that is no Instance "Unable to cast value to Object"). Then each goal in the table's
+/// order: with no instance "TweenService:Create failed because Instance is null", else the property's checks. So a tween of no
+/// instance and no goals is made; played, it reads Playing and never completes, and Pause and Cancel act on it as on any.
+/// A string for the TweenInfo is taken too (an empty one is refused): a client's tween then has a Time of the string's number,
+/// 0 for other text, and a style and direction that are no enum item (reading them raises "Invalid value for enum EasingStyle"
+/// and its tostring leaves them empty). Here that TweenInfo is Linear and In, its Time the string read as a number or 0 (a
+/// client read " " as 1: not followed), so the tween completes at once as a client's does.
 fn create(lua: &Lua, engine: &Rc<Engine>, tweens: &Shared, args: &super::Args) -> Result<LuaMultiValue, Flow> {
-    let target = args.get(1);
-    let info = args.get(2);
-    let goals = args.get(3);
-    let target = match target {
-        LuaValue::Nil => return raise_plain("TweenService:Create failed because Instance is null"),
-        LuaValue::UserData(ud) if crate::lua::raw::instance_of_ud(ud).is_some() => {
-            crate::lua::raw::instance_of_ud(ud).unwrap()
-        }
-        _ => return raise_plain("Unable to cast value to Object"),
+    let goals = match args.get(3) {
+        LuaValue::Nil => return raise_plain("Argument 3 missing or nil"),
+        LuaValue::Table(goals) if goals.raw_len() == 0 => goals.clone(),
+        other => return raise_plain(format!("Unable to cast {} to Dictionary", cast_name(engine, other))),
     };
-    let info_ud = match info {
+    for pair in goals.pairs::<LuaValue, LuaValue>() {
+        let (key, _) = pair?;
+        if !matches!(key, LuaValue::String(_) | LuaValue::Number(_) | LuaValue::Integer(_)) {
+            return raise_plain("Invalid table key type used");
+        }
+    }
+    let info_ud = match args.get(2) {
         LuaValue::Nil => return raise_plain("Argument 2 missing or nil"),
         LuaValue::UserData(ud) if ud.is::<LTweenInfo>() => ud.clone(),
+        LuaValue::String(text) if !text.as_bytes().is_empty() => {
+            let time = lua.coerce_number(LuaValue::String(text.clone()))?.unwrap_or(0.0);
+            let info = LTweenInfo {
+                time: LuaValue::Number(time),
+                easing_style: engine.reflection.enum_item("EasingStyle", "Linear").unwrap_or(0),
+                easing_direction: engine.reflection.enum_item("EasingDirection", "In").unwrap_or(0),
+                repeat_count: LuaValue::Number(0.0),
+                reverses: false,
+                delay_time: LuaValue::Number(0.0),
+            };
+            crate::lua::types::tween_info_value(lua, info)?
+        }
         other => return raise_plain(format!("Unable to cast {} to TweenInfo", cast_name(engine, other))),
     };
-    let LuaValue::Table(goals) = goals else {
-        return raise_plain(format!("Unable to cast {} to Dictionary", cast_name(engine, goals)));
+    let target = match args.get(1) {
+        LuaValue::Nil => None,
+        LuaValue::UserData(ud) if crate::lua::raw::instance_of_ud(ud).is_some() => crate::lua::raw::instance_of_ud(ud),
+        _ => return raise_plain("Unable to cast value to Object"),
     };
     let reflection: &Reflection = &engine.reflection;
-    let class = engine.state.borrow().dom.at(target).class;
-    let object_name = engine.state.borrow().dom.at(target).name.to_string();
     let mut properties = Vec::new();
     for pair in goals.pairs::<LuaValue, LuaValue>() {
         let (key, goal) = pair?;
+        let Some(target) = target else {
+            return raise_plain("TweenService:Create failed because Instance is null");
+        };
+        let class = engine.state.borrow().dom.at(target).class;
+        let object_name = engine.state.borrow().dom.at(target).name.to_string();
         let key_text = match &key {
             LuaValue::String(s) => s.to_string_lossy(),
             other => lua.coerce_string(other.clone())?.map(|s| s.to_string_lossy()).unwrap_or_else(|| other.type_name().into()),
@@ -404,7 +447,7 @@ fn create(lua: &Lua, engine: &Rc<Engine>, tweens: &Shared, args: &super::Args) -
         let mut state = engine.state.borrow_mut();
         let class = reflection.class_id("Tween").expect("Tween class");
         let tween = core::create(&mut state, reflection, class);
-        if let Some(name) = reflection.name_id("Instance") {
+        if let (Some(name), Some(target)) = (reflection.name_id("Instance"), target) {
             core::raw_set_silent(&mut state, reflection, tween, name, Value::Instance(target));
         }
         if let Some(name) = reflection.name_id("TweenInfo") {
@@ -416,18 +459,21 @@ fn create(lua: &Lua, engine: &Rc<Engine>, tweens: &Shared, args: &super::Args) -
         tween
     };
     // A tween keeps its target alive (lua/raw.rs collection) until the tween itself is freed
-    engine.state.borrow_mut().dom.pin(data.target);
+    if let Some(target) = data.target {
+        engine.state.borrow_mut().dom.pin(target);
+    }
     tweens.borrow_mut().data.insert(tween, data);
     Ok(values([instance_value(lua, engine, tween)?]))
 }
 
 /// Captures the start values (read when the playing phase begins).
 fn capture(lua: &Lua, engine: &Rc<Engine>, tweens: &Shared, tween: InstanceId) -> LuaResult<()> {
-    let (target, entries): (InstanceId, Vec<(NameId, String, LuaValue)>) = {
+    let (target, entries): (Option<InstanceId>, Vec<(NameId, String, LuaValue)>) = {
         let shared = tweens.borrow();
         let data = &shared.data[&tween];
         (data.target, data.properties.iter().map(|p| (p.name, p.script_type_name.clone(), p.goal.clone())).collect())
     };
+    let Some(target) = target else { return Ok(()) };
     let mut start = Vec::new();
     for (name, kind, goal) in entries {
         let key = LuaValue::String(lua.create_string(engine.reflection.name(name))?);
@@ -467,6 +513,7 @@ fn write(lua: &Lua, engine: &Rc<Engine>, tweens: &Shared, tween: InstanceId, own
             .collect();
         (data.target, eased, entries)
     };
+    let Some(target) = target else { return Ok(()) };
     for (name, kind, number, from, goal) in entries {
         let value = lerp(lua, kind, number, &from, &goal, eased)?;
         let value = convert::to_lua(lua, engine, &value)?;
@@ -678,7 +725,9 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
     engine.hooks.borrow_mut().instance_freed.push(Box::new(move |state, id| {
         let mut tweens = shared.borrow_mut();
         if let Some(data) = tweens.data.remove(&id) {
-            state.dom.unpin(data.target);
+            if let Some(target) = data.target {
+                state.dom.unpin(target);
+            }
             tweens.owners.retain(|_, owner| *owner != id);
             tweens.displaced.retain(|tween| *tween != id);
         }
@@ -756,8 +805,16 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
                 set_state(engine, tween, "Playing");
                 return Ok(none());
             }
-            let delay = shared.borrow().data[&tween].delay;
+            let (delay, loose) = {
+                let shared = shared.borrow();
+                let data = &shared.data[&tween];
+                (data.delay, data.target.is_none())
+            };
             set_state(engine, tween, if current == "Begin" && delay > 0.0 { "Delayed" } else { "Playing" });
+            // (a tween of no instance plays without end: it is never stepped, measured, see create)
+            if loose {
+                return Ok(none());
+            }
             let mut guard = shared.borrow_mut();
             let tweens = &mut *guard;
             let data = tweens.data.get_mut(&tween).unwrap();
@@ -766,7 +823,7 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
             data.elapsed = 0.0;
             data.iteration = 0.0;
             data.start = None;
-            let target = data.target;
+            let Some(target) = data.target else { return Ok(none()) };
             let names: Vec<NameId> = data.properties.iter().map(|p| p.name).collect();
             for name in names {
                 if let Some(previous) = tweens.owners.insert((target, name), tween) {

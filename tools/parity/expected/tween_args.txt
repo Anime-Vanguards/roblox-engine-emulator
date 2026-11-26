@@ -1,0 +1,197 @@
+# engine: Roblox Studio 0.747.0.7471481, a headless playing client (script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-26
+create info-string ok Tween info=[Time:0 DelayTime:0 RepeatCount:0 Reverses:False EasingDirection: EasingStyle:Linear] inst=V state=Begin
+create info-number error Unable to cast double to TweenInfo
+create info-table error Unable to cast Array to TweenInfo
+create info-bool error Unable to cast bool to TweenInfo
+create info-nil error Argument 2 missing or nil
+create info-enum error Unable to cast EasingStyle to TweenInfo
+create info-instance error Unable to cast Instance to TweenInfo
+create info-vector error Unable to cast Vector3 to TweenInfo
+create info-string-badgoal error TweenService:Create property named 'Value' cannot be tweened due to type mismatch (property is a 'double', but given type is 'string')
+create info-string-badkey error TweenService:Create no property named 'Nope' for object 'V'
+create target-nil-empty ok Tween info=[Time:1 DelayTime:0 RepeatCount:0 Reverses:False EasingDirection:Out EasingStyle:Quad] inst=nil state=Begin
+create target-nil-goal error TweenService:Create failed because Instance is null
+create target-nil-badinfo ok Tween info=[Time:0 DelayTime:0 RepeatCount:0 Reverses:False EasingDirection: EasingStyle:] inst=nil state=Begin
+create target-nil-badgoals error Unable to cast string to Dictionary
+create target-nil-nilgoals error Argument 3 missing or nil
+create target-string error Unable to cast value to Object
+create target-number error Unable to cast value to Object
+create target-table error Unable to cast value to Object
+create target-vector error Unable to cast value to Object
+create goals-nil error Argument 3 missing or nil
+create goals-string error Unable to cast string to Dictionary
+create goals-number error Unable to cast double to Dictionary
+create goals-instance error Unable to cast Instance to Dictionary
+create order-all-bad error Unable to cast string to Dictionary
+create order-info-goals error Unable to cast string to Dictionary
+create order-nil-all error Argument 3 missing or nil
+create none error Argument 3 missing or nil
+create play-string ok Tween info=[Time:0 DelayTime:0 RepeatCount:0 Reverses:False EasingDirection: EasingStyle:Linear] inst=Value state=Begin
+play-string play ok  Playing
+play-string mid end Completed
+play-string end 10 Completed Completed
+create play-nil ok Tween info=[Time:0.1 DelayTime:0 RepeatCount:0 Reverses:False EasingDirection:Out EasingStyle:Quad] inst=nil state=Begin
+play-nil play ok  Playing
+play-nil end Playing no
+play-nil pause ok  cancel ok  Cancelled
+info time-nan Time:-nan(ind) DelayTime:0 RepeatCount:0 Reverses:False EasingDirection:Out EasingStyle:Quad | nan 0 0 | nan 0 0
+info time-negnan Time:nan DelayTime:0 RepeatCount:0 Reverses:False EasingDirection:Out EasingStyle:Quad | nan 0 0 | nan 0 0
+info time-inf Time:inf DelayTime:0 RepeatCount:0 Reverses:False EasingDirection:Out EasingStyle:Quad | inf 0 0 | inf 0 0
+info time-neginf Time:-inf DelayTime:0 RepeatCount:0 Reverses:False EasingDirection:Out EasingStyle:Quad | -inf 0 0 | -inf 0 0
+info time-neg Time:-1 DelayTime:0 RepeatCount:0 Reverses:False EasingDirection:Out EasingStyle:Quad | -1 0 0 | -1 0 0
+info repeat-nan Time:1 DelayTime:0 RepeatCount:-2147483648 Reverses:False EasingDirection:In EasingStyle:Linear | 1 -2147483648 0 | 1 -2147483648 0
+info repeat-inf Time:1 DelayTime:0 RepeatCount:-2147483648 Reverses:False EasingDirection:In EasingStyle:Linear | 1 -2147483648 0 | 1 -2147483648 0
+info repeat-neg Time:1 DelayTime:0 RepeatCount:-3 Reverses:False EasingDirection:In EasingStyle:Linear | 1 -3 0 | 1 -3 0
+info repeat-big Time:1 DelayTime:0 RepeatCount:-2147483648 Reverses:False EasingDirection:In EasingStyle:Linear | 1 -2147483648 0 | 1 -2147483648 0
+info delay-nan Time:1 DelayTime:-nan(ind) RepeatCount:0 Reverses:False EasingDirection:In EasingStyle:Linear | 1 0 nan | 1 0 nan
+info delay-negnan Time:1 DelayTime:nan RepeatCount:0 Reverses:False EasingDirection:In EasingStyle:Linear | 1 0 nan | 1 0 nan
+info delay-inf Time:1 DelayTime:inf RepeatCount:0 Reverses:False EasingDirection:In EasingStyle:Linear | 1 0 inf | 1 0 inf
+info delay-neg Time:1 DelayTime:-2 RepeatCount:0 Reverses:False EasingDirection:In EasingStyle:Linear | 1 0 -2 | 1 0 -2
+getvalue nan Linear ok nan nan
+getvalue nan Quad ok nan nan
+getvalue nan Elastic ok nan nan
+getvalue nan Bounce ok nan nan
+getvalue nan Back ok nan nan
+getvalue nan Sine ok nan nan
+getvalue nan Exponential ok nan nan
+getvalue nan Circular ok nan nan
+getvalue nan Cubic ok nan nan
+getvalue nan Quart ok nan nan
+getvalue nan Quint ok nan nan
+getvalue negnan Linear ok nan nan
+getvalue negnan Quad ok nan nan
+getvalue negnan Elastic ok nan nan
+getvalue negnan Bounce ok nan nan
+getvalue negnan Back ok nan nan
+getvalue negnan Sine ok nan nan
+getvalue negnan Exponential ok nan nan
+getvalue negnan Circular ok nan nan
+getvalue negnan Cubic ok nan nan
+getvalue negnan Quart ok nan nan
+getvalue negnan Quint ok nan nan
+getvalue inf Linear ok 1 1
+getvalue inf Quad ok 1 1
+getvalue inf Elastic ok 1 1
+getvalue inf Bounce ok 1 1
+getvalue inf Back ok 1 1
+getvalue inf Sine ok 1 1
+getvalue inf Exponential ok 1 1
+getvalue inf Circular ok 1 1
+getvalue inf Cubic ok 1 1
+getvalue inf Quart ok 1 1
+getvalue inf Quint ok 1 1
+getvalue neginf Linear ok 0 0
+getvalue neginf Quad ok 0 0
+getvalue neginf Elastic ok 0 0
+getvalue neginf Bounce ok 0 0
+getvalue neginf Back ok 0 0
+getvalue neginf Sine ok 0 0
+getvalue neginf Exponential ok 0 0
+getvalue neginf Circular ok 0 0
+getvalue neginf Cubic ok 0 0
+getvalue neginf Quart ok 0 0
+getvalue neginf Quint ok 0 0
+getvalue nanstring Linear ok nan nan
+getvalue nanstring Quad ok nan nan
+getvalue nanstring Elastic ok nan nan
+getvalue nanstring Bounce ok nan nan
+getvalue nanstring Back ok nan nan
+getvalue nanstring Sine ok nan nan
+getvalue nanstring Exponential ok nan nan
+getvalue nanstring Circular ok nan nan
+getvalue nanstring Cubic ok nan nan
+getvalue nanstring Quart ok nan nan
+getvalue nanstring Quint ok nan nan
+getvalue infstring Linear ok 1 1
+getvalue infstring Quad ok 1 1
+getvalue infstring Elastic ok 1 1
+getvalue infstring Bounce ok 1 1
+getvalue infstring Back ok 1 1
+getvalue infstring Sine ok 1 1
+getvalue infstring Exponential ok 1 1
+getvalue infstring Circular ok 1 1
+getvalue infstring Cubic ok 1 1
+getvalue infstring Quart ok 1 1
+getvalue infstring Quint ok 1 1
+getvalue nan Spring error TweenService:GetValue does not support Enum.EasingStyle.Spring or Enum.EasingStyle.Bezier
+gui TweenPosition override-string error Unable to cast string to bool 
+gui TweenPosition override-number ok true 
+gui TweenPosition override-zero ok true 
+gui TweenPosition override-table error Unable to cast Array to bool 
+gui TweenPosition override-nil error Unable to cast bool to Function 
+gui TweenPosition callback-string error Unable to cast string to Function 
+gui TweenPosition callback-number error Unable to cast double to Function 
+gui TweenPosition callback-table error Unable to cast Array to Function 
+gui TweenPosition callback-callable error Unable to cast Array to Function 
+gui TweenPosition callback-bool error Unable to cast bool to Function 
+gui TweenPosition callback-instance error Unable to cast Instance to Function 
+gui TweenPosition callback-function ok true callback-function:Enum.TweenStatus.Completed
+gui TweenSize override-string error Unable to cast string to bool 
+gui TweenSize override-number ok true 
+gui TweenSize override-zero ok true 
+gui TweenSize override-table error Unable to cast Array to bool 
+gui TweenSize override-nil error Unable to cast bool to Function 
+gui TweenSize callback-string error Unable to cast string to Function 
+gui TweenSize callback-number error Unable to cast double to Function 
+gui TweenSize callback-table error Unable to cast Array to Function 
+gui TweenSize callback-callable error Unable to cast Array to Function 
+gui TweenSize callback-bool error Unable to cast bool to Function 
+gui TweenSize callback-instance error Unable to cast Instance to Function 
+gui TweenSize callback-function ok true callback-function:Enum.TweenStatus.Completed
+gui TweenSizeAndPosition override-string error Unable to cast string to bool 
+gui TweenSizeAndPosition override-number ok true 
+gui TweenSizeAndPosition override-zero ok true 
+gui TweenSizeAndPosition override-table error Unable to cast Array to bool 
+gui TweenSizeAndPosition override-nil error Unable to cast bool to Function 
+gui TweenSizeAndPosition callback-string error Unable to cast string to Function 
+gui TweenSizeAndPosition callback-number error Unable to cast double to Function 
+gui TweenSizeAndPosition callback-table error Unable to cast Array to Function 
+gui TweenSizeAndPosition callback-callable error Unable to cast Array to Function 
+gui TweenSizeAndPosition callback-bool error Unable to cast bool to Function 
+gui TweenSizeAndPosition callback-instance error Unable to cast Instance to Function 
+gui TweenSizeAndPosition callback-function ok true callback-function:Enum.TweenStatus.Completed
+create string-number error Unable to cast double to TweenInfo
+create string-nil error Argument 2 missing or nil
+create number-string error Unable to cast value to Object
+create nil-number error Unable to cast double to TweenInfo
+create nil-nil error Argument 2 missing or nil
+create nil-number-goal error Unable to cast double to TweenInfo
+create info-dict error Unable to cast Dictionary to TweenInfo
+create info-array error Unable to cast Array to TweenInfo
+create info-mixed error Unable to cast Array to TweenInfo
+create info-empty-string error Unable to cast string to TweenInfo
+create info-userdata error Unable to cast null to TweenInfo
+create info-function error Unable to cast Function to TweenInfo
+create goals-array error Unable to cast Array to Dictionary
+create goals-mixed error Unable to cast Array to Dictionary
+create goals-nonstring-key error Invalid table key type used
+create goals-number-key error TweenService:Create no property named '5' for object 'V'
+create goals-number-key-nil error TweenService:Create failed because Instance is null
+create target-nil-dictgoal-badvalue error TweenService:Create failed because Instance is null
+create target-nil-badkey error TweenService:Create failed because Instance is null
+string-info [x] V Time=0 DelayTime=0 RepeatCount=0 Reverses=false EasingStyle=error Invalid value for enum EasingStyle EasingDirection=error Invalid value for enum EasingDirection [Time:0 DelayTime:0 RepeatCount:0 Reverses:False EasingDirection: EasingStyle:]
+string-info [x] nil Time=0 DelayTime=0 RepeatCount=0 Reverses=false EasingStyle=error Invalid value for enum EasingStyle EasingDirection=error Invalid value for enum EasingDirection [Time:0 DelayTime:0 RepeatCount:0 Reverses:False EasingDirection: EasingStyle:]
+string-info [Time:2 DelayTime:0.5 RepeatCount:3 Reverses:True EasingDirection:In EasingStyle:Sine] V Time=0 DelayTime=0 RepeatCount=0 Reverses=false EasingStyle=error Invalid value for enum EasingStyle EasingDirection=error Invalid value for enum EasingDirection [Time:0 DelayTime:0 RepeatCount:0 Reverses:False EasingDirection: EasingStyle:]
+string-info [2] V Time=2 DelayTime=0 RepeatCount=0 Reverses=false EasingStyle=error Invalid value for enum EasingStyle EasingDirection=error Invalid value for enum EasingDirection [Time:2 DelayTime:0 RepeatCount:0 Reverses:False EasingDirection: EasingStyle:]
+string-info [ ] V Time=1 DelayTime=0 RepeatCount=0 Reverses=false EasingStyle=error Invalid value for enum EasingStyle EasingDirection=error Invalid value for enum EasingDirection [Time:1 DelayTime:0 RepeatCount:0 Reverses:False EasingDirection: EasingStyle:]
+gui override-dict error Unable to cast Dictionary to bool
+gui callback-dict error Unable to cast Dictionary to Function
+gui override-vector error Unable to cast Vector3 to bool
+gui override-instance error Unable to cast Instance to bool
+gui override-numstring error Unable to cast string to bool
+gui callback-cfunction ok true
+gui callback-before-udim error Unable to cast string to Function
+gui callback-before-override error Unable to cast string to Function
+gui override-before-time error Unable to cast string to bool
+gui loose-callback error Unable to cast string to Function
+order dir-style-time error Unable to cast string to float
+order dir-style error Unable to cast double to EasingStyle
+order udim-dir error Unable to cast string to EasingDirection
+order size-pos error Unable to cast double to UDim2
+order pos-dir error Unable to cast string to EasingDirection
+order time-override error Unable to cast string to float
+order style-spring-time error Unable to cast string to float
+order override-number-zero ok true
+create key-before-info error Invalid table key type used
+create string-key-number error Unable to cast double to TweenInfo
