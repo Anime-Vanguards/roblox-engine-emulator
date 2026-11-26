@@ -1,33 +1,58 @@
-# Topic: the compiler never imports _G
+# Topic: the compiler never imports _G, and imports no chain through a host's field globals
 #
 # What it does: the compiler treats _G, and any mutable global a host names, as written: it is read with GETGLOBAL and
-# never resolved by GETIMPORT.
+# never resolved by GETIMPORT. A name the host gives as "@fields:<name>" is upstream's mutable global instead: the global
+# itself is imported, a chain through it (`workspace.Gravity`, `game.Players.LocalPlayer`) never is, so each field is read
+# when the code runs rather than once when the chunk loads.
 #
 # Why upstream lacks it: upstream imports _G itself (blocking only chains through it), resolved at load from the loading
 # thread's globals. The first host of this VM loaded each script on one thread with an environment of its own, where
 # that resolved the thread's _G, not the script's. 07-import-environment may make this unneeded; it stays because
-# dropping it changes the bytecode of every _G read, which moves the work clock.
+# dropping it changes the bytecode of every _G read, which moves the work clock. Upstream has one kind of mutable global;
+# a host that keeps some globals out of imports altogether and others out of chains only needs the two.
 
 diff --git a/luau/Compiler/src/ValueTracking.cpp b/luau/Compiler/src/ValueTracking.cpp
-index fa79661..b7887a0 100644
+index fa79661..dce2562 100644
 --- a/luau/Compiler/src/ValueTracking.cpp
 +++ b/luau/Compiler/src/ValueTracking.cpp
-@@ -214,12 +214,12 @@ struct ValueVisitor : AstVisitor
+@@ -5,6 +5,8 @@
+ #include "Luau/Lexer.h"
+ #include "Luau/SmallVector.h"
+ 
++#include <string.h>
++
+ LUAU_FASTFLAG(LuauOptimizeExportTable)
+ 
+ namespace Luau
+@@ -214,12 +216,24 @@ struct ValueVisitor : AstVisitor
  void assignMutable(DenseHashMap<AstName, Global>& globals, const AstNameTable& names, const char* const* mutableGlobals)
  {
      if (AstName name = names.get("_G"); name.value)
 -        globals[name] = Global::Mutable;
 +        globals[name] = Global::Written;
++
++    // a host's "@fields:<name>" names a global whose fields change while it stays: the global is imported and no chain through
++    // it (upstream's Mutable), unless the host also names it as written
++    const char* const fields = "@fields:";
++    const size_t fieldsLength = strlen(fields);
  
      if (mutableGlobals)
          for (const char* const* ptr = mutableGlobals; *ptr; ++ptr)
-             if (AstName name = names.get(*ptr); name.value)
+-            if (AstName name = names.get(*ptr); name.value)
 -                globals[name] = Global::Mutable;
++        {
++            if (strncmp(*ptr, fields, fieldsLength) == 0)
++            {
++                if (AstName name = names.get(*ptr + fieldsLength); name.value && getGlobalState(globals, name) != Global::Written)
++                    globals[name] = Global::Mutable;
++            }
++            else if (AstName name = names.get(*ptr); name.value)
 +                globals[name] = Global::Written;
++        }
  }
  
  void trackValues(
-@@ -241,3 +241,4 @@ void trackValues_DEPRECATED(DenseHashMap<AstName, Global>& globals, DenseHashMap
+@@ -241,3 +255,4 @@ void trackValues_DEPRECATED(DenseHashMap<AstName, Global>& globals, DenseHashMap
  
  } // namespace Compile
  } // namespace Luau

@@ -5,6 +5,8 @@
 #include "Luau/Lexer.h"
 #include "Luau/SmallVector.h"
 
+#include <string.h>
+
 LUAU_FASTFLAG(LuauOptimizeExportTable)
 
 namespace Luau
@@ -216,10 +218,22 @@ void assignMutable(DenseHashMap<AstName, Global>& globals, const AstNameTable& n
     if (AstName name = names.get("_G"); name.value)
         globals[name] = Global::Written;
 
+    // a host's "@fields:<name>" names a global whose fields change while it stays: the global is imported and no chain through
+    // it (upstream's Mutable), unless the host also names it as written
+    const char* const fields = "@fields:";
+    const size_t fieldsLength = strlen(fields);
+
     if (mutableGlobals)
         for (const char* const* ptr = mutableGlobals; *ptr; ++ptr)
-            if (AstName name = names.get(*ptr); name.value)
+        {
+            if (strncmp(*ptr, fields, fieldsLength) == 0)
+            {
+                if (AstName name = names.get(*ptr + fieldsLength); name.value && getGlobalState(globals, name) != Global::Written)
+                    globals[name] = Global::Mutable;
+            }
+            else if (AstName name = names.get(*ptr); name.value)
                 globals[name] = Global::Written;
+        }
 }
 
 void trackValues(

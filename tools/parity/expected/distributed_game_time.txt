@@ -1,0 +1,19 @@
+# engine: Roblox Studio 0.747.0.7471481, a headless playing client (script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-26
+start number true true
+after a wait true true true
+PreAnimation reads 3 the last frame's 3 the frame's 0
+Stepped reads 3 the last frame's 3 the frame's 0
+PreSimulation reads 3 the last frame's 3 the frame's 0
+PostSimulation reads 3 the last frame's 0 the frame's 3
+task.wait reads 3 the last frame's 0 the frame's 3
+Heartbeat reads 3 the last frame's 0 the frame's 3
+written 1000 1000
+after the write: Stepped 1000
+after the write: PostSimulation equals time() true
+written string x reads 0
+written string 12 reads 12
+written number -5 reads -5
+written boolean true reads 0
+three frames: property signal 0 Changed 0
+a write and a frame: property signal 1 Changed 1

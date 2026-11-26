@@ -689,10 +689,28 @@ fn install_workspace_and_camera(behaviors: &mut Behaviors, reflection: &Reflecti
     // Workspace / Camera
     if let Some(workspace) = class(reflection, "Workspace") {
         let edit = options.edit_mode();
+        // DistributedGameTime: 0 in edit mode (the game never started running), like time(). In a running game, a playing client's
+        // and a server's alike, the game time as of the frame's simulation step (Studio 0.747,
+        // tools/parity/probes/distributed_game_time.luau): time() moves at the frame's start, DistributedGameTime after
+        // PreSimulation (PreAnimation, Stepped and PreSimulation read the last frame's, PostSimulation, the task.wait resumptions
+        // and Heartbeat the frame's, equal to time() to the bit). A client's is its own clock, not its server's
+        // (probes/loopback/distributed_game_time.luau). A script may write it: the value holds until the next step sets the game
+        // time again (scheduler.rs Scheduler::game_time; the step: install_run_service)
         behaviors.add_getter(workspace, K::DistributedGameTime as NameId, getter(move |_, engine, _| {
-            // Measured: 0 in edit mode (the game never started running), like time()
-            Ok(LuaValue::Number(if edit { 0.0 } else { engine.state.borrow().sched.now }))
+            let state = engine.state.borrow();
+            Ok(LuaValue::Number(if edit { 0.0 } else { state.sched.game_time.unwrap_or(state.sched.now) }))
         }));
+        if !edit {
+            // (a write takes any value a number property takes, "x" as 0, and fires Changed when it changes the value; edit mode
+            // keeps the plain write it had, which the getter's 0 hides: not measured there)
+            behaviors.add_setter(workspace, K::DistributedGameTime as NameId, Rc::new(|lua, engine, id, value| {
+                let class = engine.state.borrow().dom.at(id).class;
+                let Some(info) = engine.reflection.class_property(class, K::DistributedGameTime as NameId).cloned() else { return Ok(()) };
+                let Value::Number(time) = convert::coerce(lua, engine, &info, &value)? else { return Ok(()) };
+                set_game_time(engine, id, time, true);
+                Ok(())
+            }));
+        }
         behaviors.add_method(workspace, K::GetServerTimeNow as NameId, method(|_, engine, _, _| {
             let time = engine.state.borrow_mut().sched.unix_time();
             Ok(values([LuaValue::Number(time)]))
@@ -723,6 +741,17 @@ fn install_workspace_and_camera(behaviors: &mut Behaviors, reflection: &Reflecti
             let (width, height) = crate::world::camera::viewport_size(engine, id);
             Ok(vector2(lua, f64::from(width), f64::from(height))?)
         }));
+    }
+}
+
+/// Workspace.DistributedGameTime from now on: a script's write, or the game time a simulation step gives it. Changed and the
+/// property's own signal fire when the value changes and `signal` asks for them (a script's write, a server's step).
+fn set_game_time(engine: &Engine, workspace: InstanceId, time: f64, signal: bool) {
+    let mut state = engine.state.borrow_mut();
+    let old = state.sched.game_time.unwrap_or(state.sched.now);
+    state.sched.game_time = Some(time);
+    if signal && old.to_bits() != time.to_bits() {
+        core::fire_computed_changed(&mut state, &engine.reflection, workspace, K::DistributedGameTime as NameId);
     }
 }
 
@@ -962,6 +991,9 @@ fn install_run_service(engine: &Rc<Engine>, behaviors: &mut Behaviors, reflectio
             // The physics step: free assemblies fall (world::gravity); the spatial index takes in what entered the Workspace
             crate::luau_profile::engine_step("physics", || crate::world::gravity::step(engine, delta));
             crate::world::broadphase::index_parts(engine);
+            // Workspace.DistributedGameTime takes the frame's game time after the step, before PostSimulation; a server fires its
+            // Changed for it every frame, a playing client none (Studio 0.747, tools/parity/probes/distributed_game_time.luau)
+            set_game_time(engine, engine.world().workspace, now, engine.options.server());
             fire_frame_event(lua, engine, K::PostSimulation as NameId, &[Value::Number(delta)])
         }));
         state.sched.add_hook(Phase::Heartbeat, Rc::new(|lua, engine, delta| {

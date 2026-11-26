@@ -666,13 +666,27 @@ pub fn flush_module_store() {
 /// Constants fold in the float mode that flushes subnormal results, as Roblox's script loader folds them (lua/float_mode.rs): the
 /// same in every run context, so the bytecode this compiler makes (kept by [`CompiledSources`], [`Prefetch`] and a loopback run's
 /// sides) serves every engine.
+/// A field read through one of [`FIELD_GLOBALS`] is read each time the code runs, as a client reads it.
 pub fn compiler() -> Compiler {
     // (typeof is a builtin, as in Roblox, whose client runs a script's `typeof(x)` as a fast call: the VM's builtin names ree's
     // values as ree's typeof does, raw.rs typeof_function; measured in tools/cost-parity's env rows. The compiler leaves the
     // typeof of a constant vector to the VM, which names it Vector3, rather than folding it to "vector": Luau has done so
     // since LuauCompileTypeofFold's behaviour became its only one)
-    Compiler::new().set_optimization_level(2).set_vector_ctor("Vector3.new").set_vector_type("Vector3").add_mutable_global(super::float_mode::COMPILE_FLUSH)
+    FIELD_GLOBALS.iter().fold(
+        Compiler::new().set_optimization_level(2).set_vector_ctor("Vector3.new").set_vector_type("Vector3").add_mutable_global(super::float_mode::COMPILE_FLUSH),
+        |compiler, name| compiler.add_mutable_global(*name),
+    )
 }
+
+/// The globals whose fields a script reads each time its code runs: the global is resolved when the script loads, as other
+/// globals are, but `workspace.Gravity` or `game.Players.LocalPlayer` is no import resolved with it, so it reads the value of
+/// the moment, not the one the chunk loaded with (patches/luau/11-compiler-g-written.patch, "@fields:"). Measured in a playing
+/// client and a server (Studio 0.747, tools/parity/probes/field_imports.luau): a field of these written through a local reads
+/// the new value through the global (Workspace.DistributedGameTime, which moves every frame, Gravity, CurrentCamera.CFrame, a
+/// renamed child, script.Name, game.Name, shared.X), while a chain through Enum is resolved at load (`Enum.KeyCode.A` cost a
+/// client 0.7 ns a read, a local's `.A` 26). `workspace.Gravity` cost a client 32.2 ns against 30.7 for the same read through a
+/// local, `game.Workspace` 42.9 against 42.8: the global's import, then the field read each time.
+pub const FIELD_GLOBALS: &[&str] = &["@fields:game", "@fields:Game", "@fields:workspace", "@fields:Workspace", "@fields:script", "@fields:shared"];
 
 /// Compiler for `--native` `debug.loadmodule`: leaves sandbox-overridden globals mutable so `setfenv`
 /// sandboxes can keep `safeenv` (fastcalls, inline `pairs`/`ipairs`, native codegen without deopts)

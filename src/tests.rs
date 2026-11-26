@@ -14950,3 +14950,88 @@ fn hashes_cost_the_work_clock_what_other_encoding_calls_do() {
     assert_eq!(crate::cost::method("ComputeBufferHash"), crate::cost::CALL);
     assert_eq!(crate::cost::method("ComputeStringHash"), crate::cost::CALL);
 }
+
+/// A field read through workspace, game, script or shared reads the value of the moment, as a playing client's and a server's
+/// do (Studio 0.747, tools/parity/probes/field_imports.luau): the compiler imports the global and not the chain through it
+/// (modules::FIELD_GLOBALS), so `workspace.Gravity` reads what a write through a local left. The imports were resolved when the
+/// chunk loaded, through the Instance's own __index, and kept: the Gravity, the name and the shared value the chunk loaded with
+/// (and Workspace.DistributedGameTime stood at its load-time 0, public issue #63). The global itself is still an import resolved
+/// at load, as a client's is (none is looked up again), and a chain through Enum still is too.
+#[test]
+fn a_field_read_through_a_field_global_reads_the_value_of_the_moment() {
+    let (lua, engine) = start_with(Options { mode: "play".into(), ..Options::default() });
+    engine_lua::modules::interpret_all(&lua, &engine);
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    run(&lua, &engine, "shared.FieldProbe = 1");
+    let before = vm_counts(&engine);
+    let output = run(
+        &lua,
+        &engine,
+        r#"
+        local W, S, Shared = workspace, script, shared
+        W.Gravity = 50
+        S.Name = "Renamed"
+        Shared.FieldProbe = 2
+        print(workspace.Gravity, game.Workspace.Gravity, script.Name, shared.FieldProbe, Enum.KeyCode.A.Name)
+        "#,
+    );
+    let slow = vm_counts(&engine).slowimports - before.slowimports;
+    assert_eq!(output, ["print: 50 50 Renamed 2 A"]);
+    assert_eq!(slow, 0, "the globals are imports resolved at load");
+}
+
+/// Workspace.DistributedGameTime in a running game is the game time as of the frame's simulation step, a playing client's and a
+/// server's alike (Studio 0.747, tools/parity/probes/distributed_game_time.luau): time() after a wait, the last frame's in Stepped,
+/// the frame's from PostSimulation on; a write takes a number property's coercion and holds until the next step; a server fires
+/// Changed for every step, a client none. It read 0 in a running game (public issue #63). Edit mode keeps 0, like time().
+#[test]
+fn distributed_game_time_is_the_game_time_of_the_last_simulation_step() {
+    use super::RunContext;
+    let script = r#"
+        local RunService = game:GetService("RunService")
+        local W = workspace
+        task.wait(1)
+        print("after a second", workspace.DistributedGameTime == time(), math.round(workspace.DistributedGameTime))
+        RunService.Heartbeat:Wait()
+        local Last = time()
+        local SteppedRead, PostRead
+        local A = RunService.Stepped:Connect(function()
+            SteppedRead = W.DistributedGameTime
+        end)
+        local B = RunService.PostSimulation:Connect(function()
+            PostRead = W.DistributedGameTime == time()
+        end)
+        RunService.Heartbeat:Wait()
+        A:Disconnect()
+        B:Disconnect()
+        print("stepped read the last frame's", SteppedRead == Last, SteppedRead == time(), "post", PostRead)
+        W.DistributedGameTime = "12"
+        print("written", workspace.DistributedGameTime)
+        local Fired = 0
+        local C = W:GetPropertyChangedSignal("DistributedGameTime"):Connect(function()
+            Fired += 1
+        end)
+        for _ = 1, 3 do
+            RunService.Heartbeat:Wait()
+        end
+        C:Disconnect()
+        print("three frames", Fired, workspace.DistributedGameTime == time())
+    "#;
+    for (run_context, fired) in [(RunContext::Client, 0), (RunContext::Server, 3)] {
+        let (lua, engine) = start_with(Options { mode: "play".into(), run_context, ..Options::default() });
+        let output = run(&lua, &engine, script);
+        assert_eq!(
+            output,
+            [
+                "print: after a second true 1".to_string(),
+                "print: stepped read the last frame's true false post true".to_string(),
+                "print: written 12".to_string(),
+                format!("print: three frames {fired} true"),
+            ],
+            "{run_context:?}"
+        );
+    }
+    let (lua, engine) = start_with(Options { mode: "edit".into(), run_context: RunContext::Edit, ..Options::default() });
+    let output = run(&lua, &engine, "task.wait(1) print(workspace.DistributedGameTime, time())");
+    assert_eq!(output, ["print: 0 0"]);
+}

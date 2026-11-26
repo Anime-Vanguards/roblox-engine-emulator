@@ -223,6 +223,9 @@ pub struct ReplayStatus {
 
 pub struct Scheduler {
     pub now: f64,
+    /// Workspace.DistributedGameTime in a running game: `now` as of the last simulation step, or what a script wrote since; None
+    /// before the first step, where it reads `now` (services/mod.rs install_workspace_and_camera)
+    pub game_time: Option<f64>,
     pub frame: u64,
     /// A playing client's or a server's output lines waiting for LogService.MessageOut: it gets them after the frame's
     /// Heartbeat handlers and the deferred work they leave ([`deliver_log`])
@@ -396,6 +399,7 @@ impl Scheduler {
         let muted = Rc::new(std::cell::Cell::new(0));
         let mut scheduler = Scheduler {
             now: 0.0,
+            game_time: None,
             frame: 0,
             log_queue: Vec::new(),
             delivering_log: false,

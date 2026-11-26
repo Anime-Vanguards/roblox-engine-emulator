@@ -1,0 +1,9 @@
+# engine: Roblox Studio 0.747.0.7471481, a headless playing client (script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-26
+Gravity 50 50 50 50 50
+Gravity again true
+CurrentCamera.CFrame 1, 2, 3 1, 2, 3
+renamed child error Camera is not a valid member of Workspace "Workspace"
+new child true
+game.Name FieldImportsGame
+Enum chain true A

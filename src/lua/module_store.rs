@@ -751,7 +751,8 @@ fn enabled() -> bool {
 pub(crate) fn abi_info() -> &'static ([u8; 32], String) {
     static ABI: OnceLock<([u8; 32], String)> = OnceLock::new();
     ABI.get_or_init(|| {
-        const PROBE: &str = "local v = Vector3.new(1, 2, 3)\nlocal t = typeof(v)\nlocal sub = 2 ^ -1074\nlocal n = math.abs(-1) + os.clock()\nlocal s = script\nlocal r = require\nreturn { v, t, sub, n, s, r }\n";
+        // (`workspace.Gravity`: a field global's chain, which the compiler stopped importing: modules::FIELD_GLOBALS)
+        const PROBE: &str = "local v = Vector3.new(1, 2, 3)\nlocal t = typeof(v)\nlocal sub = 2 ^ -1074\nlocal n = math.abs(-1) + os.clock()\nlocal s = script\nlocal r = require\nlocal g = workspace.Gravity\nreturn { v, t, sub, n, s, r, g }\n";
         let mut material = Vec::with_capacity(512);
         material.extend_from_slice(PACK_MAGIC);
         material.extend_from_slice(&FORMAT_VERSION.to_le_bytes());
