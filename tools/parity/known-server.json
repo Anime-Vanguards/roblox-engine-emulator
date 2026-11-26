@@ -197,28 +197,6 @@
 			"why": "a server has no NetworkClient; ree's probe line is the service it made"
 		}
 	],
-	"datatype_edges": [
-		{
-			"line": "millis-range ",
-			"why": "DateTime.fromUnixTimestampMillis out of range: a client says `Error interpreting timestampMillis as a precise point in time. Fields out of range. UnixTimestampMillis should be between -17987443200000 and 253402300799999.`; ree gives the seconds' message"
-		},
-		{
-			"line": "rolled ",
-			"why": "DateTime.fromUniversalTime with units that roll below year 1400: a client raises `Below the min DateTime supported: 1400-01-01T00:00:00Z` (and a millisecond count past the int32 range of microseconds is clamped: -19008000000000 ms gives 946682652516); ree raises the fields' out-of-range message"
-		},
-		{
-			"line": "iso ",
-			"why": "DateTime.fromIsoDate in a client: text after a complete time is ignored (\"...Zjunk\", a trailing space), hours, minutes and seconds past their range roll over (25:00, 99:00, 23:60, 23:59:61), an offset that takes the time out of 1400-9999 gives nil, and an offset of +24:00 or more gives nil; ree differs on each"
-		},
-		{
-			"line": "font-unknown",
-			"why": "Font.fromEnum(Enum.Font.Unknown) raises `Enum.Font.Unknown can't be passed to Font.fromEnum` with the caller's position in a client; ree words it otherwise, without a position"
-		},
-		{
-			"line": "content-",
-			"why": "Content.fromAssetId in a client: 0 is rbxassetid://0, a fraction rounds (1.5 is rbxassetid://2), a non-finite id raises `Invalid id. Expected a finite value.`; fromObject(nil) raises `Expected Object, got nil.` and a number `invalid argument #1 to 'fromObject' (Object expected, got number)` with a position; ree answers and words them otherwise"
-		}
-	],
 	"engine_functions": [
 		{
 			"line": "same signal.Connect false",

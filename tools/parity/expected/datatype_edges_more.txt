@@ -1,0 +1,372 @@
+# engine: Roblox Studio 0.747.0.7471481, a headless playing client (script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-26
+lock XYZ 1 XYZ 0.5 1.57079637 0 | XZY 0.5 1.57079637 -8.6841121e-09 | YXZ -1.29175985e-08 1.57079637 0.5 | YZX -1.47195243e-08 1.57079637 0.5 | ZXY 0.5 1.57079637 -9.89549243e-09 | ZYX 1.57079637 1.07079649 1.57079637
+lock XYZ -1 XYZ 0.100000001 -1.57079637 0 | XZY 0.100000001 -1.57079637 -8.6841121e-09 | YXZ -1.29175985e-08 -1.57079637 -0.100000001 | YZX -1.2982456e-08 -1.57079637 -0.100000009 | ZXY 0.100000009 -1.57079637 -8.72771366e-09 | ZYX 1.57079673 -1.47079706 -1.57079673
+lock XZY 1 XYZ 0.100000001 -8.6841121e-09 1.57079637 | XZY 0.100000001 0 1.57079637 | YXZ 0.100000009 -8.72771366e-09 1.57079637 | YZX 1.57079673 -1.57079673 1.47079706 | ZXY -1.29175985e-08 -0.100000001 1.57079637 | ZYX -1.2982456e-08 -0.100000009 1.57079637
+lock XZY -1 XYZ 0.5 -8.6841121e-09 -1.57079637 | XZY 0.5 0 -1.57079637 | YXZ 0.5 -9.89549243e-09 -1.57079637 | YZX 1.57079637 1.57079637 -1.07079649 | ZXY -1.29175985e-08 0.5 -1.57079637 | ZYX -1.47195243e-08 0.5 -1.57079637
+lock YXZ 1 XYZ 1.57079637 -1.29175985e-08 -0.100000001 | XZY 1.57079637 -1.2982456e-08 -0.100000009 | YXZ 1.57079637 0.100000001 0 | YZX 1.57079637 0.100000001 -8.6841121e-09 | ZXY 1.47079706 1.57079673 -1.57079673 | ZYX 1.57079637 0.100000009 -8.72771366e-09
+lock YXZ -1 XYZ -1.57079637 -1.29175985e-08 0.5 | XZY -1.57079637 -1.47195243e-08 0.5 | YXZ -1.57079637 0.5 0 | YZX -1.57079637 0.5 -8.6841121e-09 | ZXY -1.07079649 1.57079637 1.57079637 | ZYX -1.57079637 0.5 -9.89549243e-09
+lock YZX 1 XYZ -9.89549243e-09 0.5 1.57079637 | XZY 1.57079637 1.57079637 1.07079649 | YXZ -8.6841121e-09 0.5 1.57079637 | YZX 0 0.5 1.57079637 | ZXY 0.5 -1.47195243e-08 1.57079637 | ZYX 0.5 -1.29175985e-08 1.57079637
+lock YZX -1 XYZ -8.72771366e-09 0.100000009 -1.57079637 | XZY -1.57079673 1.57079673 -1.47079706 | YXZ -8.6841121e-09 0.100000001 -1.57079637 | YZX 0 0.100000001 -1.57079637 | ZXY -0.100000009 -1.2982456e-08 -1.57079637 | ZYX -0.100000001 -1.29175985e-08 -1.57079637
+lock ZXY 1 XYZ 1.57079637 0.5 -1.47195243e-08 | XZY 1.57079637 0.5 -1.29175985e-08 | YXZ 1.07079649 1.57079637 1.57079637 | YZX 1.57079637 -9.89549243e-09 0.5 | ZXY 1.57079637 0 0.5 | ZYX 1.57079637 -8.6841121e-09 0.5
+lock ZXY -1 XYZ -1.57079637 -0.100000009 -1.2982456e-08 | XZY -1.57079637 -0.100000001 -1.29175985e-08 | YXZ -1.47079706 -1.57079673 1.57079673 | YZX -1.57079637 -8.72771366e-09 0.100000009 | ZXY -1.57079637 0 0.100000001 | ZYX -1.57079637 -8.6841121e-09 0.100000001
+lock ZYX 1 XYZ -1.57079673 1.47079706 1.57079673 | XZY -8.72771366e-09 1.57079637 0.100000009 | YXZ -0.100000009 1.57079637 -1.2982456e-08 | YZX -0.100000001 1.57079637 -1.29175985e-08 | ZXY -8.6841121e-09 1.57079637 0.100000001 | ZYX 0 1.57079637 0.100000001
+lock ZYX -1 XYZ 1.57079637 -1.07079649 1.57079637 | XZY -9.89549243e-09 -1.57079637 0.5 | YXZ 0.5 -1.57079637 -1.47195243e-08 | YZX 0.5 -1.57079637 -1.29175985e-08 | ZXY -8.6841121e-09 -1.57079637 0.5 | ZYX 0 -1.57079637 0.5
+quarter x+ XYZ 1.57079637 0 -0 | XZY 1.57079637 0 -0 | YXZ 1.57079637 0 0 | YZX 1.57079637 -0 0 | ZXY 1.57079637 0 0 | ZYX 1.57079637 -0 0
+quarter x- XYZ -1.57079637 0 -0 | XZY -1.57079637 0 -0 | YXZ -1.57079637 -0 0 | YZX -1.57079637 -0 0 | ZXY -1.57079637 0 -0 | ZYX -1.57079637 -0 0
+quarter y+ XYZ 0 1.57079637 0 | XZY 0 1.57079637 -0 | YXZ -0 1.57079637 0 | YZX -0 1.57079637 0 | ZXY 0 1.57079637 -0 | ZYX 0 1.57079637 -0
+quarter y- XYZ -0 -1.57079637 0 | XZY 0 -1.57079637 -0 | YXZ -0 -1.57079637 0 | YZX -0 -1.57079637 0 | ZXY 0 -1.57079637 -0 | ZYX 0 -1.57079637 -0
+quarter z+ XYZ -0 0 1.57079637 | XZY 0 0 1.57079637 | YXZ -0 0 1.57079637 | YZX 0 0 1.57079637 | ZXY 0 -0 1.57079637 | ZYX 0 -0 1.57079637
+quarter z- XYZ -0 0 -1.57079637 | XZY -0 0 -1.57079637 | YXZ -0 0 -1.57079637 | YZX 0 -0 -1.57079637 | ZXY 0 -0 -1.57079637 | ZYX 0 -0 -1.57079637
+quarter nan XYZ nan 1.57079637 0 | XZY nan 0 -1.57079637 | YXZ -1.57079637 nan 0 | YZX 0 nan 1.57079637 | ZXY 1.57079637 0 nan | ZYX 0 -1.57079637 nan
+quarter half-turn XYZ -3.1415925 0 0 | XZY -3.1415925 0 0 | YXZ -8.74227766e-08 3.14159274 -3.14159274 | YZX -3.1415925 -0 -0 | ZXY -8.74227766e-08 -3.14159274 3.14159274 | ZYX -3.1415925 -0 -0
+lookat along-y ok 1 2 3 0 1 -0 0 -0 -1 -1 0 -0 | along ok 1 2 3 0 1 -0 0 -0 -1 -1 0 -0
+lookat along-minus-y ok 1 2 3 -0 1 -0 0 0 1 1 0 -0 | along ok 1 2 3 0 1 0 0 0 1 1 0 0
+lookat along-z ok 1 2 3 0 1 -0 1 0 -0 0 0 -1 | along ok 1 2 3 0 1 -0 1 0 -0 0 0 -1
+lookat along-minus-z ok 1 2 3 0 1 -0 -1 0 -0 0 0 1 | along ok 1 2 3 0 1 0 -1 0 0 0 -0 1
+lookat along-diagonal ok 1 2 3 0 0.707106709 -0.707106769 0 -0.707106709 -0.707106769 -0.99999994 0 -0 | along ok 1 2 3 0 0.707106709 -0.707106769 0 -0.707106709 -0.707106769 -0.99999994 0 -0
+lookat along-diagonal-3 ok 1 2 3 0 0.816496551 -0.577350259 0.707106769 -0.408248276 -0.577350259 -0.707106769 -0.408248276 -0.577350259 | along ok 1 2 3 0 0.816496551 -0.577350259 0.707106769 -0.408248276 -0.577350259 -0.707106769 -0.408248276 -0.577350259
+lookat along-x-up-minus-x ok 1 2 3 0 0 -1 0 1 -0 1 0 -0 | along ok 1 2 3 0 0 -1 0 1 -0 1 0 -0
+lookat up-long-z ok 1 2 3 0.800000012 -0.424264103 -0.424264073 -0.600000024 -0.565685451 -0.565685451 0 0.707106829 -0.707106829 | along ok 1 2 3 0.800000012 -0.424264103 -0.424264073 -0.600000024 -0.565685451 -0.565685451 0 0.707106829 -0.707106829
+lookat up-short ok 1 2 3 -0.857492924 -0.291042745 -0.424264073 0 0.824621141 -0.565685451 0.51449573 -0.485071272 -0.707106829 | along ok 1 2 3 -0.857492924 -0.291042745 -0.424264073 0 0.824621141 -0.565685451 0.51449573 -0.485071272 -0.707106829
+lookat up-tiny ok 1 2 3 nan nan -0.424264073 nan nan -0.565685451 nan nan -0.707106829 | along ok 1 2 3 nan nan -0.424264073 nan nan -0.565685451 nan nan -0.707106829
+lookat up-nan ok 1 2 3 nan nan -0.424264073 nan nan -0.565685451 nan nan -0.707106829 | along ok 1 2 3 nan nan -0.424264073 nan nan -0.565685451 nan nan -0.707106829
+lookat near-up-z ok 1 2 3 0 -1 -9.53674316e-07 -1 0 -0 0 9.53674316e-07 -1 | along ok 1 2 3 0 -1 -9.99999997e-07 -1 0 -0 0 9.99999997e-07 -1
+lookat nearer-up-z ok 1 2 3 0 1 -1.1920929e-07 1 0 -0 0 -1.1920929e-07 -1 | along ok 1 2 3 0 1 -1.00000001e-07 1 0 -0 0 -1.00000001e-07 -1
+frommatrix cross-1e-8 ok 1 2 3 9.99999975e-05 0 0 0 9.99999975e-05 0 0 0 9.99999905e-09
+frommatrix cross-1e-7 ok 1 2 3 0.00100000005 0 0 0 9.99999975e-05 0 0 0 1.00000001e-07
+frommatrix cross-2e-7 ok 1 2 3 0.00200000009 0 0 0 9.99999975e-05 0 0 0 2.00000002e-07
+frommatrix cross-1e-6 ok 1 2 3 0.00100000005 0 0 0 0.00100000005 0 0 0 1
+frommatrix cross-1e-12 ok 1 2 3 9.99999997e-07 0 0 0 9.99999997e-07 0 0 0 9.99999996e-13
+frommatrix cross-1.000005 ok 1 2 3 1 0 0 0 1.00000501 0 0 0 1
+frommatrix cross-0.999995 ok 1 2 3 1 0 0 0 0.999994993 0 0 0 1
+frommatrix cross-1.0001 ok 1 2 3 1 0 0 0 1.00010002 0 0 0 1
+frommatrix cross-skew-near-1 ok 1 2 3 0.600000024 -0.800000012 0 0.800000012 0.600000083 -0 0 0 1
+frommatrix nan ok 1 2 3 nan 0 0 0 1 nan 0 0 nan
+frommatrix inf ok 1 2 3 inf 0 0 0 1 nan 0 0 inf
+content-assetid 0.5 ok rbxassetid://1
+content-assetid 2.5 ok rbxassetid://3
+content-assetid -0.5 ok rbxassetid://-1
+content-assetid -1.5 ok rbxassetid://-2
+content-assetid -2.5 ok rbxassetid://-3
+content-assetid 0.49999999999999994 ok rbxassetid://0
+content-assetid 1e+20 ok rbxassetid://0
+content-assetid -1e+20 ok rbxassetid://0
+content-assetid 9.2233720368547758e+18 ok rbxassetid://-9223372036854775808
+content-assetid -9.2233720368547758e+18 ok rbxassetid://-9223372036854775808
+content-assetid 9007199254740994 ok rbxassetid://9007199254740994
+content-assetid 1e-300 ok rbxassetid://0
+content-assetid -0 ok rbxassetid://0
+content-assetid-arg string ok rbxassetid://5
+content-assetid-arg word error @94: invalid argument #1 to 'fromAssetId' (number expected, got string)
+content-assetid-arg nil error @94: invalid argument #1 to 'fromAssetId' (number expected, got nil)
+content-assetid-arg true error @94: invalid argument #1 to 'fromAssetId' (number expected, got boolean)
+content-assetid-arg table error @94: invalid argument #1 to 'fromAssetId' (number expected, got table)
+content-assetid-arg vector error @94: invalid argument #1 to 'fromAssetId' (number expected, got Vector3)
+content-assetid-none error Invalid number of arguments.
+content-object string error @102: invalid argument #1 to 'fromObject' (Object expected, got string)
+content-object true error @102: invalid argument #1 to 'fromObject' (Object expected, got boolean)
+content-object table error @102: invalid argument #1 to 'fromObject' (Object expected, got table)
+content-object vector error @102: invalid argument #1 to 'fromObject' (Object expected, got Vector3)
+content-object part error @102: invalid argument #1 to 'fromObject' (Object expected, got Instance)
+content-object-none error Invalid number of arguments.
+font-fromenum nil error Invalid value for enum 'Font'
+font-fromenum number error Invalid value for enum 'Font'
+font-fromenum string error Invalid value for enum 'Font'
+font-fromenum material error Invalid type 'Material' for enum 'Font'
+font-fromenum enum error Invalid value for enum 'Font'
+font-fromenum-none error Invalid value for enum 'Font'
+metatable Vector2 string The metatable is locked
+metatable Vector2int16 string The metatable is locked
+metatable Vector3int16 string The metatable is locked
+metatable UDim string The metatable is locked
+metatable UDim2 string The metatable is locked
+metatable Rect string The metatable is locked
+metatable Ray string The metatable is locked
+metatable Region3 string The metatable is locked
+metatable Region3int16 string The metatable is locked
+metatable BrickColor string The metatable is locked
+metatable NumberRange string The metatable is locked
+metatable NumberSequence string The metatable is locked
+metatable NumberSequenceKeypoint string The metatable is locked
+metatable ColorSequence string The metatable is locked
+metatable ColorSequenceKeypoint string The metatable is locked
+metatable PhysicalProperties string The metatable is locked
+metatable TweenInfo string The metatable is locked
+metatable Faces string The metatable is locked
+metatable Axes string The metatable is locked
+metatable Font string The metatable is locked
+metatable Content string The metatable is locked
+metatable DateTime string The metatable is locked
+metatable Random string The metatable is locked
+metatable RaycastParams string The metatable is locked
+metatable OverlapParams string The metatable is locked
+metatable CatalogSearchParams string The metatable is locked
+metatable Connection string The metatable is locked
+metatable PathWaypoint string The metatable is locked
+metatable FloatCurveKey string The metatable is locked
+metatable RotationCurveKey string The metatable is locked
+metatable SharedTable string The metatable is locked
+metatable buffer nil -
+metatable thread nil -
+metatable function nil -
+metatable number nil -
+metatable boolean nil -
+metatable table nil -
+rolled-millis 0.5 ok 946684800000
+rolled-millis -0.5 ok 946684800000
+rolled-millis 1.5 ok 946684800001
+rolled-millis 0.00040000000000000002 ok 946684800000
+rolled-millis 0.0015 ok 946684800000
+rolled-millis -0.0015 ok 946684800000
+rolled-millis 2147483 ok 946686947483
+rolled-millis 2147483.6469999999 ok 946686947483
+rolled-millis 2147483.648 ok 946686947483
+rolled-millis 2147484 ok 946682652516
+rolled-millis 3000000 ok 946682652516
+rolled-millis -2147483.648 ok 946682652517
+rolled-millis -2147483.6490000002 ok 946682652517
+rolled-millis -2147484 ok 946682652516
+rolled-millis -3000000 ok 946682652516
+rolled-millis 1000000000000000 ok 946682652516
+rolled-millis -1000000000000000 ok 946682652516
+rolled-millis nan ok 946682652516
+rolled-millis inf ok 946682652516
+rolled-millis -inf ok 946682652516
+rolled-second 2147483647 ok 3094168447000
+rolled-second 2147483648 ok 3094168448000
+rolled-second 3000000000 ok 3094168448000
+rolled-second -2147483648 ok 3094168448000
+rolled-second -2147483649 ok 3094168448000
+rolled-second -3000000000 ok 3094168448000
+rolled-second nan ok 3094168448000
+rolled-second inf ok 3094168448000
+rolled-second 1.5 ok 946684801000
+rolled-second -1.5 ok 946684799000
+rolled-minute 35791394 ok 3094168440000
+rolled-minute 35791395 ok 3094168500000
+rolled-minute 2147483648 ok 129795703680000
+rolled-minute -2147483649 ok 129795703680000
+rolled-minute nan ok 129795703680000
+rolled-hour 596523 ok 3094167600000
+rolled-hour 596524 ok 3094171200000
+rolled-hour 2147483648 error Over the max DateTime supported: 9999-12-31T23:59:59Z
+rolled-hour -2147483649 error Over the max DateTime supported: 9999-12-31T23:59:59Z
+rolled-hour nan error Over the max DateTime supported: 9999-12-31T23:59:59Z
+rolled-hour inf error Over the max DateTime supported: 9999-12-31T23:59:59Z
+rolled-date 2000,1,0 error Error interpreting year, month, day, hour, minute, second as a precise point in time. Fields out of range.
+rolled-date 2000,1,32 error Error interpreting year, month, day, hour, minute, second as a precise point in time. Fields out of range.
+rolled-date 2000,0,1 error Error interpreting year, month, day, hour, minute, second as a precise point in time. Fields out of range.
+rolled-date 2000,13,1 error Error interpreting year, month, day, hour, minute, second as a precise point in time. Fields out of range.
+rolled-date 2000,2,30 error Error interpreting year, month, day, hour, minute, second as a precise point in time. Fields out of range.
+rolled-date 2000.9,1.9,1.9 ok 946684800000
+rolled-date nan,1,1 error Error interpreting year, month, day, hour, minute, second as a precise point in time. Fields out of range.
+rolled-date 2000,nan,1 error Error interpreting year, month, day, hour, minute, second as a precise point in time. Fields out of range.
+rolled-date 2000,1,nan error Error interpreting year, month, day, hour, minute, second as a precise point in time. Fields out of range.
+rolled-date inf,1,1 error Error interpreting year, month, day, hour, minute, second as a precise point in time. Fields out of range.
+rolled-date -inf,1,1 error Error interpreting year, month, day, hour, minute, second as a precise point in time. Fields out of range.
+rolled-date 10000,1,1 error Over the max DateTime supported: 9999-12-31T23:59:59Z
+rolled-date 2147483648,1,1 error Error interpreting year, month, day, hour, minute, second as a precise point in time. Fields out of range.
+rolled-date 2000,2147483649,1 error Error interpreting year, month, day, hour, minute, second as a precise point in time. Fields out of range.
+iso "2020-02-29T12:34:56junk" 1582979696000
+iso "2020-02-29T12:34junk" nil
+iso "2020-02-29T12:34:56.5junk" 1582979696500
+iso "2020-02-29T12:34Zjunk" nil
+iso "2020-02-29Zjunk" nil
+iso "2020-02-29Z" 1582934400000
+iso "2020-02-29 " 1582934400000
+iso "2020-02-29T" 1582934400000
+iso "2020-02-29T12" 1582977600000
+iso "2020-02-29T12:" 1582977600000
+iso "2020-02-29T12:3" nil
+iso "2020-02-29T12:34:" 1582979640000
+iso "2020-02-29T12:34:5Z" nil
+iso "2020-02-29T1:34:56Z" nil
+iso "2020-02-29T12:34:56.Z" 1582979696000
+iso "2020-02-29T12:34:56.5" 1582979696500
+iso "2020-02-29T12:34:56,5Z" nil
+iso "2020-02-29T12:34:56+02:00 " 1582972496000
+iso "2020-02-29T12:34:56+02" 1582972496000
+iso "2020-02-29T12:34:56+02:0" 1582972496000
+iso "2020-02-29T12:34:56+02:" 1582972496000
+iso "2020-02-29T12:34:56+23:59" nil
+iso "2020-02-29T12:34:56-23:59" nil
+iso "2020-02-29T12:34:56-24:00" nil
+iso "2020-02-29T12:34:56+00:59" 1582976156000
+iso "2020-02-29T12:34:56+00:60" 1582976096000
+iso "2020-02-29T12:34:56+00:99" 1582973756000
+iso "2020-02-29T12:34:56+05:30Z" nil
+iso "2020-02-29T12:34+01:00" 1582979641000
+iso "2020-02-29T12:34:56Z+01:00" 1582976096000
+iso "2020-02-29T99:99:99Z" 1583296839000
+iso "2020-02-29T00:00:99.999Z" 1582934499999
+iso "2020-12-31T24:00:00Z" 1609459200000
+iso "2020-02-29T12:60Z" 1582981200000
+iso "2020-02-29T12:99Z" 1582983540000
+iso "2020-02-29	12:34Z" 1582979640000
+iso "2020-02-29x12:34Z" 1582979640000
+iso "	2020-02-29" 1582934400000
+iso "\\x0A2020-02-29" 1582934400000
+iso "2020-1-01" 1577836800000
+iso "2020-01-1" nil
+iso "202-01-01" nil
+iso "20200-01-01" nil
+iso "2020-00-10" nil
+iso "2020-13-01" nil
+iso "2020-01-00" nil
+iso "2020-01-32" nil
+iso "2020/01/01" 1577836800000
+iso "0000-01-01" nil
+iso "1399-12-31T23:59:59+00:00" nil
+iso "1400-01-01T00:59:59+01:00" nil
+iso "1400-01-01T01:00:00+01:00" -17987443200000
+iso "9999-12-31T22:59:59-01:00" 253402300799000
+iso "9999-12-31T23:00:00-01:00" nil
+lookat-threshold 4.5e-07 1 -1
+lookat-threshold 4.9999994e-07 1 -1
+lookat-threshold 5e-07 -1 1
+frommatrix-threshold 6e-07 6.00000021e-07 -6.00000021e-07
+frommatrix-threshold 8e-07 8.00000009e-07 -0.707106829
+frommatrix-threshold 1e-06 9.99999997e-07 -0.707106829
+iso-more "2020-02-29T12:34:56," nil
+iso-more "2020-02-29T12:34:56,5" 1582961696000
+iso-more "2020-02-29T12:34:56,Z" 1582979696000
+iso-more "2020-02-29T12:34:56;Z" nil
+iso-more "2020-02-29T12:34:56,junk" 1582979696000
+iso-more "2020-02-29T12:34:56.5,Z" 1582979696500
+iso-more "2020-02-29T12:34:56:5Z" nil
+iso-more "2020-02-29T12:34:56 5Z" nil
+iso-more "2020-02-29T12:34:56x+01:00" 1582976096000
+iso-more "2020-02-29T12:34:56junk+01:00" 1582976096000
+iso-more "2020-02-29T12:34:56Zx+01:00" 1582976096000
+iso-more "2020-02-29T12:34:56Z+01:00x" nil
+iso-more "2020-02-29T12:34:56Z-01:00" 1582983296000
+iso-more "2020-02-29T12:34:56z+01:00" 1582976096000
+iso-more "2020-02-29T12:34:56.5+01:00" 1582976096500
+iso-more "2020-02-29T12:34:56.5Z+01:00" 1582976096500
+iso-more "2020-02-29T12:34:56+12:00" 1582936496000
+iso-more "2020-02-29T12:34:56+13:00" 1582932896000
+iso-more "2020-02-29T12:34:56+14:00" 1582929296000
+iso-more "2020-02-29T12:34:56+14:01" nil
+iso-more "2020-02-29T12:34:56+15:00" nil
+iso-more "2020-02-29T12:34:56+18:00" nil
+iso-more "2020-02-29T12:34:56+19:00" nil
+iso-more "2020-02-29T12:34:56-12:00" 1583022896000
+iso-more "2020-02-29T12:34:56-13:00" nil
+iso-more "2020-02-29T12:34:56-14:00" nil
+iso-more "2020-02-29T12:34:56-14:01" nil
+iso-more "2020-02-29T12:34:56-15:00" nil
+iso-more "2020-02-29T12:34:56+12:59" 1582932956000
+iso-more "2020-02-29T12:34:56+2:00" 1582972496000
+iso-more "2020-02-29T12:34:56+02:00:00" 1582972496000
+iso-more "2020-02-29T12:34:56+02:00Z" nil
+iso-more "2020-02-29T12:34:56+02:00	" 1582972496000
+iso-more "2020-02-29T12:34:56+02:00\\x0A" 1582972496000
+iso-more "2020-02-29T12:34:56+02:00  " 1582972496000
+iso-more "2020-02-29T12:34:56+02:30" 1582970696000
+iso-more "2020-02-29T12:34:56+02:5" 1582972196000
+iso-more "2020-02-29T12:34:56+0" 1582979696000
+iso-more "2020-02-29T12:34:56+" nil
+iso-more "2020-02-29T12:34:56-" 1582979696000
+iso-more "2020-02-29T12:34:56+ 2:00" nil
+iso-more "2020-02-29T12:34:56+02:00 x" 1582972496000
+iso-more "2020-02-29T12:34:56Z " 1582979696000
+iso-more "2020-02-29T12:34:56	" 1582979696000
+iso-more "2020-02-29T12:34:56 " 1582979696000
+iso-more "2020-02-29T12:34:56 junk" 1582979696000
+iso-more "2020-02-29T12:34:56+02 :00" 1582972496000
+iso-more "2020-02-29T12:34:56+02x00" nil
+iso-more "2020-02-29T12:34:56+02-00" 1582972496000
+iso-more "2020-2-29" 1582934400000
+iso-more "2020-2-2" nil
+iso-more "2020-12-1" nil
+iso-more "2020-001-01" nil
+iso-more "2020--1-01" nil
+iso-more "2020-1-01T12:00Z" 1577880000000
+iso-more "2020-02-29T12Z" 1582977600000
+iso-more "2020-02-29T12x" 1582977600000
+iso-more "2020-02-29T12:34x" 1582979640000
+iso-more "2020-02-29TT12:34" nil
+iso-more "2020-02-29T12::34" nil
+iso-more "2020-02-29T12:34::56" nil
+iso-more "2020-02-29T12:34:56.1234" 1582979696123
+iso-more "2020-02-29T-1:00:00" nil
+iso-more "2020-02-29T+1:00:00" nil
+iso-more "2020-02-29T 1:00:00" nil
+iso-more "2020-+2-29" nil
+iso-more "2020- 2-29" 1582934400000
+iso-more "2020-02- 9" nil
+iso-more "2020-02-+9" nil
+iso-more "+2020-02-29" nil
+iso-more " 2020-02-29 " 1582934400000
+iso-more "2020-02-29  " nil
+iso-more "2020-02-29	" 1582934400000
+iso-more "2020" 1577836800000
+iso-more "2020-" 1577836800000
+iso-more "2020-02" 1580515200000
+iso-more "2020-02-" 1580515200000
+iso-more "2020-02-2" nil
+iso-more "2020-1-1" nil
+iso-more "2020-02-29T12:34:56Z	" 1582979696000
+iso-more "2020-02-29T12:34:56.5 " 1582979696500
+iso-more "2020-02-29T12:34:56 +01:00" 1582976096000
+iso-more "2020-02-29T12:34:56Z +01:00" 1582979696000
+iso-more "2020-02-29T12:34:56.5x+01:00" 1582976096500
+iso-more "2020-02-29T12:34:56+01:00:30" 1582976066000
+iso-more "2020-02-29T12:34:56-00:30" 1582981496000
+iso-more "2020-02-29T12:34:56+02-30" 1582970696000
+iso-more "2020-02-29T12:34:56+02-3x" nil
+iso-more "2020-02-29T12:34:56-x" nil
+iso-more "2020-02-29T12:34:56-Z" nil
+iso-more "2020-02-29T12:34:56- 5" 1582979696000
+iso-more "2020-02-29T12:34:56-junk" nil
+iso-more "2020-02-29T12:34:56+x" nil
+iso-more "2020-02-29T12:34:56+Z" nil
+iso-more "2020-02-29T12:34:56,x5" 1582961696000
+iso-more "2020-02-29T12:34:56, 5" nil
+iso-more "2020-02-29T12:34:56,,5" 1582961696000
+iso-more "2020-02-29T12:34:56:00" 1582979696000
+iso-more "2020-02-29T12:34:56:00Z" nil
+iso-more "2020-02-29T12:34:56:00:00" 1582979696000
+iso-more "2020-02-29T12:34:56:5" 1582961696000
+iso-more "2020-02-29T12:34:56:123" nil
+iso-more "2020-02-29T12:34:56.5:00" 1582979696500
+iso-more "2020-02-29T12:34:56:00+01:00" nil
+iso-more "2020-02-29T12:34:56:00x" nil
+iso-more "2020-02-29T12:34:56:0" 1582979696000
+iso-more "2020-02-29T12:34:56+02:00-01:00" 1582972495000
+iso-more "2020-02-29T12:34:56+02:00:0" 1582972496000
+iso-more "2020-02-29T12:34:56+02:00:" 1582972496000
+iso-more "2020-02-29T12:34:56+02:" 1582972496000
+iso-more "2020-02-29T12:34:56,5:30" 1582959896000
+iso-more "2020-02-29T12:34:56-5" 1582997696000
+iso-more "2020-02-29T12:34:56+5" 1582961696000
+iso-more "2020-02-29T12:34:56," nil
+iso-more "2020-02-29T12:34:56,x" 1582979696000
+iso-more "2020-02-29T12:34:56, " nil
+iso-more "2020-02-29T12:34:56- " 1582979696000
+iso-more "2020-02-29T12:34:56+ " nil
+iso-more "2020-02-29T12:34:56-	" 1582979696000
+iso-more "2020-02-29T12:34:56,	" nil
+iso-more "2020-02-29T12:34:56+02:00:00:00" 1582972496000
+iso-more "2020-02-29T12:34:56+02:00:00x" nil
+iso-more "2020-02-29T12:34:56+02:00:5" 1582972491000
+iso-more "2020-02-29T12:34:56.5-" 1582979696500
+iso-more "2020-02-29T12:34:56.5," nil
+iso-more "2020-02-29T12:34:56Z-" 1582979696000
+iso-more "2020-02-29T12:34:56Z," 1582979696000
+iso-more "2020-02-29T12:34:56Z,5" 1582979696000
+iso-more "2020-02-29T12:34:56x-" 1582979696000
+iso-more "2020-02-29T12:34:56x," 1582979696000
+iso-more "2020-02-29T12:34:56x,5" 1582979696000
+iso-more "2020-02-29T12:34:56 -" 1582979696000
+iso-more "2020-02-29T12:34:56 ," nil
+iso-more "2020-02-29T12:34:56 ,5" 1582961696000
+iso-more "2020-02-29T12:34:56-05" 1582997696000
+iso-more "2020-02-29T12:34:56-5:30" 1582999496000
+iso-more "2020-02-29T12:34:56,05:30" 1582959896000
+iso-more "2020-02-29T12:34:56+02 30" 1582972496000
+iso-more "2020-02-29T12:34:56+02:x" nil
+iso-more "2020-02-29T12:34:56+02-x" nil
+iso-more "2020-02-29T12:34:56-02-" 1582986896000
+iso-more "2020-02-29T12:34:56-02:" 1582986896000

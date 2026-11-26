@@ -1027,13 +1027,24 @@ fn register_font(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
         "fromEnum",
         wrapped(lua, engine, "fromEnum", move |lua, args| {
             let args = Args::new(args);
-            let Some(item) = coerce_named_enum(lua, &e, "Font", args.get(0)) else {
-                return raise_plain("invalid argument #1 to 'fromEnum' (Enum.Font expected)");
+            // Only an item of Enum.Font: another enum's item raises `Invalid type 'Material' for enum 'Font'`, anything
+            // else (a number, a name, nil, nothing) `Invalid value for enum 'Font'`, and Enum.Font.Unknown `Enum.Font.Unknown
+            // can't be passed to Font.fromEnum` from the calling line (Studio 0.747, tools/parity/probes/datatype_edges.luau
+            // and datatype_edges_more.luau `font-`)
+            let item = match args.get(0) {
+                LuaValue::UserData(ud) => ud.borrow::<LEnumItem>().ok().map(|item| item.0),
+                _ => None,
             };
-            // Roblox's documentation: "Throws an error when called with Enum.Font.Unknown" (the
-            // message is not measured in Studio)
-            if &*e.reflection.enum_item_info(item).name == "Unknown" {
-                return raise_plain("invalid argument #1 to 'fromEnum' (Enum.Font.Unknown has no font face)");
+            let Some(item) = item else {
+                return raise_plain("Invalid value for enum 'Font'");
+            };
+            let info = e.reflection.enum_item_info(item);
+            let enum_name = &e.reflection.enums[info.enum_type as usize].name;
+            if &**enum_name != "Font" {
+                return raise_plain(format!("Invalid type '{enum_name}' for enum 'Font'"));
+            }
+            if &*info.name == "Unknown" {
+                return raise_at_caller("Enum.Font.Unknown can't be passed to Font.fromEnum");
             }
             Ok(values([make_font(lua, font_from_enum(&e, item))?]))
         })?,
@@ -1195,41 +1206,67 @@ fn register_content(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     )?;
     let none_value = lua.create_any_userdata(LContent::new(lua, ContentValue::None))?;
     lock_metatable(lua, &none_value)?;
-    // Roblox's documentation: fromAssetId(0) is Content.none, a non-finite id and fromObject(nil)
-    // throw (the messages are not measured in Studio)
-    let none = none_value.clone();
+    // fromAssetId takes a number (or a string Luau reads as one), rounds it half away from zero to a 64-bit id (0 is
+    // rbxassetid://0; past +-2^63 the id is 0, and 2^63 itself overflows to -2^63) and refuses a non-finite one;
+    // fromObject takes an Object that is no Instance (an EditableImage, an EditableMesh). The texts and rules as a
+    // playing client has them (Studio 0.747, tools/parity/probes/datatype_edges.luau and datatype_edges_more.luau
+    // `content-`): no argument at all is `Invalid number of arguments.`.
+    let e = engine.clone();
     library.set(
         "fromAssetId",
         wrapped(lua, engine, "fromAssetId", move |lua, args| {
             let args = Args::new(args);
-            let id = args.get(0);
-            if let LuaValue::Number(number) = id {
-                if !number.is_finite() {
-                    return raise_plain("invalid argument #1 to 'fromAssetId' (finite number expected)");
-                }
+            if args.is_empty() {
+                return raise_plain("Invalid number of arguments.");
             }
-            if matches!(id, LuaValue::Integer(0)) || matches!(id, LuaValue::Number(n) if *n == 0.0) {
-                return Ok(values([LuaValue::UserData(none.clone())]));
+            let value = args.get(0);
+            let number = match value {
+                LuaValue::Number(number) => Some(*number),
+                LuaValue::Integer(number) => Some(*number as f64),
+                LuaValue::String(_) => lua.coerce_number(value.clone()).ok().flatten(),
+                _ => None,
+            };
+            let Some(number) = number else {
+                return raise_at_caller(format!("invalid argument #1 to 'fromAssetId' (number expected, got {})", super::typeof_value(&e, value)));
+            };
+            if !number.is_finite() {
+                return raise_plain("Invalid id. Expected a finite value.");
             }
-            let text = string_of(lua, id)?;
+            const LIMIT: f64 = 9_223_372_036_854_775_808.0;
+            let rounded = number.round();
+            let id = if rounded > LIMIT || rounded < -LIMIT {
+                0
+            } else if rounded == LIMIT {
+                i64::MIN
+            } else {
+                rounded as i64
+            };
             Ok(values([LuaValue::UserData(
-                lua.create_any_userdata(LContent::new(lua, ContentValue::Uri(Str::from(format!("rbxassetid://{text}")))))?,
+                lua.create_any_userdata(LContent::new(lua, ContentValue::Uri(Str::from(format!("rbxassetid://{id}")))))?,
             )]))
         })?,
     )?;
+    let e = engine.clone();
     library.set(
         "fromObject",
-        wrapped(lua, engine, "fromObject", |lua, args| {
+        wrapped(lua, engine, "fromObject", move |lua, args| {
             let args = Args::new(args);
-            let content = match args.get(0) {
-                LuaValue::Nil => return raise_plain("invalid argument #1 to 'fromObject' (Object expected, got nil)"),
-                LuaValue::UserData(ud) => match super::raw::instance_of_ud(ud) {
-                    Some(instance) => ContentValue::Object(instance),
-                    None => ContentValue::None,
-                },
-                _ => ContentValue::None,
+            if args.is_empty() {
+                return raise_plain("Invalid number of arguments.");
+            }
+            let value = args.get(0);
+            let object = match value {
+                LuaValue::Nil => return raise_plain("Expected Object, got nil."),
+                LuaValue::UserData(ud) => super::raw::instance_of_ud(ud).filter(|&id| {
+                    let state = e.state.borrow();
+                    state.dom.get(id).is_some_and(|instance| !e.reflection.is_a(instance.class, "Instance"))
+                }),
+                _ => None,
             };
-            Ok(values([LuaValue::UserData(lua.create_any_userdata(LContent::new(lua, content))?)]))
+            let Some(object) = object else {
+                return raise_at_caller(format!("invalid argument #1 to 'fromObject' (Object expected, got {})", super::typeof_value(&e, value)));
+            };
+            Ok(values([LuaValue::UserData(lua.create_any_userdata(LContent::new(lua, ContentValue::Object(object)))?)]))
         })?,
     )?;
     library.set("none", none_value)?;
@@ -2053,6 +2090,10 @@ const TIMESTAMP_OUT_OF_RANGE: &str =
     "Error interpreting timestamp as a precise point in time. Fields out of range. UnixTimestamp should be between -17987443200 and 253402300799.";
 const FIELDS_OUT_OF_RANGE: &str = "Error interpreting year, month, day, hour, minute, second as a precise point in time. Fields out of range.";
 const OVER_THE_MAX: &str = "Over the max DateTime supported: 9999-12-31T23:59:59Z";
+/// fromUnixTimestampMillis' own message, and fromUniversalTime's for units that roll below 1400 (Studio 0.747,
+/// tools/parity/probes/datatype_edges.luau `millis-range`, `rolled`)
+const TIMESTAMP_MILLIS_OUT_OF_RANGE: &str = "Error interpreting timestampMillis as a precise point in time. Fields out of range. UnixTimestampMillis should be between -17987443200000 and 253402300799999.";
+const BELOW_THE_MIN: &str = "Below the min DateTime supported: 1400-01-01T00:00:00Z";
 
 /// A DateTime constructor's numeric argument: one not passed is absent, a number or numeric string is read, anything
 /// else (nil passed included) raises from the calling line with the value's typeof (Studio 0.747,
@@ -2158,108 +2199,210 @@ fn leading_number(bytes: &[u8]) -> f64 {
     std::str::from_utf8(&bytes[start..end]).ok().and_then(|text| text.parse().ok()).unwrap_or(0.0)
 }
 
+/// A fromUniversalTime unit as a client's 32-bit field holds it: truncated toward zero; not-a-number and a value outside
+/// the int32 range are i32::MIN, as x86's conversion makes them.
+fn date_time_int32(value: f64) -> i32 {
+    let whole = value.trunc();
+    if (-2_147_483_648.0..=2_147_483_647.0).contains(&whole) { whole as i32 } else { i32::MIN }
+}
+
 /// fromUniversalTime's instant for (year, month, day, hour, minute, second, millisecond) as a playing client reads them
-/// (Studio 0.744, tools/parity/probes/datetime.luau): each unit truncated toward zero (2021.5, 1.5, 1.5 is 2021-01-01),
-/// absent units 1970, 1, 1, 0, 0, 0, 0; time units roll over into the date (hour 24, minute 60, second 60, millisecond
-/// 1000 and hour -1 measured). A month or day that names no date, or a year before 1400 (measured with -1), raises
-/// FIELDS_OUT_OF_RANGE; a year after 9999 OVER_THE_MAX (measured with 10000). Not measured: an instant rolled over past
-/// 9999-12-31T23:59:59.999Z (OVER_THE_MAX here) or before the year 1400 (FIELDS_OUT_OF_RANGE here).
+/// (Studio 0.744, tools/parity/probes/datetime.luau; 0.747, datatype_edges.luau `rolled` and datatype_edges_more.luau
+/// `rolled-`): absent units are 1970, 1, 1, 0, 0, 0, 0, and each unit is a 32-bit integer truncated toward zero
+/// (2021.5, 1.5, 1.5 is 2021-01-01; one past the int32 range or not-a-number is i32::MIN). A year after 9999 raises
+/// OVER_THE_MAX; a year before 1400 (i32::MIN included) or a month or day that names no date FIELDS_OUT_OF_RANGE. The
+/// time units roll over into the date (hour 24 and -1, minute 60, second 60, millisecond 1000), where i32::MIN in an
+/// hour, minute or second counts as +2^31; the millisecond becomes 32-bit microseconds (its whole milliseconds times
+/// 1000, i32::MIN past the range: -2147483.648 ms). An instant past 9999-12-31T23:59:59.999Z raises OVER_THE_MAX, one
+/// before 1400 BELOW_THE_MIN.
 fn date_time_millis(fields: [Option<f64>; 7]) -> Result<f64, &'static str> {
-    let [year, month, day, hour, minute, second, millisecond] = fields.map(|field| field.map(f64::trunc));
-    let (year, month, day) = (year.unwrap_or(1970.0), month.unwrap_or(1.0), day.unwrap_or(1.0));
-    if year > 9999.0 {
+    let [year, month, day, hour, minute, second, millisecond] = fields;
+    let year = year.map_or(1970, date_time_int32);
+    let (month, day) = (month.map_or(1, date_time_int32), day.map_or(1, date_time_int32));
+    if year > 9999 {
         return Err(OVER_THE_MAX);
     }
-    if !(year >= 1400.0) || !(1.0..=12.0).contains(&month) {
+    if year < 1400 || !(1..=12).contains(&month) {
         return Err(FIELDS_OUT_OF_RANGE);
     }
-    let leap = year % 4.0 == 0.0 && (year % 100.0 != 0.0 || year % 400.0 == 0.0);
-    let month_days = match month as u32 {
-        2 if leap => 29.0,
-        2 => 28.0,
-        4 | 6 | 9 | 11 => 30.0,
-        _ => 31.0,
+    if !(1..=month_length(year, month)).contains(&day) {
+        return Err(FIELDS_OUT_OF_RANGE);
+    }
+    let time_unit = |value: Option<f64>| match value.map_or(0, date_time_int32) {
+        i32::MIN => 2_147_483_648.0,
+        whole => f64::from(whole),
     };
-    if !(1.0..=month_days).contains(&day) {
-        return Err(FIELDS_OUT_OF_RANGE);
-    }
-    let millis = days_from_civil(year, month, day) * 86400000.0
-        + hour.unwrap_or(0.0) * 3600000.0
-        + minute.unwrap_or(0.0) * 60000.0
-        + second.unwrap_or(0.0) * 1000.0
-        + millisecond.unwrap_or(0.0);
+    let micros = match millisecond.map(|millis| millis.trunc() * 1000.0) {
+        None => 0.0,
+        Some(micros) if (-2_147_483_648.0..=2_147_483_647.0).contains(&micros) => micros,
+        Some(_) => -2_147_483_648.0,
+    };
+    let millis = days_from_civil(f64::from(year), f64::from(month), f64::from(day)) * 86400000.0
+        + time_unit(hour) * 3600000.0
+        + time_unit(minute) * 60000.0
+        + time_unit(second) * 1000.0
+        + micros / 1000.0;
     if millis > DATE_TIME_MAX_MILLIS {
         return Err(OVER_THE_MAX);
     }
-    if !(millis >= DATE_TIME_MIN_MILLIS) {
-        return Err(FIELDS_OUT_OF_RANGE);
+    if millis < DATE_TIME_MIN_MILLIS {
+        return Err(BELOW_THE_MIN);
     }
     Ok(millis)
 }
 
-/// fromIsoDate as a playing client parses (Studio 0.744, tools/parity/probes/datetime.luau): leading white space
-/// skipped, then `YYYY-MM-DD`, optionally followed by `T`, `t` or a space and `hh:mm`, then `:ss` and a fraction of a
-/// second (its first three digits are the milliseconds, the rest ignored), then `Z`, `z` or an offset `+hh:mm` /
-/// `-hh:mm` (`+0200` is nil; no designator is universal time). A date that does not exist is nil; hour 24 and second 60
-/// roll over into the next day and minute; the basic format (`20200229T123456Z`) and a signed year are nil. Not
-/// measured: trailing text, an hour past 24, a minute past 59 or a second past 60 (all nil here).
+/// The days of `month` in `year` (proleptic Gregorian)
+fn month_length(year: i32, month: i32) -> i32 {
+    let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    match month {
+        2 if leap => 29,
+        2 => 28,
+        4 | 6 | 9 | 11 => 30,
+        _ => 31,
+    }
+}
+
+/// fromIsoDate as a playing client parses it: a model fitted with no miss to 232 texts (Studio 0.744,
+/// tools/parity/probes/datetime.luau; 0.747, datatype_edges.luau and datatype_edges_more.luau `iso`, and two one-off
+/// captures of the same kind), not the client's own code:
+/// - leading white space (C's isspace) is skipped, then a 4-digit year;
+/// - each later field follows one separator character of any kind (`2020/01/01`, `2020-02-29x12:34Z`), and the text
+///   may end before any separator or right after one (`2020`, `2020-02-`, `2020-02-29T12:`: the missing fields are 1 or
+///   0); the month is 1 or 2 digits after optional white space, the day, hour, minute and second exactly 2 digits;
+/// - after the second, `.` and any digits (the first three are the milliseconds);
+/// - then the zone: white space is skipped; letters (`Z`, `junk`) end it unless `+` or `-` follows them; `+`, `,`, `:`
+///   and `-` start an offset (`-` negative), whose hours are 1 or 2 digits (`+` and `:` with none is nil, `-` with
+///   none is no offset; `,` first skips letters and commas, and with no digits after them is no offset, or nil when it
+///   skipped nothing), followed by fields of 0 to 2 digits each after `:` or `-` (minutes, seconds, then ignored); an
+///   offset past +14:00 or -12:00 is nil; after an offset only white space may follow;
+/// - hours, minutes and seconds past their range roll over; a date that does not exist, a year before 1400 and an
+///   instant outside 1400-01-01 to 9999-12-31T23:59:59.999Z after the offset are nil.
 fn parse_iso_date(text: &str) -> Option<f64> {
-    let bytes = text.trim_start().as_bytes();
-    let digits_value = |digits: &[u8]| digits.iter().fold(0.0, |value, digit| value * 10.0 + f64::from(digit - b'0'));
-    let number = |at: &mut usize, count: usize| -> Option<f64> {
-        let digits = bytes.get(*at..*at + count)?;
-        if !digits.iter().all(u8::is_ascii_digit) {
-            return None;
+    let bytes = text.as_bytes();
+    let space = |byte: u8| matches!(byte, b' ' | b'\t' | b'\n' | 0x0B | 0x0C | b'\r');
+    let alpha = |at: usize| bytes.get(at).is_some_and(u8::is_ascii_alphabetic);
+    let digits = |at: &mut usize, least: usize, most: usize| -> Option<u32> {
+        let (mut count, mut value) = (0, 0u32);
+        while count < most && bytes.get(*at).is_some_and(u8::is_ascii_digit) {
+            value = value * 10 + u32::from(bytes[*at] - b'0');
+            *at += 1;
+            count += 1;
         }
-        *at += count;
-        Some(digits_value(digits))
+        (count >= least).then_some(value)
     };
-    let expect = |at: &mut usize, byte: u8| -> Option<()> {
-        (bytes.get(*at) == Some(&byte)).then(|| *at += 1)
+    let skip_space = |at: &mut usize| {
+        while bytes.get(*at).copied().is_some_and(space) {
+            *at += 1;
+        }
+    };
+    // one separator of any kind before a field; false when the text ends before or right after it
+    let separator = |at: &mut usize| -> bool {
+        if *at >= bytes.len() {
+            return false;
+        }
+        *at += 1;
+        *at < bytes.len()
     };
     let mut at = 0;
-    let year = number(&mut at, 4)?;
-    expect(&mut at, b'-')?;
-    let month = number(&mut at, 2)?;
-    expect(&mut at, b'-')?;
-    let day = number(&mut at, 2)?;
-    let (mut hour, mut minute, mut second, mut millisecond, mut offset) = (0.0, 0.0, 0.0, 0.0, 0.0);
-    if let Some(b'T' | b't' | b' ') = bytes.get(at) {
-        at += 1;
-        hour = number(&mut at, 2)?;
-        expect(&mut at, b':')?;
-        minute = number(&mut at, 2)?;
-        if expect(&mut at, b':').is_some() {
-            second = number(&mut at, 2)?;
-            if expect(&mut at, b'.').is_some() {
-                let start = at;
-                while bytes.get(at).is_some_and(u8::is_ascii_digit) {
-                    at += 1;
-                }
-                if at == start {
-                    return None;
-                }
-                let digits = &bytes[start..at.min(start + 3)];
-                millisecond = digits_value(digits) * 10f64.powi(3 - digits.len() as i32);
+    skip_space(&mut at);
+    let year = digits(&mut at, 4, 4)?;
+    let (mut month, mut day, mut hour, mut minute, mut second, mut millis, mut offset) = (1, 1, 0, 0, 0, 0.0, 0.0);
+    'fields: {
+        if !separator(&mut at) {
+            break 'fields;
+        }
+        skip_space(&mut at);
+        month = digits(&mut at, 1, 2)?;
+        if !separator(&mut at) {
+            break 'fields;
+        }
+        day = digits(&mut at, 2, 2)?;
+        if !separator(&mut at) {
+            break 'fields;
+        }
+        hour = digits(&mut at, 2, 2)?;
+        if !separator(&mut at) {
+            break 'fields;
+        }
+        minute = digits(&mut at, 2, 2)?;
+        if !separator(&mut at) {
+            break 'fields;
+        }
+        second = digits(&mut at, 2, 2)?;
+        if bytes.get(at) == Some(&b'.') {
+            at += 1;
+            let start = at;
+            while bytes.get(at).is_some_and(u8::is_ascii_digit) {
+                at += 1;
+            }
+            let fraction = &bytes[start..at.min(start + 3)];
+            let value = fraction.iter().fold(0.0, |value, digit| value * 10.0 + f64::from(digit - b'0'));
+            millis = value * 10f64.powi(3 - fraction.len() as i32);
+        }
+        // the zone
+        skip_space(&mut at);
+        if alpha(at) {
+            while alpha(at) {
+                at += 1;
+            }
+            if !matches!(bytes.get(at), Some(b'+' | b'-')) {
+                break 'fields;
             }
         }
-        match bytes.get(at) {
-            Some(b'Z' | b'z') => at += 1,
-            Some(&sign @ (b'+' | b'-')) => {
+        let Some(&sign) = bytes.get(at) else { break 'fields };
+        if !matches!(sign, b'+' | b',' | b'-' | b':') {
+            return None;
+        }
+        at += 1;
+        if sign == b',' {
+            let from = at;
+            while alpha(at) || bytes.get(at) == Some(&b',') {
                 at += 1;
-                let hours = number(&mut at, 2)?;
-                expect(&mut at, b':')?;
-                let minutes = number(&mut at, 2)?;
-                offset = (hours * 3600000.0 + minutes * 60000.0) * if sign == b'+' { 1.0 } else { -1.0 };
             }
-            _ => {}
+            if !bytes.get(at).is_some_and(u8::is_ascii_digit) {
+                if at > from {
+                    break 'fields;
+                }
+                return None;
+            }
+        }
+        let (mut hours, mut parts) = (0, [0u32; 2]);
+        match digits(&mut at, 1, 2) {
+            Some(value) => {
+                hours = value;
+                let mut index = 0;
+                while matches!(bytes.get(at), Some(b':' | b'-')) {
+                    at += 1;
+                    let value = digits(&mut at, 0, 2).unwrap_or(0);
+                    if let Some(part) = parts.get_mut(index) {
+                        *part = value;
+                    }
+                    index += 1;
+                }
+            }
+            None if sign == b'-' => {}
+            None => return None,
+        }
+        let seconds = f64::from(hours * 3600 + parts[0] * 60 + parts[1]);
+        if seconds > if sign == b'-' { 12.0 * 3600.0 } else { 14.0 * 3600.0 } {
+            return None;
+        }
+        offset = seconds * 1000.0 * if sign == b'-' { -1.0 } else { 1.0 };
+        if bytes.get(at).is_some_and(|byte| !space(*byte)) {
+            return None;
         }
     }
-    if at != bytes.len() || hour > 24.0 || minute > 59.0 || second > 60.0 {
+    let (year, month, day) = (year as i32, month as i32, day as i32);
+    if year < 1400 || !(1..=12).contains(&month) || !(1..=month_length(year, month)).contains(&day) {
         return None;
     }
-    let fields = [Some(year), Some(month), Some(day), Some(hour), Some(minute), Some(second), Some(millisecond)];
-    Some(date_time_millis(fields).ok()? - offset)
+    let instant = days_from_civil(f64::from(year), f64::from(month), f64::from(day)) * 86400000.0
+        + f64::from(hour) * 3600000.0
+        + f64::from(minute) * 60000.0
+        + f64::from(second) * 1000.0
+        + millis
+        - offset;
+    (DATE_TIME_MIN_MILLIS..=DATE_TIME_MAX_MILLIS).contains(&instant).then_some(instant)
 }
 
 /// A DateTime at whole milliseconds (-0 is 0: `fromUnixTimestampMillis(-0.5)` prints 0).
@@ -2367,22 +2510,22 @@ fn register_date_time(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     )?;
     // fromUnixTimestamp truncates its seconds toward zero before scaling (0.5 and -0.5 are 0, 1.999 is 1000 ms, -1.5
     // -1000 ms) and raises TIMESTAMP_OUT_OF_RANGE for a second outside the range, NaN and the infinities included;
-    // fromUnixTimestampMillis truncates its milliseconds (1.5 is 1, -1.5 -1, -0.5 0) (Studio 0.744,
-    // tools/parity/probes/datetime.luau). fromUnixTimestampMillis's out-of-range message is not measured (the seconds'
-    // message here).
-    let timestamp = |name: &'static str, scale: f64, engine: Rc<Engine>| {
+    // fromUnixTimestampMillis truncates its milliseconds (1.5 is 1, -1.5 -1, -0.5 0) and raises
+    // TIMESTAMP_MILLIS_OUT_OF_RANGE (Studio 0.744, tools/parity/probes/datetime.luau; 0.747, datatype_edges.luau
+    // `millis-range`).
+    let timestamp = |name: &'static str, scale: f64, out_of_range: &'static str, engine: Rc<Engine>| {
         move |lua: &Lua, args: LuaMultiValue| -> Ret {
             let args = Args::new(args);
             let value = date_time_number(lua, &engine, &args, 0, name)?.unwrap_or(0.0).trunc();
             let millis = value * scale;
             if !(DATE_TIME_MIN_MILLIS..=DATE_TIME_MAX_MILLIS).contains(&millis) {
-                return raise_plain(TIMESTAMP_OUT_OF_RANGE);
+                return raise_plain(out_of_range);
             }
             Ok(values([make_date_time(lua, millis)?]))
         }
     };
-    library.set("fromUnixTimestamp", wrapped(lua, engine, "fromUnixTimestamp", timestamp("fromUnixTimestamp", 1000.0, engine.clone()))?)?;
-    library.set("fromUnixTimestampMillis", wrapped(lua, engine, "fromUnixTimestampMillis", timestamp("fromUnixTimestampMillis", 1.0, engine.clone()))?)?;
+    library.set("fromUnixTimestamp", wrapped(lua, engine, "fromUnixTimestamp", timestamp("fromUnixTimestamp", 1000.0, TIMESTAMP_OUT_OF_RANGE, engine.clone()))?)?;
+    library.set("fromUnixTimestampMillis", wrapped(lua, engine, "fromUnixTimestampMillis", timestamp("fromUnixTimestampMillis", 1.0, TIMESTAMP_MILLIS_OUT_OF_RANGE, engine.clone()))?)?;
     // (the units are checked from the last one passed to the first, as a client does: fromUniversalTime(Vector3.one, "x")
     // raises for argument #2; Studio 0.747, datatype_errors.luau)
     let from_units = |name: &'static str, offset_millis: f64, engine: Rc<Engine>| {
