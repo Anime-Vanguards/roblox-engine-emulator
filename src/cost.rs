@@ -1024,8 +1024,8 @@ pub const LOCALIZATION_SERVICE_LOCALE_READ: f64 = 0.05e-6;
 /// Studio 0.747, a Script of a headless play session; os.clock around single calls, the median of 15, two passes of each scene):
 /// with 0, 1,000, 5,000 and 20,000 parts whose id stays, a register 0.5, 2.2, 8.7-8.8 and 34.7-34.9 us (unregister and rename
 /// alike), so 1.7 ns a part, in models or not; with parts of the group, whose id changes each time, 360-364 us at 1,000 and
-/// 1,866-1,910 at 5,000 (0.36-0.38 us a part more; 0.43-0.44 at 20,000, 0.45 in models). CollisionGroupSetCollidable also costs a
-/// server 1.7 ns a part (43 us at 20,000), which ree, keeping no ids by mask, does not charge.
+/// 1,866-1,910 at 5,000 (0.36-0.38 us a part more; 0.43-0.44 at 20,000, 0.45 in models). CollisionGroupSetCollidable costs a
+/// server 1.7 ns a part too, and more for its groups' parts ([`COLLISION_MASK_PART`]).
 /// The Workspace's other instances cost a change next to nothing (a register and an unregister 4.0-6.8 us beside 100,000
 /// Folders, 1.8-3.4 beside none), and ree looks at none of them.
 pub const COLLISION_GROUP_PART: f64 = 1.7e-9;
@@ -1041,10 +1041,22 @@ pub const COLLISION_GROUP_IGNORED: f64 = 1.0e-6;
 /// six rounds a scene): with 2,000, 5,000, 10,000 and 20,000 parts in the Workspace named a group the server registers and
 /// unregisters, the frame that took the change in (and the next) spent 3.1 to 61 ms more, 1.0 to 3.1 us a part (median 1.89,
 /// 1.1 to 2.4 from the 10th to the 90th percentile of ten); a group no part names registered or unregistered 0.08 to 0.7 ms,
-/// about 30 ns a part. A snapshot that changes masks alone costs a client about 45 ns a part too (0.9 ms at 20,000), which ree,
-/// keeping no ids by mask, does not charge (nor a server's 1.7 ns a part for CollisionGroupSetCollidable).
+/// about 30 ns a part. A snapshot that changes masks alone costs a client about 45 ns a part of the groups it changed (0.9 ms at
+/// 20,000: [`CLIENT_GROUP_MASK_PART`]).
 pub const CLIENT_GROUP_PART: f64 = 30e-9;
 pub const CLIENT_GROUP_CHANGED: f64 = 1.86e-6;
+/// CollisionGroupSetCollidable on a server beyond [`method`]'s price for the call, and for each part of the Workspace in either of
+/// its two groups past [`COLLISION_GROUP_PART`], which every part of the Workspace pays (services/physics.rs; roblox-sim, Studio
+/// 0.747, a server, 20 calls a sample, three sessions): 1.1-1.4 us with no parts; 2,000 or 8,000 parts in Default or in a third
+/// group 1.2-2.3 ns a part; in one of the pair's groups 10.7 and 16.3 ns a part more (2,000 and 8,000), and 20 and 41 with 2,500
+/// and 10,000 of 5,000 and 20,000 parts: the cost grows with the scene, [`COLLISION_MASK_PART`] the middle of those. The same call
+/// with the same flag costs the same. ree charged the call alone (0.07).
+pub const COLLISION_MASK_CALL: f64 = 1.05e-6;
+pub const COLLISION_MASK_PART: f64 = 18e-9;
+/// What a loopback client spends taking in a snapshot of its server's groups whose masks alone changed, for each part of its
+/// Workspace in a group whose mask changed: about 45 ns (the busy-frame measurement of [`CLIENT_GROUP_PART`], 2026-11-25); it
+/// changes no id.
+pub const CLIENT_GROUP_MASK_PART: f64 = 45e-9;
 /// A cast (Raycast, Spherecast, Blockcast, Shapecast) beyond [`method`]'s price for the call, by the parts its path meets up to its hit,
 /// whether its filter admits them or not, and none behind the hit (world/query.rs charge_cast: a client's cast stops there, measured
 /// on Studio 0.747 for all four): one that meets any pays [`RAY_MET`], and each part after the first [`RAY_CROSSED`] (but a shape
@@ -1056,6 +1068,16 @@ pub const CLIENT_GROUP_CHANGED: f64 = 1.86e-6;
 /// earlier job's parts too: three stacks of 24, which the first fit read as a ray's or a query's dearness.)
 pub const RAY_MET: f64 = 0.175e-6;
 pub const RAY_CROSSED: f64 = 0.0424e-6;
+/// FindPartOnRay, FindPartOnRayWithIgnoreList and FindPartOnRayWithWhitelist beyond [`method`]'s price for the call
+/// (world/query.rs find_part_on_ray), which otherwise pay a Raycast's walk, parts and filter checks: a playing client (roblox-sim,
+/// Studio 0.747, a headless client, two sessions, 5,000 studs out; os.clock around 200 to 400 calls in pcall, 15 samples less an
+/// empty pcall) spends 0.54-0.56 us on a miss where a Raycast's costs 0.23-0.25, and 0.72-0.76 on a hit on one wall (a Raycast
+/// 0.49-0.52); ree charged the call alone (0.07). A list given to the last two costs [`FIND_PART_ON_RAY_LIST`] and
+/// [`FIND_PART_ON_RAY_LISTED`] an entry at each call (an empty list +0.03-0.05 us over FindPartOnRay with none, one entry
+/// +0.08-0.10; 100 entries 1.74-2.24 us in all, 1,000 11.1-13.0: 10.4 to 11.5 ns an entry, an ignore list and a whitelist alike).
+pub const FIND_PART_ON_RAY: f64 = 0.47e-6;
+pub const FIND_PART_ON_RAY_LIST: f64 = 0.05e-6;
+pub const FIND_PART_ON_RAY_LISTED: f64 = 11e-9;
 /// What a spatial query that takes parts into the spatial index pays for them, beyond its own price (world/query.rs take_in_of:
 /// the parts that came into the world of the WorldRoot it is called on since a query of that world or the physics step last took
 /// that world's in, camera_moves.rs `Cameras::unindexed` for the Workspace's and `Cameras::unindexed_models` for a WorldModel's;
@@ -1143,6 +1165,12 @@ pub const MOUSE_FILTERED: f64 = 0.115e-6;
 pub const MOUSE_ICON: f64 = 4.49e-6;
 pub const MOUSE_UNIT_RAY: f64 = 0.06e-6;
 pub const MOUSE_ORIGIN: f64 = 0.09e-6;
+/// Reading a PlayerMouse's X, Y, ViewSizeX, ViewSizeY, UnitRay, Origin or Icon (world/mouse.rs getters) beyond the work clock's
+/// read of a getter: on a playing client X, Y, ViewSizeX and ViewSizeY read 0.056-0.058 us where a part's Transparency reads 0.026
+/// (2026-11-22, three sessions), and 1.57-1.95 times a part's Transparency read in each of two sessions of 2026-11-26 (a headless
+/// and a rendered client, 2,000 reads a sample); ree read 0.040, as a part's Transparency 0.034. UnitRay and Origin share the gap
+/// ([`MOUSE_UNIT_RAY`] and [`MOUSE_ORIGIN`] were fitted beyond X).
+pub const MOUSE_READ: f64 = 0.019e-6;
 /// A Spherecast's and a Blockcast's part tied with its hit, after the first, that its filter admits (the bench's
 /// `workspace.Spherecast.hit_stack` and `Blockcast.hit_stack`, a 1-stud ball and a 2-stud box into the stack of 24 coincident parts:
 /// 9.68 and 6.35 us at the fastest of six sessions, their misses 0.18 and 0.22 like a ray's). A shape tests more of each part it
@@ -1152,6 +1180,17 @@ pub const MOUSE_ORIGIN: f64 = 0.09e-6;
 /// defaulted price).
 pub const SPHERE_CROSSED: f64 = 0.405e-6;
 pub const BLOCK_CROSSED: f64 = 0.259e-6;
+/// The first part a Spherecast's and a Blockcast's path meets, in place of a Raycast's [`RAY_MET`]: a shape's hit costs a client more
+/// over its miss than a ray's (roblox-sim, Studio 0.747, a headless client, one wall 50 studs out; three sessions, two on 2026-11-26
+/// 5,000 studs out and one on 2026-11-22 200 studs out, us a call, hit less miss): a Raycast 0.27 / 0.24 / 0.12, a Spherecast (radius
+/// 1) 0.33 / 0.35 / 0.17, a Blockcast (2 x 2 x 2) 0.50 / 0.53 / 0.33, a Shapecast of a 2-stud block 0.43 / 0.50 / 0.30 (of a ball 0.17
+/// in the third): in each session a Spherecast's 1.2-1.4x and a Blockcast's 1.8-2.8x a Raycast's, so [`RAY_MET`] (the parity bench's)
+/// times 1.35 and 2.2. A Shapecast takes its part's shape's ([`BLOCK_MET`] for a box, [`SPHERE_MET`] for a ball). ree charged RAY_MET
+/// for every kind. A Shapecast's call also costs [`SHAPECAST_CALL`] more than the others' (a miss 0.32 / 0.32 / 0.40 where a
+/// Raycast's reads 0.25 / 0.25 / 0.30; a Blockcast's and a Spherecast's misses are within 0.03 of a Raycast's).
+pub const SPHERE_MET: f64 = 0.235e-6;
+pub const BLOCK_MET: f64 = 0.385e-6;
+pub const SHAPECAST_CALL: f64 = 0.08e-6;
 /// A part GetPartBoundsInBox returns and one GetPartBoundsInRadius returns (the same geometry: an empty box 0.15 us whether it is 4
 /// studs or 40 across, a line of 10 parts in a box 1.54, a radius that touches 2 parts 0.33; held out: a box of 24 parts 3.80).
 /// A box's part is the grid's measure (roblox-sim, Studio 0.747, a headless client; os.clock around call loops, calls doubled to 2
@@ -1173,6 +1212,15 @@ pub const QUERY_ROOT_CELL: f64 = 1.05e-9;
 pub const QUERY_CELL: f64 = 25e-9;
 pub const QUERY_MISSED_PART: f64 = 7.6e-9;
 pub const QUERY_UNQUERYABLE: f64 = 0.055e-6;
+/// Each part a GetPartBoundsInBox or GetPartBoundsInRadius that reaches everywhere lists, past [`QUERY_BOX_PART`] or
+/// [`QUERY_RADIUS_PART`]: a box or a radius reaching the clamp (7,500 studs from its centre on an axis), an infinite one
+/// included, which also pays the clamped box's walk ([`QUERY_ROOT_CELL`] and the rest; it paid nothing for its walk before). Measured
+/// on a headless playing client (roblox-sim, Studio 0.747, two sessions; the capture place's 69 parts and 100 or 1,000 of a probe's own
+/// 6 studs apart, 10 calls a sample): an infinite box 263-317 us beside the 69, an infinite radius 268-286, a 15,000-stud box
+/// 249-280; each part more 0.19-0.20 us for the infinite box, 0.12-0.16 for the radius and 0.17-0.23 for the 15,000-stud box (a
+/// 5,000-part scene read 0.25-0.9 us a part, session to session: not fitted). ree charged the infinite radius 0.17 us, and 0.13 and
+/// 0.09 us a part.
+pub const QUERY_WIDE_PART: f64 = 0.06e-6;
 /// What a spatial query whose params name a registered collision group other than Default costs a client past the same query with
 /// Default (a 0.747 server, three sessions of a box query that found nothing: 0.18 to 0.31 us; 2026-11-26). A part the params'
 /// group does not collide with costs a box query [`QUERY_UNQUERYABLE`] (0.46 to 0.52 of a listed part's cost there).

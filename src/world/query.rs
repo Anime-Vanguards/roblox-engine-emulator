@@ -1169,8 +1169,10 @@ fn find_part_on_ray(lua: &Lua, engine: &Rc<Engine>, world: InstanceId, args: &Ar
     for at in (3..=bools).rev() {
         bool_argument(engine, args, at)?;
     }
+    let mut entries = None;
     let list = if listed {
         let table = super::objects_arg(args, 2)?;
+        entries = Some(table.raw_len());
         for index in 1..=table.raw_len() {
             let entry: LuaValue = table.raw_get(index).map_err(Flow::from)?;
             if !entry.is_nil() && instance_id(&entry).is_none() {
@@ -1185,17 +1187,15 @@ fn find_part_on_ray(lua: &Lua, engine: &Rc<Engine>, world: InstanceId, args: &Ar
     let (origin, direction) = ray_argument(engine, args, 1)?;
     let mut filter = query_cache(engine).spare.take();
     filter.read_list(engine, world, &list, include);
-    let index = take_in_of(engine, world);
+    // (its call and its list cost a client more than a Raycast's; its walk, the parts it meets and its filter's checks as a
+    // Raycast's: cost.rs FIND_PART_ON_RAY)
+    charge_query(engine, crate::cost::FIND_PART_ON_RAY + entries.map_or(0.0, |entries| crate::cost::FIND_PART_ON_RAY_LIST + entries as f64 * crate::cost::FIND_PART_ON_RAY_LISTED));
     // (a ray that is not finite finds nothing and tests no part: its end is still origin + direction, an infinity kept)
-    let hit = match index {
-        Some(index) if finite_path(origin, direction) => {
-            let reach = cut(direction);
-            walk_ray(engine, index, origin, reach, |near, _| {
-                let state = engine.state.borrow();
-                cast_ray(near.iter().map(|(part, entry, _)| (*part, entry)), |part, entry| filter.sees(&state, part, entry), origin, reach, 0.0, None)
-            })
-        }
-        _ => None,
+    let hit = if finite_path(origin, direction) {
+        raycast(engine, world, &filter, origin, direction)
+    } else {
+        take_in_of(engine, world);
+        None
     };
     keep_filter(engine, filter);
     let air = engine.reflection.enum_item("Material", "Air");
@@ -1232,38 +1232,82 @@ fn limited(max_parts: usize, parts: Vec<InstanceId>) -> Vec<InstanceId> {
 /// whatever the cast's shape (23 excluded walls before the hit 0.027 to 0.031 us each for a Raycast, a Spherecast, a Blockcast and
 /// a Shapecast alike); each other part it admits, one tied with the hit (a stack), pays `each`, the cast's own test (a Spherecast
 /// 0.09 us, a Blockcast 0.12, a Raycast 0.023 a coincident wall). A miss pays for every part its path crosses. `met` is
-/// [`cast_counts`]'.
-fn charge_cast(engine: &Engine, (met, admitted): (usize, usize), each: f64, kinds: u8) {
+/// [`cast_counts`]'. The first part met pays `first`: RAY_MET for a Raycast, SPHERE_MET and BLOCK_MET for the shapes (a shape's hit
+/// costs a client more over its miss than a ray's).
+fn charge_cast(engine: &Engine, (met, admitted): (usize, usize), first: f64, each: f64, kinds: u8) {
     if met > 0 {
         let tied = admitted.saturating_sub(1);
-        let seconds = crate::cost::RAY_MET + tied as f64 * each + (met - 1 - tied) as f64 * crate::cost::RAY_CROSSED;
+        let seconds = first + tied as f64 * each + (met - 1 - tied) as f64 * crate::cost::RAY_CROSSED;
         charge_query(engine, seconds);
         engine.state.borrow().sched.touched.borrow().book_kinds(kinds, seconds);
     }
 }
 
-/// The parts among `near` a query sees (CanQuery or CanCollide on, whatever else the cast's filter says) that a cast's path from `origin` along
-/// `direction`, grown by `grow`, meets up to its hit (`hit`, the distance along `direction`), and how many of those its filter
-/// admits when it hit something: what [`charge_cast`] charges for; and what its filter's checks of them cost.
-#[allow(clippy::too_many_arguments)]
-fn cast_counts<'a>(state: &State, near: impl IntoIterator<Item = (InstanceId, &'a Entry)>, filter: &Filter, hit: Option<f32>, origin: Vec3, direction: Vec3, grow: f32) -> (usize, usize, f64) {
-    let length = direction.length();
+/// How far past a cast's hit, or beside its path, a client's cast still asks its filter about a part: the part's bounds grown by
+/// this much each way (measured, Studio 0.747, a headless playing client, two sessions: walls 200 folders deep behind an Exclude list
+/// of 50 parts elsewhere, so each check is a long walk; a wall entered 0.30 or 0.31 studs past the hit is asked about, one at 0.32
+/// or more is not, whatever the walls' thickness, the hit's distance (5 to 500 studs) or the cast's length (60 to 2,000), for a
+/// Raycast, a Spherecast and a Blockcast alike; a bar beside the path 0.1 or 0.2 studs from it is asked about, at 0.4 not).
+pub(crate) const FILTER_MARGIN: f32 = 0.315;
+
+/// How often a client's ray asks its filter about a part it passes close to: once for every [`FILTER_STEP`] studs of its path
+/// inside the part's bounds grown by [`FILTER_MARGIN`], rounded, and once more (measured as [`FILTER_MARGIN`]: a 1, 2 or 4-stud bar
+/// along the ray 0.1 studs beside it asked about twice, an 8-stud one about four times wherever it lay along the path, 16 six times,
+/// 32 nine, 64 seventeen; a 9 x 9 x 30 box as a 1 x 1 x 30 bar). A wall the path crosses is asked about once.
+pub(crate) const FILTER_STEP: f32 = 4.0;
+
+/// How many times a Raycast's filter is asked about the part of `entry` ([`FILTER_STEP`]), its path from `origin` along `direction`
+/// up to `until` (0 to 1).
+fn ray_checks(entry: &Entry, origin: Vec3, direction: Vec3, until: f32) -> u32 {
+    let inverse = entry.solid.frame.inverse();
+    let (o, d) = (inverse.transform_point3(origin), inverse.transform_vector3(direction));
+    let half = entry.solid.half_extents() + Vec3::splat(FILTER_MARGIN);
+    let (mut enter, mut exit) = (0.0f32, until);
+    for axis in 0..3 {
+        if d[axis].abs() < 1e-12 {
+            if o[axis].abs() > half[axis] {
+                return 1;
+            }
+            continue;
+        }
+        let (a, b) = ((-half[axis] - o[axis]) / d[axis], (half[axis] - o[axis]) / d[axis]);
+        enter = enter.max(a.min(b));
+        exit = exit.min(a.max(b));
+    }
+    let inside = (exit - enter).max(0.0) * direction.length();
+    1 + (inside / FILTER_STEP).round() as u32
+}
+
+/// The parts among `near` a query sees (CanQuery or CanCollide on, whatever else the cast's filter says) that a cast's path meets up to
+/// its hit (`hit`, the distance along the path, `length` long), and how many of those its filter admits when it hit something: what
+/// [`charge_cast`] charges for; and what its filter's checks cost. `enter(entry, grow)` is where along the path (0 to 1) the cast's
+/// shape first meets the part grown by `grow` (exactly: a Blockcast's box sweep, not its bounding sphere). A client asks its filter
+/// about each part the path meets up to the hit and about each part whose bounds grown by [`FILTER_MARGIN`] it enters before the hit
+/// (a part close behind the hit, or close beside the path; anywhere on a miss): those are checked without being met. `checks`
+/// says how often the filter is asked about a part, the path ending where its argument says ([`ray_checks`] for a ray, once for a
+/// shape's: not measured).
+fn cast_counts<'a>(state: &State, near: impl IntoIterator<Item = (InstanceId, &'a Entry)>, filter: &Filter, hit: Option<f32>, length: f32, enter: impl Fn(&Entry, f32) -> Option<f32>, checks: impl Fn(&Entry, f32) -> u32) -> (usize, usize, f64) {
     let (mut met, mut admitted, mut walks) = (0usize, 0usize, 0.0);
+    let before = |t: f32| hit.is_none_or(|distance| length * t <= distance);
     for (part, entry) in near {
         // (the parts a query with no filter sees: CanQuery and CanCollide off left out)
         if !entry.can_query {
             continue;
         }
-        let Some((t, _)) = ray_solid(&entry.solid, origin, direction, grow) else { continue };
         // (the hit's own distance is reckoned the same way: the hit and the parts tied with it are met)
-        if hit.is_some_and(|distance| length * t > distance) {
+        let meets = enter(entry, 0.0).is_some_and(before);
+        if !meets && !enter(entry, FILTER_MARGIN).is_some_and(before) {
+            continue;
+        }
+        let collides = (!filter.respect_can_collide || entry.can_collide) && filter.groups_pass(state, part);
+        // (a client's cast asks its filter of each part it meets or comes that close to, at what a client spends on it: Filter::check)
+        let (admits, walk) = if collides { filter.check(state, part, true) } else { (false, 0.0) };
+        // (a part along the path is asked about again every few studs: `checks`, given where the path stops)
+        walks += if walk > 0.0 { walk * f64::from(checks(entry, hit.map_or(1.0, |distance| if length > 0.0 { distance / length } else { 0.0 }))) } else { 0.0 };
+        if !meets {
             continue;
         }
         met += 1;
-        let collides = (!filter.respect_can_collide || entry.can_collide) && filter.groups_pass(state, part);
-        // (a client's cast asks its filter of each part it meets, at what a client spends on it: Filter::check)
-        let (admits, walk) = if collides { filter.check(state, part, true) } else { (false, 0.0) };
-        walks += walk;
         if hit.is_some() && admits {
             admitted += 1;
         }
@@ -1275,15 +1319,15 @@ fn cast_counts<'a>(state: &State, near: impl IntoIterator<Item = (InstanceId, &'
 /// swept box `lo`..`hi` (every part of its world for none), a cell's anchored parts first (a client's shape casts take the first of
 /// exact ties so: measured, grid_order "ties", where a Spherecast takes a level-1 part before a level-0 one with the same top, as
 /// a box walk of its swept box starting on level 2 gives them; inferred, its walk not measured further), tested by `cast` for the
-/// hit and by [`cast_counts`] for what its path (a segment from `origin` along `direction`, grown by `grow`) meets. It takes in
+/// hit and by [`cast_counts`] for what its path (along `direction`, `enter` the shape's entry test) meets. It takes in
 /// `world`'s parts ([`take_in_of`]); a WorldModel outside the DataModel has none.
 #[allow(clippy::too_many_arguments)]
-fn cast_and_count(engine: &Engine, world: InstanceId, filter: &Filter, origin: Vec3, direction: Vec3, grow: f32, swept: Option<(Vec3, Vec3)>, cast: impl FnOnce(&State, &[(InstanceId, Entry)]) -> Option<Hit>) -> (Option<Hit>, (usize, usize)) {
+fn cast_and_count(engine: &Engine, world: InstanceId, filter: &Filter, direction: Vec3, enter: impl Fn(&Entry, f32) -> Option<f32>, swept: Option<(Vec3, Vec3)>, cast: impl FnOnce(&State, &[(InstanceId, Entry)]) -> Option<Hit>) -> (Option<Hit>, (usize, usize)) {
     let Some(index) = take_in_of(engine, world) else { return (None, (0, 0)) };
     let then = |near: &[(InstanceId, Entry)]| {
         let state = engine.state.borrow();
         let hit = cast(&state, near);
-        let (met, admitted, walks) = cast_counts(&state, near.iter().map(|(part, entry)| (*part, entry)), filter, hit.map(|hit| hit.distance), origin, direction, grow);
+        let (met, admitted, walks) = cast_counts(&state, near.iter().map(|(part, entry)| (*part, entry)), filter, hit.map(|hit| hit.distance), direction.length(), &enter, |_, _| 1);
         drop(state);
         charge_query(engine, walks);
         (hit, (met, admitted))
@@ -1306,11 +1350,11 @@ fn raycast(engine: &Engine, world: InstanceId, filter: &Filter, origin: Vec3, di
         let state = engine.state.borrow();
         let parts = || near.iter().map(|(part, entry, _)| (*part, entry));
         let hit = cast_ray(parts(), |part, entry| filter.sees(&state, part, entry), origin, reach, 0.0, None);
-        let (met, admitted, walks) = cast_counts(&state, parts(), filter, hit.map(|hit| hit.distance), origin, reach, 0.0);
+        let (met, admitted, walks) = cast_counts(&state, parts(), filter, hit.map(|hit| hit.distance), reach.length(), |entry, grow| ray_solid(&entry.solid, origin, reach, grow).map(|(t, _)| t), |entry, until| ray_checks(entry, origin, reach, until));
         (hit, (met, admitted, walks), ray_walk(near, passed, hit, origin, reach))
     });
     charge_query(engine, counts.2);
-    charge_cast(engine, (counts.0, counts.1), crate::cost::RAY_CROSSED, 0);
+    charge_cast(engine, (counts.0, counts.1), crate::cost::RAY_MET, crate::cost::RAY_CROSSED, 0);
     charge_ray_walk(engine, walk);
     hit
 }
@@ -1436,10 +1480,21 @@ fn overlapping(engine: &Engine, world: InstanceId, filter: Filter, center: Vec3,
                 (parts, seconds + if walked_price { walk_cost(walked, missed) } else { 0.0 })
             })
         }
-        None => every_part(engine, index, |near| {
-            let (parts, seconds, _) = test(near, None);
-            (parts, seconds)
-        }),
+        None => {
+            // (an infinite radius takes every part, and costs a client the walk of a box clamped on every side, as a box that reaches
+            // everywhere does: measured, cost.rs QUERY_WIDE_PART)
+            let walked = match extent {
+                Some(extent) if walked_price && !extent.is_nan() => {
+                    let (lo, hi, _) = clamped(center, Vec3::splat(f32::INFINITY));
+                    walk_box(engine, index, lo, hi, grid::UNANCHORED, |_, walked| walk_cost(walked, 0))
+                }
+                _ => 0.0,
+            };
+            every_part(engine, index, |near| {
+                let (parts, seconds, _) = test(near, None);
+                (parts, seconds + walked)
+            })
+        }
     };
     charge_query(engine, seconds);
     let max_parts = filter.max_parts;
@@ -1495,8 +1550,9 @@ pub fn install(engine: &Rc<Engine>) {
         }
         let grow = radius;
         let swept = (center.min(center + direction) - Vec3::splat(grow), center.max(center + direction) + Vec3::splat(grow));
-        let (hit, counts) = cast_and_count(engine, world, &filter, center, direction, grow, Some(swept), |state, near| cast_ray(near.iter().map(|(part, entry)| (*part, entry)), |part, entry| filter.sees(state, part, entry), center, direction, grow, None));
-        charge_cast(engine, counts, crate::cost::SPHERE_CROSSED, 0);
+        let enter = |entry: &Entry, extra: f32| ray_solid(&entry.solid, center, direction, grow + extra).map(|(t, _)| t);
+        let (hit, counts) = cast_and_count(engine, world, &filter, direction, enter, Some(swept), |state, near| cast_ray(near.iter().map(|(part, entry)| (*part, entry)), |part, entry| filter.sees(state, part, entry), center, direction, grow, None));
+        charge_cast(engine, counts, crate::cost::SPHERE_MET, crate::cost::SPHERE_CROSSED, 0);
         keep_filter(engine, filter);
         hit_values(lua, engine, hit)
     })));
@@ -1515,12 +1571,14 @@ pub fn install(engine: &Rc<Engine>) {
         if !finite_path(frame::translation(&frame), direction) || size.min_element() < -SHAPECAST_SIDE {
             return missed(lua, engine, world, filter);
         }
-        // (a box's path counted as its centre's, grown by its half diagonal: its bounding sphere; the walk over its swept box, every
-        // part when that is not finite)
+        // (what a box's path meets counted by its own sweep, as cast_box finds its hit; the walk over its swept box, every part when
+        // that is not finite)
         let center = frame::translation(&frame);
         let swept = box_extent(&frame, size).map(|extent| (center.min(center + direction) - extent, center.max(center + direction) + extent));
-        let (hit, counts) = cast_and_count(engine, world, &filter, center, direction, size.length() * 0.5, swept, |state, near| cast_box(near, |part, entry| filter.sees(state, part, entry), &frame, size, direction, None));
-        charge_cast(engine, counts, crate::cost::BLOCK_CROSSED, 0);
+        let moving = Oriented::of(&unit_frame(&frame), (size * 0.5).abs());
+        let enter = |entry: &Entry, extra: f32| sweep_boxes(&moving, direction, &Oriented::of(&entry.solid.frame, entry.solid.half_extents() + Vec3::splat(extra))).map(|(t, _)| t);
+        let (hit, counts) = cast_and_count(engine, world, &filter, direction, enter, swept, |state, near| cast_box(near, |part, entry| filter.sees(state, part, entry), &frame, size, direction, None));
+        charge_cast(engine, counts, crate::cost::BLOCK_MET, crate::cost::BLOCK_CROSSED, 0);
         keep_filter(engine, filter);
         hit_values(lua, engine, hit)
     })));
@@ -1571,15 +1629,22 @@ pub fn install(engine: &Rc<Engine>) {
         };
         // the part being cast is never hit (documented); what it holds can be
         let center = frame::translation(&cast.frame);
-        // (it stops at its hit as the other casts do: measured; the parts tied with the hit at a Blockcast's price, borrowed; its
-        // path counted grown by its half diagonal, which holds what it can touch; the walk over its swept box)
+        // (it stops at its hit as the other casts do: measured; the parts tied with the hit at a Blockcast's price, borrowed; what its
+        // path meets counted by its own sweep, a ball's or a box's, as its hit is found; the walk over its swept box)
         let (_, reach) = world_reach(&cast);
         let swept = (center + reach).is_finite().then(|| (center.min(center + direction) - reach, center.max(center + direction) + reach));
-        let (hit, counts) = cast_and_count(engine, world, &filter, center, direction, cast.half_extents().length(), swept, |state, near| match cast.shape {
+        let moving = Oriented::of(&cast.frame, cast.half_extents());
+        let enter = |entry: &Entry, extra: f32| match cast.shape {
+            Shape::Ball(radius) => ray_solid(&entry.solid, center, direction, radius + extra).map(|(t, _)| t),
+            _ => sweep_boxes(&moving, direction, &Oriented::of(&entry.solid.frame, entry.solid.half_extents() + Vec3::splat(extra))).map(|(t, _)| t),
+        };
+        let (hit, counts) = cast_and_count(engine, world, &filter, direction, enter, swept, |state, near| match cast.shape {
             Shape::Ball(radius) => cast_ray(near.iter().map(|(part, entry)| (*part, entry)), |part, entry| filter.sees(state, part, entry), center, direction, radius, Some(part)),
             _ => cast_box(near, |part, entry| filter.sees(state, part, entry), &cast.frame, cast.half_extents() * 2.0, direction, Some(part)),
         });
-        charge_cast(engine, counts, crate::cost::BLOCK_CROSSED, crate::cost::kind::DEFAULTED);
+        let first = if matches!(cast.shape, Shape::Ball(_)) { crate::cost::SPHERE_MET } else { crate::cost::BLOCK_MET };
+        charge_query(engine, crate::cost::SHAPECAST_CALL);
+        charge_cast(engine, counts, first, crate::cost::BLOCK_CROSSED, crate::cost::kind::DEFAULTED);
         keep_filter(engine, filter);
         hit_values(lua, engine, hit)
     })));
@@ -1600,8 +1665,10 @@ pub fn install(engine: &Rc<Engine>) {
         }
         let size = box_size(size);
         let extent = box_extent(&frame, size);
+        // (a box reaching the clamp on an axis reaches everywhere: each part it lists costs a client more, cost.rs QUERY_WIDE_PART)
+        let wide = extent.is_none_or(|extent| extent.cmpge(Vec3::splat(CLAMP)).any());
         let parts = overlapping(engine, world, filter, frame::translation(&frame), extent, true, |s| overlaps_box(s, &frame, size));
-        charge_query(engine, parts.len() as f64 * crate::cost::QUERY_BOX_PART);
+        charge_query(engine, parts.len() as f64 * (crate::cost::QUERY_BOX_PART + if wide { crate::cost::QUERY_WIDE_PART } else { 0.0 }));
         parts_table(lua, engine, parts)
     })));
     members.push(("GetPartBoundsInRadius", method(|lua, engine, world, args| {
@@ -1616,7 +1683,9 @@ pub fn install(engine: &Rc<Engine>) {
             return found_nothing(lua, engine, world, filter);
         }
         let parts = overlapping(engine, world, filter, center, sphere_extent(radius as f32), true, |s| overlaps_sphere(s, center, radius as f32));
-        charge_query(engine, parts.len() as f64 * crate::cost::QUERY_RADIUS_PART);
+        // (a radius reaching the clamp reaches everywhere, an infinite one too: cost.rs QUERY_WIDE_PART)
+        let wide = !((radius as f32) < CLAMP);
+        charge_query(engine, parts.len() as f64 * (crate::cost::QUERY_RADIUS_PART + if wide { crate::cost::QUERY_WIDE_PART } else { 0.0 }));
         parts_table(lua, engine, parts)
     })));
     members.push(("GetPartsInPart", method(|lua, engine, world, args| {

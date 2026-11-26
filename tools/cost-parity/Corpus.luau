@@ -723,6 +723,28 @@ method("workspace.Blockcast.hit_stack", 4000, function(N, S)
 		local _ = workspace:Blockcast(From, Size, Direction, Params)
 	end
 end)
+-- a box's hit and the legacy ray (each the shape's first part, FindPartOnRay's call above a Raycast's)
+method("workspace.Blockcast.hit_one", 4000, function(N, S)
+	spatial(S)
+	local Params = RaycastParams.new()
+	local From, Size, Direction = CFrame.new(SpatialAt + Vector3.new(30, 10, 20)), Vector3.new(2, 2, 2), Vector3.new(0, -20, 0)
+	for _ = 1, N do
+		local _ = workspace:Blockcast(From, Size, Direction, Params)
+	end
+end)
+method("workspace.FindPartOnRay.miss", 4000, function(N)
+	local R = Ray.new(Vector3.new(5000, 5000, 5000), Vector3.new(0, -20, 0))
+	for _ = 1, N do
+		local _ = workspace:FindPartOnRay(R)
+	end
+end)
+method("workspace.FindPartOnRay.hit_one", 4000, function(N, S)
+	spatial(S)
+	local R = Ray.new(SpatialAt + Vector3.new(30, 10, 20), Vector3.new(0, -20, 0))
+	for _ = 1, N do
+		local _ = workspace:FindPartOnRay(R)
+	end
+end)
 method("workspace.GetPartBoundsInBox.model10", 2000, function(N, S)
 	spatial(S)
 	local Params = OverlapParams.new()

@@ -381,6 +381,8 @@ impl Groups {
         let touched = snapshot.touched;
         let registry = Registry::from_snapshot(snapshot);
         let (held, renamed) = self.read(world, |held| (held.names == registry.names && held.masks == registry.masks, held.names != registry.names));
+        let masks_changed = self.read(world, |held| (0..MAX_GROUPS).filter(|&id| held.masks[id] != registry.masks[id]).fold(0u32, |bits, id| bits | 1 << id));
+        let masks_changed = (masks_changed != 0).then_some(masks_changed);
         let follows = followed || touched || !registry.is_default();
         if held && follows == followed {
             return;
@@ -394,7 +396,30 @@ impl Groups {
         }
         if !followed || renamed {
             self.resolve_world(engine, world).charge_client(engine);
+        } else if let (Owner::Shared, Some(changed)) = (world, masks_changed) {
+            // (a snapshot that changed masks alone: the client works out its parts in those groups again, at what it spends on
+            // them, cost.rs CLIENT_GROUP_MASK_PART; it changes no id)
+            let (_, grouped) = self.parts_in(engine, changed);
+            charge_on(&engine.state.borrow(), grouped as f64 * crate::cost::CLIENT_GROUP_MASK_PART);
         }
+    }
+
+    /// The Workspace's parts (as a group change looks at them: [`Groups::resolve_placed`]) and how many of them are in a group of
+    /// `groups` (bit i: the group with id i), by the CollisionGroupId each holds.
+    fn parts_in(&self, engine: &Engine, groups: u32) -> (usize, usize) {
+        let Some(data_model) = engine.world.get() else { return (0, 0) };
+        let mut parts = Vec::new();
+        crate::world::query::placed_parts(engine, &mut parts);
+        let state = engine.state.borrow();
+        let grouped = parts
+            .iter()
+            .filter(|&&part| state.dom.home(part) == Some(data_model.workspace))
+            .filter(|&&part| {
+                let id = state.dom.raw_get(part, self.group_id).and_then(Value::as_number).unwrap_or(-1.0);
+                (0.0..32.0).contains(&id) && groups & (1 << id as u32) != 0
+            })
+            .count();
+        (parts.len(), grouped)
     }
 
     /// A change a loopback client hears of: the first since the frame's last flush logs a marker, in its place among the
@@ -1063,11 +1088,15 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
         let world = shared.world(engine, id);
         shared.warn_unused(engine, world);
         let outside = shared.server_only(engine, world)?;
-        shared.write(world, |registry| {
+        let pair = shared.write(world, |registry| {
             let (Some(a), Some(b)) = (registry.id(&first), registry.id(&second)) else { return raise("Both collision groups must be registered.") };
             registry.set_collidable(a, b, collidable);
-            Ok(())
+            Ok((1u32 << a) | (1u32 << b))
         })?;
+        // (what a server spends on the call and on the Workspace's parts, the two groups' most: cost.rs COLLISION_MASK_CALL,
+        // COLLISION_GROUP_PART, COLLISION_MASK_PART; the parts of a WorldModel with groups of its own were not measured)
+        let (parts, grouped) = if matches!(world, Owner::Shared) { shared.parts_in(engine, pair) } else { (0, 0) };
+        charge_on(&engine.state.borrow(), crate::cost::COLLISION_MASK_CALL + parts as f64 * crate::cost::COLLISION_GROUP_PART + grouped as f64 * crate::cost::COLLISION_MASK_PART);
         shared.changed(engine, world, false, outside);
         Ok(none())
     }));

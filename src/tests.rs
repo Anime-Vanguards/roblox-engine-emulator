@@ -13113,12 +13113,85 @@ fn each_engine_has_its_own_collision_groups() {
     assert_eq!(run(&first_lua, &first, &format!(r#"game:GetService("PhysicsService"):RegisterCollisionGroup("GroupA") {count}"#)), ["print: 2"]);
     assert_eq!(run(&second_lua, &second, count), ["print: 1"]);
 }
+/// CollisionGroupSetCollidable costs a server its call, each part of the Workspace and more for each part in either of its two
+/// groups (cost.rs COLLISION_MASK_CALL, COLLISION_GROUP_PART, COLLISION_MASK_PART; Studio 0.747, a server: 1.1-1.4 us alone, 1.2-2.3 ns
+/// a part, 10.7-41 ns more a part of the pair's groups); before, it cost its call alone.
+#[test]
+fn a_collidable_pair_change_costs_what_a_server_spends_on_the_groups_parts() {
+    use super::RunContext;
+    let (lua, engine) = start_with(Options { run_context: RunContext::Server, ..Options::default() });
+    engine_lua::modules::interpret_all(&lua, &engine);
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    run(
+        &lua,
+        &engine,
+        r#"
+        local PhysicsService = game:GetService("PhysicsService")
+        PhysicsService:RegisterCollisionGroup("A")
+        PhysicsService:RegisterCollisionGroup("B")
+        PhysicsService:RegisterCollisionGroup("C")
+        local function Cost(Change)
+            Change()
+            local Start = os.clock()
+            Change()
+            return os.clock() - Start
+        end
+        local function Set() PhysicsService:CollisionGroupSetCollidable("A", "B", false) end
+        local function Known() return PhysicsService:CollisionGroupsAreCollidable("A", "B") end
+        shared.Alone = Cost(Set) - Cost(Known)
+        local Folder = Instance.new("Folder")
+        for Index = 1, 1000 do
+            local Part = Instance.new("Part")
+            Part.Anchored = true
+            Part.CollisionGroup = if Index <= 300 then "A" elseif Index <= 500 then "C" else "Default"
+            Part.Parent = Folder
+        end
+        Folder.Parent = workspace
+        shared.Parts = Cost(Set) - Cost(Known) - shared.Alone
+        "#,
+    );
+    // (the call past CollisionGroupsAreCollidable's, priced alike)
+    let (alone, parts) = (crate::cost::COLLISION_MASK_CALL, 1000.0 * crate::cost::COLLISION_GROUP_PART + 300.0 * crate::cost::COLLISION_MASK_PART);
+    run(&lua, &engine, &format!("assert(math.abs(shared.Alone - {alone:e}) < 0.02e-6, `the call alone: {{shared.Alone}}`) assert(math.abs(shared.Parts - {parts:e}) < 0.02e-6, `1,000 parts, 300 of a pair's group: {{shared.Parts}}`)"));
+}
+
+/// A PlayerMouse's X costs a getter's read and cost.rs MOUSE_READ more (Studio 0.747: a client's X 0.057 us, 1.6-1.95 times a part's
+/// Transparency read); it cost the getter's read alone.
+#[test]
+fn a_player_mouses_plain_reads_cost_what_a_client_spends() {
+    let (lua, engine) = start_with(Options { mode: "play".into(), ..Options::default() });
+    engine_lua::modules::interpret_all(&lua, &engine);
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    let price = crate::cost::MOUSE_READ;
+    run(
+        &lua,
+        &engine,
+        &format!(
+            r#"
+        local Mouse = game:GetService("Players").LocalPlayer:GetMouse()
+        local function Cost(Read)
+            Read()
+            local Start = os.clock()
+            Read()
+            return os.clock() - Start
+        end
+        -- (X, Y, ViewSizeX and ViewSizeY past TargetFilter, a plain read of the mouse)
+        local Plain = Cost(function() local _ = Mouse.TargetFilter end)
+        for _, Name in {{ "X", "Y", "ViewSizeX", "ViewSizeY" }} do
+            local Extra = Cost(function() local _ = Mouse[Name] end) - Plain
+            assert(math.abs(Extra - {price:e}) < 0.01e-6, `{{Name}}: {{Extra}} s past a plain read`)
+        end
+        "#
+        ),
+    );
+}
+
 
 /// A group change works out every part's CollisionGroupId in the Workspace again, and costs the work clock what a server spends
 /// on that (roblox-sim, Studio 0.747: cost.rs COLLISION_GROUP_PART, COLLISION_GROUP_CHANGED): 1.7 ns a part whose id stays and
 /// 0.38 us more for each whose id changes, so a register or unregister beside 5,000 parts reads 8.5 us more than beside none,
 /// and with 1,000 of them in the group 380 more again (each read a flat 0.08 us). CollisionGroupSetCollidable works out no ids
-/// and stays at its call's price.
+/// (its price: a_collidable_pair_change_costs_what_a_server_spends_on_the_groups_parts).
 #[test]
 fn a_collision_group_change_costs_what_a_server_spends_on_the_workspaces_parts() {
     use super::RunContext;
@@ -13164,9 +13237,11 @@ fn a_collision_group_change_costs_what_a_server_spends_on_the_workspaces_parts()
             end
         end
         Within("a change of 1,000 of their ids", (Each(Toggle) - Alone) / 2, 8.5 + 370, 8.5 + 390)
+        -- (a collidable pair: its call, the 5,000 parts and the 1,000 of its group, cost.rs COLLISION_MASK_CALL and the rest)
+        PhysicsService:RegisterCollisionGroup("A")
         Within("a collidable pair", Each(function()
-            PhysicsService:CollisionGroupSetCollidable("Default", "Default", true)
-        end), 0.0, 0.3)
+            PhysicsService:CollisionGroupSetCollidable("A", "A", true)
+        end), 1.05 + 8.5 + 18.0 - 0.2, 1.05 + 8.5 + 18.0 + 0.2)
         "#,
     );
 }
@@ -13854,9 +13929,10 @@ fn a_world_models_group_change_and_use_workspace_toggle_cost_what_a_change_does_
         Within("a change of 1,000 of their ids", (Each(Toggle(World, "A")) - Alone) / 2, 8.5 + 370, 8.5 + 390)
         World:RegisterCollisionGroup("A")
         Within("UseWorkspaceCollisionGroups changing 1,000 of their ids", Each(Flip(World)) - FlipAlone, 8.5 + 370, 8.5 + 390)
+        -- (a WorldModel's own pair costs the call alone: its parts were not measured)
         Within("a collidable pair", Each(function()
             World:CollisionGroupSetCollidable("A", "Default", true)
-        end), 0.0, 0.3)
+        end), 1.05, 1.35)
         "#,
     );
 }
@@ -14399,7 +14475,7 @@ fn a_world_models_walk_to_its_parts_pays_for_the_instances_it_looks_at() {
 /// A loopback client taking in a snapshot of its server's groups pays for the parts it works out what a 0.747 client spends on
 /// them (cost.rs CLIENT_GROUP_PART, CLIENT_GROUP_CHANGED: about 1.9 us a part whose id changes, 30 ns one whose id stays): a
 /// snapshot that registers the group 1,000 parts name costs 1.9 ms, one that adds a group no part names 30 us, one that changes
-/// a mask alone nothing, and a snapshot of what the client holds nothing, looking at no part. The join's snapshot of a server
+/// a mask alone 45 ns for each part of its groups (CLIENT_GROUP_MASK_PART), and a snapshot of what the client holds nothing, looking at no part. The join's snapshot of a server
 /// that never touched its groups, Default alone, leaves a client that never touched its own as it was: no part is looked at
 /// and no spatial index made. The parts used to cost a client nothing, and the join's Default alone looked at every part.
 #[test]
@@ -14449,7 +14525,8 @@ fn a_loopback_client_pays_for_the_parts_a_snapshot_of_its_servers_groups_works_o
     assert!(seen >= 1000 && (spent - expected).abs() < 1e-7, "the group 1,000 parts name registered: {seen} looked at, {spent} s where {expected} expected");
     let (seen, spent) = paid(&other);
     assert!(seen >= 1000 && (spent - 1000.0 * crate::cost::CLIENT_GROUP_PART).abs() < 1e-7, "a group no part names: {seen} looked at, {spent} s");
-    assert_eq!(paid(&masked), (0, 0.0), "a mask alone");
+    let (seen, spent) = paid(&masked);
+    assert!(seen == 0 && (spent - 1000.0 * crate::cost::CLIENT_GROUP_MASK_PART).abs() < 1e-9, "a mask alone: the 1,000 parts of its group, {seen} looked at, {spent} s");
     assert_eq!(paid(&masked), (0, 0.0), "what the client holds");
     run(&client_lua, &client, r#"assert(workspace.P1.CollisionGroupId == 1, `the ids follow the groups: {workspace.P1.CollisionGroupId}`)"#);
 }

@@ -10757,10 +10757,10 @@ fn queries_that_raise_cost_what_a_client_spends_on_the_error() {
         "##,
     );
     // (a call that raises skips the work past its arguments, which the passing call pays: GetPartsInPart's by its 4 x 1 x 2 part's area, the camera
-    // calls' own prices)
+    // calls' own prices, Shapecast's and FindPartOnRay's call prices)
     let raised = crate::cost::RAISED;
     let in_part = 28.0f64.sqrt() * crate::cost::QUERY_PART_SIZE;
-    let checks = [("Raycast", raised), ("Spherecast", raised), ("Blockcast", raised), ("Shapecast", raised), ("Box", raised), ("Radius", raised), ("InPart", raised - in_part), ("FindPartOnRay", raised), ("Obscuring", raised - crate::cost::OBSCURING_CALL), ("Cutoff", raised - crate::cost::CUTOFF_CALL)];
+    let checks = [("Raycast", raised), ("Spherecast", raised), ("Blockcast", raised), ("Shapecast", raised - crate::cost::SHAPECAST_CALL), ("Box", raised), ("Radius", raised), ("InPart", raised - in_part), ("FindPartOnRay", raised - crate::cost::FIND_PART_ON_RAY), ("Obscuring", raised - crate::cost::OBSCURING_CALL), ("Cutoff", raised - crate::cost::CUTOFF_CALL)];
     for (name, price) in checks {
         run(&lua, &engine, &format!("assert(math.abs(shared.Raised.{name} - {price:e}) < 0.01e-6, `{name}: {{shared.Raised.{name}}} s more work when it raises, not {price:e}`)"));
     }
@@ -10831,6 +10831,8 @@ fn engine_errors_cost_what_a_client_spends_on_the_error() {
     for (name, price) in checks {
         run(&lua, &engine, &format!("assert(math.abs(shared.Errors.{name} - {price:e}) < 0.06e-6, `{name}: {{shared.Errors.{name}}} s more work when it raises, not {price:e}`)"));
     }
+}
+
 /// A script's own errors, the datatypes' and the proxy values' errors, refused property writes, failed conversions and the error a
 /// Connect logs cost the work clock what a playing client spends on them (cost.rs SCRIPT_ERROR, MEMBER_MISSED, WRITE_REFUSED,
 /// WRITE_CAST_REFUSED, CONVERSION_FAILED, CONNECT_FAILED_LOGGED; Studio 0.747, a headless client, its server and a rendered client:
@@ -10911,6 +10913,167 @@ fn script_errors_refused_writes_and_failed_conversions_cost_what_a_client_spends
     }
 }
 
+/// A cast asks its filter about each part whose bounds grown by 0.315 studs its path enters before the hit (a wall 0.30 studs behind
+/// the hit, a bar 0.1 studs beside the path), a Raycast once for every 4 studs of path inside them and once more, and a Blockcast
+/// counts what its box meets by the box's own sweep (Studio 0.747, a headless client: walls 200 folders deep behind an Exclude list of
+/// 50 parts, each check a long walk; query.rs FILTER_MARGIN, FILTER_STEP). Before, nothing behind the hit or beside the path was
+/// asked about, and a Blockcast into walls 0.1 studs apart paid eight checks where a client pays four.
+#[test]
+fn casts_ask_their_filter_about_parts_close_to_their_path() {
+    let (lua, engine) = start_play();
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    run(
+        &lua,
+        &engine,
+        r##"
+        local X, Y = 5000, 500
+        local Chain = workspace
+        for i = 1, 200 do
+            local F = Instance.new("Folder")
+            F.Parent = Chain
+            Chain = F
+        end
+        local List = {}
+        for i = 1, 50 do
+            local E = Instance.new("Part")
+            E.Anchored = true
+            E.CFrame = CFrame.new(X + 400 + i * 4, Y, 0)
+            E.Parent = workspace
+            List[i] = E
+        end
+        local Params = RaycastParams.new()
+        Params.FilterType = Enum.RaycastFilterType.Exclude
+        Params.FilterDescendantsInstances = List
+        local O, D = Vector3.new(X, Y, -50.25), Vector3.new(0, 0, 200)
+        local function Part(S, Z, Size, OffsetX)
+            local P = Instance.new("Part")
+            P.Anchored = true
+            P.Size = Size or Vector3.new(40, 40, 0.5)
+            P.CFrame = CFrame.new(X + (OffsetX or 0), Y, Z)
+            P.Parent = S
+        end
+        local function Scene(Build, Cast)
+            local S = Instance.new("Folder")
+            S.Parent = Chain
+            Build(S)
+            Cast()
+            local Start = os.clock()
+            Cast()
+            local Spent = os.clock() - Start
+            S:Destroy()
+            return Spent
+        end
+        local Ray = function() return workspace:Raycast(O, D, Params) end
+        local Block = function() return workspace:Blockcast(CFrame.new(O + Vector3.new(0, 0, -1)), Vector3.new(2, 2, 2), D, Params) end
+        local One = Scene(function(S) Part(S, 0) end, Ray)
+        local Unlisted = Scene(function(S) Part(S, 0) end, function() return workspace:Raycast(O, D, RaycastParams.new()) end)
+        shared.Margin = {
+            Check = One - Unlisted,
+            Behind = Scene(function(S) Part(S, 0) Part(S, 0.3) end, Ray) - One,
+            Past = Scene(function(S) Part(S, 0) Part(S, 0.33) end, Ray) - One,
+            Beside = Scene(function(S) Part(S, 0) Part(S, -20, Vector3.new(1, 1, 30), 0.6) end, Ray) - One,
+            Far = Scene(function(S) Part(S, 0) Part(S, -20, Vector3.new(1, 1, 30), 0.9) end, Ray) - One,
+            BlockOne = Scene(function(S) Part(S, 0) end, Block),
+            BlockStack = Scene(function(S) for i = 0, 9 do Part(S, i * 0.1) end end, Block),
+        }
+        "##,
+    );
+    // (one check: the list's walks, past the list's read; a 30-stud bar 0.1 studs beside the path is 30.63 studs inside its grown
+    // bounds, 1 + 8 checks; ten walls 0.1 apart: the hit's and those 0.1, 0.2 and 0.3 behind it)
+    let list_read = crate::cost::PARAMS_LIST + 50.0 * crate::cost::PARAMS_LISTED;
+    run(
+        &lua,
+        &engine,
+        &format!(
+            r#"
+        local M = shared.Margin
+        local Check = M.Check - {list_read:e}
+        assert(Check > 5e-6, `a check of a wall 200 deep behind 50 entries is a long walk: {{Check}}`)
+        local function Near(Value, Checks, Label)
+            assert(math.abs(Value / Check - Checks) < 0.05, `{{Label}}: {{Value / Check}} checks, not {{Checks}}`)
+        end
+        Near(M.Behind, 1, "a wall 0.30 behind the hit")
+        Near(M.Past, 0, "a wall 0.33 behind the hit")
+        Near(M.Beside, 9, "a bar beside the path")
+        Near(M.Far, 0, "a bar 0.4 beside the path")
+        Near(M.BlockStack - M.BlockOne, 3, "a Blockcast into a dense stack")
+        "#
+        ),
+    );
+}
+
+/// FindPartOnRay costs a Raycast's walk, parts and filter checks and more for its call and its list, and a query reaching everywhere
+/// (an infinite radius, a box reaching the clamp) more for each part, an infinite radius the clamped walk too (Studio 0.747, a
+/// headless client: cost.rs FIND_PART_ON_RAY, FIND_PART_ON_RAY_LIST, FIND_PART_ON_RAY_LISTED, QUERY_WIDE_PART). Before, FindPartOnRay
+/// cost its call alone and an infinite radius walked nothing.
+#[test]
+fn find_part_on_ray_and_queries_reaching_everywhere_cost_what_a_client_spends() {
+    let (lua, engine) = start_play();
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    run(
+        &lua,
+        &engine,
+        r##"
+        local Far = Instance.new("Part")
+        Far.Anchored = true
+        Far.CFrame = CFrame.new(5600, 500, 0)
+        Far.Parent = workspace
+        local R = Ray.new(Vector3.new(5000, 500, -50), Vector3.new(0, 0, 200))
+        local Hundred = table.create(100, Far)
+        local Empty = {}
+        local function Cost(Call)
+            Call()
+            local Start = os.clock()
+            Call()
+            return os.clock() - Start
+        end
+        local Plain = Cost(function() return workspace:FindPartOnRay(R) end)
+        local Listed = Cost(function() return workspace:FindPartOnRayWithIgnoreList(R, Empty) end)
+        shared.Find = {
+            Plain = Plain - Cost(function() return workspace:Raycast(R.Origin, R.Direction) end),
+            List = Listed - Plain,
+            Listed = Cost(function() return workspace:FindPartOnRayWithIgnoreList(R, Hundred) end) - Listed,
+        }
+        local Box = Cost(function() return workspace:GetPartBoundsInBox(CFrame.new(), Vector3.new(15000, 15000, 15000)) end)
+        local Radius = Cost(function() return workspace:GetPartBoundsInRadius(Vector3.zero, math.huge) end)
+        for i = 1, 100 do
+            local P = Instance.new("Part")
+            P.Anchored = true
+            P.CFrame = CFrame.new(i * 6, 500, 0)
+            P.Parent = workspace
+        end
+        workspace:Raycast(Vector3.zero, Vector3.one)
+        shared.Wide = {
+            Radius = Radius,
+            Box = Box,
+            RadiusParts = Cost(function() return workspace:GetPartBoundsInRadius(Vector3.zero, math.huge) end) - Radius,
+            BoxParts = Cost(function() return workspace:GetPartBoundsInBox(CFrame.new(), Vector3.new(15000, 15000, 15000)) end) - Box,
+        }
+        "##,
+    );
+    // (FindPartOnRay past a Raycast: its own price, less the Raycast's call price over FindPartOnRay's, 0.13 us; the clamp's walk: the
+    // same root cells for the box and the infinite radius)
+    let (find, list, listed) = (crate::cost::FIND_PART_ON_RAY - 0.132e-6, crate::cost::FIND_PART_ON_RAY_LIST, 100.0 * crate::cost::FIND_PART_ON_RAY_LISTED);
+    let (radius_part, box_part) = (crate::cost::QUERY_RADIUS_PART + crate::cost::QUERY_WIDE_PART, crate::cost::QUERY_BOX_PART + crate::cost::QUERY_WIDE_PART);
+    run(
+        &lua,
+        &engine,
+        &format!(
+            r#"
+        local F, W = shared.Find, shared.Wide
+        local function Within(Label, Value, Expected, Slack)
+            assert(math.abs(Value - Expected) < Slack, `{{Label}}: {{Value}} not {{Expected}}`)
+        end
+        Within("FindPartOnRay past a Raycast", F.Plain, {find:e}, 0.03e-6)
+        Within("an empty list", F.List, {list:e}, 0.02e-6)
+        Within("a list of 100", F.Listed, {listed:e}, 0.05e-6)
+        assert(W.Radius > 100e-6, `an infinite radius walks the clamped cells: {{W.Radius}}`)
+        Within("an infinite radius beside a box reaching the clamp", W.Radius, W.Box, 2e-6)
+        Within("a part an infinite radius lists", W.RadiusParts / 100, {radius_part:e}, 0.03e-6)
+        Within("a part a box reaching the clamp lists", W.BoxParts / 100, {box_part:e}, 0.06e-6)
+        "#
+        ),
+    );
 }
 
 /// A query whose geometry is not finite tests no part, as a client's spends nothing on the parts (Studio 0.747: a NaN or infinite

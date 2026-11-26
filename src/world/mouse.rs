@@ -232,23 +232,26 @@ pub fn install(engine: &Rc<Engine>) {
     let (right, normal_id) = (engine.reflection.enum_item("NormalId", "Right"), engine.reflection.enum_id("NormalId"));
     let mut members: Vec<(&str, GetterFn)> = Vec::new();
     for (key, default) in [("X", -1000.0), ("Y", -1000.0), ("ViewSizeX", 0.0), ("ViewSizeY", 0.0)] {
-        members.push((key, Rc::new(move |_, engine, _| Ok(LuaValue::Number(recorded(engine, key, default))))));
+        members.push((key, Rc::new(move |_, engine, _| {
+            query::charge_query(engine, crate::cost::MOUSE_READ);
+            Ok(LuaValue::Number(recorded(engine, key, default)))
+        })));
     }
     members.push(("UnitRay", Rc::new(|lua, engine, _| {
-        query::charge_query(engine, crate::cost::MOUSE_UNIT_RAY);
+        query::charge_query(engine, crate::cost::MOUSE_READ + crate::cost::MOUSE_UNIT_RAY);
         let (origin, direction) = unit_ray(engine);
         let ray = lune::Ray::from(dom::Ray::new(dom::Vector3::new(origin.x, origin.y, origin.z), dom::Vector3::new(direction.x, direction.y, direction.z)));
         Ok(LuaValue::UserData(lune_roblox::datatypes::create::ray(lua, ray)?))
     })));
     members.push(("Origin", Rc::new(|lua, engine, _| {
-        query::charge_query(engine, crate::cost::MOUSE_ORIGIN);
+        query::charge_query(engine, crate::cost::MOUSE_READ + crate::cost::MOUSE_ORIGIN);
         let (origin, direction) = unit_ray(engine);
         Ok(cframe_value(lua, engine, &aimed(origin, direction))?)
     })));
     // Icon is a plain property, read at what a client spends on it
     let icon = engine.reflection.name_id("Icon");
     members.push(("Icon", Rc::new(move |lua, engine, id| {
-        query::charge_query(engine, crate::cost::MOUSE_ICON);
+        query::charge_query(engine, crate::cost::MOUSE_READ + crate::cost::MOUSE_ICON);
         let value = icon.and_then(|name| engine.state.borrow().dom.raw_get(id, name).cloned());
         Ok(match value {
             Some(value) => convert::to_lua(lua, engine, &value)?,
