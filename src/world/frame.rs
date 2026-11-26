@@ -46,18 +46,23 @@ pub fn cframe_value(transform: &Affine3A) -> Value {
     Value::Dom(Rc::new(Variant::CFrame(from_affine(transform))))
 }
 
-/// A rotation (rows) as a client stores it in a part's CFrame or a joint's C0 / C1: as written while every entry of RᵀR - I is
-/// within 1e-5, else orthonormalized as `CFrame:Orthonormalize()` does it (lune_roblox's float32 Gram-Schmidt), and identity where
+/// A rotation (rows) as a client stores it in a part's CFrame: as written while every entry of RᵀR - I is within 1e-5 (a joint's
+/// C0 / C1 within 5e-7: [`stored_rotation_within`], lua/instance.rs JOINT_TOLERANCE), else orthonormalized as `CFrame:Orthonormalize()` does it (lune_roblox's float32 Gram-Schmidt), and identity where
 /// that is not a number (a zero column). Measured in a playing client (roblox-sim, Studio 0.746, 2026-11-07): a column
 /// stretched by 2e-6 or leaning 1e-5 toward another reads back as written, by 5e-6 or 2e-5 orthonormalized; a skewed
 /// rotation reads back to the bit as Orthonormalize gives it, written to a part, through BulkMoveTo or as a Motor6D's C0; a
 /// mirror stays one; a rotation with a zero column reads identity. (An Attachment's CFrame is orthonormalized too, but its
 /// last bits differ from Gram-Schmidt's: not modelled.)
 pub fn stored_rotation(rows: [[f32; 3]; 3]) -> [[f32; 3]; 3] {
+    stored_rotation_within(rows, 1e-5)
+}
+
+/// [`stored_rotation`] with another tolerance for RᵀR - I: a joint's C0 / C1 keeps less (JOINT_TOLERANCE).
+pub fn stored_rotation_within(rows: [[f32; 3]; 3], tolerance: f32) -> [[f32; 3]; 3] {
     use lune_roblox::datatypes::types::float32;
     let column = |i: usize| [rows[0][i], rows[1][i], rows[2][i]];
     let (c0, c1, c2) = (column(0), column(1), column(2));
-    let off = |a: [f32; 3], b: [f32; 3], want: f32| (float32::dot3(a, b) - want).abs() > 1e-5;
+    let off = |a: [f32; 3], b: [f32; 3], want: f32| (float32::dot3(a, b) - want).abs() > tolerance;
     if !(off(c0, c0, 1.0) || off(c1, c1, 1.0) || off(c2, c2, 1.0) || off(c0, c1, 0.0) || off(c0, c2, 0.0) || off(c1, c2, 0.0)) {
         return rows;
     }

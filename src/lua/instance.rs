@@ -631,17 +631,23 @@ fn cframe_as_stored(engine: &Engine, id: InstanceId, name: NameId, value: Value)
         let stored = attachment_rotation(rows);
         return Value::Dom(Rc::new(Variant::CFrame(dom::CFrame::new(cframe.position, dom::Matrix3::new(row(stored[0]), row(stored[1]), row(stored[2]))))));
     }
-    let held = (name == crate::world::cframe_name(engine) && engine.reflection.is_a(class, "BasePart"))
-        || (matches!(property, "C0" | "C1") && engine.reflection.is_a(class, "JointInstance"));
-    if !held {
+    let joint = matches!(property, "C0" | "C1") && engine.reflection.is_a(class, "JointInstance");
+    if !joint && !(name == crate::world::cframe_name(engine) && engine.reflection.is_a(class, "BasePart")) {
         return value;
     }
-    let stored = crate::world::frame::stored_rotation(rows);
+    let stored = if joint { crate::world::frame::stored_rotation_within(rows, JOINT_TOLERANCE) } else { crate::world::frame::stored_rotation(rows) };
     if stored == rows {
         return value;
     }
     Value::Dom(Rc::new(Variant::CFrame(dom::CFrame::new(cframe.position, dom::Matrix3::new(row(stored[0]), row(stored[1]), row(stored[2]))))))
 }
+
+/// How far a joint's C0 / C1 may be off orthonormal (an entry of RᵀR - I) before a write orthonormalizes it, with the same float32
+/// Gram-Schmidt a part's CFrame gets past 1e-5 (world::frame::stored_rotation). Measured on a 0.747 playing client and server
+/// (tools/parity/probes/joint_c0_tolerance.luau, captured twice on each side): kept with entries up to 4.8e-7 (a scale of 2.5e-7,
+/// a column leaning 5e-7), orthonormalized from 5.07e-7 (a column leaning 5.5e-7); cframe_writes.luau's 27 C0 writes, their
+/// residues of 1e-13 included, then match to the bit.
+const JOINT_TOLERANCE: f32 = 5e-7;
 
 /// The rotation (rows) an Attachment's CFrame write stores, whatever its error: in float32, X is the first column times the inverse
 /// of its length, Y the second column less its part along X, normalized the same way, and Z the cross product X x Y, so the

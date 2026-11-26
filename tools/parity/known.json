@@ -100,7 +100,7 @@
 	"cframe_writes": [
 		{
 			"line": "write ",
-			"why": "a JointInstance's C0 is orthonormalised when written with an error of 1e-6 or more in a client (from 2e-5, 5e-6 for a scaled one, it equals a part write's); ree keeps it below its 1e-5 tolerance (FIX-R22, package G1). An Attachment's CFrame write matches but for the scaled write of 0.1 and the skew of 2e-5, one ulp off in its normalized columns (the client's reciprocal square root)"
+			"why": "Model:PivotTo puts the primary part exactly at the asked CFrame in a client, where ree's part carries float noise and rotation residues (FIX-R23, package G2): that column differs on 26 of the 27 write lines. An Attachment's CFrame write matches but for the scaled write of 0.1 and the skew of 2e-5, one ulp off in its normalized columns (the client's reciprocal square root); a joint's C0 matches on every line"
 		}
 	],
 	"chunknames": [

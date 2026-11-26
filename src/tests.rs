@@ -15517,3 +15517,27 @@ fn an_attachment_write_is_orthonormal_and_fires_a_clients_events() {
         ]
     );
 }
+
+/// A joint's C0 is orthonormalized once an entry of RᵀR - I passes 5e-7, where a part's CFrame keeps its rotation up to 1e-5
+/// (measured, Studio 0.747: tools/parity/probes/joint_c0_tolerance.luau, cframe_writes.luau).
+#[test]
+fn a_joint_c0_is_orthonormalized_past_a_smaller_error_than_a_parts_cframe() {
+    let (lua, engine) = start();
+    run(
+        &lua,
+        &engine,
+        r#"
+        local C, S = math.cos(0.4), math.sin(0.4)
+        local Weld = Instance.new("Weld")
+        local Part = Instance.new("Part")
+        for _, Error in { 5e-7, 5.5e-7, 1e-6 } do
+            local Written = CFrame.new(0, 0, 0, C, -S, Error, S, C, 0, 0, 0, 1)
+            Weld.C0 = Written
+            Part.CFrame = Written
+            local _, _, _, _, _, R02 = Weld.C0:GetComponents()
+            print(Error, R02 == select(6, Written:GetComponents()), Part.CFrame == Written)
+        end
+        "#,
+    );
+    assert_eq!(lines(&engine), ["print: 5e-07 true true", "print: 5.5e-07 false true", "print: 0.000001 false true"]);
+}
