@@ -538,6 +538,37 @@ fn fire_descendant_events(state: &mut State, ancestors: &[InstanceId], root: Ins
     }
 }
 
+/// [`fire_descendant_events`] of a player leaving Players (services/players.rs): on a server the character's step comes after
+/// the nearest ancestor's (Players') DescendantRemoving of the player and before the rest, in GetDescendants' order as ever;
+/// on a client before them all.
+fn leaving_descendant_events(state: &mut State, reflection: &Reflection, hooks: &Hooks, ancestors: &[InstanceId], player: InstanceId) {
+    let event = K::DescendantRemoving as NameId;
+    if !super::services::players::on_server(state) || ancestors.is_empty() {
+        super::services::players::remove_character(state, reflection, hooks, player);
+        fire_descendant_events(state, ancestors, player, event);
+        return;
+    }
+    if let Some(signal) = existing_event(state, ancestors[0], event) {
+        fire_measured(state, signal, vec![Value::Instance(player)], SignalKind::DescendantRemoving);
+    }
+    super::services::players::remove_character(state, reflection, hooks, player);
+    let listeners: Vec<(usize, SignalId)> =
+        ancestors.iter().enumerate().filter_map(|(index, &node)| existing_event(state, node, event).map(|signal| (index, signal))).collect();
+    if listeners.is_empty() {
+        return;
+    }
+    let mut nodes = vec![player];
+    nodes.extend(state.dom.descendants(player));
+    for (position, node) in nodes.into_iter().enumerate() {
+        for &(index, signal) in &listeners {
+            if position == 0 && index == 0 {
+                continue;
+            }
+            fire_measured(state, signal, vec![Value::Instance(node)], SignalKind::DescendantRemoving);
+        }
+    }
+}
+
 /// AncestryChanged of every instance of the moved subtree, children before the instance (post-order, measured in Studio
 /// with the others above: A1, A2, A, B1, B, C, U for U(A(A1, A2), B(B1), C)).
 fn fire_ancestry_changed(state: &mut State, root: InstanceId, new_parent: Option<InstanceId>) {
@@ -740,10 +771,20 @@ fn reparent(
             crate::boundary::add_cost(first);
         }
     }
-    if old_parent.is_some() {
-        fire_descendant_events(state, &old_chain[..old_chain.len() - kept], id, K::DescendantRemoving as NameId);
+    if let Some(old) = old_parent {
+        // (a player leaving Players: its character's step and PlayerRemoving come in among its removal events, where a server
+        // and a client put them: services/players.rs)
+        let leaving = super::services::players::leaving(state, id, old);
+        if leaving {
+            leaving_descendant_events(state, reflection, hooks, &old_chain[..old_chain.len() - kept], id);
+        } else {
+            fire_descendant_events(state, &old_chain[..old_chain.len() - kept], id, K::DescendantRemoving as NameId);
+        }
         if was_inside && !now_inside {
             super::services::subtree_moved(state, id, false);
+        }
+        if leaving {
+            super::services::players::player_removing(state, id, old);
         }
     }
     // (out of the old parent and under the new one, its home in the tree worked out once: dom.rs reparent; a client looks for the

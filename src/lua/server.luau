@@ -1196,7 +1196,7 @@ Method("MessagingService", "PublishAsync", function(_, Name, Message)
 	end
 end)
 
--- Player:Kick: the player leaves (PlayerRemoving) at the next resumption point
+-- Player:Kick: the player leaves (PlayerRemoving, its character's removal: services/players.rs) at the next resumption point, the engine's own step that no script pays for (a 0.747 server whose client ran in a process of its own let it leave 1.02-1.03 s after the call; that delay is not followed)
 
 Method("Player", "Kick", function(Self, Message)
 	if Message ~= nil and type(Message) ~= "string" then
@@ -1204,7 +1204,7 @@ Method("Player", "Kick", function(Self, Message)
 	end
 	task.defer(function()
 		if Self.Parent == Players then
-			R.SetParent(Self, nil)
+			R.Mute(true) pcall(R.SetParent, Self, nil) R.Mute(false)
 		end
 	end)
 end)

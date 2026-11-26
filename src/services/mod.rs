@@ -18,6 +18,7 @@ pub mod input_actions;
 pub mod json;
 pub mod localization;
 pub mod physics;
+pub(crate) mod players;
 pub mod query;
 pub mod reflection_service;
 pub mod settings;
@@ -153,6 +154,8 @@ pub struct CollectionState {
     /// Every instance ever given each tag ([`note_tag`]; freed and untagged ones are skipped when
     /// read): GetTagged looks at these instead of the whole DataModel
     holders: FxHashMap<Str, Vec<InstanceId>>,
+    /// Players leaving: what the leave reads, and the departed characters and Players waiting to be destroyed (players.rs)
+    pub(crate) departures: players::Departures,
 }
 
 impl CollectionState {
@@ -812,21 +815,22 @@ fn install_players(engine: &Rc<Engine>, behaviors: &mut Behaviors, reflection: &
                 Ok(values([LuaValue::Number(id.unwrap_or(1.0))]))
             })));
         }
-        // Players a harness adds after the run started: PlayerAdded when a Player is parented to Players,
-        // PlayerRemoving when it leaves, and Player.CharacterAdded when its Character is set to a model
-        // (the local player joined before the run, and CharacterRemoving is not fired: a changed property
-        // carries no old value). On a server a joining player gets the containers Roblox's server gives
-        // it (Backpack, StarterGear, PlayerGui) before PlayerAdded, unless the harness made them, and its team (teams.rs).
-        if let (Some(player_class), Some(added), Some(removing), Some(character), Some(character_added)) = (
+        // Players a harness adds after the run started: PlayerAdded when a Player is parented to Players, and
+        // Player.CharacterAdded when its Character is set to a model (the local player joined before the run; a script's
+        // Character write fires no CharacterRemoving: a changed property carries no old value). On a server a joining player
+        // gets the containers Roblox's server gives it (Backpack, StarterGear, PlayerGui) before PlayerAdded, unless the
+        // harness made them, and its team (teams.rs). A player leaving (PlayerRemoving, its character's removal) is
+        // instance.rs reparent's, with players.rs.
+        if let (Some(player_class), Some(added), Some(character), Some(character_added)) = (
             class(reflection, "Player"),
             name(reflection, "PlayerAdded"),
-            name(reflection, "PlayerRemoving"),
             name(reflection, "Character"),
             name(reflection, "CharacterAdded"),
         ) {
             let weak = Rc::downgrade(engine);
             let reflection_for_enter = engine.reflection.clone();
             let server = options.server();
+            players::install(&mut engine.state.borrow_mut(), reflection, server);
             let mut hooks = engine.hooks.borrow_mut();
             // Joining player setup (containers, team auto-assignment + Team.PlayerAdded, Players.PlayerAdded) runs before
             // Players.ChildAdded (measured in Studio 0.747, tools/parity/probes/loopback/team_join.luau).
@@ -853,19 +857,6 @@ fn install_players(engine: &Rc<Engine>, behaviors: &mut Behaviors, reflection: &
                     teams::assign_joining(state, &reflection_for_enter, hooks, engine.world().game, id);
                 }
                 core::fire_event(state, new, added, vec![Value::Instance(id)]);
-            }));
-            let weak = Rc::downgrade(engine);
-            let reflection_for_leave = engine.reflection.clone();
-            hooks.hierarchy_changed.push(Box::new(move |state, id, old, _new| {
-                let Some(engine) = weak.upgrade() else { return };
-                if !reflection_for_leave.is_a(state.dom.at(id).class, "Player") || engine.world().local_player == Some(id) {
-                    return;
-                }
-                if let Some(old_parent) = old
-                    && state.dom.at(old_parent).class == players
-                {
-                    core::fire_event(state, old_parent, removing, vec![Value::Instance(id)]);
-                }
             }));
             hooks.property_changed.push(Box::new(move |state, id, changed| {
                 if changed != character || state.dom.at(id).class != player_class {

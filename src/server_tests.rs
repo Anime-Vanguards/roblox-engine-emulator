@@ -786,3 +786,231 @@ fn a_live_server_is_not_studio_and_its_players_carry_join_data() {
 fn a_test_script_is_checked_after_it_waits() {
     run(RunContext::Server, "task.wait(1) assert(false, 'checked after the wait')", 0.1);
 }
+
+/// A departing player's scene: a Player "Leaver" in Players (on a server, with the containers a joining player gets) and a
+/// Model "Body" with a Humanoid and two anchored parts in the Workspace, the player's Character when `Character` is true; then
+/// `Leave` (a statement) makes it leave. The script records the events a script sees, in the order they fire, and prints them
+/// a frame on (`order ...`), what the player and the body hold in the leaving thread (`same thread ...`) and a frame on, and
+/// when (time from the leave) the body and the player were destroyed six seconds on (`destroyed <body> <player>`, -1: not).
+const LEAVING_SCENE: &str = r#"
+local Players = game:GetService("Players")
+local Order = {}
+local Player = Instance.new("Player")
+Player.Name = "Leaver"
+Player.UserId = 5
+Player.Parent = Players
+local Body = Instance.new("Model")
+Body.Name = "Body"
+Instance.new("Humanoid").Parent = Body
+for I = 1, 2 do
+	local Part = Instance.new("Part")
+	Part.Anchored = true
+	Part.Position = Vector3.new(300, I * 4, 0)
+	Part.Parent = Body
+end
+Body.Parent = workspace
+if Character then
+	Player.Character = Body
+end
+task.wait()
+local function Mine(X)
+	return X == Player or X == Body or X.Parent == Player
+end
+local function Note(Text)
+	table.insert(Order, Text)
+end
+Players.DescendantRemoving:Connect(function(X) if Mine(X) then Note("Players.DescendantRemoving " .. X.Name) end end)
+game.DescendantRemoving:Connect(function(X) if Mine(X) then Note("game.DescendantRemoving " .. X.Name) end end)
+workspace.DescendantRemoving:Connect(function(X) if Mine(X) then Note("Workspace.DescendantRemoving " .. X.Name) end end)
+workspace.ChildRemoved:Connect(function(X) if Mine(X) then Note("Workspace.ChildRemoved " .. X.Name) end end)
+Player.CharacterRemoving:Connect(function(X) Note("CharacterRemoving " .. X.Name) end)
+Body.AncestryChanged:Connect(function(X, Parent) if X == Body then Note("Body.AncestryChanged " .. tostring(Parent)) end end)
+Player:GetPropertyChangedSignal("Character"):Connect(function() Note("Character " .. tostring(Player.Character)) end)
+Player.Destroying:Connect(function() if #Order < 30 then Note("Leaver.Destroying") end end)
+Players.PlayerRemoving:Connect(function(X) Note("PlayerRemoving " .. X.Name) end)
+Players.ChildRemoved:Connect(function(X) if Mine(X) then Note("Players.ChildRemoved " .. X.Name) end end)
+Player.AncestryChanged:Connect(function(X, Parent) if X == Player then Note("Leaver.AncestryChanged " .. tostring(Parent)) end end)
+Player.Changed:Connect(function(Property) if Property == "Parent" then Note("Leaver.Changed Parent") end end)
+local Gone = { Body = -1, Player = -1 }
+local Left = time()
+Leave
+print("same thread", Player.Parent, Player.Character, Body.Parent)
+Body.Destroying:Connect(function() Gone.Body = time() - Left end)
+Player.Destroying:Connect(function() Gone.Player = time() - Left end)
+task.wait()
+print("order " .. table.concat(Order, ", "))
+print("after", Player.Parent, Player.Character, Body.Parent)
+task.wait(6)
+print("destroyed", string.format("%.2f %.2f", Gone.Body, Gone.Player))
+"#;
+
+/// Runs [`LEAVING_SCENE`] with `leave` (the statement) on a fresh engine of `run_context`, the body the player's Character or
+/// not, the place's Workspace.PlayerCharacterDestroyBehavior `behavior` (None: as the reflection's default leaves it), then
+/// `after` (more statements, the scene's locals in reach).
+#[inline(never)]
+fn leaving(run_context: RunContext, leave: &str, character: bool, behavior: Option<&str>, after: &str) -> Vec<String> {
+    let (lua, engine) = start(run_context);
+    if let Some(behavior) = behavior {
+        let workspace = engine.world().workspace;
+        let name = engine.reflection.name_id("PlayerCharacterDestroyBehavior").unwrap();
+        let item = engine.reflection.enum_item("PlayerCharacterDestroyBehavior", behavior).unwrap();
+        super::instance::raw_set_silent(&mut engine.state.borrow_mut(), &engine.reflection, workspace, name, super::value::Value::EnumItem(item));
+    }
+    let source = format!("local Character = {character}\n{}\n{after}", LEAVING_SCENE.replace("\nLeave\n", &format!("\n{leave}\n")));
+    run_in(&lua, &engine, &source, 7.0)
+}
+
+/// The scene of [`LEAVING_SCENE`] up to the leave, its player and body
+#[inline(never)]
+fn leaving_scene(character: bool) -> (Lua, Rc<Engine>, super::InstanceId, super::InstanceId) {
+    let (lua, engine) = start(RunContext::Server);
+    let source = format!("local Character = {character}\n{}", LEAVING_SCENE.split("\nlocal function Mine").next().unwrap());
+    run_in(&lua, &engine, &source, 0.1);
+    let players = crate::services::find_service(&engine, engine.world().game, "Players").unwrap();
+    let workspace = engine.world().workspace;
+    let (player, body) = {
+        let state = engine.state.borrow();
+        (state.dom.find_child(players, b"Leaver").unwrap(), state.dom.find_child(workspace, b"Body").unwrap())
+    };
+    (lua, engine, player, body)
+}
+
+/// What a server's script sees when a player leaves Players (Parent = nil here, Kick and Destroy below), as measured in 0.747
+/// play sessions of one server and four clients (services/players.rs): Players' DescendantRemoving of the player, then the
+/// player's CharacterRemoving, its character leaving the Workspace and Character becoming nil, then the rest of the player's
+/// DescendantRemoving events, PlayerRemoving, and the player's own removal events, all done in the leaving thread; the
+/// player's Parent locked; the character destroyed a second on and the Player five. The character used to stay in the
+/// Workspace with Character still set, and PlayerRemoving fired last.
+#[test]
+fn a_leaving_players_character_leaves_with_it_and_is_destroyed_a_second_on() {
+    let lines = leaving(
+        RunContext::Server,
+        "Player.Parent = nil",
+        true,
+        None,
+        r#"print("locked", select(2, pcall(function() Player.Parent = Players end)))
+        print("body", Body.Parent, #Body:GetChildren(), select(2, pcall(function() Body.Parent = workspace end)))"#,
+    );
+    let order = "print: order Players.DescendantRemoving Leaver, CharacterRemoving Body, Workspace.DescendantRemoving Body, \
+        game.DescendantRemoving Body, Workspace.ChildRemoved Body, Body.AncestryChanged nil, Character nil, game.DescendantRemoving Leaver, \
+        Players.DescendantRemoving Backpack, game.DescendantRemoving Backpack, Players.DescendantRemoving StarterGear, \
+        game.DescendantRemoving StarterGear, Players.DescendantRemoving PlayerGui, game.DescendantRemoving PlayerGui, PlayerRemoving Leaver, \
+        Players.ChildRemoved Leaver, Leaver.AncestryChanged nil, Leaver.Changed Parent";
+    for wanted in [
+        "print: same thread nil nil nil",
+        order,
+        "print: after nil nil nil",
+        "print: destroyed 1.00 5.00",
+        "print: locked The Parent property of Leaver is locked, current parent: NULL, new parent Players",
+        "print: body nil 0 The Parent property of Body is locked, current parent: NULL, new parent Workspace",
+    ] {
+        assert!(has(&lines, wanted), "{wanted}: {lines:?}");
+    }
+}
+
+/// Kick and Destroy make the player leave the same way: Kick at the next resumption point (the player still in Players in the
+/// calling thread), Destroy in the call, the player's Destroying first; a player whose Character is nil leaves with no
+/// CharacterRemoving, its model left where it is.
+#[test]
+fn kick_and_destroy_take_the_character_with_the_player() {
+    let order = "CharacterRemoving Body, Workspace.DescendantRemoving Body, game.DescendantRemoving Body, Workspace.ChildRemoved Body, \
+        Body.AncestryChanged nil, Character nil, game.DescendantRemoving Leaver";
+    let kicked = leaving(RunContext::Server, r#"Player:Kick("bye")"#, true, None, "");
+    for wanted in [
+        "print: same thread Players Body Workspace".to_string(),
+        format!("print: order Players.DescendantRemoving Leaver, {order}, Players.DescendantRemoving Backpack"),
+        "print: after nil nil nil".to_string(),
+        "print: destroyed 1.00 5.00".to_string(),
+    ] {
+        assert!(kicked.iter().any(|line| line.starts_with(&wanted)), "{wanted}: {kicked:?}");
+    }
+    // (the player's children are destroyed too: their DescendantRemoving handlers find them parentless, so the scene leaves them out)
+    let destroyed = leaving(RunContext::Server, "Player:Destroy()", true, None, "");
+    for wanted in [
+        "print: same thread nil nil nil".to_string(),
+        format!("print: order Leaver.Destroying, Players.DescendantRemoving Leaver, {order}, PlayerRemoving Leaver, Players.ChildRemoved Leaver"),
+        // (the player is destroyed already: only the body is, a second on)
+        "print: destroyed 1.00 -1.00".to_string(),
+    ] {
+        assert!(destroyed.iter().any(|line| line.starts_with(&wanted)), "{wanted}: {destroyed:?}");
+    }
+    let plain = leaving(RunContext::Server, "Player.Parent = nil", false, None, r#"print("body", Body.Parent)"#);
+    for wanted in ["print: same thread nil nil Workspace", "print: destroyed -1.00 5.00", "print: body Workspace"] {
+        assert!(has(&plain, wanted), "{wanted}: {plain:?}");
+    }
+    assert!(plain.iter().any(|line| line.starts_with("print: order Players.DescendantRemoving Leaver, game.DescendantRemoving Leaver, ")), "{plain:?}");
+}
+
+/// A place whose Workspace.PlayerCharacterDestroyBehavior is Disabled keeps a departed player's character and the Player:
+/// both only leave (the character unparented, the player's Parent locked), as measured; Enabled is the default's way.
+#[test]
+fn a_place_that_disables_the_destroy_keeps_departed_characters() {
+    let lines = leaving(
+        RunContext::Server,
+        "Player.Parent = nil",
+        true,
+        Some("Disabled"),
+        r#"print("locked", select(2, pcall(function() Player.Parent = Players end)))
+        print("body", Body.Parent, #Body:GetChildren(), pcall(function() Body.Parent = workspace end))"#,
+    );
+    for wanted in [
+        "print: same thread nil nil nil",
+        "print: destroyed -1.00 -1.00",
+        "print: locked The Parent property of Leaver is locked, current parent: NULL, new parent Players",
+        "print: body nil 3 true",
+    ] {
+        assert!(has(&lines, wanted), "{wanted}: {lines:?}");
+    }
+    let enabled = leaving(RunContext::Server, "Player.Parent = nil", true, Some("Enabled"), "");
+    assert!(has(&enabled, "print: destroyed 1.00 5.00"), "{enabled:?}");
+}
+
+/// What a client sees of another player leaving (a harness's Player): the character's removal first, then CharacterRemoving
+/// and Character's change, then (Destroy) the player's Destroying, then its own removal events with PlayerRemoving before
+/// ChildRemoved; nothing is destroyed later (the server's destroys never reach a client), as measured.
+#[test]
+fn a_client_sees_the_character_leave_before_the_players_events() {
+    let order = "Workspace.DescendantRemoving Body, game.DescendantRemoving Body, Workspace.ChildRemoved Body, Body.AncestryChanged nil, \
+        CharacterRemoving Body, Character nil";
+    let lines = leaving(RunContext::Client, "Player.Parent = nil", true, None, "");
+    for wanted in [
+        "print: same thread nil nil nil".to_string(),
+        format!(
+            "print: order {order}, Players.DescendantRemoving Leaver, game.DescendantRemoving Leaver, PlayerRemoving Leaver, Players.ChildRemoved Leaver, \
+            Leaver.AncestryChanged nil, Leaver.Changed Parent"
+        ),
+        "print: destroyed -1.00 -1.00".to_string(),
+    ] {
+        assert!(has(&lines, &wanted), "{wanted}: {lines:?}");
+    }
+    let destroyed = leaving(RunContext::Client, "Player:Destroy()", true, None, "");
+    let wanted = format!("print: order {order}, Leaver.Destroying, Players.DescendantRemoving Leaver, game.DescendantRemoving Leaver, PlayerRemoving Leaver");
+    assert!(destroyed.iter().any(|line| line.starts_with(&wanted)), "{wanted}: {destroyed:?}");
+}
+
+/// The work clock: a script's leave pays for the character's removal what removing that model costs (its reparent's prices),
+/// no more and no less; Kick's leave and the destroys after it are the engine's own step, so a kicked player's character costs
+/// the run nothing.
+#[test]
+fn a_leaving_players_character_costs_what_its_removal_does() {
+    let work = |engine: &Engine| engine.state.borrow().sched.work_total();
+    let spent = |engine: &Rc<Engine>, id| {
+        let before = work(engine);
+        engine_lua::instance::set_parent(engine, id, None).unwrap();
+        work(engine) - before
+    };
+    let (_lua, with, player, _) = leaving_scene(true);
+    let leave_with = spent(&with, player);
+    let (_lua, without, player, body) = leaving_scene(false);
+    let (leave_alone, body_alone) = (spent(&without, player), spent(&without, body));
+    assert!(body_alone > 0.0 && (leave_with - (leave_alone + body_alone)).abs() < 1e-12, "{leave_with} where {leave_alone} + {body_alone}");
+
+    let kicked = |character: bool| {
+        let (lua, engine, _, _) = leaving_scene(character);
+        let before = work(&engine);
+        run_in(&lua, &engine, r#"game:GetService("Players").Leaver:Kick()"#, 6.5);
+        work(&engine) - before
+    };
+    let (with, without) = (kicked(true), kicked(false));
+    assert!((with - without).abs() < 1e-12, "a kick's leave and destroys: {with} with the character, {without} without");
+}

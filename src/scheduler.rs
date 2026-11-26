@@ -1799,6 +1799,8 @@ fn heartbeat_timers(lua: &Lua, engine: &Rc<Engine>, at: f64, delta: f64, limit: 
         // before the Heartbeat handlers.
         run_timers(lua, engine, true, None, TimerFlush::AfterAll)?;
         run_hooks(lua, engine, Phase::Simulation, delta)?;
+        // (departed players' characters and Players whose time came, destroyed where task.delay threads resume: services/players.rs)
+        crate::services::players::destroy_due(lua, engine, at)?;
         run_timers(lua, engine, false, limit, TimerFlush::OncePass)?;
         // A server has no render step: it steps its tweens after the task.wait resumptions and before the Heartbeat
         // handlers (measured, a Studio 0.744 server's game script: tools/parity/probes/tween.luau; a tween played at a

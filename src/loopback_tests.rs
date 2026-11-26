@@ -2845,3 +2845,60 @@ return {{
     }
     assert!(wrong.is_empty(), "{wrong:#?}");
 }
+
+/// A loopback client leaving (Context.Leave) takes its player's character with it on the server, as a leave does
+/// (services/players.rs): CharacterRemoving there, the character out of the Workspace and Character nil before PlayerRemoving,
+/// the character destroyed a second on; the server's scripts pay nothing for it (it is the engine's own step). The
+/// character used to stay in the server's Workspace with Character still set.
+#[test]
+fn a_loopback_client_leaving_takes_its_character_with_it() {
+    let summary = run_pair(
+        "leave-character",
+        r##"
+local Players = game:GetService("Players")
+return {
+	Server = function(Context)
+		local Player = Context.Player
+		local Body = Instance.new("Model")
+		Body.Name = "Body"
+		local Part = Instance.new("Part")
+		Part.Anchored = true
+		Part.Parent = Body
+		Body.Parent = workspace
+		task.wait(0.2)
+		Player.Character = Body
+		local Order = {}
+		Player.CharacterRemoving:Connect(function(Model) table.insert(Order, "CharacterRemoving " .. Model.Name) end)
+		Body.AncestryChanged:Connect(function(_, Parent) table.insert(Order, "Body.AncestryChanged " .. tostring(Parent)) end)
+		Player:GetPropertyChangedSignal("Character"):Connect(function() table.insert(Order, "Character " .. tostring(Player.Character)) end)
+		Players.PlayerRemoving:Connect(function() table.insert(Order, "PlayerRemoving") end)
+		local Gone
+		Body.Destroying:Connect(function() Gone = time() end)
+		task.wait(0.2)
+		Context.Leave()
+		task.wait()
+		local Left = time()
+		task.wait()
+		print("order", table.concat(Order, ", "))
+		print("after", Player.Parent, Player.Character, Body.Parent)
+		task.wait(1.2)
+		print("destroyed", Gone ~= nil and string.format("%.2f", Gone - Left))
+		print("@done")
+	end,
+	Client = function(Context)
+		task.wait(5)
+	end,
+}
+"##,
+        None,
+        &[],
+    );
+    let lines = lines(&summary);
+    for wanted in [
+        "server print: order CharacterRemoving Body, Body.AncestryChanged nil, Character nil, PlayerRemoving",
+        "server print: after nil nil nil",
+    ] {
+        assert!(has(&lines, wanted), "{wanted}: {lines:?}");
+    }
+    assert!(lines.iter().any(|line| line.starts_with("server print: destroyed 0.9") || line.starts_with("server print: destroyed 1.0")), "{lines:?}");
+}

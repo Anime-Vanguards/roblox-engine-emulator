@@ -352,7 +352,10 @@ pub fn leave(client_engine: &Rc<Engine>) -> Result<(), String> {
     }
     bridge.left.set(true);
     if let Some((server_player, _)) = bridge.player.get() {
+        // (the engine's own step, its character's removal with it: services/players.rs; no script pays for it)
+        let muted = crate::scheduler::Muted::raise(&server.state.borrow().sched.muted);
         let _ = crate::lua::instance::set_parent(&server, server_player, None);
+        drop(muted);
     }
     if let Some(server_end) = server.loopback() {
         remotes::player_left(&server_lua, &server, &server_end).map_err(|error| error.to_string())?;

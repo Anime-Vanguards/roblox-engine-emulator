@@ -864,6 +864,17 @@ fn destroy_subtree(engine: &Rc<Engine>, id: InstanceId) -> Result<(), Flow> {
                 _ => 0.0,
             }
         };
+        // (a client sees another player's character leave before that player's Destroying: services/players.rs)
+        {
+            let mut state = engine.state.borrow_mut();
+            if !crate::services::players::on_server(&state)
+                && let Some(parent) = state.dom.at(id).parent
+                && crate::services::players::leaving(&state, id, parent)
+            {
+                let hooks = engine.hooks.borrow();
+                crate::services::players::remove_character(&mut state, &engine.reflection, &hooks, id);
+            }
+        }
         if let Some(signal) = destroying {
             // Deferred like every other event (measured in a playing client, Studio 0.744, SignalBehavior Deferred:
             // tools/parity/probes/hierarchy.luau): the handlers run after Destroy returned and see the instance
