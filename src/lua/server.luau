@@ -1196,17 +1196,17 @@ Method("MessagingService", "PublishAsync", function(_, Name, Message)
 	end
 end)
 
--- Player:Kick: the player leaves (PlayerRemoving, its character's removal: services/players.rs) at the next resumption point, the engine's own step that no script pays for (a 0.747 server whose client ran in a process of its own let it leave 1.02-1.03 s after the call; that delay is not followed)
+-- Player:Kick: the player stays about a second, until the server's timer closes its connection, then leaves (PlayerRemoving, its character's removal) as the engine's own step that no script pays for (services/players.rs kick: 62 frames at 60 Hz, as a 0.747 server whose client ran in a process of its own)
 
 Method("Player", "Kick", function(Self, Message)
 	if Message ~= nil and type(Message) ~= "string" then
 		Raise(`Unable to cast {typeof(Message)} to string`)
 	end
-	task.defer(function()
-		if Self.Parent == Players then
-			R.Mute(true) pcall(R.SetParent, Self, nil) R.Mute(false)
-		end
-	end)
+	-- (a second Kick before it leaves changes nothing; a player out of Players is not kicked)
+	if Self.Parent == Players then
+		R.Kick(Self)
+	end
+	-- (nothing fires at the call: Parent, Character and GetPlayers stay as they were until the leave)
 end)
 
 -- Player:GetJoinData: the join data a harness gave the player (Context.SetJoinData, through R.SetJoinData)
@@ -1376,7 +1376,7 @@ Method("RemoteFunction", "InvokeClient", function(Self, Player)
 		end)
 		coroutine.yield()
 	end
-	error(`InvokeClient: {Player.Name} left the game before {Self:GetFullName()} returned`, 0)
+	error(`Player {Player.Name} disconnected during remote call to {Self:GetFullName()}`, 0)
 end)
 
 -- The client profile's data (client_profile.rs, R.Profile.data): what a data store or a memory store structure holds when

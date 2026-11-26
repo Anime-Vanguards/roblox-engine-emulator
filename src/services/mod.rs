@@ -44,8 +44,9 @@ use super::{
     value::{Str, Value},
 };
 
-/// What Roblox's server puts in a Player when it joins (a client's own player also has PlayerScripts)
-const JOINED_PLAYER_CONTAINERS: [&str; 3] = ["Backpack", "StarterGear", "PlayerGui"];
+/// What Roblox's server puts in a Player when it joins, in its order (a 0.747 server's player before its first spawn:
+/// StarterGear, Backpack, PlayerGui; a client's own player also has PlayerScripts)
+const JOINED_PLAYER_CONTAINERS: [&str; 3] = ["StarterGear", "Backpack", "PlayerGui"];
 
 pub type MethodFn = Rc<dyn Fn(&Lua, &Rc<Engine>, InstanceId, &Args) -> Ret>;
 pub type GetterFn = Rc<dyn Fn(&Lua, &Rc<Engine>, InstanceId) -> Result<LuaValue, Flow>>;
@@ -285,13 +286,15 @@ fn name(reflection: &Reflection, name: &str) -> Option<NameId> {
 fn joined_players(engine: &Rc<Engine>, players: InstanceId) -> Vec<InstanceId> {
     let local = engine.world().local_player;
     let state = engine.state.borrow();
+    // (a loopback client's own player its server took out is no longer one: measured, a client counts the others only)
+    let listed = local.filter(|&local| state.dom.get(local).is_some_and(|player| player.parent == Some(players)));
     let others = state
         .dom
         .children_of(players)
         .iter()
         .copied()
         .filter(|&child| Some(child) != local && engine.reflection.is_a(state.dom.at(child).class, "Player"));
-    local.into_iter().chain(others).collect()
+    listed.into_iter().chain(others).collect()
 }
 
 /// A behaviour method from a closure (a layer's behaviours: [`Behaviors::add_method`]).
@@ -815,18 +818,12 @@ fn install_players(engine: &Rc<Engine>, behaviors: &mut Behaviors, reflection: &
                 Ok(values([LuaValue::Number(id.unwrap_or(1.0))]))
             })));
         }
-        // Players a harness adds after the run started: PlayerAdded when a Player is parented to Players, and
-        // Player.CharacterAdded when its Character is set to a model (the local player joined before the run; a script's
-        // Character write fires no CharacterRemoving: a changed property carries no old value). On a server a joining player
-        // gets the containers Roblox's server gives it (Backpack, StarterGear, PlayerGui) before PlayerAdded, unless the
-        // harness made them, and its team (teams.rs). A player leaving (PlayerRemoving, its character's removal) is
-        // instance.rs reparent's, with players.rs.
-        if let (Some(player_class), Some(added), Some(character), Some(character_added)) = (
-            class(reflection, "Player"),
-            name(reflection, "PlayerAdded"),
-            name(reflection, "Character"),
-            name(reflection, "CharacterAdded"),
-        ) {
+        // Players a harness adds after the run started: PlayerAdded when a Player is parented to Players (the local player
+        // joined before the run). On a server a joining player gets the containers Roblox's server gives it (StarterGear,
+        // Backpack, PlayerGui, in that order) before PlayerAdded, unless the harness made them, and its team (teams.rs). A
+        // player leaving (PlayerRemoving, its character's removal) is instance.rs reparent's, with players.rs; a Character
+        // change (CharacterRemoving, CharacterAdded, a server's removal of the old character) is players.rs set_character's.
+        if let (Some(_), Some(added)) = (class(reflection, "Player"), name(reflection, "PlayerAdded")) {
             let weak = Rc::downgrade(engine);
             let reflection_for_enter = engine.reflection.clone();
             let server = options.server();
@@ -857,14 +854,6 @@ fn install_players(engine: &Rc<Engine>, behaviors: &mut Behaviors, reflection: &
                     teams::assign_joining(state, &reflection_for_enter, hooks, engine.world().game, id);
                 }
                 core::fire_event(state, new, added, vec![Value::Instance(id)]);
-            }));
-            hooks.property_changed.push(Box::new(move |state, id, changed| {
-                if changed != character || state.dom.at(id).class != player_class {
-                    return;
-                }
-                if let Some(Value::Instance(model)) = state.dom.at(id).stored(character).cloned() {
-                    core::fire_event(state, id, character_added, vec![Value::Instance(model)]);
-                }
             }));
         }
     }

@@ -1,7 +1,8 @@
 -- parity: loopback players=4
 -- Players leaving the server (src/services/players.rs), each its own way, its Character a Model the probe made or none: what
--- the server's scripts see (the events in the order they fire, what the player and its character hold in the leaving thread
--- and after, the player's Parent locked, the character destroyed a second after the leave and the Player five) and that the
+-- the server's scripts see (the events in the order they fire, the player's PlayerGui destroyed in the leave, what the player
+-- and its character hold in the leaving thread and after, the player's Parent locked, the character destroyed a second after
+-- the leave and the Player five, a kicked player staying about a second, an InvokeClient waiting on the player) and that the
 -- client sees the players and characters gone. A game script cannot make a Player, so in the real engine the session's three
 -- other clients (they run nothing) are the ones that leave; ree's loopback run has one client, so its server makes the three
 -- Players itself, as a harness does.
@@ -46,6 +47,9 @@ end
 local Holder = Instance.new("Folder")
 Holder.Name = "Holder"
 Holder.Parent = Storage
+local Call = Instance.new("RemoteFunction")
+Call.Name = "ProbeCall"
+Call.Parent = Storage
 
 local function Where(Instance_)
 	return if Instance_ == nil then "-" elseif Instance_.Parent == nil then "nil" else Instance_.Parent.Name
@@ -84,10 +88,12 @@ local function Leave(Label, Player, Index, Where, How)
 	local function Note(Text)
 		table.insert(Order, Text)
 	end
+	local Gui, Pack, Gear = Player:FindFirstChildOfClass("PlayerGui"), Player:FindFirstChildOfClass("Backpack"), Player:FindFirstChildOfClass("StarterGear")
 	local function Tag(X)
-		return if X == Player then "player" elseif Model ~= nil and X == Model then "body" else nil
+		return if X == Player then "player" elseif Model ~= nil and X == Model then "body" elseif X == Gui then "gui" elseif X == Pack then "backpack"
+			elseif X == Gear then "gear" else nil
 	end
-	for _, Ancestor in { { "Players", Players }, { "game", game }, { "Workspace", workspace }, { "ReplicatedStorage", Storage } } do
+	for _, Ancestor in { { "player", Player }, { "Players", Players }, { "game", game }, { "Workspace", workspace }, { "ReplicatedStorage", Storage } } do
 		On(Ancestor[2].DescendantRemoving, function(X)
 			if Tag(X) then
 				Note(Ancestor[1] .. ".DescendantRemoving " .. Tag(X))
@@ -97,6 +103,11 @@ local function Leave(Label, Player, Index, Where, How)
 			if Tag(X) then
 				Note(Ancestor[1] .. ".ChildRemoved " .. Tag(X))
 			end
+		end)
+	end
+	if Gui then
+		On(Gui.Destroying, function()
+			Note("gui Destroying")
 		end)
 	end
 	On(Player.CharacterRemoving, function(X)
@@ -137,6 +148,15 @@ local function Leave(Label, Player, Index, Where, How)
 			Destroyed.Body = time()
 		end)
 	end
+	local Invoked
+	task.spawn(function()
+		local Ok, Message = pcall(Call.InvokeClient, Call, Player)
+		local Text, Named = tostring(Message), "Player " .. Player.Name .. " "
+		local Start, Finish = string.find(Text, Named, 1, true)
+		Invoked = tostring(Ok) .. " " .. (if Start then string.sub(Text, 1, Start - 1) .. "Player <name> " .. string.sub(Text, Finish + 1) else Text)
+	end)
+	task.wait()
+	local Called = time()
 	if How == "kick" then
 		Player:Kick("bye")
 	elseif How == "destroy" then
@@ -149,9 +169,19 @@ local function Leave(Label, Player, Index, Where, How)
 	while Player.Parent ~= nil and Waited < 300 do
 		task.wait()
 		Waited += 1
+		if Waited == 10 then
+			-- (a kicked player stays as it was, and a second Kick changes nothing)
+			local Listed = table.find(Players:GetPlayers(), Player) ~= nil
+			print(Label .. " ten frames on: " .. State(Player, Model) .. " listed=" .. tostring(Listed) .. " again=" .. tostring((pcall(Player.Kick, Player, "again"))))
+		end
 	end
-	-- (the leave's frame: a kicked player leaves later in a real session than in ree, measured from here on)
+	-- (the leave's frame; a kicked player leaves at the frame after the first that starts more than a second after the call: 61
+	-- or 62 frames at 60 Hz in a real session, a frame landing on the second's edge, 62 in ree; in time, as a busy machine's
+	-- frames run slower)
 	local Left = time()
+	if How == "kick" then
+		print(Label .. " left about a second after the call: " .. tostring(Left - Called > 1 and Left - Called < 1.12))
+	end
 	task.wait()
 	print(Label .. " order: " .. table.concat(Order, ", "))
 	print(Label .. " after: " .. State(Player, Model))
@@ -162,6 +192,7 @@ local function Leave(Label, Player, Index, Where, How)
 	local function Since(At)
 		return if At then string.format("%.1f", At - Left) else "no"
 	end
+	print(Label .. " InvokeClient waiting at the leave: " .. tostring(Invoked))
 	print(Label .. " destroyed: body " .. (if Model then Since(Destroyed.Body) else "-") .. ", player " .. (if How == "destroy" then "in the call" else Since(Destroyed.Player)))
 	for _, Connection in Connections do
 		Connection:Disconnect()

@@ -203,6 +203,9 @@ pub struct Bridge {
     pub join_asked: Cell<bool>,
     /// The player left (Context.Leave): the client steps no more
     pub left: Cell<bool>,
+    /// The client is cut off (its server took its player out, or closed a kicked player's connection): nothing more passes
+    /// either way, and the client steps on by itself ([`Bridge::cut_off`])
+    pub cut: Cell<bool>,
     pub leave_asked: Cell<bool>,
     /// The frame the player joined at (the pair's frames stepped before)
     pub joined_at: Cell<u64>,
@@ -246,6 +249,7 @@ impl Bridge {
             hold_join: Cell::new(false),
             join_asked: Cell::new(false),
             left: Cell::new(false),
+            cut: Cell::new(false),
             leave_asked: Cell::new(false),
             joined_at: Cell::new(0),
             record_server: Cell::new(false),
@@ -263,14 +267,30 @@ impl Bridge {
         &self.streams[from.index()]
     }
 
-    /// Queues a reliable message `from` a side, in order with its others
+    /// Queues a reliable message `from` a side, in order with its others (dropped once the client is cut off)
     pub fn send(&self, from: Side, message: Msg) {
-        self.streams[from.index()].borrow_mut().open.push(message);
+        if !self.cut.get() {
+            self.streams[from.index()].borrow_mut().open.push(message);
+        }
     }
 
-    /// Queues an unreliable event: after the frame's reliable messages
+    /// Queues an unreliable event: after the frame's reliable messages (dropped once the client is cut off)
     pub fn send_unreliable(&self, from: Side, message: Msg) {
-        self.streams[from.index()].borrow_mut().unreliable.push(message);
+        if !self.cut.get() {
+            self.streams[from.index()].borrow_mut().unreliable.push(message);
+        }
+    }
+
+    /// The client is cut off from its server: what either side has not sealed yet is dropped, and nothing either sends from
+    /// now on goes out (a real client heard nothing more after its connection closed: its events and calls go nowhere, and its
+    /// waiting calls never return). Batches already sealed still arrive.
+    pub fn cut_off(&self) {
+        self.cut.set(true);
+        for stream in &self.streams {
+            let mut stream = stream.borrow_mut();
+            stream.open.clear();
+            stream.unreliable.clear();
+        }
     }
 
     /// The sender's frame ended: what it sent goes out, due at the other side's frame `latency` frames after its last

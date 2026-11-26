@@ -582,7 +582,8 @@ pub fn flush(server: &Engine, bridge: &Bridge) {
     let Some(log) = state.loopback_log.as_mut().filter(|log| !log.is_empty()).map(std::mem::take) else { return };
     // (the collision groups as they are now, if they changed since the last flush: sent in the place of the first change)
     let mut groups = crate::services::physics::flushed(server);
-    let Some(filter) = bridge.filter.borrow().clone() else {
+    // (a client cut off hears nothing more: the frame's changes go nowhere, loopback/mod.rs)
+    let Some(filter) = bridge.filter.borrow().clone().filter(|_| !bridge.cut.get()) else {
         crate::services::physics::flush_done(server);
         return;
     };
@@ -619,7 +620,7 @@ pub fn flush(server: &Engine, bridge: &Bridge) {
                 }
             }
             Change::Prop(id, name, quiet) => {
-                if whole.contains(&id) || !written.insert((id, name)) || !sent_and_replicated(&state, id) {
+                if whole.contains(&id) || !written.insert((id, name)) || !(sent_and_replicated(&state, id) || leaving_player(&state, reflection, id)) {
                     continue;
                 }
                 let class = state.dom.at(id).class;
@@ -661,6 +662,14 @@ pub fn flush(server: &Engine, bridge: &Bridge) {
 #[inline]
 fn sent_and_replicated(state: &State, id: InstanceId) -> bool {
     state.dom.get(id).is_some_and(|instance| instance.flags & (flags::SENT | flags::REPLICATED) == flags::SENT | flags::REPLICATED)
+}
+
+/// A Player the client has a copy of that left the containers in this frame: what changed on it while it was in them (its
+/// Character's change in its leave, services/players.rs) still goes out, in its place before the leave (measured: a client sees
+/// its own and other players' CharacterRemoving and Character's change before the player's removal). A change made once it was
+/// out is never logged.
+fn leaving_player(state: &State, reflection: &Reflection, id: InstanceId) -> bool {
+    state.dom.get(id).is_some_and(|instance| instance.flags & (flags::SENT | flags::REPLICATED) == flags::SENT && reflection.class_id("Player") == Some(instance.class))
 }
 
 /// What a moved instance comes to: a tree the client makes (a new instance entering), a move of the client's copy (in or
@@ -1145,6 +1154,10 @@ pub fn apply(lua: &Lua, client: &Rc<Engine>, endpoint: &Rc<Endpoint>, message: M
             let mut state = client.state.borrow_mut();
             if quiet {
                 core::raw_set_unsignalled(&mut state, &client.reflection, &hooks, copy, name, value);
+            } else if crate::services::players::is_character(&state, copy, name) {
+                // (a client fires CharacterRemoving and CharacterAdded from the change; the old character's removal came as its
+                // own change before it: services/players.rs)
+                crate::services::players::set_character(&mut state, &client.reflection, &hooks, copy, value, false);
             } else {
                 core::raw_set(&mut state, &client.reflection, &hooks, copy, name, value);
             }

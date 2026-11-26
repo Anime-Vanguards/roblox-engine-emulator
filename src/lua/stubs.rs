@@ -249,6 +249,16 @@ pub fn load(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
             set_parent(&e, child, parent).map_err(|_| LuaError::runtime("SetParent failed"))
         })?,
     )?;
+    // Player:Kick on a server (server.luau): the player leaves about a second on (services/players.rs kick)
+    let e = engine.clone();
+    r.set(
+        "Kick",
+        super::lua_fn(lua, move |_, player: LuaValue| {
+            let player = instance_of(&player)?;
+            crate::services::players::kick(&mut e.state.borrow_mut(), player);
+            Ok(())
+        })?,
+    )?;
     // The engine's Luau that prices its own methods (services.luau Priced): Mute(true) drops the Instance API's
     // charges until Mute(false), Charge adds the method's own cost
     let e = engine.clone();

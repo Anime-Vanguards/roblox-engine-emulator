@@ -136,7 +136,7 @@ fn a_server_has_no_local_player_and_renders_nothing() {
         print("frames", Rendered, Bound, Beats > 3, #Players:GetPlayers())
         Player:Kick("bye")
         print("kicked", Player.Parent == Players)
-        task.wait()
+        task.wait(1.1)
         print("left", Player.Parent)
         "#,
         0.5,
@@ -488,7 +488,7 @@ fn messages_reach_subscribers_and_remotes_reach_no_client() {
         "print: fire client Test:22: FireClient: player argument must be a Player object",
         "print: invoke server Test:24: InvokeServer can only be called from the client",
         "print: waiting false",
-        "print: invoke client false InvokeClient: Player left the game before RemoteFunction returned",
+        "print: invoke client false Player Player disconnected during remote call to RemoteFunction",
     ] {
         assert!(has(&lines, wanted), "{wanted}: {lines:?}");
     }
@@ -893,9 +893,8 @@ fn a_leaving_players_character_leaves_with_it_and_is_destroyed_a_second_on() {
     );
     let order = "print: order Players.DescendantRemoving Leaver, CharacterRemoving Body, Workspace.DescendantRemoving Body, \
         game.DescendantRemoving Body, Workspace.ChildRemoved Body, Body.AncestryChanged nil, Character nil, game.DescendantRemoving Leaver, \
-        Players.DescendantRemoving Backpack, game.DescendantRemoving Backpack, Players.DescendantRemoving StarterGear, \
-        game.DescendantRemoving StarterGear, Players.DescendantRemoving PlayerGui, game.DescendantRemoving PlayerGui, PlayerRemoving Leaver, \
-        Players.ChildRemoved Leaver, Leaver.AncestryChanged nil, Leaver.Changed Parent";
+        Players.DescendantRemoving StarterGear, game.DescendantRemoving StarterGear, Players.DescendantRemoving Backpack, \
+        game.DescendantRemoving Backpack, PlayerRemoving Leaver, Players.ChildRemoved Leaver, Leaver.AncestryChanged nil, Leaver.Changed Parent";
     for wanted in [
         "print: same thread nil nil nil",
         order,
@@ -908,17 +907,17 @@ fn a_leaving_players_character_leaves_with_it_and_is_destroyed_a_second_on() {
     }
 }
 
-/// Kick and Destroy make the player leave the same way: Kick at the next resumption point (the player still in Players in the
-/// calling thread), Destroy in the call, the player's Destroying first; a player whose Character is nil leaves with no
+/// Kick and Destroy make the player leave the same way: Kick about a second on (the scene waits for it, then counts from the
+/// leave), Destroy in the call, the player's Destroying first; a player whose Character is nil leaves with no
 /// CharacterRemoving, its model left where it is.
 #[test]
 fn kick_and_destroy_take_the_character_with_the_player() {
     let order = "CharacterRemoving Body, Workspace.DescendantRemoving Body, game.DescendantRemoving Body, Workspace.ChildRemoved Body, \
         Body.AncestryChanged nil, Character nil, game.DescendantRemoving Leaver";
-    let kicked = leaving(RunContext::Server, r#"Player:Kick("bye")"#, true, None, "");
+    let kicked = leaving(RunContext::Server, r#"Player:Kick("bye") while Player.Parent do task.wait() end Left = time()"#, true, None, "");
     for wanted in [
-        "print: same thread Players Body Workspace".to_string(),
-        format!("print: order Players.DescendantRemoving Leaver, {order}, Players.DescendantRemoving Backpack"),
+        "print: same thread nil nil nil".to_string(),
+        format!("print: order Players.DescendantRemoving Leaver, {order}, Players.DescendantRemoving StarterGear"),
         "print: after nil nil nil".to_string(),
         "print: destroyed 1.00 5.00".to_string(),
     ] {
@@ -1013,4 +1012,247 @@ fn a_leaving_players_character_costs_what_its_removal_does() {
     };
     let (with, without) = (kicked(true), kicked(false));
     assert!((with - without).abs() < 1e-12, "a kick's leave and destroys: {with} with the character, {without} without");
+}
+
+/// Kick leaves the player where it is for about a second, as a 0.747 server whose client ran in a process of its own (and a
+/// client busy for four seconds, or reading its replication a second late, the same): its Parent, Character and place in
+/// GetPlayers stay, a second Kick changes nothing, and it leaves at the network step of the frame after the first that starts
+/// more than a second after the call, 62 frames at 60 Hz (services/players.rs kick). It used to leave at the next resumption
+/// point.
+#[test]
+fn a_kicked_player_leaves_about_a_second_on() {
+    let lines = run(
+        RunContext::Server,
+        r#"
+local Players = game:GetService("Players")
+local Player = Instance.new("Player")
+Player.Name = "Leaver"
+Player.Parent = Players
+local Body = Instance.new("Model")
+Body.Name = "Body"
+Body.Parent = workspace
+Player.Character = Body
+local Frame = 0
+game:GetService("RunService").Heartbeat:Connect(function() Frame += 1 end)
+local Removing
+Players.PlayerRemoving:Connect(function(X) if X == Player then Removing = Frame end end)
+task.wait()
+task.wait()
+local F0, T0 = Frame, time()
+Player:Kick("bye")
+print("in the call", Player.Parent, Player.Character)
+local During
+while Player.Parent ~= nil do
+	task.wait()
+	if Frame - F0 == 10 then
+		Player:Kick("again")
+		During = string.format("%s %s %s %s", tostring(Player.Parent), tostring(Player.Character), tostring(Body.Parent), tostring(table.find(Players:GetPlayers(), Player) ~= nil))
+	end
+end
+print("during", During)
+print(string.format("left %d %.3f", Frame - F0, time() - T0))
+task.wait()
+print("removing", Removing - F0)
+"#,
+        3.0,
+    );
+    for wanted in ["print: in the call Players Body", "print: during Players Body Workspace true", "print: left 62 1.033", "print: removing 62"] {
+        assert!(has(&lines, wanted), "{wanted}: {lines:?}");
+    }
+}
+
+/// A server's leave destroys the player's PlayerGui after the character's step and before the rest of the player's
+/// DescendantRemoving events (measured: its Destroying, then its removal events), while the Backpack and StarterGear stay in
+/// the departed player; a joining player's containers come in a 0.747 server's order, StarterGear, Backpack, PlayerGui. The
+/// PlayerGui used to stay, and the containers came Backpack first.
+#[test]
+fn a_servers_leave_destroys_the_players_gui() {
+    let lines = run(
+        RunContext::Server,
+        r#"
+local Players = game:GetService("Players")
+local Player = Instance.new("Player")
+Player.Name = "Leaver"
+Player.Parent = Players
+local Names = {}
+for _, Child in Player:GetChildren() do table.insert(Names, Child.Name) end
+print("containers", table.concat(Names, " "))
+local Gui, Pack, Gear = Player.PlayerGui, Player.Backpack, Player.StarterGear
+local Order = {}
+local function Tag(X) return if X == Player then "Leaver" elseif X == Gui then "PlayerGui" elseif X == Pack then "Backpack" elseif X == Gear then "StarterGear" else nil end
+for _, Pair in { { "Leaver", Player }, { "Players", Players }, { "game", game } } do
+	Pair[2].DescendantRemoving:Connect(function(X) if Tag(X) then table.insert(Order, Pair[1] .. ".DescendantRemoving " .. Tag(X)) end end)
+end
+Player.ChildRemoved:Connect(function(X) table.insert(Order, "Leaver.ChildRemoved " .. (Tag(X) or X.Name)) end)
+Gui.Destroying:Connect(function() table.insert(Order, "PlayerGui.Destroying") end)
+Gui.AncestryChanged:Connect(function(X, P) if X == Gui then table.insert(Order, "PlayerGui.AncestryChanged " .. tostring(P)) end end)
+Players.PlayerRemoving:Connect(function() table.insert(Order, "PlayerRemoving") end)
+task.wait()
+Player.Parent = nil
+task.wait()
+print("order " .. table.concat(Order, ", "))
+print("after", Gui.Parent, Pack.Parent, Gear.Parent)
+"#,
+        0.2,
+    );
+    for wanted in [
+        "print: containers StarterGear Backpack PlayerGui",
+        "print: order Players.DescendantRemoving Leaver, PlayerGui.Destroying, Leaver.DescendantRemoving PlayerGui, Players.DescendantRemoving PlayerGui, \
+        game.DescendantRemoving PlayerGui, Leaver.ChildRemoved PlayerGui, PlayerGui.AncestryChanged nil, game.DescendantRemoving Leaver, \
+        Players.DescendantRemoving StarterGear, game.DescendantRemoving StarterGear, Players.DescendantRemoving Backpack, game.DescendantRemoving Backpack, \
+        PlayerRemoving",
+        "print: after nil Leaver Leaver",
+    ] {
+        assert!(has(&lines, wanted), "{wanted}: {lines:?}");
+    }
+}
+
+/// A script's Character writes, as a 0.747 server and client measured them (services/players.rs set_character). `Prepare`:
+/// statements run before the writes (the engine and `Player` in reach). Each case prints its events in the order they fired.
+const CHARACTER_WRITES: &str = r#"
+local Players = game:GetService("Players")
+local Player = Instance.new("Player")
+Player.Name = "P"
+Player.Parent = Players
+local Holder = Instance.new("Folder")
+Holder.Name = "Holder"
+Holder.Parent = game:GetService("ReplicatedStorage")
+local function Model(Name, Parent) local M = Instance.new("Model") M.Name = Name M.Parent = Parent return M end
+local Order = {}
+local function Note(Text) table.insert(Order, Text) end
+local Removed, Gone = {}, {}
+local function Watch(M)
+	M.AncestryChanged:Connect(function(X, P) if X == M then Note(M.Name .. ".AncestryChanged " .. tostring(P)) end end)
+	M.Destroying:Connect(function() Gone[M.Name] = if Removed[M.Name] then time() - Removed[M.Name] else -1 end)
+	return M
+end
+local M1 = Watch(Model("M1", workspace))
+Player.Character = M1
+task.wait()
+Player.CharacterRemoving:Connect(function(X) Removed[X.Name] = time() Note("CharacterRemoving " .. X.Name) end)
+Player.CharacterAdded:Connect(function(X) Note("CharacterAdded " .. X.Name) end)
+Player.Changed:Connect(function(P) if P == "Character" then Note("Changed Character") end end)
+Player:GetPropertyChangedSignal("Character"):Connect(function() Note("Character " .. tostring(Player.Character)) end)
+workspace.ChildRemoved:Connect(function(X) Note("Workspace.ChildRemoved " .. X.Name) end)
+local function Case(Label, Act)
+	Act()
+	local Thread = tostring(Player.Character)
+	task.wait()
+	print(Label .. " [" .. table.concat(Order, ", ") .. "] " .. Thread)
+	table.clear(Order)
+end
+Case("replace", function() Player.Character = Watch(Model("M2", workspace)) print("same thread", M1.Parent) end)
+Case("same", function() Player.Character = Player.Character end)
+Case("elsewhere", function() Player.Character = Watch(Model("M3", Holder)) end)
+Case("nil", function() Player.Character = nil end)
+Case("parentless", function() Player.Character = Watch(Model("M4", nil)) end)
+Case("from parentless", function() Player.Character = Watch(Model("M5", workspace)) end)
+Case("destroyed", function() Player.Character:Destroy() Player.Character = Watch(Model("M6", workspace)) end)
+task.wait(1.5)
+local Times = {}
+for _, Name in { "M1", "M2", "M3", "M4", "M5" } do table.insert(Times, Name .. " " .. (if Gone[Name] then string.format("%.2f", Gone[Name]) else "-")) end
+print("destroyed " .. table.concat(Times, ", "))
+"#;
+
+/// A script's write of Character on a server takes the old character out (its removal events between CharacterRemoving and
+/// CharacterAdded, done in the writing thread) and destroys it a second on, wherever it was, parentless too; CharacterAdded
+/// fires before Changed; the same value fires nothing. Measured in 0.747 play sessions (a server and two clients, each case
+/// twice). Character used to change alone, CharacterAdded after Changed.
+#[test]
+fn a_servers_character_write_takes_the_old_character_out() {
+    let lines = run(RunContext::Server, CHARACTER_WRITES, 3.0);
+    for wanted in [
+        "print: same thread nil",
+        "print: replace [CharacterRemoving M1, Workspace.ChildRemoved M1, M1.AncestryChanged nil, CharacterAdded M2, Changed Character, Character M2] M2",
+        "print: same [] M2",
+        "print: elsewhere [CharacterRemoving M2, Workspace.ChildRemoved M2, M2.AncestryChanged nil, CharacterAdded M3, Changed Character, Character M3] M3",
+        "print: nil [CharacterRemoving M3, M3.AncestryChanged nil, Changed Character, Character nil] nil",
+        "print: parentless [CharacterAdded M4, Changed Character, Character M4] M4",
+        "print: from parentless [CharacterRemoving M4, CharacterAdded M5, Changed Character, Character M5] M5",
+        "print: destroyed [Workspace.ChildRemoved M5, M5.AncestryChanged nil, CharacterRemoving M5, CharacterAdded M6, Changed Character, Character M6] M6",
+        "print: destroyed M1 1.00, M2 1.00, M3 1.00, M4 1.00, M5 -1.00",
+    ] {
+        assert!(has(&lines, wanted), "{wanted}: {lines:?}");
+    }
+}
+
+/// A place whose Workspace.PlayerCharacterDestroyBehavior is Disabled keeps a replaced character, unparented (measured on a
+/// 0.747 server, as for a departed player's).
+#[test]
+fn a_place_that_disables_the_destroy_keeps_replaced_characters() {
+    let (lua, engine) = start(RunContext::Server);
+    let workspace = engine.world().workspace;
+    let name = engine.reflection.name_id("PlayerCharacterDestroyBehavior").unwrap();
+    let item = engine.reflection.enum_item("PlayerCharacterDestroyBehavior", "Disabled").unwrap();
+    super::instance::raw_set_silent(&mut engine.state.borrow_mut(), &engine.reflection, workspace, name, super::value::Value::EnumItem(item));
+    let lines = run_in(&lua, &engine, &format!("{CHARACTER_WRITES}\nprint(\"kept\", M1.Parent, #Holder:GetChildren())"), 3.0);
+    for wanted in ["print: destroyed M1 -, M2 -, M3 -, M4 -, M5 -1.00", "print: kept nil 0"] {
+        assert!(has(&lines, wanted), "{wanted}: {lines:?}");
+    }
+}
+
+/// A client script's Character write fires CharacterRemoving, CharacterAdded and Changed as a server's does, and moves and
+/// destroys nothing (measured in a 0.747 client, its own player and another's).
+#[test]
+fn a_clients_character_write_fires_its_events_and_moves_nothing() {
+    let lines = run(RunContext::Client, CHARACTER_WRITES, 3.0);
+    for wanted in [
+        "print: same thread Workspace",
+        "print: replace [CharacterRemoving M1, CharacterAdded M2, Changed Character, Character M2] M2",
+        "print: same [] M2",
+        "print: nil [CharacterRemoving M3, Changed Character, Character nil] nil",
+        "print: destroyed M1 -, M2 -, M3 -, M4 -, M5 -1.00",
+    ] {
+        assert!(has(&lines, wanted), "{wanted}: {lines:?}");
+    }
+}
+
+/// The work clock: a server script's Character write pays the old character's removal what that reparent costs (as a leave
+/// does) on top of the write, and nothing for the old character's destroy a second on (the engine's own step).
+#[test]
+fn a_character_write_costs_the_old_characters_removal() {
+    let scene = |held: bool| {
+        let (lua, engine) = start(RunContext::Server);
+        let source = format!(
+            r#"
+local Player = Instance.new("Player")
+Player.Name = "P"
+Player.Parent = game:GetService("Players")
+local function Model(Name) local M = Instance.new("Model") M.Name = Name local Part = Instance.new("Part") Part.Anchored = true Part.Parent = M M.Parent = workspace return M end
+local Old, New = Model("Old"), Model("New")
+if {held} then Player.Character = Old end
+"#
+        );
+        run_in(&lua, &engine, &source, 0.1);
+        let players = crate::services::find_service(&engine, engine.world().game, "Players").unwrap();
+        let workspace = engine.world().workspace;
+        let (player, old, new) = {
+            let state = engine.state.borrow();
+            (state.dom.find_child(players, b"P").unwrap(), state.dom.find_child(workspace, b"Old").unwrap(), state.dom.find_child(workspace, b"New").unwrap())
+        };
+        (lua, engine, player, old, new)
+    };
+    let work = |engine: &Engine| engine.state.borrow().sched.work_total();
+    let write = |engine: &Rc<Engine>, player, new| {
+        let before = work(engine);
+        let character = engine.reflection.name_id("Character").unwrap();
+        engine_lua::instance::script_set_property(engine, player, character, super::value::Value::Instance(new));
+        work(engine) - before
+    };
+    let (with_lua, with, player, _, new) = scene(true);
+    let replaced = write(&with, player, new);
+    let (without_lua, without, player, old, new) = scene(false);
+    let set = write(&without, player, new);
+    let before = work(&without);
+    engine_lua::instance::set_parent(&without, old, None).unwrap();
+    let removal = work(&without) - before;
+    assert!(removal > 0.0 && (replaced - (set + removal)).abs() < 1e-12, "{replaced} where {set} + {removal}");
+    let idle = |lua: &Lua, engine: &Rc<Engine>| {
+        let before = work(engine);
+        let now = engine.state.borrow().sched.now;
+        scheduler::run_until(lua, engine, now + 1.5).unwrap();
+        work(engine) - before
+    };
+    let (after_with, after_without) = (idle(&with_lua, &with), idle(&without_lua, &without));
+    assert!((after_with - after_without).abs() < 1e-12, "the destroy: {after_with} against {after_without}");
 }

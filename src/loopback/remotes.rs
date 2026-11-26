@@ -55,8 +55,8 @@ struct Queue {
 /// their callback. Its Lua values are its own VM's ([`Remotes::release`] lets them go before the VM).
 #[derive(Default)]
 pub struct Remotes {
-    /// Threads waiting for an answer, by call id (a slot freed when answered)
-    calls: RefCell<Vec<Option<LuaThread>>>,
+    /// Threads waiting for an answer and the remote they called, by call id (a slot freed when answered)
+    calls: RefCell<Vec<Option<(LuaThread, InstanceId)>>>,
     free: RefCell<Vec<u32>>,
     /// Events waiting for a first connection, by the remote's event signal
     queued: RefCell<FxHashMap<SignalId, Queue>>,
@@ -76,22 +76,22 @@ impl Remotes {
         *self.run.borrow_mut() = None;
     }
 
-    fn hold(&self, thread: LuaThread) -> u32 {
+    fn hold(&self, thread: LuaThread, remote: InstanceId) -> u32 {
         let mut calls = self.calls.borrow_mut();
         match self.free.borrow_mut().pop() {
             Some(slot) => {
-                calls[slot as usize] = Some(thread);
+                calls[slot as usize] = Some((thread, remote));
                 slot
             }
             None => {
-                calls.push(Some(thread));
+                calls.push(Some((thread, remote)));
                 (calls.len() - 1) as u32
             }
         }
     }
 
     fn take(&self, call: u32) -> Option<LuaThread> {
-        let thread = self.calls.borrow_mut().get_mut(call as usize)?.take()?;
+        let (thread, _) = self.calls.borrow_mut().get_mut(call as usize)?.take()?;
         self.free.borrow_mut().push(call);
         Some(thread)
     }
@@ -187,7 +187,15 @@ pub fn install(lua: &Lua, engine: &Rc<Engine>, side: Side) -> LuaResult<()> {
         })?
     };
     let create: LuaFunction = lua.globals().get::<LuaTable>("coroutine")?.get("create")?;
-    let exports: LuaTable = crate::cost::engine_luau(lua, chunk)?.call((call, instance_value(lua, engine, players)?, report, create))?;
+    // (a thread the chunk parked, resumed as task.spawn resumes one, with no thread price: the call that parked it is priced)
+    let resume = {
+        let engine = engine.clone();
+        lua.create_function(move |lua, thread: LuaThread| {
+            crate::scheduler::resume(lua, &engine, &thread, LuaMultiValue::new());
+            Ok(())
+        })?
+    };
+    let exports: LuaTable = crate::cost::engine_luau(lua, chunk)?.call((call, instance_value(lua, engine, players)?, report, create, resume))?;
     if let Some(function) = reflection.class_id("RemoteFunction") {
         let mut behaviors = engine.behaviors.borrow_mut();
         for member in ["InvokeServer", "InvokeClient"] {
@@ -287,7 +295,7 @@ fn invoke(lua: &Lua, engine: &Rc<Engine>, side: Side, args: Args) -> Ret {
         Ok(captured) => captured,
         Err(refused) => return refused.raise(),
     };
-    let call = endpoint.remotes.hold(lua.current_thread());
+    let call = endpoint.remotes.hold(lua.current_thread(), remote);
     send(engine, &endpoint, Msg::Invoke { remote, call, args: captured });
     Err(Flow::Yield)
 }
@@ -484,17 +492,23 @@ pub fn deliver_return(lua: &Lua, engine: &Rc<Engine>, endpoint: &Rc<Endpoint>, c
     Ok(())
 }
 
-/// The player left: the server's InvokeClient calls waiting on it raise, as a server's do when the player leaves
+/// The player left: the server's InvokeClient calls waiting on it raise, as a server's do when the player leaves (measured in a
+/// 0.747 server, tools/parity/probes/loopback/player_leaving.luau: "Player <name> disconnected during remote call to <the
+/// remote's full name>")
 pub fn player_left(lua: &Lua, engine: &Rc<Engine>, endpoint: &Rc<Endpoint>) -> LuaResult<()> {
-    let threads: Vec<(u32, LuaThread)> = {
+    let threads: Vec<(u32, (LuaThread, InstanceId))> = {
         let mut calls = endpoint.remotes.calls.borrow_mut();
-        calls.iter_mut().enumerate().filter_map(|(index, slot)| slot.take().map(|thread| (index as u32, thread))).collect()
+        calls.iter_mut().enumerate().filter_map(|(index, slot)| slot.take().map(|held| (index as u32, held))).collect()
     };
     let name = endpoint.bridge.player.get().map(|(server, _)| engine.state.borrow().dom.at(server).name.to_string()).unwrap_or_default();
-    for (call, thread) in threads {
+    for (call, (thread, remote)) in threads {
         endpoint.remotes.free.borrow_mut().push(call);
         if crate::scheduler::can_resume(engine, &thread) {
-            let message = format!("InvokeClient: {name} left the game before RemoteFunction returned");
+            let full = {
+                let state = engine.state.borrow();
+                if state.dom.get(remote).is_some() { state.dom.full_name(&engine.reflection, remote) } else { String::from("RemoteFunction") }
+            };
+            let message = format!("Player {name} disconnected during remote call to {full}");
             crate::scheduler::resume(lua, engine, &thread, LuaMultiValue::from_iter([LuaValue::Boolean(false), LuaValue::String(lua.create_string(message)?)]));
         }
     }

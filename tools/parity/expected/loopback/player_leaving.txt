@@ -3,18 +3,23 @@
 # repeated: 3 captures, the same lines
 server: leavers 3
 server: no character unparent, in the leaving thread: Parent=nil Character=nil body.Parent=-
-server: no character order: Players.DescendantRemoving player, game.DescendantRemoving player, PlayerRemoving player, Players.ChildRemoved player, player AncestryChanged nil, player Changed Parent
+server: no character order: Players.DescendantRemoving player, gui Destroying, player.DescendantRemoving gui, Players.DescendantRemoving gui, game.DescendantRemoving gui, player.ChildRemoved gui, game.DescendantRemoving player, Players.DescendantRemoving gear, game.DescendantRemoving gear, Players.DescendantRemoving backpack, game.DescendantRemoving backpack, PlayerRemoving player, Players.ChildRemoved player, player AncestryChanged nil, player Changed Parent
 server: no character after: Parent=nil Character=nil body.Parent=-
 server: no character locked: The Parent property of <name> is locked, current parent: NULL, new parent Players
+server: no character InvokeClient waiting at the leave: false Player <name> disconnected during remote call to ReplicatedStorage.ProbeCall
 server: no character destroyed: body -, player 5.0
 server: character in the Workspace kick, in the leaving thread: Parent=Players Character=body body.Parent=Workspace
-server: character in the Workspace order: Players.DescendantRemoving player, CharacterRemoving body, Workspace.DescendantRemoving body, game.DescendantRemoving body, Workspace.ChildRemoved body, body AncestryChanged nil, Character nil, game.DescendantRemoving player, PlayerRemoving player, Players.ChildRemoved player, player AncestryChanged nil, player Changed Parent
+server: character in the Workspace ten frames on: Parent=Players Character=body body.Parent=Workspace listed=true again=true
+server: character in the Workspace left about a second after the call: true
+server: character in the Workspace order: Players.DescendantRemoving player, CharacterRemoving body, Workspace.DescendantRemoving body, game.DescendantRemoving body, Workspace.ChildRemoved body, body AncestryChanged nil, Character nil, gui Destroying, player.DescendantRemoving gui, Players.DescendantRemoving gui, game.DescendantRemoving gui, player.ChildRemoved gui, game.DescendantRemoving player, Players.DescendantRemoving gear, game.DescendantRemoving gear, Players.DescendantRemoving backpack, game.DescendantRemoving backpack, PlayerRemoving player, Players.ChildRemoved player, player AncestryChanged nil, player Changed Parent
 server: character in the Workspace after: Parent=nil Character=nil body.Parent=nil
 server: character in the Workspace locked: The Parent property of <name> is locked, current parent: NULL, new parent Players
+server: character in the Workspace InvokeClient waiting at the leave: false Player <name> disconnected during remote call to ReplicatedStorage.ProbeCall
 server: character in the Workspace destroyed: body 1.0, player 5.0
 server: character in ReplicatedStorage destroy, in the leaving thread: Parent=nil Character=nil body.Parent=nil
-server: character in ReplicatedStorage order: player Destroying, Players.DescendantRemoving player, CharacterRemoving body, ReplicatedStorage.DescendantRemoving body, game.DescendantRemoving body, body AncestryChanged nil, Character nil, game.DescendantRemoving player, PlayerRemoving player, Players.ChildRemoved player, player AncestryChanged nil, player Changed Parent
+server: character in ReplicatedStorage order: player Destroying, Players.DescendantRemoving player, CharacterRemoving body, ReplicatedStorage.DescendantRemoving body, game.DescendantRemoving body, body AncestryChanged nil, Character nil, gui Destroying, player.DescendantRemoving gui, Players.DescendantRemoving gui, game.DescendantRemoving gui, player.ChildRemoved gui, game.DescendantRemoving player, Players.DescendantRemoving gear, game.DescendantRemoving gear, Players.DescendantRemoving backpack, game.DescendantRemoving backpack, PlayerRemoving player, Players.ChildRemoved player, player AncestryChanged nil, player Changed Parent, player.DescendantRemoving gear, player.ChildRemoved gear, player.DescendantRemoving backpack, player.ChildRemoved backpack
 server: character in ReplicatedStorage after: Parent=nil Character=nil body.Parent=nil
 server: character in ReplicatedStorage locked: The Parent property of <name> is locked, current parent: NULL, new parent Players
+server: character in ReplicatedStorage InvokeClient waiting at the leave: false Player <name> disconnected during remote call to ReplicatedStorage.ProbeCall
 server: character in ReplicatedStorage destroyed: body 1.0, player in the call
 client: other players 0, bodies 0

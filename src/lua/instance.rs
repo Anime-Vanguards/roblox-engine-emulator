@@ -609,7 +609,9 @@ pub fn script_set_property(engine: &Engine, id: InstanceId, name: NameId, value:
         }
         _ => None,
     };
-    let changed = set_property(engine, id, name, value);
+    // (a Player's Character: its events and, on a server, the old character's removal, services/players.rs)
+    let character = crate::services::players::is_character(&engine.state.borrow(), id, name);
+    let changed = if character { crate::services::players::write_character(engine, id, value) } else { set_property(engine, id, name, value) };
     let state = engine.state.borrow();
     let class = state.dom.at(id).class;
     let (placed, levels) = if changed { part_placement(engine, &state, class, id) } else { (false, 0) };

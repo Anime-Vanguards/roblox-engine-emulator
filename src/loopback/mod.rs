@@ -194,6 +194,8 @@ pub fn link(server: Emulator, client_lua: &Lua, client: &Rc<Engine>, spec: Spec)
     };
     bridge.player.set(Some((server_player, client_player)));
     bridge.ids.borrow_mut().pair(server_player, client_player);
+    // (the client's own player leaves as any player when the server's removal of it arrives: services/players.rs)
+    crate::services::players::set_loopback_client(&mut client.state.borrow_mut());
     *client.peer.borrow_mut() = Some(Box::new(Link { server, bridge }));
     Ok(())
 }
@@ -351,6 +353,10 @@ pub fn leave(client_engine: &Rc<Engine>) -> Result<(), String> {
         return Ok(());
     }
     bridge.left.set(true);
+    // (a client its server cut off: its player is gone there already)
+    if bridge.cut.get() {
+        return Ok(());
+    }
     if let Some((server_player, _)) = bridge.player.get() {
         // (the engine's own step, its character's removal with it: services/players.rs; no script pays for it)
         let muted = crate::scheduler::Muted::raise(&server.state.borrow().sched.muted);
@@ -381,11 +387,43 @@ pub fn step_pair(lua: &Lua, client: &Rc<Engine>, duration: Option<f64>) -> LuaRe
     crate::scheduler::step_one(&link.server.lua, &link.server.engine, duration)?;
     replicate::flush(&link.server.engine, bridge);
     bridge.seal(Side::Server);
+    // (the server took the player out in this frame: the client gets the frame, its own leave in it, then nothing more)
+    if bridge.joined.get() && !bridge.left.get() && !bridge.cut.get() && player_gone(&link.server.engine, bridge) {
+        cut(&link.server.lua, &link.server.engine)?;
+    }
     if bridge.joined.get() && !bridge.left.get() {
         crate::scheduler::step_one(lua, client, duration)?;
         bridge.seal(Side::Client);
     }
     Ok(())
+}
+
+/// Whether the server's player of the pair has left Players (one parent compare a frame)
+fn player_gone(server: &Engine, bridge: &Bridge) -> bool {
+    let Some((player, _)) = bridge.player.get() else { return false };
+    !crate::services::players::in_players(&server.state.borrow(), player)
+}
+
+/// The client is cut off from its server (measured in 0.747 play sessions of one server and four clients, each leaver's client
+/// reporting what it saw): the server's calls waiting on the client raise as for a player that left; the client hears
+/// nothing more and nothing it sends reaches the server (FireServer returns as ever, an InvokeServer waiting or made later never
+/// returns); it keeps stepping, its scripts and frames running as a real client's go on at 60 Hz with no server, and its
+/// output still goes to the run's, whose end is as ever (its length, `@done` from either side).
+fn cut(server_lua: &Lua, server: &Rc<Engine>) -> LuaResult<()> {
+    let Some(endpoint) = server.loopback() else { return Ok(()) };
+    if endpoint.bridge.cut.get() {
+        return Ok(());
+    }
+    endpoint.bridge.cut_off();
+    remotes::player_left(server_lua, server, &endpoint)
+}
+
+/// A kicked player's connection closed (services/players.rs network_step, on the server): a loopback run's player is cut off at
+/// once, so its client hears nothing the server sends from this frame on, its own leave a frame later included (measured: a
+/// kicked client heard the server until the frame before its connection closed, then nothing)
+pub(crate) fn connection_closed(lua: &Lua, server: &Rc<Engine>, player: InstanceId) -> LuaResult<()> {
+    let ours = server.loopback().is_some_and(|endpoint| endpoint.bridge.player.get().is_some_and(|(id, _)| id == player));
+    if ours { cut(lua, server) } else { Ok(()) }
 }
 
 /// The receive point of a linked engine's frame (scheduler.rs, a play frame's start: after the legacy wait() resumptions'

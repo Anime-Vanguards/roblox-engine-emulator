@@ -538,13 +538,14 @@ fn fire_descendant_events(state: &mut State, ancestors: &[InstanceId], root: Ins
     }
 }
 
-/// [`fire_descendant_events`] of a player leaving Players (services/players.rs): on a server the character's step comes after
-/// the nearest ancestor's (Players') DescendantRemoving of the player and before the rest, in GetDescendants' order as ever;
-/// on a client before them all.
+/// [`fire_descendant_events`] of a player leaving Players (services/players.rs): on a server the character's step, then the
+/// PlayerGui's destroy, come after the nearest ancestor's (Players') DescendantRemoving of the player and before the rest, in
+/// GetDescendants' order as ever; on a client the character's step comes before them all.
 fn leaving_descendant_events(state: &mut State, reflection: &Reflection, hooks: &Hooks, ancestors: &[InstanceId], player: InstanceId) {
     let event = K::DescendantRemoving as NameId;
     if !super::services::players::on_server(state) || ancestors.is_empty() {
         super::services::players::remove_character(state, reflection, hooks, player);
+        super::services::players::destroy_player_gui(state, reflection, hooks, player);
         fire_descendant_events(state, ancestors, player, event);
         return;
     }
@@ -552,6 +553,7 @@ fn leaving_descendant_events(state: &mut State, reflection: &Reflection, hooks: 
         fire_measured(state, signal, vec![Value::Instance(player)], SignalKind::DescendantRemoving);
     }
     super::services::players::remove_character(state, reflection, hooks, player);
+    super::services::players::destroy_player_gui(state, reflection, hooks, player);
     let listeners: Vec<(usize, SignalId)> =
         ancestors.iter().enumerate().filter_map(|(index, &node)| existing_event(state, node, event).map(|signal| (index, signal))).collect();
     if listeners.is_empty() {

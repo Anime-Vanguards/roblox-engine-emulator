@@ -1032,7 +1032,7 @@ return {
     assert!(has(&lines, "client print: ok 3 plain nil Player"), "{lines:?}");
     assert!(has(&lines, "client print: error false <position>: server failed"), "{lines:?}");
     assert!(has(&lines, "client print: later 42"), "{lines:?}");
-    assert!(has(&lines, "server print: stuck false InvokeClient: Player left the game before RemoteFunction returned"), "{lines:?}");
+    assert!(has(&lines, "server print: stuck false Player Player disconnected during remote call to ReplicatedStorage.Stuck"), "{lines:?}");
 }
 
 
@@ -2965,4 +2965,191 @@ return {
     for kind in ["server print: OnServerEvent", "server print: OnServerInvoke", "server print: InvokeClient returned", "client print: OnClientEvent", "client print: OnClientInvoke", "client print: InvokeServer returned"] {
         assert!(has(&lines, &format!("{kind} true true")), "{kind}: {lines:?}");
     }
+}
+
+/// A loopback client sees another player leave as a real client does: its character's removal first, then CharacterRemoving
+/// and Character's change (from the replicated Character change: services/players.rs set_character), then PlayerRemoving.
+/// It used to fire no CharacterRemoving (the character's removal and Character's change arrived before the player's).
+#[test]
+fn a_loopback_client_sees_another_players_character_leave() {
+    let summary = run_pair(
+        "other-leaves",
+        r##"
+local Players = game:GetService("Players")
+return {
+	Server = function(Context)
+		local Other = Instance.new("Player")
+		Other.Name = "Other"
+		Other.Parent = Players
+		local Body = Instance.new("Model")
+		Body.Name = "Body"
+		Body.Parent = workspace
+		Other.Character = Body
+		task.wait(0.3)
+		Other.Parent = nil
+	end,
+	Client = function(Context)
+		local Other = Players:WaitForChild("Other")
+		local Body = workspace:WaitForChild("Body")
+		task.wait(0.1)
+		local Order = {}
+		Other.CharacterRemoving:Connect(function(X) table.insert(Order, "CharacterRemoving " .. X.Name) end)
+		Other:GetPropertyChangedSignal("Character"):Connect(function() table.insert(Order, "Character " .. tostring(Other.Character)) end)
+		Body.AncestryChanged:Connect(function(X, P) if X == Body then table.insert(Order, "Body.AncestryChanged " .. tostring(P)) end end)
+		Players.PlayerRemoving:Connect(function(X) table.insert(Order, "PlayerRemoving " .. X.Name) end)
+		task.wait(0.5)
+		print("order " .. table.concat(Order, ", "))
+		print("@done")
+	end,
+}
+"##,
+        None,
+        &[],
+    );
+    let lines = lines(&summary);
+    let wanted = "client print: order Body.AncestryChanged nil, CharacterRemoving Body, Character nil, PlayerRemoving Other";
+    assert!(has(&lines, wanted), "{wanted}: {lines:?}");
+}
+
+/// The server takes a loopback client's player out (here Parent = nil): the client sees its own leave as a real client did
+/// (its character's removal, CharacterRemoving, Character nil, its PlayerGui destroyed, PlayerRemoving of its own player, its
+/// AncestryChanged), and what the server sent in that frame; then it hears nothing more (a later FireClient), and nothing it
+/// sends reaches the server (FireServer; an InvokeServer never returns); it keeps stepping, and the server's InvokeClient waiting
+/// on it raises. Measured in 0.747 sessions of one server and four clients, each leaver's client reporting. The client used to
+/// go on hearing the server, and saw no PlayerRemoving of its own.
+#[test]
+fn a_loopback_client_its_server_took_out_hears_nothing_more() {
+    let summary = run_pair(
+        "cut",
+        r##"
+local Players = game:GetService("Players")
+local Storage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+return {
+	Server = function(Context)
+		local Player = Context.Player
+		local Tick = Instance.new("RemoteEvent")
+		Tick.Name = "Tick"
+		Tick.Parent = Storage
+		local Call = Instance.new("RemoteFunction")
+		Call.Name = "Call"
+		Call.OnServerInvoke = function() return "answer" end
+		Call.Parent = Storage
+		Tick.OnServerEvent:Connect(function(_, Text) print("heard " .. Text) end)
+		local Body = Instance.new("Model")
+		Body.Name = "Body"
+		Body.Parent = workspace
+		Player.Character = Body
+		task.wait(0.3)
+		task.spawn(function() print("InvokeClient", pcall(Call.InvokeClient, Call, Player)) end)
+		task.wait()
+		Tick:FireClient(Player, "before")
+		Player.Parent = nil
+		Tick:FireClient(Player, "after the call")
+		task.wait()
+		Tick:FireAllClients("next frame")
+		task.wait(0.5)
+	end,
+	Client = function(Context)
+		local Me = Players.LocalPlayer
+		local Tick = Storage:WaitForChild("Tick")
+		local Call = Storage:WaitForChild("Call")
+		Call.OnClientInvoke = function() task.wait(5) return "late" end
+		local Body = workspace:WaitForChild("Body")
+		local Gui = Me:FindFirstChildOfClass("PlayerGui")
+		local Order = {}
+		local Heard = {}
+		Tick.OnClientEvent:Connect(function(Text) table.insert(Heard, Text) end)
+		Body.AncestryChanged:Connect(function(X, P) if X == Body then table.insert(Order, "Body.AncestryChanged " .. tostring(P)) end end)
+		Me.CharacterRemoving:Connect(function(X) table.insert(Order, "CharacterRemoving " .. X.Name) end)
+		Me:GetPropertyChangedSignal("Character"):Connect(function() table.insert(Order, "Character " .. tostring(Me.Character)) end)
+		Gui.Destroying:Connect(function() table.insert(Order, "PlayerGui.Destroying") end)
+		Players.PlayerRemoving:Connect(function(X) table.insert(Order, "PlayerRemoving " .. (if X == Me then "me" else X.Name)) end)
+		Me.AncestryChanged:Connect(function(X, P) if X == Me then table.insert(Order, "LocalPlayer.AncestryChanged " .. tostring(P)) end end)
+		while Me.Parent ~= nil do task.wait() end
+		task.wait(0.1)
+		Tick:FireServer("after the cut")
+		local Answer = "waiting"
+		task.spawn(function() Answer = tostring(Call:InvokeServer()) end)
+		local Beats = 0
+		RunService.Heartbeat:Connect(function() Beats += 1 end)
+		task.wait(0.5)
+		print("order " .. table.concat(Order, ", "))
+		print("heard " .. table.concat(Heard, ", "))
+		print("after", Answer, Beats >= 29, Me.Parent, Me.Character)
+		print("@done")
+	end,
+}
+"##,
+        None,
+        &[],
+    );
+    let lines = lines(&summary);
+    for wanted in [
+        "client print: order Body.AncestryChanged nil, CharacterRemoving Body, Character nil, PlayerGui.Destroying, PlayerRemoving me, LocalPlayer.AncestryChanged nil",
+        "client print: heard before, after the call",
+        "client print: after waiting true nil nil",
+        "server print: InvokeClient false Player Player disconnected during remote call to ReplicatedStorage.Call",
+    ] {
+        assert!(has(&lines, wanted), "{wanted}: {lines:?}");
+    }
+    assert!(!lines.iter().any(|line| line.contains("heard after the cut")), "{lines:?}");
+}
+
+/// A kicked loopback client hears the server until its connection closes (the first server frame that starts more than a second
+/// after the call), then nothing: never its own leave (no PlayerRemoving, its player still in Players, its character still set),
+/// as a real kicked client heard (services/players.rs kick). It used to see its leave at the next resumption point and go on
+/// hearing the server.
+#[test]
+fn a_kicked_loopback_client_hears_nothing_of_its_leave() {
+    let summary = run_pair(
+        "kicked",
+        r##"
+local Players = game:GetService("Players")
+local Storage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+return {
+	Server = function(Context)
+		local Player = Context.Player
+		local Tick = Instance.new("RemoteEvent")
+		Tick.Name = "Tick"
+		Tick.Parent = Storage
+		local Body = Instance.new("Model")
+		Body.Name = "Body"
+		Body.Parent = workspace
+		Player.Character = Body
+		task.wait(0.2)
+		local Frame = 0
+		RunService.Heartbeat:Connect(function()
+			Frame += 1
+			if Player.Parent == Players then Tick:FireClient(Player, Frame) end
+		end)
+		task.wait()
+		Frame = 0
+		Player:Kick("bye")
+		while Player.Parent ~= nil do task.wait() end
+		print("left", Frame)
+	end,
+	Client = function(Context)
+		local Me = Players.LocalPlayer
+		local Tick = Storage:WaitForChild("Tick")
+		local Last = 0
+		Tick.OnClientEvent:Connect(function(Frame) Last = Frame end)
+		local Removing = false
+		Players.PlayerRemoving:Connect(function() Removing = true end)
+		task.wait(1.6)
+		print("last", Last, Removing, Me.Parent, Me.Character)
+		print("@done")
+	end,
+}
+"##,
+        None,
+        &[],
+    );
+    let lines = lines(&summary);
+    assert!(has(&lines, "server print: left 62"), "{lines:?}");
+    let last = lines.iter().find_map(|line| line.strip_prefix("client print: last ")).unwrap_or_else(|| panic!("{lines:?}"));
+    let mut words = last.split(' ');
+    let frame: u32 = words.next().unwrap().parse().unwrap();
+    assert!((58..=61).contains(&frame) && words.collect::<Vec<_>>() == ["false", "Players", "Body"], "{last}: {lines:?}");
 }

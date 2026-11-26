@@ -3,7 +3,7 @@
 -- the callback's script and line (measured: tools/parity/probes/loopback/remote_function.luau). A server's InvokeClient
 -- of a player that is not the loopback one waits for that player to leave and then raises, as a server run's does
 -- (server.luau). Run as the engine's own Luau (not charged to scripts).
-local Call, Players, Report, CreateThread = ...
+local Call, Players, Report, CreateThread, Resume = ...
 
 -- (results pass as arguments, never packed into a table: a call allocates nothing of its own here)
 local function Answer(Ok, ...)
@@ -26,12 +26,12 @@ local function Answered(Self, Player, Ok, ...)
 			Connection = Players.PlayerRemoving:Connect(function(Leaving)
 				if Leaving == Player then
 					Connection:Disconnect()
-					task.spawn(Thread)
+					Resume(Thread)
 				end
 			end)
 			coroutine.yield()
 		end
-		error(`InvokeClient: {Player.Name} left the game before {Self:GetFullName()} returned`, 0)
+		error(`Player {Player.Name} disconnected during remote call to {Self:GetFullName()}`, 0)
 	end
 	return Answer(Ok, ...)
 end

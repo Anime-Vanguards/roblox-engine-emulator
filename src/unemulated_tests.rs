@@ -363,7 +363,7 @@ end
 "#,
         &["--run-context", "server"],
     );
-    assert_eq!(other_lines(&summary), ["print: false InvokeClient: Player left the game before RemoteFunction returned"], "{summary}");
+    assert_eq!(other_lines(&summary), ["print: false Player Player disconnected during remote call to RemoteFunction"], "{summary}");
     let at = |line: u32| format!("ReplicatedStorage.RURFixtures.Server:{line}");
     assert_eq!(
         summary["unemulated"],

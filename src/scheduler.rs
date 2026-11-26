@@ -1825,6 +1825,8 @@ fn heartbeat_timers(lua: &Lua, engine: &Rc<Engine>, at: f64, delta: f64, limit: 
         // resumptions, its events queued for their flush (measured: a remote's handlers run after the legacy wait() resumptions
         // and before PreAnimation; a RemoteFunction's callback and an answered call before those resumptions)
         crate::loopback::receive(lua, engine)?;
+        // (a server's network step: kicked players' connections closing and their leaves, services/players.rs)
+        crate::services::players::network_step(lua, engine)?;
         if !edit_mode {
             // A playing client (measured, Studio 0.744: tools/parity/probes/deferred_points.luau and a wait / spawn
             // chain probe) resumes wait / delay / spawn threads after the render step's PreRender handlers and before
