@@ -163,6 +163,9 @@ export function runInRee(name, ree, scratch, server = false, realAssets = false)
 	const options = probeOptions(name);
 	const context = server ? ["--run-context", "server", "--load-string"] : options.context === "edit" ? ["--mode", "edit", "--run-context", "edit"] : [];
 	if (options.flag === "FFlagEnableLoadModule") context.push("--load-module");
+	// ("studio=false": a probe of what a running game refuses that Studio allows, as the capture's client and server are one:
+	// `--studio false`, ree's live game)
+	if (options.studio === "false") context.push("--studio", "false");
 	if (!realAssets) context.push("--animations", ANIMATIONS);
 	// ("timeout=<seconds>": the script timeout the capture set with ScriptContext:SetTimeout, which a game script may not call;
 	// the run goes on past timeouts, as a client does)

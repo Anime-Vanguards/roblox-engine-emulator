@@ -145,6 +145,10 @@ fn probe_job(scratch: &Path, empty: &Path, name: &str, source: &str, server: boo
     if directive("flag=FFlagEnableLoadModule") {
         args.push("--load-module".into());
     }
+    // ("studio=false": what a running game refuses that Studio allows: run.mjs runInRee)
+    if directive("studio=false") {
+        args.extend(["--studio", "false"].map(str::to_owned));
+    }
     // ("timeout=<seconds>": the script timeout the capture set with ScriptContext:SetTimeout: run.mjs runInRee)
     let timeout = source.lines().filter(|line| line.starts_with("-- parity:")).flat_map(str::split_whitespace).find_map(|part| part.strip_prefix("timeout="));
     if let Some(seconds) = timeout {

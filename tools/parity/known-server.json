@@ -1148,11 +1148,5 @@
 			"line": "same u2.",
 			"why": "a method of CFrame, Color3, UDim2 or Vector2 read as a value is a new function at every read on a client; Lune's datatypes (vendor/lune-roblox) give one function a method (a signal's, a connection's, a Vector3's, a Random's and an EnumItem's IsA follow the client)"
 		}
-	],
-	"animation_members": [
-		{
-			"line": "Register",
-			"why": "a running game (the capture client and its server) refuses the providers' registration, \"Usage error: RegisterKeyframeSequence can only be called in Studio.\" and \"... can only be used in Solo mode.\" (RegisterActiveAnimationClip names RegisterActiveKeyframeSequence), before its argument; ree registers in play mode as in edit mode, because previews of unpublished animations play that way (a Studio solo test registers; not measured)"
-		}
 	]
 }

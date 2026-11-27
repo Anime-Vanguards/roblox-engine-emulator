@@ -825,8 +825,15 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
     // (curve_clip::validate) and anything that is not a clip; the Active ones give "active://N", counted from 0 across
     // each service (source::active_clip), and KeyframeSequenceProvider's takes a KeyframeSequence only. The two that
     // are not Active keep the clip as it is when registered and give the id that content has (source::register).
-    let register = |active: bool, curves: bool, checked: bool, refusal: &'static str| {
+    // A live game (`--studio false`) refuses all four first, before their argument: "Usage error: RegisterKeyframeSequence can
+    // only be called in Studio." and "... can only be used in Solo mode." (RegisterActiveAnimationClip's names
+    // RegisterActiveKeyframeSequence), as a running 0.747 client and server do (tools/parity/probes/animation_members.luau); a
+    // Studio session, ree's default, registers, as Studio's previews of unpublished animations do.
+    let register = |active: bool, curves: bool, checked: bool, refusal: &'static str, live: &'static str| {
         method(move |lua, engine, _, args| {
+            if !engine.options.studio && !engine.options.edit_mode() {
+                return Err(Flow::Error(ScriptError::plain(live)));
+            }
             if args.get(1).is_nil() {
                 return Err(Flow::Error(ScriptError::plain("Argument 1 missing or nil")));
             }
@@ -861,10 +868,10 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
             Ok(values([LuaValue::String(lua.create_string(&uri)?)]))
         })
     };
-    add(behaviors, "KeyframeSequenceProvider", "RegisterKeyframeSequence", register(false, true, false, "RegisterKeyframeSequence requires a KeyframeSequence"));
-    add(behaviors, "KeyframeSequenceProvider", "RegisterActiveKeyframeSequence", register(true, false, false, "Argument must be a 'KeyframeSequence' object"));
-    add(behaviors, "AnimationClipProvider", "RegisterAnimationClip", register(false, true, true, "Invalid AnimationClip instance passed to registerAnimationClip"));
-    add(behaviors, "AnimationClipProvider", "RegisterActiveAnimationClip", register(true, true, true, "Argument must be an 'AnimationClip' object"));
+    add(behaviors, "KeyframeSequenceProvider", "RegisterKeyframeSequence", register(false, true, false, "RegisterKeyframeSequence requires a KeyframeSequence", "Usage error: RegisterKeyframeSequence can only be called in Studio."));
+    add(behaviors, "KeyframeSequenceProvider", "RegisterActiveKeyframeSequence", register(true, false, false, "Argument must be a 'KeyframeSequence' object", "Usage error: RegisterActiveKeyframeSequence can only be used in Solo mode."));
+    add(behaviors, "AnimationClipProvider", "RegisterAnimationClip", register(false, true, true, "Invalid AnimationClip instance passed to registerAnimationClip", "Usage error: RegisterAnimationClip can only be called in Studio."));
+    add(behaviors, "AnimationClipProvider", "RegisterActiveAnimationClip", register(true, true, true, "Argument must be an 'AnimationClip' object", "Usage error: RegisterActiveKeyframeSequence can only be used in Solo mode."));
 
     curves::install(engine, behaviors);
     members::install(engine, behaviors);

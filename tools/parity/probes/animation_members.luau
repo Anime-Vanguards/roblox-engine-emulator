@@ -1,3 +1,4 @@
+-- parity: studio=false
 -- The animation classes' other members: the providers' register and web members in a running game, the members only
 -- Roblox's scripts or plugins may call, Animator:GetTrackByAnimationId / ApplyJointVelocities /
 -- RegisterEvaluationParallelCallback, a track's parameters and targets, AnimationNodeDefinition's input pins, IKControl's chain
