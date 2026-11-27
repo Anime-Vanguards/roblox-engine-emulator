@@ -680,31 +680,41 @@ fn write_touch(state: &State, id: InstanceId, name: NameId, property: &str, chan
 /// is off by more than the client lets pass (world::frame::stored_rotation). Other values, and CFrames written elsewhere (a
 /// model's WorldPivot keeps a scaled rotation, measured), pass as they are.
 fn cframe_as_stored(engine: &Engine, id: InstanceId, name: NameId, value: Value) -> Value {
-    use rbx_dom_weak::types::{self as dom, Variant};
+    use rbx_dom_weak::types::Variant;
     let Value::Dom(variant) = &value else { return value };
     let Variant::CFrame(cframe) = &**variant else { return value };
     let class = engine.state.borrow().dom.at(id).class;
-    let property = engine.reflection.name(name);
-    let o = &cframe.orientation;
-    let rows = [[o.x.x, o.x.y, o.x.z], [o.y.x, o.y.y, o.y.z], [o.z.x, o.z.y, o.z.z]];
-    let row = |r: [f32; 3]| dom::Vector3::new(r[0], r[1], r[2]);
     // (a Camera refuses a CFrame that is not finite or has a rotation entry of 1.2 or more: the write keeps what it holds, world/camera.rs)
     if name == crate::world::cframe_name(engine) && engine.reflection.is_a(class, "Camera") && !crate::world::camera::takes_cframe(cframe) {
         return engine.state.borrow().dom.raw_get(id, name).cloned().unwrap_or(value);
     }
-    if name == crate::world::cframe_name(engine) && engine.reflection.is_a(class, "Attachment") {
-        let stored = attachment_rotation(rows);
-        return Value::Dom(Rc::new(Variant::CFrame(dom::CFrame::new(cframe.position, dom::Matrix3::new(row(stored[0]), row(stored[1]), row(stored[2]))))));
+    match stored_cframe(&engine.reflection, class, name, cframe) {
+        Some(stored) => Value::Dom(Rc::new(Variant::CFrame(stored))),
+        None => value,
     }
-    let joint = matches!(property, "C0" | "C1") && engine.reflection.is_a(class, "JointInstance");
-    if !joint && !(name == crate::world::cframe_name(engine) && engine.reflection.is_a(class, "BasePart")) {
-        return value;
+}
+
+/// A CFrame stored in property `name` of an instance of `class` as a client stores it when a script writes it or the server
+/// sends it (loopback/replicate.rs): an Attachment's CFrame always through [`attachment_rotation`], a joint's C0 / C1 and a
+/// part's CFrame orthonormalized past their tolerances (world::frame::stored_rotation); None where it is stored as it is
+/// (other properties, a rotation within the tolerance)
+pub(crate) fn stored_cframe(reflection: &crate::reflection::Reflection, class: crate::reflection::ClassId, name: NameId, cframe: &rbx_dom_weak::types::CFrame) -> Option<rbx_dom_weak::types::CFrame> {
+    use rbx_dom_weak::types as dom;
+    let property = reflection.name(name);
+    let o = &cframe.orientation;
+    let rows = [[o.x.x, o.x.y, o.x.z], [o.y.x, o.y.y, o.y.z], [o.z.x, o.z.y, o.z.z]];
+    let row = |r: [f32; 3]| dom::Vector3::new(r[0], r[1], r[2]);
+    let made = |stored: [[f32; 3]; 3]| dom::CFrame::new(cframe.position, dom::Matrix3::new(row(stored[0]), row(stored[1]), row(stored[2])));
+    let is_cframe = property == "CFrame";
+    if is_cframe && reflection.is_a(class, "Attachment") {
+        return Some(made(attachment_rotation(rows)));
+    }
+    let joint = matches!(property, "C0" | "C1") && reflection.is_a(class, "JointInstance");
+    if !joint && !(is_cframe && reflection.is_a(class, "BasePart")) {
+        return None;
     }
     let stored = if joint { crate::world::frame::stored_rotation_within(rows, JOINT_TOLERANCE) } else { crate::world::frame::stored_rotation(rows) };
-    if stored == rows {
-        return value;
-    }
-    Value::Dom(Rc::new(Variant::CFrame(dom::CFrame::new(cframe.position, dom::Matrix3::new(row(stored[0]), row(stored[1]), row(stored[2]))))))
+    (stored != rows).then(|| made(stored))
 }
 
 /// How far a joint's C0 / C1 may be off orthonormal (an entry of RᵀR - I) before a write orthonormalizes it, with the same float32

@@ -8,13 +8,15 @@
 //!   it, as a script's write is (`world::frame::stored_rotation`). A joint's C0 and an attachment's or bone's CFrame are
 //!   orthonormalized even within that tolerance. A bone's last bits differ from Gram-Schmidt's in about half of them.
 //!   A part's PivotOffset and a model's pivot keep the file's rotation.
-//! - **Replication.** A rotation that is not axis-aligned crosses as a quaternion:
-//!   - the largest component is dropped, with the sign made positive;
+//! - **Replication.** A rotation whose first two columns each hold an entry of exactly 1 or -1 crosses as an orientation
+//!   id: each column as the axis that entry names, the third column rebuilt as their cross product. Any other crosses
+//!   as a quaternion:
+//!   - made unit, then the largest component is dropped, with the sign made positive;
 //!   - the other three, times sqrt 2, are rounded to steps of 1/16383 (15 bits);
 //!   - the client rebuilds the largest from the others and makes a matrix of the quaternion ([`replicated`]).
 //!
-//!   So the client's rotation is orthonormal to float precision, and within about 1e-4 of the server's. Positions and
-//!   axis-aligned rotations cross exactly.
+//!   So the client's rotation is orthonormal to float precision, and within about 1e-4 of the server's. Positions
+//!   cross exactly. The same form carries a CFrame through a remote and a replicated property (loopback/wire.rs).
 //!
 //! From the file's value, 2,328 of the 2,347 come out to the bit. The others are 18 bones, within 5e-7 (an ulp or two),
 //! and one pivot that is 1.7e-4 off. That pivot's quaternion had four components all within 1e-5 of 0.5, and the
@@ -109,20 +111,51 @@ pub fn received(rows: Rot, load: Load) -> Rot {
     replicated(loaded)
 }
 
-/// Every entry 0 or 1 or -1: one of the rotations that cross exactly
+/// Every entry 0 or 1 or -1 (the server's load keeps such a rotation as it is)
 fn axis_aligned(rows: &Rot) -> bool {
     rows.iter().flatten().all(|&value| value == 0.0 || value.abs() == 1.0)
 }
 
-/// A rotation as it crosses the network: as is when axis-aligned (or not finite), else as a 15-bit quaternion. The
-/// largest component is dropped and the other three, made positive with it and times sqrt 2, are rounded to steps of
-/// 1/16383. The client takes each as `(n / 16383) * (1 / sqrt 2)`, the largest as `sqrt(1 - ((a² + b²) + c²))`, and
-/// makes the matrix ([`rot_from_quat`]). All in single precision, as measured to the bit.
+/// The axis a rotation's column names on the network: the first of its entries (x, y, z) that is exactly 1 or -1, with that
+/// sign. Measured (Studio 0.747, a play session's server and client, tools/parity/probes/loopback/cframe_wire.luau): a column
+/// (1, 0.5, 0) or (2, 1, 0) names +X and +Y, a near-axis rotation whose entries round to 1 in float32 (a turn of 2e-4 rad)
+/// crosses exactly and one of 3e-4 does not.
+fn unit_axis(rows: &Rot, column: usize) -> Option<(usize, f32)> {
+    (0..3).find_map(|row| match rows[row][column] {
+        1.0 => Some((row, 1.0)),
+        -1.0 => Some((row, -1.0)),
+        _ => None,
+    })
+}
+
+/// An orientation id's rotation: columns X and Y the two axes (zeros positive), Z their cross product in float32, its signed
+/// zeros kept (a rotation of +Y and -X reads R12 -0); two equal axes give a zero third column, as a client reads it
+fn from_axes(x: (usize, f32), y: (usize, f32)) -> Rot {
+    let axis = |(index, sign): (usize, f32)| {
+        let mut vector = [0.0f32; 3];
+        vector[index] = sign;
+        vector
+    };
+    let (x, y) = (axis(x), axis(y));
+    let z = [x[1] * y[2] - x[2] * y[1], x[2] * y[0] - x[0] * y[2], x[0] * y[1] - x[1] * y[0]];
+    [[x[0], y[0], z[0]], [x[1], y[1], z[1]], [x[2], y[2], z[2]]]
+}
+
+/// A rotation as it crosses the network (a replicated property, a remote's argument or result): as an orientation id when
+/// its first two columns name axes ([`unit_axis`], [`from_axes`]), else as a 15-bit quaternion. The quaternion
+/// ([`quat_from_rot`]) is made unit, its largest component dropped (the first of equal ones) and the other three, made
+/// positive with it and times sqrt 2, rounded to steps of 1/16383 (one that is not a number as 0). The client takes each as
+/// `(n / 16383) * (1 / sqrt 2)`, the largest as `sqrt(1 - ((a² + b²) + c²))`, and makes the matrix ([`rot_from_quat`]). All in
+/// single precision, as measured to the bit: a matrix that is no rotation (a scaled or leaning column, zeros, NaN) arrives as
+/// the rotation of its unit quaternion (tools/parity/probes/loopback/cframe_wire.luau).
 pub fn replicated(rows: Rot) -> Rot {
-    if axis_aligned(&rows) || !rows.iter().flatten().all(|value| value.is_finite()) {
-        return rows;
+    if let (Some(x), Some(y)) = (unit_axis(&rows, 0), unit_axis(&rows, 1)) {
+        return from_axes(x, y);
     }
-    let mut q = quat_from_rot(&rows);
+    let q = quat_from_rot(&rows);
+    let dot = (q[0] * q[0] + q[1] * q[1]) + (q[2] * q[2] + q[3] * q[3]);
+    let k = 1.0 / dot.sqrt();
+    let mut q = q.map(|value| value * k);
     // (the first of equal largest)
     let mut big = 0;
     for i in 1..4 {
@@ -143,18 +176,43 @@ pub fn replicated(rows: Rot) -> Rot {
             continue;
         }
         let steps = (q[i] * scale + 0.5).floor();
+        let steps = if steps.is_nan() { 0.0 } else { steps };
         out[i] = (steps / STEPS) * std::f32::consts::FRAC_1_SQRT_2;
         // ((a² + b²) + c², in index order)
         squares = if first { out[i] * out[i] } else { squares + out[i] * out[i] };
         first = false;
     }
     out[big] = (1.0 - squares).max(0.0).sqrt();
-    let received = rot_from_quat(out);
-    if received.iter().flatten().all(|value| value.is_finite()) { received } else { rows }
+    rot_from_quat(out)
+}
+
+/// A rotation held by an attribute as it replicates: as an orientation id ([`from_axes`]) when its three columns are each an
+/// axis (one entry 1 or -1, the others 0) and the three are different axes, a mirror too (diag(-1, 1, 1) arrives as a half turn
+/// about Y); else exactly as it is, a near-axis, skewed or zero one too (measured: tools/parity/probes/loopback/cframe_wire.luau)
+pub fn attribute_replicated(rows: Rot) -> Rot {
+    let axis = |column: usize| {
+        let at = unit_axis(&rows, column)?;
+        (0..3).all(|row| row == at.0 || rows[row][column] == 0.0).then_some(at)
+    };
+    match (axis(0), axis(1), axis(2)) {
+        (Some(x), Some(y), Some(z)) if x.0 != y.0 && x.0 != z.0 && y.0 != z.0 => from_axes(x, y),
+        _ => rows,
+    }
+}
+
+/// A CFrame as it crosses the network: its position exactly, its rotation [`replicated`] (`attribute`: as an attribute's,
+/// [`attribute_replicated`])
+pub fn replicated_cframe(cframe: &dom::CFrame, attribute: bool) -> dom::CFrame {
+    let o = &cframe.orientation;
+    let rows = [[o.x.x, o.x.y, o.x.z], [o.y.x, o.y.y, o.y.z], [o.z.x, o.z.y, o.z.z]];
+    let out = if attribute { attribute_replicated(rows) } else { replicated(rows) };
+    let row = |r: [f32; 3]| dom::Vector3::new(r[0], r[1], r[2]);
+    dom::CFrame::new(cframe.position, dom::Matrix3::new(row(out[0]), row(out[1]), row(out[2])))
 }
 
 /// A rotation's quaternion (x, y, z, w), as the engine takes it: the trace branch, else the largest diagonal term's,
-/// subtracting the other two diagonal terms in index order (lune-roblox's float32 port, measured through CFrame:Lerp)
+/// subtracting the other two diagonal terms in index order (lune-roblox's float32 port, measured through CFrame:Lerp; ties as
+/// the network breaks them)
 fn quat_from_rot(r: &Rot) -> [f32; 4] {
     let trace = (r[0][0] + r[1][1]) + r[2][2];
     if trace > 0.0 {
@@ -162,10 +220,14 @@ fn quat_from_rot(r: &Rot) -> [f32; 4] {
         let k = 0.5 / s;
         return [(r[2][1] - r[1][2]) * k, (r[0][2] - r[2][0]) * k, (r[1][0] - r[0][1]) * k, s * 0.5];
     }
-    let mut i = if r[1][1] > r[0][0] { 1 } else { 0 };
-    if r[2][2] > r[i][i] {
-        i = 2;
-    }
+    // (ties go to the later axis: a zero matrix crosses as a half turn about Z, measured)
+    let i = if r[0][0] > r[1][1] && r[0][0] > r[2][2] {
+        0
+    } else if r[1][1] > r[2][2] {
+        1
+    } else {
+        2
+    };
     let (j, k3) = ((i + 1) % 3, (i + 2) % 3);
     let (first, second) = (j.min(k3), j.max(k3));
     let s = (((1.0 + r[i][i]) - r[first][first]) - r[second][second]).sqrt();
@@ -214,6 +276,8 @@ mod tests {
 
     use super::*;
 
+    const IDENTITY: Rot = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+
     fn rot(v: &[f32; 9]) -> Rot {
         [[v[0], v[1], v[2]], [v[3], v[4], v[5]], [v[6], v[7], v[8]]]
     }
@@ -256,6 +320,45 @@ mod tests {
         ];
         for (name, load, stored, read) in cases {
             assert_eq!(received(rot(stored), *load), rot(read), "{name}");
+        }
+    }
+
+    /// Rotations as a play session's client read them after the server sent them (Studio 0.747, a remote's argument and a
+    /// CFrameValue alike, tools/parity/probes/loopback/cframe_wire.luau): orientation ids from the first entry of exactly 1 or -1
+    /// in each of the first two columns (the third their cross product, signed zeros kept, two equal axes a zero column), a
+    /// near-axis turn whose entries round to 1 exactly, any other rotation (one no rotation at all too) as its unit quaternion.
+    #[test]
+    fn a_sent_rotation_is_what_a_client_read() {
+        let cases: &[(&str, [f32; 9], [f32; 9])] = &[
+            ("a turn of 0.5 about X", [1.0, 0.0, 0.0, 0.0, 0.87758255, -0.47942555, 0.0, 0.47942555, 0.87758255], [1.0, 0.0, 0.0, 0.0, 0.877587557, -0.47941637, 0.0, 0.47941637, 0.877587557]),
+            ("a quarter turn about Y: R12 -0", [-4.37113883e-08, 0.0, 1.0, 0.0, 1.0, 0.0, -1.0, 0.0, -4.37113883e-08], [0.0, 0.0, 1.0, 0.0, 1.0, -0.0, -1.0, 0.0, 0.0]),
+            ("+Y and -X: R12 -0", [0.0, -1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0], [0.0, -1.0, 0.0, 1.0, 0.0, -0.0, 0.0, 0.0, 1.0]),
+            ("a mirror's third column rebuilt", [-1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0], [-1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, -1.0]),
+            ("a column (1, 1, 0) names +X twice", [1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0], [1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
+            ("a leaning column (2, 1, 0) names +Y", [1.0, 2.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0], [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]),
+            ("a zero matrix: a half turn about Z", [0.0; 9], [-1.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 1.0]),
+            ("NaN: a half turn about X", [f32::NAN, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0], [1.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, -1.0]),
+            ("a zero column: the unit quaternion's rotation", [0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0], [0.599962831, 0.0, 0.800027847, 0.0, 1.0, 0.0, -0.800027847, 0.0, 0.599962831]),
+        ];
+        for (name, sent, read) in cases {
+            let got = replicated(rot(sent));
+            let bits = |rows: Rot| rows.map(|row| row.map(f32::to_bits));
+            assert_eq!(bits(got), bits(rot(read)), "{name}");
+        }
+        // (a near-axis turn: 2e-4 rad rounds its entries to 1 and crosses exactly, 3e-4 does not)
+        let turn = |angle: f32| rot(&[1.0, 0.0, 0.0, 0.0, angle.cos(), -angle.sin(), 0.0, angle.sin(), angle.cos()]);
+        assert_eq!(replicated(turn(2e-4)), IDENTITY);
+        assert_ne!(replicated(turn(3e-4)), IDENTITY);
+    }
+
+    /// An attribute's CFrame keeps its rotation unless its three columns are three different axes (then as an id, a mirror
+    /// too); a near-axis, skewed or zero rotation arrives as it is (Studio 0.747, cframe_wire.luau)
+    #[test]
+    fn an_attributes_rotation_crosses_as_it_is_unless_it_is_axes() {
+        let mirror = rot(&[-1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]);
+        assert_eq!(attribute_replicated(mirror), rot(&[-1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, -1.0]));
+        for kept in [[1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0], [0.0; 9], [1.0, 0.0, 0.0, 0.0, 0.87758255, -0.47942555, 0.0, 0.47942555, 0.87758255], [1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]] {
+            assert_eq!(attribute_replicated(rot(&kept)), rot(&kept));
         }
     }
 

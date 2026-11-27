@@ -10,9 +10,10 @@
 //!   table it leaves a hole in an array, its dictionary entry is dropped, and as a key it is named `<SharedTable> (SharedTable:
 //!   0x...)`), and so do an RBXScriptSignal, an OverlapParams, a CatalogSearchParams, a DockWidgetPluginGuiInfo, a
 //!   Path2DControlPoint and the curve keys (FloatCurveKey, RotationCurveKey, ValueCurveKey: Studio 0.747,
-//!   tools/parity/probes/loopback/remote_keys.luau). CFrame, Color3, UDim, UDim2, Vector2, BrickColor, NumberRange,
+//!   tools/parity/probes/loopback/remote_keys.luau). Color3, UDim, UDim2, Vector2, BrickColor, NumberRange,
 //!   NumberSequence, ColorSequence, Rect, Ray, Font, DateTime, PhysicalProperties, Random, TweenInfo and EnumItems arrive
-//!   equal, and Region3, Region3int16, Vector2int16, Vector3int16, Content, ColorSequenceKeypoint, NumberSequenceKeypoint, Axes,
+//!   equal, a CFrame with its rotation as the network carries it (an orientation id or a 15-bit quaternion:
+//!   project::received::replicated; tools/parity/probes/loopback/cframe_wire.luau), and Region3, Region3int16, Vector2int16, Vector3int16, Content, ColorSequenceKeypoint, NumberSequenceKeypoint, Axes,
 //!   Faces, PathWaypoint and SecurityCapabilities with the same text (remote_keys.luau, alone and in a table); the last four
 //!   are the prelude's proxies, sent as their fields ([`Wire::Proxy`]).
 //! - An Instance arrives as the receiver's own when it has it (mapped at delivery, after the batch's earlier creations), else
@@ -148,9 +149,45 @@ fn number_sent(number: f64) -> f64 {
     if number != 0.0 && number.is_finite() && number.abs() < f64::MIN_POSITIVE { 0.0 } else { number }
 }
 
-/// A stored property or attribute value as the other VM can hold it: a datatype a script made (kept by the engine as its VM's
-/// userdata: a part's CustomPhysicalProperties, say) as an engine value; a table, function or other VM value as None
+/// A stored property value as it reaches the other VM: a datatype a script made (kept by the engine as its VM's userdata: a
+/// part's CustomPhysicalProperties, say) as an engine value, a CFrame's rotation as the network carries it ([`carried`]); a
+/// table, function or other VM value as None
 pub fn portable(value: &Value) -> Option<Value> {
+    held(value).map(|value| carried(value, false))
+}
+
+/// Property `name` of an instance of `class` as the other side's copy stores it: [`portable`], then a CFrame stored as that
+/// side stores one a script writes (lua/instance.rs stored_cframe: a client orthonormalizes an Attachment's received CFrame,
+/// as measured: tools/parity/probes/loopback/cframe_wire.luau)
+pub fn portable_property(reflection: &crate::reflection::Reflection, class: crate::reflection::ClassId, name: crate::NameId, value: &Value) -> Option<Value> {
+    let value = portable(value)?;
+    if let Value::Dom(variant) = &value
+        && let Variant::CFrame(cframe) = &**variant
+        && let Some(stored) = crate::lua::instance::stored_cframe(reflection, class, name, cframe)
+    {
+        return Some(Value::Dom(Rc::new(Variant::CFrame(stored))));
+    }
+    Some(value)
+}
+
+/// An attribute's value as it reaches the other VM: as [`portable`], but a CFrame keeps its rotation unless its columns are
+/// three different axes (project::received::attribute_replicated)
+pub fn portable_attribute(value: &Value) -> Option<Value> {
+    held(value).map(|value| carried(value, true))
+}
+
+/// A CFrame as the network carries it (project::received::replicated_cframe); any other value as it is
+fn carried(value: Value, attribute: bool) -> Value {
+    if let Value::Dom(variant) = &value
+        && let Variant::CFrame(cframe) = &**variant
+    {
+        return Value::Dom(Rc::new(Variant::CFrame(crate::project::received::replicated_cframe(cframe, attribute))));
+    }
+    value
+}
+
+/// A stored value the other VM can hold (a VM's own datatype userdata as an engine value)
+fn held(value: &Value) -> Option<Value> {
     match value {
         Value::Lua(lua_value) => match &**lua_value {
             LuaValue::UserData(userdata) => match capture_userdata(userdata) {
@@ -213,9 +250,9 @@ fn capture_userdata(userdata: &LuaAnyUserData) -> Wire {
         return dom(Variant::Vector3int16(dom::Vector3int16::from(*v)));
     }
     match crate::lua::convert::from_lua(&LuaValue::UserData(userdata.clone())) {
-        // (EnumItems, Font, Content and the datatypes the engine stores: VM-independent values)
+        // (EnumItems, Font, Content and the datatypes the engine stores: VM-independent values; a CFrame as it crosses)
         Value::Lua(_) | Value::Instance(_) => Wire::Nil,
-        value => Wire::Value(value),
+        value => Wire::Value(carried(value, false)),
     }
 }
 
@@ -337,12 +374,29 @@ fn object(lua: &Lua, engine: &Engine, wire: &Wire) -> LuaResult<LuaValue> {
 
 /// What a call's arguments come to on the network, for UnreliableRemoteEvent's ceiling ([`UNRELIABLE_LIMIT`]). Measured
 /// (tools/parity/probes/loopback/remote_limits.luau, a sweep across the cutoff): a string costs 1 + its length's varint + its
-/// bytes, a buffer one byte more, a number 9, a table 1 + its count's varint + its entries (a dictionary's keys as
-/// strings), an instance reference 6. Not measured, taken from those: nil and booleans 1 and 2, a vector 13, other values
-/// their datatype's float count times 4 plus 1. A buffer that compresses well can pass a real client where ree drops it
-/// (a client compresses buffers).
+/// bytes, a number 9, a table 1 + its count's varint + its entries (a dictionary's keys as strings), an instance reference 6,
+/// and a buffer [`buffer_size`]. Not measured, taken from those: nil and booleans 1 and 2, a vector 13, other values their
+/// datatype's float count times 4 plus 1.
 pub fn encoded_size(values: &[Wire]) -> usize {
-    values.iter().map(size_of).sum()
+    let raw: usize = values.iter().map(|wire| size_of(wire, false)).sum();
+    // (a buffer is never sent larger than it is: only a call past the ceiling as it is needs its buffers compressed)
+    if raw <= UNRELIABLE_LIMIT { raw } else { values.iter().map(|wire| size_of(wire, true)).sum() }
+}
+
+/// A buffer's bytes on the network: 1 + its length's varint, then the varint of its Zstandard frame's length (level 1, the
+/// content size written, no checksum) and the frame when that is smaller than the buffer, else a 0 and the bytes as they are.
+/// Measured each way, both sides alike (Studio 0.747, tools/parity/probes/loopback/buffer_sizes.luau: 144 sizes of repeated,
+/// patterned, random and part-random buffers, alone and many to a table, to the byte from the sender's "went over by" count):
+/// 1,000,000 zero bytes pass the ceiling, 20 zero bytes cost 20, 20 random bytes 23.
+pub fn buffer_size(bytes: &[u8]) -> usize {
+    let raw = 2 + varint(bytes.len()) + bytes.len();
+    if bytes.is_empty() {
+        return raw;
+    }
+    match zstd::bulk::compress(bytes, 1) {
+        Ok(frame) if 1 + varint(bytes.len()) + varint(frame.len()) + frame.len() < raw => 1 + varint(bytes.len()) + varint(frame.len()) + frame.len(),
+        _ => raw,
+    }
 }
 
 /// The UnreliableRemoteEvent ceiling: 1000 bytes of arguments (Roblox's documentation, and the measured cutoffs)
@@ -358,13 +412,15 @@ fn varint(value: usize) -> usize {
     bytes
 }
 
-fn size_of(wire: &Wire) -> usize {
+/// `compress`: a buffer as the network compresses it ([`buffer_size`]), else as it is
+fn size_of(wire: &Wire, compress: bool) -> usize {
     match wire {
         Wire::Nil => 1,
         Wire::Bool(_) => 2,
         Wire::Number(_) => 9,
         Wire::Vector(_) => 13,
         Wire::String(text) => 1 + varint(text.len()) + text.len(),
+        Wire::Buffer(bytes) if compress => buffer_size(bytes),
         Wire::Buffer(bytes) => 2 + varint(bytes.len()) + bytes.len(),
         Wire::Instance(_) | Wire::Handle(_) => 6,
         Wire::Value(value) => 1 + 4 * floats_of(value),
@@ -374,17 +430,46 @@ fn size_of(wire: &Wire) -> usize {
         // (not measured: their floats, as a datatype's; a proxy's fields)
         Wire::ColorKeypoint(_) => 1 + 4 * 5,
         Wire::NumberKeypoint(_) => 1 + 4 * 3,
-        Wire::Proxy { fields, .. } => 1 + fields.iter().map(size_of).sum::<usize>(),
+        Wire::Proxy { fields, .. } => 1 + fields.iter().map(|field| size_of(field, compress)).sum::<usize>(),
         Wire::Table(entries) => {
             1 + varint(entries.len())
                 + entries
                     .iter()
                     .map(|(key, item)| match key {
-                        Key::Index(_) => size_of(item),
-                        Key::Name(name) => 1 + varint(name.len()) + name.len() + size_of(item),
+                        Key::Index(_) => size_of(item, compress),
+                        Key::Name(name) => 1 + varint(name.len()) + name.len() + size_of(item, compress),
                     })
                     .sum::<usize>()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A buffer's cost against the ceiling, as the sender's "went over by" counts gave it (Studio 0.747, buffer_sizes.luau): raw
+    /// when compression does not make it smaller, else its Zstandard frame's
+    #[test]
+    fn a_buffer_costs_its_compressed_frame_when_that_is_smaller() {
+        let random = |size: usize, seed: u32| {
+            let mut state = seed;
+            (0..size).map(|_| {
+                state ^= state << 13;
+                state ^= state >> 17;
+                state ^= state << 5;
+                (state % 256) as u8
+            }).collect::<Vec<u8>>()
+        };
+        assert_eq!(buffer_size(&random(979, 979)), 983, "random bytes cost themselves and 4");
+        assert_eq!(buffer_size(&random(20, 1)), 23);
+        assert_eq!(buffer_size(&[0; 20]), 20, "20 zero bytes compress to a 17-byte frame");
+        assert_eq!(buffer_size(&[0; 2000]), 23);
+        assert!(buffer_size(&[0; 1_000_000]) < UNRELIABLE_LIMIT, "a million zero bytes pass the ceiling");
+        assert_eq!(buffer_size(&[]), 3);
+        // (a call under the ceiling as it is is never compressed: its size is the raw one)
+        assert_eq!(encoded_size(&[Wire::Buffer(vec![0; 900].into())]), 904);
+        assert_eq!(encoded_size(&[Wire::Number(1.0), Wire::Number(2.0), Wire::Buffer(vec![0; 2000].into())]), 18 + 23);
     }
 }
 

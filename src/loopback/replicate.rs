@@ -450,11 +450,11 @@ fn copy_values(
             refs.push((to, name, target));
             continue;
         }
-        if let Some(value) = super::wire::portable(value) {
+        if let Some(value) = super::wire::portable_property(reflection, class, name, value) {
             props.push((name, value));
         }
     }
-    let attributes: crate::dom::Attributes = source.attributes.iter().filter_map(|(name, value)| super::wire::portable(value).map(|value| (name.clone(), value))).collect::<Vec<_>>().into();
+    let attributes: crate::dom::Attributes = source.attributes.iter().filter_map(|(name, value)| super::wire::portable_attribute(value).map(|value| (name.clone(), value))).collect::<Vec<_>>().into();
     for (name, value) in attributes.iter() {
         if let Value::Instance(target) = value {
             attribute_refs.push((to, name.clone(), *target));
@@ -642,7 +642,7 @@ pub fn flush(server: &Engine, bridge: &Bridge) {
                 if !filter.replicates(reflection, class, name) {
                     continue;
                 }
-                let value = state.dom.raw_get(id, name).and_then(super::wire::portable).unwrap_or(Value::Nil);
+                let value = state.dom.raw_get(id, name).and_then(|value| super::wire::portable_property(reflection, class, name, value)).unwrap_or(Value::Nil);
                 writes += 1;
                 out.push(Msg::Prop { id, name, value, quiet });
             }
@@ -650,7 +650,7 @@ pub fn flush(server: &Engine, bridge: &Bridge) {
                 if whole.contains(&id) || !sent_and_replicated(&state, id) || !attributed.insert((id, name.clone())) {
                     continue;
                 }
-                let value = state.dom.at(id).attribute(name.as_bytes()).and_then(super::wire::portable).unwrap_or(Value::Nil);
+                let value = state.dom.at(id).attribute(name.as_bytes()).and_then(super::wire::portable_attribute).unwrap_or(Value::Nil);
                 out.push(Msg::Attr { id, name, value });
             }
             Change::Tag(id, tag) => {
@@ -786,13 +786,13 @@ fn re_enter(server: &Engine, state: &mut State, reflection: &Reflection, filter:
             let class = state.dom.at(node).class;
             for (name, value) in state.dom.at(node).props.iter() {
                 if filter.replicates(reflection, class, name)
-                    && let Some(value) = super::wire::portable(value)
+                    && let Some(value) = super::wire::portable_property(reflection, class, name, value)
                 {
                     out.push(Msg::Prop { id: node, name, value, quiet: false });
                 }
             }
             for (name, value) in state.dom.at(node).attributes.iter() {
-                if let Some(value) = super::wire::portable(value) {
+                if let Some(value) = super::wire::portable_attribute(value) {
                     out.push(Msg::Attr { id: node, name: name.clone(), value });
                 }
             }
@@ -812,7 +812,7 @@ fn node_of(state: &State, reflection: &Reflection, filter: &Filter, id: Instance
     let mut props: Vec<(NameId, Value)> = Vec::with_capacity(instance.props.len());
     for (name, value) in instance.props.iter() {
         if filter.replicates(reflection, class, name)
-            && let Some(value) = super::wire::portable(value)
+            && let Some(value) = super::wire::portable_property(reflection, class, name, value)
         {
             props.push((name, value));
         }
@@ -823,7 +823,7 @@ fn node_of(state: &State, reflection: &Reflection, filter: &Filter, id: Instance
         class,
         parent,
         props,
-        attributes: instance.attributes.iter().filter_map(|(name, value)| super::wire::portable(value).map(|value| (name.clone(), value))).collect(),
+        attributes: instance.attributes.iter().filter_map(|(name, value)| super::wire::portable_attribute(value).map(|value| (name.clone(), value))).collect(),
         tags: instance.tags.iter().cloned().collect(),
         source: script_source(reflection, instance),
         json: instance.flags & flags::JSON_MODULE != 0,
