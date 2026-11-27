@@ -105,12 +105,19 @@ struct View {
 /// Whether the camera has the run's screen for its viewport: the camera the run starts with, a camera a render step found
 /// current and a camera the engine made current (`Cameras::screened`).
 pub fn has_screen(engine: &Engine, camera: InstanceId) -> bool {
-    camera == engine.world().camera || engine.state.borrow().cameras.screened.contains(&camera)
+    !engine.options.server() && (camera == engine.world().camera || engine.state.borrow().cameras.screened.contains(&camera))
 }
 
 /// The camera's ViewportSize: the run's screen (`--camera` / the viewport) for a camera that has it ([`has_screen`]), 1 x 1 for
 /// any other camera.
 pub fn viewport_size(engine: &Engine, camera: InstanceId) -> (f32, f32) {
+    // A server has no window: its start camera and the cameras a script makes read 1 x 1, and so does one the engine makes for a
+    // CurrentCamera written nil, while one it makes for a CurrentCamera that left the Workspace or was destroyed reads 800 x 600
+    // (measured on a 0.747 server and a headless client alike, two sessions: tools/parity/probes/camera_headless.luau; their near
+    // planes stay 0.5 out, as no render step moves them)
+    if engine.options.server() {
+        return if engine.state.borrow().cameras.screened.contains(&camera) { (800.0, 600.0) } else { (1.0, 1.0) };
+    }
     if has_screen(engine, camera) {
         let device = &engine.options.profile.device;
         let (width, height) = device.camera.unwrap_or(device.viewport());
@@ -124,6 +131,9 @@ pub fn viewport_size(engine: &Engine, camera: InstanceId) -> (f32, f32) {
 /// How far ahead of the camera its near plane is (`-NearPlaneZ`): 0.1 for the camera the run starts with and a camera a render
 /// step found current (`Cameras::near`), 0.5 for others.
 pub fn near_plane(engine: &Engine, camera: InstanceId) -> f32 {
+    if engine.options.server() {
+        return 0.5;
+    }
     if camera == engine.world().camera || engine.state.borrow().cameras.near.contains(&camera) { 0.1 } else { 0.5 }
 }
 
@@ -368,6 +378,8 @@ fn write_current(engine: &Engine, value: &LuaValue) -> Result<(), Flow> {
 /// Camera child, or else to a new Camera named "Camera" put in the Workspace, which has the window for its viewport at once.
 fn settle_current(engine: &Engine) {
     let workspace = engine.world().workspace;
+    // (a server's camera for a CurrentCamera that left the Workspace has 800 x 600, for one written nil 1 x 1: viewport_size)
+    let replaced = current(engine).is_some();
     let picked = {
         let state = engine.state.borrow();
         if current(engine).is_some_and(|camera| state.dom.is_descendant_of(camera, workspace)) {
@@ -382,7 +394,9 @@ fn settle_current(engine: &Engine) {
             let hooks = engine.hooks.borrow();
             let mut state = engine.state.borrow_mut();
             let camera = core::create_named(&mut state, &engine.reflection, class, "Camera");
-            state.cameras.screened.insert(camera);
+            if replaced || !engine.options.server() {
+                state.cameras.screened.insert(camera);
+            }
             if core::set_parent(&mut state, &engine.reflection, &hooks, camera, Some(workspace)).is_err() {
                 return;
             }

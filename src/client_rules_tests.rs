@@ -124,3 +124,36 @@ fn screen_resolution_and_touch_controls_answer_as_a_client() {
         done(&lines);
     }
 }
+
+/// A server has no window: its start camera and a script's cameras read 1 x 1 at NearPlaneZ -0.5, a camera the engine makes for a
+/// CurrentCamera that left the Workspace 800 x 600, one it makes for a CurrentCamera written nil 1 x 1.
+#[test]
+fn a_servers_cameras_have_no_window() {
+    let lines = run(
+        server(),
+        r#"
+        local function Size(C) return C.ViewportSize.X .. "x" .. C.ViewportSize.Y .. " " .. C.NearPlaneZ end
+        local Start = workspace.CurrentCamera
+        assert(Size(Start) == "1x1 -0.5", Size(Start))
+        local Made = Instance.new("Camera")
+        Made.Parent = workspace
+        workspace.CurrentCamera = Made
+        task.wait()
+        Made:Destroy()
+        task.wait()
+        local Replaced = workspace.CurrentCamera
+        assert(Replaced ~= Made and Replaced ~= Start and Size(Replaced) == "800x600 -0.5", Size(Replaced))
+        Replaced.Parent = nil
+        workspace.CurrentCamera = nil
+        task.wait()
+        local Fresh = workspace.CurrentCamera
+        assert(Fresh ~= Replaced and Size(Fresh) == "1x1 -0.5", Size(Fresh))
+        print("done")
+        "#,
+        1.0,
+    );
+    done(&lines);
+    // (a client keeps its window: the start camera has the screen)
+    let lines = run(play(), r#"assert(workspace.CurrentCamera.ViewportSize.X > 1 and math.abs(workspace.CurrentCamera.NearPlaneZ + 0.1) < 1e-6) print("done")"#, 0.0);
+    done(&lines);
+}
