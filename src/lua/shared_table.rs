@@ -65,10 +65,9 @@
 //! others' order; an overwrite or increment in a list the table alone holds stays in place, while a write in a list a shallow
 //! copy (or a loop, [`Walk`]) shares copies the list and moves the key written first (a removal there keeps the others'
 //! order); `update` always moves its key first, as it holds a copy of the table while it runs; a deep copy keeps the order,
-//! `new(t)` adds t's keys in its `pairs` order (so they walk the other way), and a list left with one key moves back up. Not
-//! matched: once a client has marked a SharedTable ([`Shared::mark`], which ree tracks for increment), every overwrite or
-//! increment of a key in a list moves it first, as in a list a copy shares (measured, iteration probes held, trigger and
-//! sticky); ree's stays in place. A deep copy shares the nodes that hold no SharedTable with the table it copied
+//! `new(t)` adds t's keys in its `pairs` order (so they walk the other way), and a list left with one key moves back up. A
+//! marked SharedTable ([`Shared::mark`]) writes as one a copy shares at every write: each overwrite or increment copies its path
+//! and moves a key of a list first ([`node_mut`]; measured, Studio 0.747, tools/parity/probes/shared_table_marked.luau). A deep copy shares the nodes that hold no SharedTable with the table it copied
 //! ([`retarget`]), so a write to either right after it pays for its path and moves a key of a list first, as after a shallow
 //! copy (a client's top-level deep copy does the same, measured). The value types the engine has no value for (Ray, Axes,
 //! TweenInfo, the keypoints, ...) wait in one engine table, a slot each, freed once no SharedTable holds them; a copy goes in
@@ -84,15 +83,14 @@
 //! (hashed once a call and again for each further call of an update's callback, copied in when a write adds it), of a string or
 //! buffer copied in or made for a script on a read or a loop's step, the object a read or a loop's step makes ([`load`]), an
 //! integer key a read finds, the empty slots a conversion walks and the entries `clear` frees. A read of a 16-byte string now
-//! costs what a client's does ([`cost::SHARED_MADE_STRING`]). Not matched yet: a read by a 16-byte key took a client 0.059 to
-//! 0.080 us (ree charges 0.03); a loop's step over 16-byte string values 0.025 to 0.029 more than over numbers (ree 0.003); an
-//! update with a trivial callback 0.70 in one probe and 0.38 to 0.43 in another (ree 0.32); increment 0.07 to 0.21 in three
-//! probes against an older probe's 0.37 to 0.43 ([`cost::SHARED_INCREMENT`]; ree charges 0.39); one key added and taken out
-//! again and again 0.22 to 0.31 us a pair (ree 0.62, an add and a removal); reads of one list of colliding
-//! keys again and again about a third of ree's price (a client's cache: 2.0 to 2.4 us for the oldest of 1,024, ree 7.6; read
-//! once in each of 200 tables 8.4 to 8.7, matched); SharedTableRegistry's GetSharedTable 0.17 to 0.19 us and SetSharedTable
-//! 0.35 to 0.37 (ree charges a method call, 0.085); and from 65,488 bytes a client takes longer over a key than its hash
-//! ([`cost::SHARED_KEY_BYTE`]).
+//! costs what a client's does ([`cost::SHARED_MADE_STRING`]), as do a read's own price ([`cost::SHARED_READ`]), a long key's
+//! ([`cost::SHARED_LONG_KEY`]), increment ([`cost::SHARED_INCREMENT`]) and the registry's calls (cost.rs `method`). Not matched
+//! yet: a loop's step over 16-byte string values 0.025 to 0.029 more than over numbers (ree 0.003); an update with a trivial
+//! callback 0.52 to 0.56 us at 10 entries (ree 0.34); one key added and taken out again and again 0.22 to 0.36 us a pair (ree
+//! 0.62, an add and a removal; a marked table's 0.53 to 1.7, ree 1.1 to 2.1); reads of one list of colliding keys again and
+//! again about a third of ree's price (a client's cache: 2.0 to 2.4 us for the oldest of 1,024, ree 7.6; read once in each of
+//! 200 tables 8.4 to 8.7, matched); a marked table's overwrite in a list of colliding keys, 13 levels down (ree 4.0 us, a
+//! client 1.2 to 1.5).
 
 use std::cell::{Cell, RefCell};
 use std::ffi::{CStr, c_int, c_void};
@@ -240,9 +238,16 @@ impl Probe {
         if let Probe::String(bytes, _) = self { bytes.len() } else { 0 }
     }
 
-    /// What hashing the key cost (cost.rs [`cost::SHARED_KEY_BYTE`]), charged by the call that named it, also when it then raises
+    /// What hashing the key cost (cost.rs [`cost::SHARED_KEY_BYTE`], and [`cost::SHARED_LONG_KEY`] for a long one), charged by the
+    /// call that named it, also when it then raises
     fn price(&self) -> f64 {
-        self.len() as f64 * cost::SHARED_KEY_BYTE
+        let len = self.len();
+        len as f64 * cost::SHARED_KEY_BYTE + if len >= cost::SHARED_LONG_KEY_FROM { cost::SHARED_LONG_KEY } else { 0.0 }
+    }
+
+    /// What a write that stores at a long key costs more (cost.rs [`cost::SHARED_LONG_KEY_WRITTEN`])
+    fn written_price(&self) -> f64 {
+        if self.len() >= cost::SHARED_LONG_KEY_FROM { cost::SHARED_LONG_KEY_WRITTEN } else { 0.0 }
     }
 }
 
@@ -416,6 +421,9 @@ struct Work {
     rehashed: usize,
     /// Bytes of keys added, copied in
     added: usize,
+    /// Set by the caller: the table written is marked ([`Shared::mark`]), so the write treats every node on its path as one a copy
+    /// shares ([`node_mut`])
+    marked: bool,
 }
 
 impl Work {
@@ -558,7 +566,13 @@ impl<K: TrieKey> Trie<K> {
 /// The node, to change: copied first when another trie shares it (counted in `work`, a list by its entries), and whether it
 /// was. `list`: whether it is a list past the last level.
 fn node_mut<'a, K: TrieKey>(node: &'a mut Rc<Node<K>>, list: bool, work: &mut Work) -> (&'a mut Node<K>, bool) {
-    let shared = Rc::strong_count(node) > 1;
+    // (a write to a marked table goes as a write after a shallow copy does, at every write: it pays for the nodes on its path and moves
+    // a key of a list first (measured, Studio 0.747, a headless client, two sessions: an overwrite of a table held by
+    // SharedTableRegistry, stored in another SharedTable, set as an attribute or sent through a BindableFunction moved its key first
+    // in its list, as increment did; an overwrite of a string key cost 0.27-0.29 us at 10 entries, 0.57-0.60 at 1,000 and 0.61-0.85
+    // at 10,000, where the same table unmarked cost 0.068-0.086, an increment 0.29-0.32 / 0.58-0.59 / 0.77-0.83 against 0.080-0.10,
+    // an integer key's overwrite 0.19-0.20, and an overwrite in a list of 8 colliding keys 1.41-1.48 against 0.33-0.36))
+    let shared = Rc::strong_count(node) > 1 || work.marked;
     if shared {
         if list {
             work.list_copied += node.entries.len();
@@ -1164,7 +1178,7 @@ fn converted(lua: &Lua, engine: &Engine, store: &Store, table: &LuaTable, conver
         return raise(message);
     }
     let empty = empty_slots(table);
-    conversion.tally.seconds += empty as f64 * cost::SHARED_EMPTY_SLOT;
+    conversion.tally.seconds += empty as f64 * cost::SHARED_EMPTY_SLOT + empty.saturating_sub(cost::SHARED_NEAR_SLOTS) as f64 * cost::SHARED_FAR_SLOT;
     if let Err(message) = conversion.made.add_values(empty as u64) {
         return raise(message);
     }
@@ -1539,15 +1553,20 @@ fn deep_arg(engine: &Engine, args: &Args, function: &str) -> Result<bool, Flow> 
     }
 }
 
-/// The value at `key` in `entries`, for a script, and what finding it cost (a list's search, an integer key that found a value:
-/// cost.rs [`cost::SHARED_FOUND_INTEGER`]) charged.
+/// The value at `key` in `entries`, for a script, and what finding it cost (the read's own, a list's search, an integer key that
+/// found a value or missed: cost.rs [`cost::SHARED_READ`], [`cost::SHARED_FOUND_INTEGER`], [`cost::SHARED_MISSED_INTEGER`]) charged.
 fn read(lua: &Lua, engine: &Engine, store: &Store, entries: &Entries, key: &Probe) -> LuaResult<LuaValue> {
     let mut work = Work::default();
     let (value, found) = match entries.get(key.key(), &mut work) {
         Some(stored) => (load(lua, engine, store, stored, true)?, !key.is_string() && !matches!(stored, Stored::Nil)),
         None => (LuaValue::Nil, false),
     };
-    charge(engine, work.price(key.is_string()) + if found { cost::SHARED_FOUND_INTEGER } else { 0.0 });
+    let own = match (key.is_string(), found) {
+        (true, _) => cost::SHARED_READ,
+        (false, true) => cost::SHARED_FOUND_INTEGER,
+        (false, false) => cost::SHARED_MISSED_INTEGER,
+    };
+    charge(engine, own + work.price(key.is_string()));
     Ok(value)
 }
 
@@ -1564,11 +1583,11 @@ fn convert_value(lua: &Lua, engine: &Engine, store: &Store, value: &LuaValue, he
 /// Sets `key` of `entries` (a table's, or update's copy of them) to `value` (converted: [`convert_value`]; the key already
 /// checked, the table not frozen), priced as an overwrite or a key added or taken out ([`write_price`]): the value it replaced,
 /// for the caller to drop once it has let go of the entries.
-fn put(engine: &Engine, entries: &mut Entries, key: &Probe, value: Option<Stored>) -> Option<Stored> {
+fn put(engine: &Engine, entries: &mut Entries, key: &Probe, value: Option<Stored>, marked: bool) -> Option<Stored> {
     let adds = value.is_some();
-    let mut work = Work::default();
+    let mut work = Work { marked, ..Work::default() };
     let replaced = entries.set(key.key(), value, &mut work);
-    charge(engine, write_price(key.is_string(), adds != replaced.is_some(), &work));
+    charge(engine, write_price(key.is_string(), adds != replaced.is_some(), &work) + if adds { key.written_price() } else { 0.0 });
     replaced
 }
 
@@ -1589,7 +1608,7 @@ fn write(lua: &Lua, engine: &Engine, store: &Store, shared: &Shared, key: &Probe
     if shared.is_frozen() {
         return raise(FROZEN);
     }
-    let replaced = put(engine, &mut shared.entries.borrow_mut(), key, value);
+    let replaced = put(engine, &mut shared.entries.borrow_mut(), key, value, shared.marked.get());
     shared.changed();
     drop(replaced);
     Ok(())
@@ -1767,7 +1786,7 @@ fn update_commit(lua: &Lua, library: &Library, updating: &mut Option<Updating>) 
     }
     // (stored in update's copy, which then becomes the table's entries: the table has not changed since the copy was taken,
     // as every change counts but a failed increment's key with no value, which the table, marked, no longer gets)
-    let replaced = put(engine, &mut entries, &updating.key, value);
+    let replaced = put(engine, &mut entries, &updating.key, value, false);
     let before = updating.shared.entries.replace(entries);
     updating.shared.changed();
     drop((replaced, before));
@@ -1920,11 +1939,12 @@ fn increment(lua: &Lua, engine: &Engine, args: &Args) -> Result<LuaMultiValue, F
             return Ok(values([LuaValue::Boolean(true), LuaValue::String(lua.create_string(&message)?), LuaValue::Integer(0)]));
         }
     };
-    // (a key in a list is written at the place found, the list searched once)
+    // (a key in a list is written at the place found, the list searched once; in a marked table as after a shallow copy: node_mut)
+    work.marked = shared.marked.get();
     shared.entries.borrow_mut().replace(key.key(), Stored::Number(old + delta), at, &mut work);
     shared.changed();
     // (what Studio spent on it, its write included: cost.rs; and the nodes copied from a shallow copy, as a write's)
-    charge(engine, cost::SHARED_INCREMENT + work.price(key.is_string()));
+    charge(engine, cost::SHARED_INCREMENT + work.price(key.is_string()) + key.written_price());
     Ok(values([LuaValue::Boolean(false), LuaValue::Number(old)]))
 }
 

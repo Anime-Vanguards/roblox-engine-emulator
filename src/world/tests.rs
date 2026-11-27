@@ -11962,3 +11962,65 @@ fn writes_that_change_nothing_kept_parents_and_datatype_misses_cost_what_a_clien
         ),
     );
 }
+
+/// A write to a marked SharedTable (here one SharedTableRegistry holds) copies the nodes on its path at every write, as one right
+/// after a shallow copy does (lua/shared_table.rs node_mut; Studio 0.747, a headless client: 0.27-0.29 us at 10 entries against an
+/// unmarked table's 0.068-0.086), increment costs an overwrite's price (cost.rs SHARED_INCREMENT: 0.080-0.10 us, where ree charged
+/// 0.37 for every increment), a key of 16 bytes or more costs SHARED_LONG_KEY more to name and SHARED_LONG_KEY_WRITTEN more to store
+/// at, a read SHARED_READ more, the registry's calls what a client spends on them, and a conversion's slots past the first million
+/// SHARED_FAR_SLOT each.
+#[test]
+fn shared_tables_marked_long_keys_and_far_slots_cost_what_a_client_spends() {
+    use crate::cost::*;
+    let (lua, engine) = start_play();
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    run(
+        &lua,
+        &engine,
+        &format!(
+            r##"
+        local Registry = game:GetService("SharedTableRegistry")
+        local function Table(N)
+            local T = {{}}
+            for I = 1, N do T["k" .. I] = I end
+            return SharedTable.new(T)
+        end
+        local Plain, Marked, Unmarked = Table(10), Table(10), Table(10)
+        Registry:SetSharedTable("Marked", Marked)
+        local Long, Short = string.rep("a", 15) .. "z", string.rep("a", 14) .. "z"
+        Plain[Long] = 1
+        Plain[Short] = 1
+        local function Each(Call)
+            Call(0)
+            local Start = os.clock()
+            for I = 1, 40 do Call(I) end
+            return (os.clock() - Start) / 40
+        end
+        local function Is(Name, Got, Want, Within)
+            assert(math.abs(Got - Want) < Within, `{{Name}}: {{Got}} s, not {{Want}}`)
+        end
+        local Write = Each(function(I) Plain.k5 = I end)
+        -- (the nodes on the key's path, one or more: each SHARED_COPIED_STRING_NODE)
+        local Nodes = (Each(function(I) Marked.k5 = I end) - Each(function(I) Unmarked.k5 = I end)) / {node:e}
+        assert(Nodes >= 0.999 and math.abs(Nodes - math.round(Nodes)) < 1e-6, `a marked table's write copied {{Nodes}} nodes' worth`)
+        Is("increment", Each(function() SharedTable.increment(Plain, "k5", 1) end) - Write, {increment:e}, 0.03e-6)
+        Is("a 16-byte key's read", Each(function() local _ = Plain[Long] end) - Each(function() local _ = Plain[Short] end), {long:e}, 1e-12)
+        Is("a 16-byte key's write", Each(function(I) Plain[Long] = I end) - Each(function(I) Plain[Short] = I end), {long_written:e}, 1e-12)
+        local Empty = Each(function() end)
+        Is("GetSharedTable", Each(function() Registry:GetSharedTable("Marked") end) - Empty, {get:e}, 0.03e-6)
+        Is("SetSharedTable", Each(function() Registry:SetSharedTable("Marked", Marked) end) - Empty, {set:e}, 0.03e-6)
+        local Near, Far = table.create(1000000), table.create(2000000)
+        Near[1], Far[1] = 1, 1
+        local function Convert(T) local Start = os.clock() SharedTable.new(T) return os.clock() - Start end
+        Is("2,000,000 slots against 1,000,000", Convert(Far) - Convert(Near), {far:e}, 1e-9)
+        "##,
+            node = SHARED_COPIED_STRING_NODE,
+            increment = SHARED_INCREMENT + 0.015e-6 - SHARED_OVERWRITE_STRING,
+            long = SHARED_LONG_KEY + SHARED_KEY_BYTE,
+            long_written = SHARED_LONG_KEY + SHARED_LONG_KEY_WRITTEN + SHARED_KEY_BYTE,
+            get = method("GetSharedTable"),
+            set = method("SetSharedTable"),
+            far = 1e6 * (SHARED_EMPTY_SLOT + SHARED_FAR_SLOT),
+        ),
+    );
+}

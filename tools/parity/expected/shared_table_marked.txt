@@ -1,0 +1,51 @@
+# engine: Roblox Studio 0.747.0.7471481, a headless playing client (script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-27
+plain made 7,6,5,4,3,2,1,0
+plain write 3 7,6,5,4,3,2,1,0
+plain increment 5 7,6,5,4,3,2,1,0
+plain remove 1 7,6,5,4,3,2,0
+plain add 1 1,7,6,5,4,3,2,0
+plain update 6 6,1,7,5,4,3,2,0
+plain write 0 0,6,1,7,5,4,3,2
+registry made 7,6,5,4,3,2,1,0
+registry write 3 3,7,6,5,4,2,1,0
+registry increment 5 5,3,7,6,4,2,1,0
+registry remove 1 5,3,7,6,4,2,0
+registry add 1 1,5,3,7,6,4,2,0
+registry update 6 6,1,5,3,7,4,2,0
+registry write 0 0,6,1,5,3,7,4,2
+nested made 7,6,5,4,3,2,1,0
+nested write 3 3,7,6,5,4,2,1,0
+nested increment 5 5,3,7,6,4,2,1,0
+nested remove 1 5,3,7,6,4,2,0
+nested add 1 1,5,3,7,6,4,2,0
+nested update 6 6,1,5,3,7,4,2,0
+nested write 0 0,6,1,5,3,7,4,2
+attribute made 7,6,5,4,3,2,1,0
+attribute write 3 3,7,6,5,4,2,1,0
+attribute increment 5 5,3,7,6,4,2,1,0
+attribute remove 1 5,3,7,6,4,2,0
+attribute add 1 1,5,3,7,6,4,2,0
+attribute update 6 6,1,5,3,7,4,2,0
+attribute write 0 0,6,1,5,3,7,4,2
+bindable made 7,6,5,4,3,2,1,0
+bindable write 3 3,7,6,5,4,2,1,0
+bindable increment 5 5,3,7,6,4,2,1,0
+bindable remove 1 5,3,7,6,4,2,0
+bindable add 1 1,5,3,7,6,4,2,0
+bindable update 6 6,1,5,3,7,4,2,0
+bindable write 0 0,6,1,5,3,7,4,2
+deep copy source made 7,6,5,4,3,2,1,0
+deep copy source write 3 3,7,6,5,4,2,1,0
+deep copy source increment 5 5,3,7,6,4,2,1,0
+deep copy source remove 1 5,3,7,6,4,2,0
+deep copy source add 1 1,5,3,7,6,4,2,0
+deep copy source update 6 6,1,5,3,7,4,2,0
+deep copy source write 0 0,6,1,5,3,7,4,2
+deep copy made 7,6,5,4,3,2,1,0
+deep copy write 3 3,7,6,5,4,2,1,0
+deep copy increment 5 3,7,6,5,4,2,1,0
+deep copy remove 1 3,7,6,5,4,2,0
+deep copy add 1 1,3,7,6,5,4,2,0
+deep copy update 6 6,1,3,7,5,4,2,0
+deep copy write 0 0,6,1,3,7,5,4,2

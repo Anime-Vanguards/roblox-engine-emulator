@@ -2127,12 +2127,32 @@ pub fn full_name(names: usize, bytes: usize) -> f64 {
     names as f64 * FULL_NAME_NAME + bytes as f64 * FULL_NAME_BYTE
 }
 /// The parallel bridge's machinery (an empty test place's client, an actor_cost probe, one session, 2026-10-23): BindableFunction:Invoke into an
-/// Actor's OnInvoke 1,025 ns (ree's call itself counts 81.5), SharedTable.increment 370-429 (counts 31.5); a read (29 ns) is not priced beyond
-/// the engine call ree's SharedTable makes of it but by its key's bytes, an integer key it finds and the value it makes ([`SHARED_KEY_BYTE`],
-/// [`SHARED_FOUND_INTEGER`], [`SHARED_MADE_VALUE`] and after, [`SHARED_LOADED_BUFFER`]), a write is ([`SHARED_OVERWRITE_STRING`] and after).
-/// Charged on top of what the instructions count.
+/// Actor's OnInvoke 1,025 ns (ree's call itself counts 81.5); a SharedTable read is priced by [`SHARED_READ`], its key's bytes, an integer key it
+/// finds and the value it makes ([`SHARED_KEY_BYTE`], [`SHARED_FOUND_INTEGER`], [`SHARED_MADE_VALUE`] and after, [`SHARED_LOADED_BUFFER`]), a
+/// write by [`SHARED_OVERWRITE_STRING`] and after. Charged on top of what the instructions count.
 pub const ACTOR_INVOKE: f64 = 0.94e-6;
-pub const SHARED_INCREMENT: f64 = 0.37e-6;
+/// SharedTable.increment of a key the table holds, its write included, beyond the call and its key's hash, and the nodes it copies (a
+/// marked table's at every increment, as its writes: lua/shared_table.rs `node_mut`). A playing client (roblox-sim, Studio 0.747, a
+/// headless client, two sessions; os.clock around 1,000 calls, the median of 15 less an empty loop, beside a part's unchanged CastShadow
+/// write): 0.080-0.083 us at 10 entries, 0.086-0.097 at 1,000 and 0.096-0.100 at 10,000; the same table held by SharedTableRegistry
+/// 0.29-0.32, 0.58-0.59 and 0.77-0.83. The actor_cost probe's 0.37-0.43 was of a table it had sent to an Actor, so marked; ree charged
+/// 0.37 for every increment.
+pub const SHARED_INCREMENT: f64 = 0.065e-6;
+/// A SharedTable read by a string key (a hit or a miss) beyond the VM's call to it and its key's hash ([`SHARED_KEY_BYTE`]), in
+/// seconds, and a miss by an integer key ([`SHARED_FOUND_INTEGER`] a hit): the same sessions, 2,000 reads a sample, a number read by a
+/// 1- to 4-byte key 0.025-0.029 us at 10 entries, 0.033-0.037 at 100 and 0.032-0.036 at 10,000, a miss by a 1- to 4-byte key
+/// 0.027-0.032, where ree charged 0.016 to 0.018 in all; an integer key missed in an array of 10 to 100,000 0.035-0.041 (ree 0.015).
+pub const SHARED_READ: f64 = 0.011e-6;
+pub const SHARED_MISSED_INTEGER: f64 = 0.022e-6;
+/// A string key of [`SHARED_LONG_KEY_FROM`] bytes or more, which a client handles apart from a shorter one, in seconds: a read or any
+/// other call that names it ([`SHARED_LONG_KEY`]), and a write that stores at it ([`SHARED_LONG_KEY_WRITTEN`] more). The same sessions,
+/// keys of 1 to 64 bytes in a table of 100: a read 0.034 us at 1 byte and 0.050 at 15, then 0.076 at 16, 0.075 at 17 and 0.119 at 64; a
+/// miss by a 15-byte key 0.034 and by a 16-byte one 0.064; an overwrite 0.080 at 1 byte and 0.094 at 15, then 0.156 at 16 and 0.209 at
+/// 64 (most likely the key copied into a string that holds no more than 15 bytes in place; inferred from the step, not observed). ree
+/// charged the key's bytes alone (0.028 for a 16-byte read).
+pub const SHARED_LONG_KEY_FROM: usize = 16;
+pub const SHARED_LONG_KEY: f64 = 0.028e-6;
+pub const SHARED_LONG_KEY_WRITTEN: f64 = 0.035e-6;
 /// SharedTable's calls by the entries they handle, beyond the call (lua/shared_table.rs), in seconds. A playing client (Studio 0.748,
 /// os.clock over 10 to 10,000 entries, string and integer keys, two runs, fitted for the least relative error): SharedTable.new from a
 /// table 0.32 us an entry with a string key and 0.19 with an integer key (a nested table's entries counted alike: 1,000 one-entry tables
@@ -2259,11 +2279,15 @@ pub const SHARED_LOOP_MADE_VALUE: f64 = 0.022e-6;
 pub const SHARED_FOUND_INTEGER: f64 = 0.03e-6;
 /// An empty array slot or hash node of a table a SharedTable conversion walks, in seconds. A playing client (Studio 0.748, os.clock, two
 /// runs): SharedTable.new of `table.create(n)` holding one entry took 19.9-20.0 us at n = 100,000 and 196-213 at 1,000,000 (0.20 to
-/// 0.21 ns a slot), of `{x = 1}` 0.33-0.37. Fitted up to 1,000,000 slots. From there a client's time a slot grows, which this leaves out
-/// (not matched): at 2,000,000 slots it took 529-533 us (0.27 ns a slot; ree 400, x0.75), and `table.create(4000000)` (4,000,000 slots)
-/// took a client 4,634 us in an earlier session (1.16 ns a slot; ree 800). Only an array was measured, and an empty hash node is priced
-/// as an array slot.
+/// 0.21 ns a slot), of `{x = 1}` 0.33-0.37. Fitted up to 1,000,000 slots. From there a client's time a slot grows (the table's slots
+/// pass a core's caches: 16 MB at 1,000,000): each slot of a conversion past [`SHARED_NEAR_SLOTS`] costs [`SHARED_FAR_SLOT`] more. A
+/// playing client (roblox-sim, Studio 0.747, a headless client, two sessions, 9 conversions of one table each, beside 2,000 to 20,000
+/// unchanged part writes in the same sample): 23-38 us at 100,000 slots, 264-281 at 1,000,000, 951-1,291 at 2,000,000, 1,716-2,355 at
+/// 3,000,000 and 2,847-5,197 at 4,000,000 (an earlier session's `table.create(4000000)` 4,634); ree charged 20, 200, 400, 600 and 800,
+/// now 20, 200, 1,100, 2,000 and 2,900 (x0.94 to x1.15 of the three sessions' geometric means). Only an array was measured, and an empty hash node is priced as an array slot.
 pub const SHARED_EMPTY_SLOT: f64 = 0.2e-9;
+pub const SHARED_NEAR_SLOTS: usize = 1_000_000;
+pub const SHARED_FAR_SLOT: f64 = 0.7e-9;
 /// An entry SharedTable.clear frees, the table alone holding it, in seconds. A playing client (Studio 0.748, os.clock, two runs each,
 /// tables of `k<i>` keys): at 1,000 entries 37-41 us, cleared right after new, a frame after it or built by writes (60 tables), and
 /// 25-26 in a sub-millisecond batch (20 tables); at 10,000 205-218 us (3 tables), 260-279 (3 tables) and 262-268 (5 tables) in
@@ -2568,6 +2592,11 @@ pub fn method(name: &str) -> f64 {
         "GetValue" => 0.027,
         // ReflectionService:GetClass's lookup; the entry it makes is [`REFLECTED_CLASS`]'s
         "GetClass" => 0.28,
+        // (SharedTableRegistry, whose methods are the engine's Luau (services.luau): a playing client and a server, Studio 0.747, two
+        // sessions each, 1,000 calls a sample beside a part's unchanged CastShadow write: GetSharedTable 0.16-0.19 us, SetSharedTable of
+        // the table the name holds 0.42-0.44; ree charged a call the table does not name, 0.08 in all)
+        "GetSharedTable" => 0.15,
+        "SetSharedTable" => 0.41,
         // the Luau-served model queries add their own MODEL_QUERY
         "GetPivot" | "GetScale" | "GetBoundingBox" | "GetExtentsSize" | "PivotTo" | "ScaleTo" => 0.0,
         // (the part methods of world/parts.rs and gravity.rs: a headless 0.747 client, two sessions, the median of 9 samples of 200 calls
@@ -2623,7 +2652,7 @@ pub fn method_kinds(name: &str) -> u8 {
         | "FindFirstAncestorOfClass" | "FindFirstAncestorWhichIsA" | "GetFullName" | "GetPlayers" | "HasTag" | "GetTags" | "AddTag" | "RemoveTag" | "Emit"
         | "WorldToViewportPoint" | "WorldToScreenPoint" | "ViewportPointToRay" | "ScreenPointToRay" | "GetAttribute" | "Create" | "Raycast"
         | "Blockcast" | "Spherecast" | "GetPartBoundsInBox" | "GetPartBoundsInRadius" | "GetPartsInPart" | "JSONEncode" | "JSONDecode"
-        | "GetValue" | "GetClass" | "Fire" | "GetPivot" | "GetScale" | "GetBoundingBox" | "GetExtentsSize" | "PivotTo" | "ScaleTo"
+        | "GetValue" | "GetClass" | "GetSharedTable" | "SetSharedTable" | "Fire" | "GetPivot" | "GetScale" | "GetBoundingBox" | "GetExtentsSize" | "PivotTo" | "ScaleTo"
         | "FindPartsInRegion3" | "FindPartsInRegion3WithIgnoreList" | "FindPartsInRegion3WithWhiteList"
         | "findPartsInRegion3" | "IsRegion3Empty" | "IsRegion3EmptyWithIgnoreList" | "ArePartsTouchingOthers" | "GetRootPart" | "GetConnectedParts"
         | "GetJoints" | "GetNoCollisionConstraints" | "IsGrounded" | "GetRenderCFrame" | "GetClosestPointOnSurface" | "GetVelocityAtPosition"

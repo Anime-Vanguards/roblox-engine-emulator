@@ -8763,7 +8763,8 @@ fn an_update_whose_callback_raised_lets_go_of_its_copy() {
         local Cloned = SharedTable.clone(T)
         local Shared = Once(function() T.k2 = 2 end)
         Within("a write after a raised update beyond one after a stored update", Raised - Stored, -0.01, 0.01)
-        Within("a write after a clone beyond one after a stored update", Shared - Stored, 0.1, 5)
+        -- (update marked the table, so every write copies its path as one after a clone does: lua/shared_table.rs node_mut)
+        Within("a write after a clone beyond one after a stored update", Shared - Stored, -0.01, 0.01)
         "#,
     );
 }
@@ -9192,7 +9193,8 @@ fn shared_table_writes_cost_what_studio_spent() {
 }
 
 /// The parallel bridge's machinery costs what Studio spent (an empty test place's client, an actor_cost probe, 2026-10-23): a BindableFunction:Invoke
-/// into an Actor's OnInvoke 1,025 ns, SharedTable.increment 370-429; ree counted 81 and 32 (a table read, 29 ns in Studio, is close to ree's 3).
+/// into an Actor's OnInvoke 1,025 ns, SharedTable.increment 370-429 of a table the probe shared, so marked (a 0.747 client's increment of a
+/// table SharedTableRegistry holds 0.29-0.32 at 10 entries, of one unmarked 0.080-0.083: cost.rs SHARED_INCREMENT); ree counted 81 and 32.
 #[test]
 fn a_call_into_an_actor_and_a_shared_increment_cost_what_studio_spent() {
     let (lua, engine) = start();
@@ -9217,6 +9219,7 @@ fn a_call_into_an_actor_and_a_shared_increment_cost_what_studio_spent() {
         local Plain = Instance.new("BindableFunction")
         Plain.OnInvoke = function(A) return A end
         local Shared = SharedTable.new({ N = 0 })
+        game:GetService("SharedTableRegistry"):SetSharedTable("Bridge", Shared)
         local Invoke, Increment, Same = Per(function(N) for _ = 1, N do Call:Invoke(1, 2) end end), Per(function(N) for _ = 1, N do SharedTable.increment(Shared, "N", 1) end end), Per(function(N) for _ = 1, N do Plain:Invoke(1, 2) end end)
         assert(Invoke > 850 and Invoke < 1300, "Invoke into an Actor: " .. Invoke)
         assert(Increment > 300 and Increment < 520, "SharedTable.increment: " .. Increment)
@@ -9387,8 +9390,9 @@ fn shared_table_update_copies_its_path_as_in_roblox() {
                 T["k" .. I] = I
             end
             local S = SharedTable.new(T)
-            local Update = Per(200, function(N) for _ = 1, N do SharedTable.update(S, "k1", Same) end end)
+            -- (the overwrite first: update marks the table, whose writes then copy their path too)
             local Overwrite = Per(200, function(N) for _ = 1, N do S.k1 = 1 end end)
+            local Update = Per(200, function(N) for _ = 1, N do SharedTable.update(S, "k1", Same) end end)
             assert(Update > Overwrite + 0.2, `update {Update} and an overwrite {Overwrite} (us) at {Count} entries`)
             if Count == 1000 then
                 Within("update of a 1,000-entry table", Update, 0.4, 1.0)
@@ -9931,7 +9935,8 @@ fn a_shared_table_stores_a_copy_of_a_path2d_control_point() {
 }
 
 /// A SharedTable read costs the object it makes for the script and an integer key it finds, as a playing client's does (Studio
-/// 0.748, medians of 7 batches, two runs; cost.rs SHARED_MADE_VALUE and after): a number 0.023-0.024 us, a CFrame 0.038-0.053,
+/// 0.748, medians of 7 batches, two runs; cost.rs SHARED_MADE_VALUE and after; the read's own SHARED_READ since 2026-11-27, a 0.747
+/// client's number read 0.025-0.036 us at 10 to 10,000 entries): a number 0.023-0.024 us, a CFrame 0.038-0.053,
 /// an EnumItem 0.039, a TweenInfo 0.047-0.053, a Region3 0.056-0.059, a SharedTable 0.047-0.057; a number by an integer key
 /// 0.049-0.052; a 16-byte string by a short string key 0.063-0.069 and by an integer key 0.088-0.099. ree charged 0.018-0.022
 /// for each. A loop's step pays for its value's object as a read does.
@@ -9944,7 +9949,7 @@ fn shared_table_reads_cost_the_objects_they_make() {
             T.v = Value
             return Per(2000, function(N) for _ = 1, N do local _ = T.v end end)
         end
-        Within("a number read", Read(12345.5), 0.015, 0.03)
+        Within("a number read", Read(12345.5), 0.015, 0.035)
         Within("a CFrame read", Read(CFrame.new(1, 2, 3)), 0.03, 0.06)
         Within("an EnumItem read", Read(Enum.Material.Plastic), 0.03, 0.05)
         Within("a TweenInfo read", Read(TweenInfo.new(1)), 0.04, 0.065)
