@@ -1948,6 +1948,15 @@ pub(crate) fn json_safe(lua: &Lua, value: &LuaValue, path: &mut Vec<*const std::
 }
 
 /// FireFrameEvent: RunService's event, if a script ever created it, with immediate handlers.
+/// The frame's Heartbeat reaches the handlers RunService.Heartbeat has now (the wait step's deferred pass is next: signal.rs freeze)
+pub(crate) fn freeze_heartbeat(engine: &Rc<Engine>) {
+    let game = engine.world().game;
+    let Some(run_service) = find_service(engine, game, "RunService") else { return };
+    let mut state = engine.state.borrow_mut();
+    let signal = crate::instance::event_signal(&mut state, &engine.reflection, run_service, K::Heartbeat as NameId);
+    state.signals.freeze(signal);
+}
+
 fn fire_frame_event(lua: &Lua, engine: &Rc<Engine>, event: NameId, args: &[Value]) -> LuaResult<()> {
     let game = engine.world().game;
     let Some(run_service) = find_service(engine, game, "RunService") else { return Ok(()) };

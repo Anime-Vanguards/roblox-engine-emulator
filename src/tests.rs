@@ -15911,3 +15911,34 @@ fn a_joint_c0_is_orthonormalized_past_a_smaller_error_than_a_parts_cframe() {
     );
     assert_eq!(lines(&engine), ["print: 5e-07 true true", "print: 5.5e-07 false true", "print: 0.000001 false true"]);
 }
+
+/// A client takes Heartbeat's handlers between the wait step's resumptions and the deferred pass after them (measured, a 0.747
+/// playing client and server, a script's and a job's alike): a connection made by a wait-step resumption runs in that frame's
+/// Heartbeat, one made in the deferred pass in the next frame's, and so does a Wait made there.
+#[test]
+fn a_heartbeat_connection_made_in_the_wait_steps_deferred_pass_runs_from_the_next_frame() {
+    let (lua, engine) = start_with(Options { mode: "play".into(), ..Options::default() });
+    let output = run(&lua, &engine, r#"
+        local RunService = game:GetService("RunService")
+        local frame = 0
+        RunService.Heartbeat:Connect(function() frame += 1 end)
+        task.wait()
+        RunService.Heartbeat:Once(function() print("wait-step connection, frame " .. frame) end)
+        task.defer(function()
+            RunService.Heartbeat:Once(function() print("deferred-pass connection, frame " .. frame) end)
+            task.spawn(function()
+                RunService.Heartbeat:Wait()
+                print("deferred-pass Wait, frame " .. frame)
+            end)
+        end)
+        print("connected, frame " .. frame)
+        task.wait()
+        task.wait()
+    "#);
+    assert_eq!(output, [
+        "print: connected, frame 0",
+        "print: wait-step connection, frame 0",
+        "print: deferred-pass Wait, frame 1",
+        "print: deferred-pass connection, frame 1",
+    ]);
+}

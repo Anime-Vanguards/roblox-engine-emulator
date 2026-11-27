@@ -1949,7 +1949,7 @@ fn flush_deferred_upto(lua: &Lua, engine: &Rc<Engine>, processed: &mut usize, up
 enum TimerFlush {
     /// a full flush after each resumption (edit mode, as measured in Studio's edit DataModel)
     EachResumption,
-    /// every due timer first, then one pass (a playing client's task.wait / task.delay step)
+    /// every due timer first, then one pass (a playing client's task.wait / task.delay step), Heartbeat's handlers taken before it
     OncePass,
     /// every due timer first, then a full flush (a playing client's wait / delay / spawn step)
     AfterAll,
@@ -2060,6 +2060,8 @@ fn run_timers_in(lua: &Lua, engine: &Rc<Engine>, legacy: bool, limit: Option<f64
             // heartbeat_handlers closes it)
             let point = resumption_point(engine);
             engine.state.borrow_mut().sched.heartbeat_point = Some(point);
+            // (Heartbeat's handlers are those it has now: what the pass connects runs from the next frame, services/mod.rs)
+            crate::services::freeze_heartbeat(engine);
             flush_deferred_once(lua, engine)
         }
         TimerFlush::AfterAll => flush_deferred(lua, engine),

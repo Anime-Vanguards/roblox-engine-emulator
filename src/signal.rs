@@ -91,6 +91,9 @@ pub struct Signals {
     threads: Option<mlua::Table>,
     /// How many connected connections are ConnectParallel ones
     parallel_connections: usize,
+    /// A signal whose next fire reaches only the handlers it had when it was frozen ([`Signals::freeze`]), and how many of its
+    /// handlers came after (they are its last ones: handlers join at the end)
+    frozen: Option<(SignalId, usize)>,
 }
 
 impl Signals {
@@ -170,6 +173,9 @@ impl Signals {
         let signal = &mut self.signals[id as usize];
         signal.name = Str::default();
         signal.handlers = Vec::new();
+        if self.frozen.is_some_and(|(frozen, _)| frozen == id) {
+            self.frozen = None;
+        }
         signal.generation = signal.generation.wrapping_add(1);
         self.free_signals.push(id);
         self.freed.push(id);
@@ -227,6 +233,7 @@ impl Signals {
         self.parallel_connections += usize::from(parallel);
         let id = ConnectionId { index, generation: data.generation };
         self.signals[signal as usize].handlers.push(Handler::Connection(id));
+        self.joined(signal);
         id
     }
 
@@ -254,6 +261,7 @@ impl Signals {
     /// Registers a thread blocked in :Wait() (resumed once by the next fire).
     pub fn wait(&mut self, signal: SignalId, thread: mlua::Thread) {
         self.signals[signal as usize].handlers.push(Handler::Thread(thread));
+        self.joined(signal);
     }
 
     pub fn disconnect(&mut self, connection: ConnectionId) {
@@ -272,6 +280,13 @@ impl Signals {
             .iter()
             .position(|h| matches!(h, Handler::Connection(c) if *c == connection))
         {
+            // (one that joined a frozen signal after it froze leaves the count)
+            if let Some((frozen, added)) = &mut self.frozen
+                && *frozen == signal
+                && index + *added >= handlers.len()
+            {
+                *added -= 1;
+            }
             handlers.remove(index);
         }
         self.release(connection.index);
@@ -282,14 +297,43 @@ impl Signals {
         !self.signals[signal as usize].handlers.is_empty()
     }
 
+    /// The next fire of `signal` reaches the handlers it has now, not those added before it fires (RunService.Heartbeat: a
+    /// client takes its handlers between the wait step's resumptions and the deferred pass after them; a connection or a Wait
+    /// that pass makes waits for the next frame's. Measured, a 0.747 playing client and server, the scripts' and a job's alike)
+    pub fn freeze(&mut self, signal: SignalId) {
+        self.frozen = Some((signal, 0));
+    }
+
+    /// A handler joined `signal` (at the end of its list)
+    #[inline]
+    fn joined(&mut self, signal: SignalId) {
+        if let Some((frozen, added)) = &mut self.frozen
+            && *frozen == signal
+        {
+            *added += 1;
+        }
+    }
+
     /// The handlers of one fire, newest first, the ConnectParallel ones (also newest first) after the others; waiting
     /// threads leave the chain, and so do :Once() connections (they read disconnected from the fire on, and a second
     /// fire before their handler runs does not reach them: measured, Studio 0.744, tools/parity/probes/signals.luau).
     pub fn take_handlers(&mut self, signal: SignalId) -> Vec<Handler> {
+        // (a frozen signal's fire takes the handlers it had when it froze, those still there: the ones after them stay)
+        let later = match self.frozen {
+            Some((frozen, added)) if frozen == signal => {
+                self.frozen = None;
+                added
+            }
+            _ => 0,
+        };
         let connections = &mut self.connections;
         let handlers = &mut self.signals[signal as usize].handlers;
-        let mut result: Vec<Handler> = handlers.iter().rev().cloned().collect();
-        handlers.retain(|handler| match handler {
+        let held = handlers.len() - later.min(handlers.len());
+        let mut result: Vec<Handler> = handlers[..held].iter().rev().cloned().collect();
+        let mut index = 0;
+        handlers.retain(|handler| {
+            index += 1;
+            index > held || match handler {
             Handler::Connection(id) => match connections.get_mut(id.index as usize) {
                 Some(data) if data.once && data.connected && data.generation == id.generation => {
                     data.fired = true;
@@ -298,7 +342,7 @@ impl Signals {
                 _ => true,
             },
             Handler::Thread(_) => false,
-        });
+        }});
         if self.parallel_connections > 0 {
             let parallel = |handler: &Handler| matches!(handler, Handler::Connection(id) if self.connection(*id).is_some_and(|data| data.parallel));
             if result.iter().any(parallel) {
@@ -316,6 +360,11 @@ impl Signals {
     /// Disconnects every connection and drops waiting threads.
     pub fn disconnect_all(&mut self, signal: SignalId) {
         let handlers = std::mem::take(&mut self.signals[signal as usize].handlers);
+        if let Some((frozen, added)) = &mut self.frozen
+            && *frozen == signal
+        {
+            *added = 0;
+        }
         for handler in handlers {
             if let Handler::Connection(id) = handler {
                 if self.connection(id).is_some() {
