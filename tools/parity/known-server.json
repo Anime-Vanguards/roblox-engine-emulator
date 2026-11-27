@@ -1199,16 +1199,6 @@
 			"why": "a string for TweenService:Create's TweenInfo gives a client's tween a style and direction that are no enum item (reading them raises `Invalid value for enum EasingStyle`, tostring leaves them empty) and \" \" a Time of 1; ree's is Linear, In and the string's number or 0, so the tween completes at once as there"
 		}
 	],
-	"primary_part_cframe": [
-		{
-			"line": "model gone primary",
-			"why": "Model.PrimaryPart reads nil on a client once the part is no longer under the model (taken out or destroyed); ree keeps answering the part (SetPrimaryPartCFrame and GetPrimaryPartCFrame refuse it as a client does)"
-		},
-		{
-			"line": "model destroyed primary",
-			"why": "Model.PrimaryPart reads nil on a client once the part is no longer under the model (taken out or destroyed); ree keeps answering the part (SetPrimaryPartCFrame and GetPrimaryPartCFrame refuse it as a client does)"
-		}
-	],
 	"method_values": [
 		{
 			"line": "same v2.",

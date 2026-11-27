@@ -717,6 +717,24 @@ pub fn set_parent(
     reparent(state, reflection, hooks, id, new_parent)
 }
 
+/// The ancestors among `leaving` (those a move takes `id` away from) whose PrimaryPart is `id` or one of its descendants, with
+/// PrimaryPart's name: none when no ancestor is left behind.
+fn released_primaries(state: &State, reflection: &Reflection, leaving: &[InstanceId], id: InstanceId) -> Option<(NameId, Vec<InstanceId>)> {
+    if leaving.is_empty() {
+        return None;
+    }
+    let primary = reflection.name_id("PrimaryPart")?;
+    let models: Vec<InstanceId> = leaving
+        .iter()
+        .copied()
+        .filter(|&ancestor| match state.dom.raw_get(ancestor, primary) {
+            Some(Value::Instance(part)) => *part == id || state.dom.is_descendant_of(*part, id),
+            _ => false,
+        })
+        .collect();
+    (!models.is_empty()).then_some((primary, models))
+}
+
 /// The parent some classes require, as a playing client and a server refuse another (a Parent write and Instance.new's parent
 /// alike; nil and a parent's own move are fine): an AdPortal goes under a Part (no other BasePart), an Animator under a Humanoid or
 /// an AnimationController, a Bone under a BasePart or a Bone, a WrapLayer or WrapTarget under a MeshPart (measured, Studio 0.747:
@@ -848,6 +866,11 @@ fn reparent(
             super::services::players::player_removing(state, id, old);
         }
     }
+    // A Model whose PrimaryPart leaves it lets go of it (measured in a 0.747 playing client and a server:
+    // tools/parity/probes/engine_data_methods.luau): an ancestor the move leaves whose PrimaryPart is the moved instance or under it
+    // reads nil from the move on (its Changed fires), destroyed or taken out alike; a part moved deeper inside, or the whole model
+    // moved, keeps it, and a PrimaryPart set to a part outside the model stays until that part leaves it after joining
+    let released = released_primaries(state, reflection, &old_chain[..old_chain.len() - kept], id);
     // (out of the old parent and under the new one, its home in the tree worked out once: dom.rs reparent; a client looks for the
     // child from the start of its old parent's list, in the order it keeps them in: cost.rs CHILD_SEARCHED)
     let searched = state.dom.reparent(id, new_parent);
@@ -883,6 +906,11 @@ fn reparent(
     fire_ancestry_changed(state, id, new_parent);
     // (the moved instance's own Changed("Parent") and Parent property signal come last: measured with the others)
     notify_changed_events(state, reflection, hooks, id, K::Parent as NameId, None);
+    if let Some((primary, models)) = released {
+        for model in models {
+            raw_set(state, reflection, hooks, model, primary, Value::Nil);
+        }
+    }
     for hook in &hooks.hierarchy_changed {
         hook(state, id, old_parent, new_parent);
     }
