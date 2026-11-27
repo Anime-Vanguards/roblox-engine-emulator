@@ -1198,3 +1198,31 @@ fn ik_chains_pins_parameters_and_locked_members() {
         1.0,
     );
 }
+
+/// TimePosition written reads at once as the step will take it, and a Transform a script writes fires no Changed (measured on a
+/// 0.747 playing client and server: animation_writes.luau).
+#[test]
+fn time_position_writes_read_as_taken_and_transform_writes_are_silent() {
+    check(
+        r#"
+        local Model, Animator, Shoulder = Rig()
+        local Track = Animator:LoadAnimation(Sequence({ {0, 0}, {1, 1} }, true))
+        Track.TimePosition = -0.25
+        assert(Track.TimePosition == 0.75, "looped, the time into the clip: " .. Track.TimePosition)
+        Track.TimePosition = 2.5
+        assert(Track.TimePosition == 0.5, Track.TimePosition)
+        Track.Looped = false
+        Track.TimePosition = 5
+        assert(Track.TimePosition == 1, "not looped, held in the clip: " .. Track.TimePosition)
+        Track.TimePosition = -1
+        assert(Track.TimePosition == 0, Track.TimePosition)
+        local Fired = 0
+        Shoulder.Changed:Connect(function() Fired += 1 end)
+        Shoulder:GetPropertyChangedSignal("Transform"):Connect(function() Fired += 1 end)
+        Shoulder.Transform = CFrame.new(0, 1, 0)
+        task.wait()
+        assert(Fired == 0 and Shoulder.Transform.Y == 1, "a Transform write is silent")
+        "#,
+        0.2,
+    );
+}

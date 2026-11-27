@@ -1,0 +1,31 @@
+# engine: Roblox Studio 0.747.0.7471481, a headless playing client (script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-27
+parent nil name Idle length at load 0
+set before arrival ok -0.30000001192092896
+time of keyframe before error Invalid operation for this animation format.
+arrived true within a second true after a frame or more true
+time of keyframe after error Could not find a keyframe by that name!
+looped true
+playing changed 0  transform signal 0 posed true
+script write changed 0  transform signal 0
+second load length 4.30000019
+negative set reads 4
+negative after a frame inside true near the end true
+minus five after a frame inside true
+set true -0.3 reads 4
+set true 5 reads 0.699999809
+set true 4.3 reads 0
+set true 8.7 reads 0.0999994278
+set false -0.3 reads 0
+set false 5 reads 4.30000019
+set false 4.3 reads 4.30000019
+set false 1.25 reads 1.25
+playing set true -0.3 reads 4 true
+playing set true 5 reads 0.699999809 true
+playing set true 4.3 reads 0 true
+playing set true 8.7 reads 0.0999994278 true
+playing set false -0.3 reads 0 true
+playing set false 5 reads 4.30000019 true
+playing set false 4.3 reads 4.30000019 true
+playing set false 1.25 reads 1.25 true
+bone write changed  joint reads 2 bone reads 1

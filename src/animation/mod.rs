@@ -94,6 +94,8 @@ struct Track {
     live: Option<InstanceId>,
     /// The instance changed since `clip` was read from it
     stale: bool,
+    /// The TimePosition a script wrote since the last step, as written (the property reads it as the step will take it)
+    written: Option<f64>,
 }
 
 #[derive(Default)]
@@ -383,6 +385,7 @@ fn load(lua: &Lua, engine: &Rc<Engine>, shared: &Shared, names: &Names, owner: I
         pending,
         live,
         stale: false,
+        written: None,
         set_looped: false,
         set_priority: false,
         playing: false,
@@ -629,6 +632,48 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
         behaviors.add_setter(names.track_class, property, setter);
     }
 
+
+    // TimePosition written by a script reads at once as the step will take it (measured, a 0.747 playing client and server,
+    // a track of a 4.3 s asset, playing or not: animation_writes.luau): looped, the time into the clip (-0.3 reads 4, 5 reads
+    // 0.699999809, 4.3 reads 0, in float32); not looped, held in [0, Length] (-0.3 reads 0, 5 reads 4.30000019). A clip of
+    // Length 0, or one not arrived, keeps the time as written. The step takes the time as written (`Track::written`).
+    let (s, n) = (shared.clone(), names.clone());
+    behaviors.add_setter(names.track_class, names.time_position, Rc::new(move |lua, engine, id, value| {
+        let class = engine.state.borrow().dom.at(id).class;
+        let Some(info) = engine.reflection.class_property(class, n.time_position).cloned() else { return Ok(()) };
+        let coerced = crate::lua::convert::coerce(lua, engine, &info, &value)?;
+        let mut shown = coerced.clone();
+        if let Value::Number(time) = coerced {
+            let looped = engine.state.borrow().dom.boolean(id, n.looped).unwrap_or(false);
+            if let Some(track) = s.borrow_mut().tracks.get_mut(&id) {
+                track.written = Some(time);
+                if let Some(clip) = track.clip.as_ref().filter(|clip| clip.length > 0.0 && track.pending.is_none()) {
+                    let (time, length) = (time as f32, clip.length);
+                    if time.is_finite() {
+                        shown = Value::Number(if looped { time.rem_euclid(length) } else { time.clamp(0.0, length) } as f64);
+                    }
+                }
+            }
+        }
+        crate::lua::instance::script_set_property(engine, id, n.time_position, shown);
+        Ok(())
+    }));
+    // A Transform a script writes fires no Changed, a Motor6D's or a Bone's (measured likewise), as the Animator's own writes
+    for class in [names.motor6d, names.bone] {
+        let n = names.clone();
+        behaviors.add_setter(class, names.transform, Rc::new(move |lua, engine, id, value| {
+            let class = engine.state.borrow().dom.at(id).class;
+            let Some(info) = engine.reflection.class_property(class, n.transform).cloned() else { return Ok(()) };
+            let coerced = crate::lua::convert::coerce(lua, engine, &info, &value)?;
+            let hooks = engine.hooks.borrow();
+            let mut state = engine.state.borrow_mut();
+            if core::raw_set_unsignalled(&mut state, &engine.reflection, &hooks, id, n.transform, coerced) {
+                crate::world::joints::property_changed(&mut state, &engine.reflection, &hooks, id, n.transform, None);
+            }
+            Ok(())
+        }));
+    }
+
     let reflection = engine.reflection.clone();
     let add = |behaviors: &mut Behaviors, class: &str, name: &str, function: crate::services::MethodFn| {
         if let (Some(class), Some(name)) = (reflection.class_id(class), reflection.name_id(name)) {
@@ -761,10 +806,10 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
         if clip.as_ref().is_some_and(|clip| clip.curve) {
             return Err(Flow::Error(ScriptError::plain("Invalid operation for this animation format.")));
         }
-        // Documented: it errors before the animation loaded (message not measured) and for a name no keyframe has
-        // (measured, Studio 0.747: "Could not find a keyframe by that name!")
+        // Measured (a 0.747 playing client and server: animation_writes.luau): before the clip arrived it raises the format's
+        // error; a name no keyframe has "Could not find a keyframe by that name!" (Studio 0.747)
         let Some(clip) = clip.filter(|clip| clip.length > 0.0 || !clip.names.is_empty()) else {
-            return Err(Flow::Error(ScriptError::plain("GetTimeOfKeyframe: the animation has not loaded")));
+            return Err(Flow::Error(ScriptError::plain("Invalid operation for this animation format.")));
         };
         match clip.time_of(&name) {
             Some(time) => Ok(values([LuaValue::Number(time as f64)])),
@@ -1122,7 +1167,7 @@ fn step_of(engine: &Rc<Engine>, delta: f64, only: Option<InstanceId>) {
             // (a destroyed rig stops its tracks; a destroyed track plays on, measured: its pose stays and moves)
             let alive = state.dom.get(track.animator).is_some_and(|instance| !instance.has(crate::dom::flags::DESTROYED)) && state.dom.get(id).is_some();
             let looped = state.dom.boolean(id, names.looped).unwrap_or(false);
-            let set_time = state.dom.number(id, names.time_position).filter(|&t| t != track.time && !(t.is_nan() && track.time.is_nan()));
+            let set_time = track.written.or_else(|| state.dom.number(id, names.time_position).filter(|&t| t != track.time && !(t.is_nan() && track.time.is_nan())));
             (alive, looped, set_time)
         };
         let animator = shared.borrow().tracks[&id].animator;
@@ -1134,6 +1179,7 @@ fn step_of(engine: &Rc<Engine>, delta: f64, only: Option<InstanceId>) {
         let (finished, time, weight, playing, waiting) = {
             let mut animations = shared.borrow_mut();
             let track = animations.tracks.get_mut(&id).expect("active track");
+            track.written = None;
             // (a track whose asset is on the way holds: TimePosition as set, weight 0)
             let waiting = track.pending.is_some();
             let mut finished = !alive;
@@ -1502,7 +1548,7 @@ pub fn blend_values(layers: &mut [(u32, f32, f32)]) -> f32 {
     value
 }
 
-/// Sets a joint's Transform as an Animator does: no Changed event (not measured), a Motor6D's
+/// Sets a joint's Transform as an Animator does: no Changed event (measured: animation_writes.luau), a Motor6D's
 /// joining the batch applied after PreSimulation.
 fn write_transform(state: &mut State, reflection: &Reflection, hooks: &crate::Hooks, names: &Names, joint: InstanceId, transform: Affine3A) {
     let value = crate::world::frame::cframe_value(&transform);
