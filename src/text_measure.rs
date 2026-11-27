@@ -3,8 +3,8 @@
 //! measurements, per Enum.Font (data/text-advances.json, from a text_advances probe): Studio hints its fonts, so a glyph's advance
 //! is a whole number of pixels at the size asked and does not scale down from a large size. A least-squares line per character over 23
 //! sizes (8-100), `round(a x size + c)` summed over the string, reproduces 76 % of 3,744 sample strings exactly (mean error 0.66 px, 95th
-//! percentile 3). A line is `floor(ratio x size)` high (Legacy 1.5, every other font 1.0), a string wider than the frame wraps at spaces
-//! (and at newlines), and a word wider than the frame breaks between characters.
+//! percentile 3). A line is `floor(ratio x size)` high (Legacy 1.5, every other font 1.0). FredokaOne at the integer sizes 1-100 is a
+//! client's own table (data/fredoka-sizes.json: advances, kerns, ligatures). Lines break as a client breaks them ([`measure`]).
 //!
 //! TextService:GetTextBoundsAsync (a GetTextBoundsParams: Text, Font, Size, Width, RichText) is the same measurement of a Font face
 //! (measured in a playing client, Studio 0.747, tools/parity/probes/text_bounds.luau): the bounds of an Enum.Font face are what
@@ -44,31 +44,70 @@ fn fonts() -> &'static HashMap<String, Font> {
     FONTS.get_or_init(|| serde_json::from_slice(include_bytes!("../data/text-advances.json")).expect("data/text-advances.json"))
 }
 
-/// FredokaOne, a font games measure their UI with, size by size (data/fredoka-sizes.json, from a fredoka_sizes probe): Studio's
-/// advance of each printable ASCII glyph at every integer
-/// size `first`.. (fractional: "l" is 5.5 px at 20), and a line's height. A string is the sum of its advances, rounded once.
+/// FredokaOne, a font games measure their UI with, size by size (data/fredoka-sizes.json, measured in a playing client, Studio 0.747):
+/// the advance of each printable ASCII glyph at every integer size `first`.. (a whole number of pixels), a line's height, the kerns
+/// of glyph pairs within a text, and the font's ligatures with their kerns. A string's width is its clusters' advances and the
+/// kerns between them.
 #[derive(Deserialize)]
 struct SizedFile {
     first: usize,
     heights: Vec<f64>,
     advances: Vec<Vec<f64>>,
-    /// per size: `[first code, second code, kern]` for each pair that moves (whole pixels; a space kerns with nothing)
+    /// per size: `[first code, second code, kern]` for each pair that moves (whole pixels; a space kerns with nothing). A ligature's
+    /// pair holds what the ligature changes: its width is the two advances and that kern.
     kerns: Vec<Vec<(u32, u32, f64)>>,
+    /// the pairs the font draws as one glyph, which a line never breaks
+    ligatures: Vec<String>,
+    /// per size: `[left, right, kern]` between a ligature and a glyph or another ligature (a ligature kerns as a glyph of its own,
+    /// not as the letters it joins)
+    ligature_kerns: Vec<Vec<(String, String, f64)>>,
 }
 
 struct Sized {
     first: usize,
     heights: Vec<f64>,
     advances: Vec<Vec<f64>>,
+    /// per size, by cluster ([`Sized::cluster`]): the kern between two clusters next to each other in a text
     kerns: Vec<HashMap<(u32, u32), f64>>,
+    ligatures: Vec<(char, char)>,
+}
+
+/// A ligature's cluster id: past every char's
+const LIGATURE: u32 = 0x11_0000;
+
+impl Sized {
+    /// The cluster id of a char or of a ligature named by its two chars
+    fn cluster(&self, text: &str) -> u32 {
+        let mut chars = text.chars();
+        match (chars.next(), chars.next()) {
+            (Some(one), None) => one as u32,
+            (Some(a), Some(b)) => LIGATURE + self.ligatures.iter().position(|&pair| pair == (a, b)).expect("a ligature of data/fredoka-sizes.json") as u32,
+            _ => panic!("an empty cluster in data/fredoka-sizes.json"),
+        }
+    }
 }
 
 fn sized() -> &'static Sized {
     static SIZED: OnceLock<Sized> = OnceLock::new();
     SIZED.get_or_init(|| {
         let file: SizedFile = serde_json::from_slice(include_bytes!("../data/fredoka-sizes.json")).expect("data/fredoka-sizes.json");
-        let kerns = file.kerns.iter().map(|row| row.iter().map(|&(a, b, kern)| ((a, b), kern)).collect()).collect();
-        Sized { first: file.first, heights: file.heights, advances: file.advances, kerns }
+        let ligatures = file.ligatures.iter().map(|pair| {
+            let mut chars = pair.chars();
+            (chars.next().expect("a ligature's first char"), chars.next().expect("a ligature's second char"))
+        }).collect();
+        let mut table = Sized { first: file.first, heights: file.heights, advances: file.advances, kerns: Vec::new(), ligatures };
+        let kerns = file
+            .kerns
+            .iter()
+            .zip(&file.ligature_kerns)
+            .map(|(pairs, ligature)| {
+                let mut kerns: HashMap<(u32, u32), f64> = pairs.iter().map(|&(a, b, kern)| ((a, b), kern)).collect();
+                kerns.extend(ligature.iter().map(|(a, b, kern)| ((table.cluster(a), table.cluster(b)), *kern)));
+                kerns
+            })
+            .collect();
+        table.kerns = kerns;
+        table
     })
 }
 
@@ -148,36 +187,74 @@ fn column(font: &str, size: f64) -> Option<usize> {
     (column < table.heights.len()).then_some(column)
 }
 
-/// The pixel width of `text` on one line.
-fn width(font: &Font, column: Option<usize>, text: &str, size: f64) -> f64 {
-    if let Some(column) = column {
-        let table = sized();
-        let rows = &table.advances;
-        let mean = rows.iter().map(|row| row[column]).sum::<f64>() / rows.len() as f64;
-        let advances: f64 = text
-            .chars()
-            .map(|character| match (character as u32).checked_sub(32).filter(|index| *index < 95) {
-                Some(index) => rows[index as usize][column],
-                None => mean,
-            })
-            .sum();
-        let kerning: f64 = text.chars().zip(text.chars().skip(1)).filter_map(|(a, b)| table.kerns[column].get(&(a as u32, b as u32))).sum();
-        return (advances + kerning + 0.5).floor();
-    }
-    let count = font.a.len() as f64;
-    let (mean_a, mean_c) = (font.a.iter().sum::<f64>() / count, font.c.iter().sum::<f64>() / count);
-    text.chars()
-        .map(|character| {
+/// The marks that kern with the glyph after them only once a letter came before them in the text: before the text's first letter,
+/// a client shapes them apart from it (".T" alone, after a space or a digit or at a paragraph's start is unkerned; "a.T", "a .T",
+/// "a1.T" and "a\n.T" kern). They are the only glyphs before a letter that kern.
+const MARKS: [char; 4] = ['"', '\'', ',', '.'];
+
+/// Lays `paragraph` out on one line: `pens` gets each cluster's pen position and then the line's end (one more than the clusters),
+/// `spaces` whether each cluster is a space. A cluster is a glyph, or one of FredokaOne's ligatures (`column`: its table's size),
+/// which a line never breaks; FredokaOne's clusters kern. `lettered`: whether a letter came before, in the text's earlier
+/// paragraphs too ([`MARKS`]).
+fn shape(font: &Font, column: Option<usize>, paragraph: &str, size: f64, lettered: &mut bool, pens: &mut Vec<f64>, spaces: &mut Vec<bool>) {
+    pens.clear();
+    spaces.clear();
+    let mut pen = 0.0;
+    let Some(column) = column else {
+        let count = font.a.len() as f64;
+        let (mean_a, mean_c) = (font.a.iter().sum::<f64>() / count, font.c.iter().sum::<f64>() / count);
+        for character in paragraph.chars() {
             let (a, c) = match (character as u32).checked_sub(32).filter(|index| *index < 95) {
                 Some(index) => (font.a[index as usize], font.c[index as usize]),
                 None => (mean_a, mean_c),
             };
-            (a * size + c + 0.5).floor().max(0.0)
-        })
-        .sum()
+            pens.push(pen);
+            spaces.push(character == ' ');
+            pen += (a * size + c + 0.5).floor().max(0.0);
+        }
+        pens.push(pen);
+        return;
+    };
+    let table = sized();
+    let advance = |character: char| match (character as u32).checked_sub(32).filter(|index| *index < 95) {
+        Some(index) => table.advances[index as usize][column],
+        None => table.advances.iter().map(|row| row[column]).sum::<f64>() / table.advances.len() as f64,
+    };
+    let kerns = &table.kerns[column];
+    let mut chars = paragraph.chars().peekable();
+    let mut before: Option<(u32, char)> = None;
+    while let Some(character) = chars.next() {
+        let ligature = chars.peek().and_then(|&next| table.ligatures.iter().position(|&pair| pair == (character, next)).map(|index| (index, next)));
+        let (cluster, width) = match ligature {
+            Some((index, next)) => {
+                chars.next();
+                let kern = kerns.get(&(character as u32, next as u32)).copied().unwrap_or(0.0);
+                (LIGATURE + index as u32, advance(character) + advance(next) + kern)
+            }
+            None => (character as u32, advance(character)),
+        };
+        if let Some((left, last)) = before {
+            if *lettered || !MARKS.contains(&last) {
+                pen += kerns.get(&(left, cluster)).copied().unwrap_or(0.0);
+            }
+        }
+        pens.push(pen);
+        spaces.push(character == ' ');
+        pen += width;
+        *lettered |= character.is_alphabetic();
+        before = Some((cluster, if ligature.is_some() { '\0' } else { character }));
+    }
+    pens.push(pen);
 }
 
-/// (width, height) of `text` at `size` in `font` (an Enum.Font item's name) inside a frame `limit` wide.
+/// (width, height) of `text` at `size` in `font` (an Enum.Font item's name) inside a frame `limit` wide, as a playing client lays it
+/// out (Studio 0.747, roblox-sim: 24,000 texts of FredokaOne, and sweeps of SourceSans, GothamBold, Arial and Legacy). Each paragraph
+/// (a newline ends one) is laid out on one line, kerned, and broken greedily: a line's width is the distance from its first cluster's
+/// pen position to the next line's, so the kern across a break counts on the line before it. A cluster that does not fit goes to the
+/// next line, after the spaces before it when the clusters from there to it fit a line of their own (the spaces before the break do
+/// not count in the line's width), else right before it (the spaces count: a word wider than the frame breaks between clusters, after
+/// what fits on the line it starts on). A paragraph whose first cluster is wider than the frame starts with an empty line. The last
+/// line's trailing spaces count when they fit, or when its other clusters do not fit either, or when it holds only spaces.
 pub fn measure(font: &str, text: &str, size: f64, limit: f64) -> (f64, f64) {
     let table = fonts();
     let column = column(font, size);
@@ -186,46 +263,51 @@ pub fn measure(font: &str, text: &str, size: f64, limit: f64) -> (f64, f64) {
         Some(column) => sized().heights[column],
         None => (font.height * size + 1e-6).floor(),
     };
-    let width = |font: &Font, text: &str, size: f64| width(font, column, text, size);
-    let space = width(font, " ", size);
+    let (mut pens, mut spaces) = (Vec::new(), Vec::new());
+    let mut lettered = false;
     let mut widest: f64 = 0.0;
     let mut lines = 0.0;
     for paragraph in text.split('\n') {
         lines += 1.0;
-        let mut used = 0.0;
-        let mut first = true;
-        for word in paragraph.split(' ') {
-            let wide = width(font, word, size);
-            let joined = if first { used + wide } else { used + space + wide };
-            if joined <= limit {
-                used = joined;
-            } else if wide <= limit {
-                // (the word starts the next line)
-                widest = widest.max(used);
-                lines += 1.0;
-                used = wide;
-            } else {
-                // a word wider than the frame breaks between characters (Studio: 62 characters in 40 px at size 14 are 11 lines)
-                if !first {
-                    widest = widest.max(used);
-                    lines += 1.0;
-                    used = 0.0;
-                }
-                for character in word.chars() {
-                    let each = width(font, character.encode_utf8(&mut [0; 4]), size);
-                    if used + each > limit && used > 0.0 {
-                        widest = widest.max(used);
-                        lines += 1.0;
-                        used = 0.0;
-                    }
-                    used += each;
-                }
-            }
-            first = false;
+        shape(font, column, paragraph, size, &mut lettered, &mut pens, &mut spaces);
+        let count = spaces.len();
+        if count == 0 {
+            continue;
         }
-        widest = widest.max(used);
+        let width = |from: usize, to: usize| pens[to] - pens[from];
+        let trimmed = |from: usize, mut to: usize| {
+            while to > from && spaces[to - 1] {
+                to -= 1;
+            }
+            width(from, to)
+        };
+        if !spaces[0] && width(0, 1) > limit {
+            lines += 1.0;
+        }
+        let mut start = 0;
+        // (where the line could break: after its last run of spaces)
+        let mut opening = 0;
+        for index in 0..count {
+            if spaces[index] {
+                opening = index + 1;
+                continue;
+            }
+            if index > start && width(start, index + 1) > limit {
+                if opening > start && width(opening, index + 1) <= limit {
+                    widest = widest.max(trimmed(start, opening));
+                    start = opening;
+                } else {
+                    widest = widest.max(width(start, index));
+                    start = index;
+                }
+                lines += 1.0;
+            }
+        }
+        let (full, content) = (width(start, count), trimmed(start, count));
+        let only_spaces = spaces[start..].iter().all(|space| *space);
+        widest = widest.max(if full <= limit || content > limit || only_spaces { full } else { content });
     }
-    (widest, lines * line_height)
+    ((widest + 0.5).floor(), lines * line_height)
 }
 
 pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
@@ -380,10 +462,10 @@ mod tests {
     }
 
     /// FredokaOne at the integer sizes UI uses, from Studio's own table (data/fredoka-sizes.json, the fredoka_sizes probe in an
-    /// empty test place, 2026-10-23): a glyph's advance is a whole number of pixels, pairs kern by whole pixels, and a string is the
-    /// sum rounded. The per-glyph fit (data/text-advances.json) read 57 % of these samples exactly and was up to 8 px wide on "The quick
-    /// brown fox..." at 48; the table reads 694 of 704 exactly (the 10 are 1 px: a same-glyph pair after a kerned pair, "Sett" and "All").
-    /// `(text, size, width, height)`, all pinned exactly.
+    /// empty test place, 2026-10-23; the same in a playing client, 2026-11-27): a glyph's advance is a whole number of pixels and pairs
+    /// kern by whole pixels. The per-glyph fit (data/text-advances.json) read 57 % of these samples exactly and was up to 8 px wide on
+    /// "The quick brown fox..." at 48; the table read 694 of 704 exactly, the 10 others ("Sett", "All") 1 px off where a ligature (tt,
+    /// ll) met a glyph it kerns with as a letter but not as a ligature. `(text, size, width, height)`, all pinned exactly.
     const FREDOKA: &[(&str, f64, f64, f64)] = &[
         ("Hello", 10.0, 22.0, 10.0),
         ("Hello", 13.0, 29.0, 13.0),
@@ -428,6 +510,81 @@ mod tests {
         ("Unit Limit: 6/6", 36.0, 210.0, 36.0),
         ("Unit Limit: 6/6", 48.0, 275.0, 48.0),
     ];
+
+    /// A playing client's FredokaOne layouts (Studio 0.747, roblox-sim, GetTextSize), each one ree measured otherwise before:
+    /// sizes 1-3 (the table started at 4), ligatures (never broken, kerned as glyphs of their own), the marks before a text's first
+    /// letter (unkerned), a word wider than the frame breaking after what fits and never inside a ligature, a line's width up to the
+    /// next line's pen position, the empty first line of a frame narrower than the first glyph, and trailing spaces.
+    /// `(text, size, frame, width, height)`.
+    const CLIENT: &[(&str, f64, f64, f64, f64)] = &[
+        ("Hello", 1.0, 1e5, 4.0, 1.0),
+        ("The quick brown fox jumps over the lazy dog", 1.0, 1e5, 33.0, 1.0),
+        ("Hello", 2.0, 1e5, 6.0, 2.0),
+        ("Hello", 3.0, 1e5, 8.0, 3.0),
+        ("All", 3.0, 1e5, 5.0, 3.0),
+        ("Sett", 3.0, 1e5, 7.0, 3.0),
+        ("lll", 20.0, 1e5, 17.0, 20.0),
+        ("Alll", 20.0, 1e5, 30.0, 20.0),
+        ("affluent", 20.0, 1e5, 68.0, 20.0),
+        ("Office", 48.0, 1e5, 117.0, 48.0),
+        ("fft", 48.0, 1e5, 51.0, 48.0),
+        (".T", 20.0, 1e5, 17.0, 20.0),
+        ("..T", 20.0, 1e5, 21.0, 20.0),
+        ("1.T", 20.0, 1e5, 24.0, 20.0),
+        ("\"A", 48.0, 1e5, 48.0, 48.0),
+        ("\"\"A", 20.0, 1e5, 27.0, 20.0),
+        (".\"A", 20.0, 1e5, 24.0, 20.0),
+        ("(.T", 48.0, 1e5, 56.0, 48.0),
+        ("\n.T", 20.0, 1e5, 17.0, 40.0),
+        ("Hello", 20.0, 21.0, 21.0, 60.0),
+        ("Hello", 20.0, 28.0, 22.0, 40.0),
+        ("Hello", 20.0, 33.0, 33.0, 40.0),
+        ("Hello", 20.0, 16.0, 12.0, 80.0),
+        ("ll", 20.0, 9.0, 11.0, 40.0),
+        ("T.T", 20.0, 11.0, 13.0, 40.0),
+        ("Wa.", 20.0, 14.0, 16.0, 60.0),
+        ("WWWWW", 20.0, 1.0, 17.0, 120.0),
+        ("WWWWW", 20.0, 16.0, 17.0, 120.0),
+        ("iiiiiiiiii", 20.0, 3.0, 4.0, 220.0),
+        ("e", 20.0, 9.0, 10.0, 40.0),
+        ("Ho", 20.0, 11.0, 12.0, 60.0),
+        ("a b", 20.0, 9.0, 14.0, 60.0),
+        ("W i", 20.0, 3.0, 21.0, 60.0),
+        ("W i", 20.0, 4.0, 17.0, 60.0),
+        ("Hello ", 20.0, 9.0, 14.0, 100.0),
+        ("Hello ", 20.0, 10.0, 12.0, 100.0),
+        ("Hello ", 20.0, 22.0, 22.0, 40.0),
+        ("Hello ", 20.0, 25.0, 25.0, 40.0),
+        (" ", 20.0, 1.0, 4.0, 20.0),
+        ("  ", 14.0, 3.0, 6.0, 14.0),
+        ("  Hello  ", 20.0, 12.0, 12.0, 100.0),
+        ("  Hello  ", 20.0, 20.0, 20.0, 80.0),
+        ("  Hello  ", 20.0, 30.0, 30.0, 40.0),
+        ("ab cd", 20.0, 8.0, 14.0, 100.0),
+        ("ab cd", 20.0, 9.0, 10.0, 100.0),
+        ("The quick brown fox jumps over the lazy dog and keeps running", 14.0, 1.0, 11.0, 714.0),
+        ("The quick brown fox jumps over the lazy dog and keeps running", 14.0, 12.0, 12.0, 616.0),
+    ];
+
+    #[test]
+    fn fredoka_one_lays_out_as_a_client_does() {
+        for &(text, size, frame, width, height) in CLIENT {
+            let (x, y) = measure("FredokaOne", text, size, frame);
+            assert_eq!((x, y), (width, height), "FredokaOne {text:?} at {size} in {frame}: {x} x {y}, a client {width} x {height}");
+        }
+        // a letter in an earlier paragraph lets a mark kern: "a\n.T" is 14 wide where "\n.T" is 17
+        assert_eq!(measure("FredokaOne", "a\n.T", 20.0, 1e5), (14.0, 40.0));
+    }
+
+    /// The table names only ligatures whose pairs it measures, and each size holds every ligature's kerns (the cluster ids resolve).
+    #[test]
+    fn the_fredoka_table_covers_sizes_1_to_100_with_its_ligatures() {
+        let table = super::sized();
+        assert_eq!((table.first, table.heights.len()), (1, 100));
+        assert!(table.advances.iter().all(|row| row.len() == 100));
+        assert_eq!(table.ligatures.iter().map(|(a, b)| format!("{a}{b}")).collect::<Vec<_>>(), ["ff", "fi", "fl", "ft", "jj", "ll", "tt"]);
+        assert_eq!(table.heights[..3], [1.0, 2.0, 3.0]);
+    }
 
     #[test]
     fn fredoka_one_is_exact_at_the_sizes_the_game_measures() {
