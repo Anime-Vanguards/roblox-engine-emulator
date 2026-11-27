@@ -1122,23 +1122,5 @@
 			"line": "string-info [",
 			"why": "a string for TweenService:Create's TweenInfo gives a client's tween a style and direction that are no enum item (reading them raises `Invalid value for enum EasingStyle`, tostring leaves them empty) and \" \" a Time of 1; ree's is Linear, In and the string's number or 0, so the tween completes at once as there"
 		}
-	],
-	"method_values": [
-		{
-			"line": "same v2.",
-			"why": "a method of CFrame, Color3, UDim2 or Vector2 read as a value is a new function at every read on a client; Lune's datatypes (vendor/lune-roblox) give one function a method (a signal's, a connection's, a Vector3's, a Random's and an EnumItem's IsA follow the client)"
-		},
-		{
-			"line": "same cf.",
-			"why": "a method of CFrame, Color3, UDim2 or Vector2 read as a value is a new function at every read on a client; Lune's datatypes (vendor/lune-roblox) give one function a method (a signal's, a connection's, a Vector3's, a Random's and an EnumItem's IsA follow the client)"
-		},
-		{
-			"line": "same c3.",
-			"why": "a method of CFrame, Color3, UDim2 or Vector2 read as a value is a new function at every read on a client; Lune's datatypes (vendor/lune-roblox) give one function a method (a signal's, a connection's, a Vector3's, a Random's and an EnumItem's IsA follow the client)"
-		},
-		{
-			"line": "same u2.",
-			"why": "a method of CFrame, Color3, UDim2 or Vector2 read as a value is a new function at every read on a client; Lune's datatypes (vendor/lune-roblox) give one function a method (a signal's, a connection's, a Vector3's, a Random's and an EnumItem's IsA follow the client)"
-		}
 	]
 }

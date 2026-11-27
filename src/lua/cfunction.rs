@@ -117,24 +117,30 @@ fn is_trampoline(function: Option<ffi::lua_CFunction>) -> bool {
 /// function at every read (not rawequal to another read; measured in a 0.747 playing client and a server:
 /// tools/parity/probes/method_values.luau); a call through it is the same call.
 pub fn copy(lua: &Lua, function: &LuaFunction) -> LuaResult<LuaFunction> {
-    // SAFETY: the function is pushed as the argument; its upvalues are pushed above it and taken by the new closure, which
-    // replaces it as the one result
+    // SAFETY: the function is pushed as the argument and replaced by its copy
+    unsafe { lua.exec_raw::<LuaFunction>(function, |state| replace_with_copy(state)) }
+}
+
+/// [`copy`] over the C API: replaces the function on the top of the stack with a new closure of it (a Luau function, or a
+/// C function it cannot read, stays as it is).
+///
+/// # Safety
+/// The top of `state`'s stack must be a function.
+pub unsafe fn replace_with_copy(state: *mut ffi::lua_State) {
     unsafe {
-        lua.exec_raw::<LuaFunction>(function, |state| {
-            let Some(body) = ffi::lua_tocfunction(state, -1) else { return };
-            let mut debug: ffi::lua_Debug = std::mem::zeroed();
-            if ffi::lua_getinfo(state, -1, c"nu".as_ptr(), &mut debug) == 0 {
-                return;
-            }
-            let at = ffi::lua_gettop(state);
-            let count = debug.nupvals as c_int;
-            ffi::lua_rawcheckstack(state, count + 1);
-            for index in 1..=count {
-                ffi::lua_getupvalue(state, at, index);
-            }
-            ffi::lua_pushcclosurek(state, body, debug.name, count, continuation_of(body));
-            ffi::lua_remove(state, at);
-        })
+        let Some(body) = ffi::lua_tocfunction(state, -1) else { return };
+        let mut debug: ffi::lua_Debug = std::mem::zeroed();
+        if ffi::lua_getinfo(state, -1, c"nu".as_ptr(), &mut debug) == 0 {
+            return;
+        }
+        let at = ffi::lua_gettop(state);
+        let count = debug.nupvals as c_int;
+        ffi::lua_rawcheckstack(state, count + 1);
+        for index in 1..=count {
+            ffi::lua_getupvalue(state, at, index);
+        }
+        ffi::lua_pushcclosurek(state, body, debug.name, count, continuation_of(body));
+        ffi::lua_remove(state, at);
     }
 }
 

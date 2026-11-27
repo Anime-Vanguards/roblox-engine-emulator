@@ -702,7 +702,7 @@ fn name_datatype_methods(lua: &Lua, exports: &LuaTable) -> LuaResult<()> {
         let Ok(sample) = new.call::<LuaValue>(LuaMultiValue::from_vec(args)) else { continue };
         // SAFETY: the sample is pushed as the argument; its metatable's __namecall's first upvalue (or nil) is left as the one result
         let methods: LuaValue = unsafe {
-            lua.exec_raw(sample, |state| {
+            lua.exec_raw(sample.clone(), |state| {
                 use mlua::ffi;
                 let found = ffi::lua_getmetatable(state, 1) != 0 && {
                     ffi::lua_pushstring(state, c"__namecall".as_ptr());
@@ -727,8 +727,80 @@ fn name_datatype_methods(lua: &Lua, exports: &LuaTable) -> LuaResult<()> {
             let key_name = key.to_string_lossy();
             methods.raw_set(key, cfunction::over_rust(lua, &key_name, Library, function)?)?;
         }
+        if name != "Ray" && name != "Region3" {
+            fresh_method_reads(lua, &sample, &methods)?;
+        }
     }
     Ok(())
+}
+
+/// A method of a CFrame, Color3, UDim2 or Vector2 read as a value is a new function at every read, as a client's is (not rawequal
+/// to another read, the same call; measured in a 0.747 playing client and a server: tools/parity/probes/method_values.luau).
+/// The type's methods move to a table of their own, which its `__namecall` reads (a `:` call stays as fast), and the table its
+/// `__index` reads, left empty, answers a key through [`fresh_method`]: a new closure of the method, or the type's own refusal
+/// of a member it lacks. Field reads (CFrame.Position, Color3.R) are answered before it, as they were.
+fn fresh_method_reads(lua: &Lua, sample: &LuaValue, methods: &LuaTable) -> LuaResult<()> {
+    let own = lua.create_table()?;
+    for pair in methods.pairs::<LuaValue, LuaValue>() {
+        let (key, value) = pair?;
+        own.raw_set(key, value)?;
+    }
+    let keys: Vec<LuaValue> = own.pairs::<LuaValue, LuaValue>().map(|pair| pair.map(|(key, _)| key)).collect::<LuaResult<_>>()?;
+    for key in keys {
+        methods.raw_set(key, LuaValue::Nil)?;
+    }
+    let Some(meta) = methods.metatable() else { return Ok(()) };
+    let refusal: LuaValue = meta.raw_get("__index")?;
+    // SAFETY: the sample, the method table, its refusal and the type's own table are pushed as the arguments; the namecall's first
+    // upvalue becomes the own table, and the method table's metatable gets the new __index (upvalues: the own table, the refusal)
+    unsafe {
+        lua.exec_raw::<()>((sample.clone(), LuaValue::Table(meta), refusal, LuaValue::Table(own)), |state| {
+            use mlua::ffi;
+            if ffi::lua_getmetatable(state, 1) != 0 {
+                ffi::lua_pushstring(state, c"__namecall".as_ptr());
+                ffi::lua_rawget(state, -2);
+                if ffi::lua_iscfunction(state, -1) != 0 {
+                    ffi::lua_pushvalue(state, 4);
+                    ffi::lua_setupvalue(state, -2, 1);
+                }
+                ffi::lua_pop(state, 2);
+            }
+            ffi::lua_pushstring(state, c"__index".as_ptr());
+            ffi::lua_pushvalue(state, 4);
+            ffi::lua_pushvalue(state, 3);
+            ffi::lua_pushcclosurek(state, fresh_method, c"__index".as_ptr(), 2, None);
+            ffi::lua_rawset(state, 2);
+            ffi::lua_settop(state, 0);
+        })
+    }
+}
+
+/// The `__index` of a datatype's emptied method table ([`fresh_method_reads`]): (table, key) answers a new closure of the method
+/// in upvalue 1's table, any other value there as it is, else what upvalue 2 (the type's refusal: "X is not a valid member of
+/// CFrame") does.
+unsafe extern "C-unwind" fn fresh_method(state: *mut mlua::ffi::lua_State) -> std::ffi::c_int {
+    use mlua::ffi;
+    unsafe {
+        ffi::lua_settop(state, 2);
+        ffi::lua_pushvalue(state, 2);
+        let kind = ffi::lua_rawget(state, ffi::lua_upvalueindex(1));
+        if kind == ffi::LUA_TFUNCTION {
+            cfunction::replace_with_copy(state);
+            return 1;
+        }
+        if kind != ffi::LUA_TNIL {
+            return 1;
+        }
+        ffi::lua_pop(state, 1);
+        ffi::lua_pushvalue(state, ffi::lua_upvalueindex(2));
+        if ffi::lua_type(state, -1) != ffi::LUA_TFUNCTION {
+            ffi::lua_pushnil(state);
+            return 1;
+        }
+        ffi::lua_insert(state, 1);
+        ffi::lua_call(state, 2, 1);
+        1
+    }
 }
 
 /// Hooks.MissingChild (edit mode): the running client's PlayerGui a script waits for or indexes

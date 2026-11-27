@@ -192,3 +192,24 @@ fn translator_for_locale_waits_ten_seconds() {
     );
     done(&lines);
 }
+
+/// A CFrame's, Color3's, UDim2's and Vector2's method read as a value is a new function at every read, which still works; fields,
+/// `:` calls and the unknown-member error are as they were.
+#[test]
+fn datatype_method_values_are_new_functions() {
+    let lines = run(
+        play(),
+        r#"
+        local Cf, C3, U2, V2 = CFrame.new(1, 2, 3), Color3.new(0.1, 0.2, 0.3), UDim2.new(1, 2, 3, 4), Vector2.new(1, 2)
+        assert(not rawequal(Cf.Lerp, Cf.Lerp) and not rawequal(Cf.Inverse, CFrame.identity.Inverse) and not rawequal(C3.Lerp, C3.Lerp))
+        assert(not rawequal(U2.Lerp, U2.Lerp) and not rawequal(V2.Lerp, V2.Lerp) and type(Cf.Lerp) == "function")
+        assert(Cf.Inverse(Cf) == Cf:Inverse() and Cf.Position == Vector3.new(1, 2, 3) and C3.R == C3.r and U2.X.Offset == 2 and V2.X == 1)
+        assert(V2.Lerp(Vector2.zero, Vector2.one, 0.5) == Vector2.one / 2)
+        assert(select(2, pcall(function() return Cf.Nope end)) == "Nope is not a valid member of CFrame")
+        assert(select(2, pcall(function() return V2:Nope() end)) == "Nope is not a valid member of Vector2")
+        print("done")
+        "#,
+        0.0,
+    );
+    done(&lines);
+}
