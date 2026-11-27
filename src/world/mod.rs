@@ -20,6 +20,7 @@
 
 pub mod broadphase;
 pub mod camera;
+mod convex;
 mod camera_fov;
 pub(crate) mod camera_moves;
 mod faces;

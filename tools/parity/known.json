@@ -658,27 +658,27 @@
 	"part_world": [
 		{
 			"line": "torque A ",
-			"why": "a client's assembly inertia carries float steps of its own (a 2 x 4 x 6 block's Iyy reads 111.999985 for 112), and a wedge's inertia is a wedge's, where ree's is a box's (GetMass and AssemblyMass alike)"
+			"why": "a client's assembly inertia carries float steps of its own (a 2 x 4 x 6 block's Iyy reads 111.999985 for 112, a 2 x 4 x 6 wedge's Ixx 48.533329 for 48.5333333)"
 		},
 		{
 			"line": "torque B ",
-			"why": "a client's assembly inertia carries float steps of its own (a 2 x 4 x 6 block's Iyy reads 111.999985 for 112), and a wedge's inertia is a wedge's, where ree's is a box's (GetMass and AssemblyMass alike)"
+			"why": "a client's assembly inertia carries float steps of its own (a 2 x 4 x 6 block's Iyy reads 111.999985 for 112, a 2 x 4 x 6 wedge's Ixx 48.533329 for 48.5333333)"
 		},
 		{
 			"line": "torque C ",
-			"why": "a client's assembly inertia carries float steps of its own (a 2 x 4 x 6 block's Iyy reads 111.999985 for 112), and a wedge's inertia is a wedge's, where ree's is a box's (GetMass and AssemblyMass alike)"
+			"why": "a client's assembly inertia carries float steps of its own (a 2 x 4 x 6 block's Iyy reads 111.999985 for 112, a 2 x 4 x 6 wedge's Ixx 48.533329 for 48.5333333)"
 		},
 		{
 			"line": "torque F ",
-			"why": "a client's assembly inertia carries float steps of its own (a 2 x 4 x 6 block's Iyy reads 111.999985 for 112), and a wedge's inertia is a wedge's, where ree's is a box's (GetMass and AssemblyMass alike)"
+			"why": "a client's assembly inertia carries float steps of its own (a 2 x 4 x 6 block's Iyy reads 111.999985 for 112, a 2 x 4 x 6 wedge's Ixx 48.533329 for 48.5333333)"
 		},
 		{
 			"line": "torque G ",
-			"why": "a client's assembly inertia carries float steps of its own (a 2 x 4 x 6 block's Iyy reads 111.999985 for 112), and a wedge's inertia is a wedge's, where ree's is a box's (GetMass and AssemblyMass alike)"
+			"why": "a client's assembly inertia carries float steps of its own (a 2 x 4 x 6 block's Iyy reads 111.999985 for 112, a 2 x 4 x 6 wedge's Ixx 48.533329 for 48.5333333)"
 		},
 		{
 			"line": "torque H ",
-			"why": "a client's assembly inertia carries float steps of its own (a 2 x 4 x 6 block's Iyy reads 111.999985 for 112), and a wedge's inertia is a wedge's, where ree's is a box's (GetMass and AssemblyMass alike)"
+			"why": "a client's assembly inertia carries float steps of its own (a 2 x 4 x 6 block's Iyy reads 111.999985 for 112, a 2 x 4 x 6 wedge's Ixx 48.533329 for 48.5333333)"
 		},
 		{
 			"line": "velocity-at B ",
@@ -687,10 +687,6 @@
 		{
 			"line": "velocity-at C ",
 			"why": "the velocity at a point through a welded pair's centre: a client's centre of mass carries float steps ree's does not (the centre-precision measure entry, ASM-WELD-PRECISION)"
-		},
-		{
-			"line": "closest truss ",
-			"why": "a TrussPart's closest point is its truss shape's on a client; ree's is its box's"
 		},
 		{
 			"line": "grounded A ",
@@ -1091,6 +1087,132 @@
 		{
 			"line": "sphere r0.5 290, 91, 300 20, 0, 0 Wall pos 295.0000 90.5000 300.0000 n -0.0003 1.0000 0.0000 d 5.0000",
 			"why": "a Spherecast touching a box's edge: a client's Normal is 3e-4 off the exact one (its iterated contact), ree's is exact; the Distance and Position match"
+		}
+	],
+	"query_wedges": [
+		{
+			"line": "block W down -0.75 W pos ",
+			"why": "a client's Blockcast or Shapecast Position against a wedge, a corner wedge or a wedge cast is its GJK cast's witness point along the contact edge or face (300.23 where ree's box_contact point is 300.08); the Distance and Normal match"
+		},
+		{
+			"line": "block W front 0 W pos ",
+			"why": "a client's Blockcast or Shapecast Position against a wedge, a corner wedge or a wedge cast is its GJK cast's witness point along the contact edge or face (300.23 where ree's box_contact point is 300.08); the Distance and Normal match"
+		},
+		{
+			"line": "shapewedge W down -0.75 W pos ",
+			"why": "a client's Blockcast or Shapecast Position against a wedge, a corner wedge or a wedge cast is its GJK cast's witness point along the contact edge or face (300.23 where ree's box_contact point is 300.08); the Distance and Normal match"
+		},
+		{
+			"line": "shapewedge W down 0.75 W pos ",
+			"why": "a client's Blockcast or Shapecast Position against a wedge, a corner wedge or a wedge cast is its GJK cast's witness point along the contact edge or face (300.23 where ree's box_contact point is 300.08); the Distance and Normal match"
+		},
+		{
+			"line": "shapewedge W side -0.5 W pos ",
+			"why": "a client's Blockcast or Shapecast Position against a wedge, a corner wedge or a wedge cast is its GJK cast's witness point along the contact edge or face (300.23 where ree's box_contact point is 300.08); the Distance and Normal match"
+		},
+		{
+			"line": "shapewedge W front 0 W pos ",
+			"why": "a client's Blockcast or Shapecast Position against a wedge, a corner wedge or a wedge cast is its GJK cast's witness point along the contact edge or face (300.23 where ree's box_contact point is 300.08); the Distance and Normal match"
+		},
+		{
+			"line": "shapewedge W side 0 W pos ",
+			"why": "a client's Blockcast or Shapecast Position against a wedge, a corner wedge or a wedge cast is its GJK cast's witness point along the contact edge or face (300.23 where ree's box_contact point is 300.08); the Distance and Normal match"
+		},
+		{
+			"line": "shapewedge W front 0.5 W pos ",
+			"why": "a client's Blockcast or Shapecast Position against a wedge, a corner wedge or a wedge cast is its GJK cast's witness point along the contact edge or face (300.23 where ree's box_contact point is 300.08); the Distance and Normal match"
+		},
+		{
+			"line": "block C down -0.75 C pos ",
+			"why": "a client's Blockcast or Shapecast Position against a wedge, a corner wedge or a wedge cast is its GJK cast's witness point along the contact edge or face (300.23 where ree's box_contact point is 300.08); the Distance and Normal match"
+		},
+		{
+			"line": "block C down 0.25 C pos ",
+			"why": "a client's Blockcast or Shapecast Position against a wedge, a corner wedge or a wedge cast is its GJK cast's witness point along the contact edge or face (300.23 where ree's box_contact point is 300.08); the Distance and Normal match"
+		},
+		{
+			"line": "block C down 0.75 C pos ",
+			"why": "a client's Blockcast or Shapecast Position against a wedge, a corner wedge or a wedge cast is its GJK cast's witness point along the contact edge or face (300.23 where ree's box_contact point is 300.08); the Distance and Normal match"
+		},
+		{
+			"line": "block C front -0.5 C pos ",
+			"why": "a client's Blockcast or Shapecast Position against a wedge, a corner wedge or a wedge cast is its GJK cast's witness point along the contact edge or face (300.23 where ree's box_contact point is 300.08); the Distance and Normal match"
+		},
+		{
+			"line": "block C front 0 C pos ",
+			"why": "a client's Blockcast or Shapecast Position against a wedge, a corner wedge or a wedge cast is its GJK cast's witness point along the contact edge or face (300.23 where ree's box_contact point is 300.08); the Distance and Normal match"
+		},
+		{
+			"line": "block C side 0.5 C pos ",
+			"why": "a client's Blockcast or Shapecast Position against a wedge, a corner wedge or a wedge cast is its GJK cast's witness point along the contact edge or face (300.23 where ree's box_contact point is 300.08); the Distance and Normal match"
+		},
+		{
+			"line": "block C diag C pos ",
+			"why": "a client's Blockcast or Shapecast Position against a wedge, a corner wedge or a wedge cast is its GJK cast's witness point along the contact edge or face (300.23 where ree's box_contact point is 300.08); the Distance and Normal match"
+		},
+		{
+			"line": "shapeball C diag C pos ",
+			"why": "a client's contact carries its iteration's error (about 1e-4 at a turned wedge or a corner wedge's slope edge), ree's is exact"
+		},
+		{
+			"line": "shapewedge C down -0.75 C pos ",
+			"why": "a client's Blockcast or Shapecast Position against a wedge, a corner wedge or a wedge cast is its GJK cast's witness point along the contact edge or face (300.23 where ree's box_contact point is 300.08); the Distance and Normal match"
+		},
+		{
+			"line": "shapewedge C down 0.25 C pos ",
+			"why": "a client's Blockcast or Shapecast Position against a wedge, a corner wedge or a wedge cast is its GJK cast's witness point along the contact edge or face (300.23 where ree's box_contact point is 300.08); the Distance and Normal match"
+		},
+		{
+			"line": "shapewedge C down 0.75 C pos ",
+			"why": "a client's Blockcast or Shapecast Position against a wedge, a corner wedge or a wedge cast is its GJK cast's witness point along the contact edge or face (300.23 where ree's box_contact point is 300.08); the Distance and Normal match"
+		},
+		{
+			"line": "shapewedge C front -0.5 C pos ",
+			"why": "a client's Blockcast or Shapecast Position against a wedge, a corner wedge or a wedge cast is its GJK cast's witness point along the contact edge or face (300.23 where ree's box_contact point is 300.08); the Distance and Normal match"
+		},
+		{
+			"line": "shapewedge C side -0.5 C pos ",
+			"why": "a client's Blockcast or Shapecast Position against a wedge, a corner wedge or a wedge cast is its GJK cast's witness point along the contact edge or face (300.23 where ree's box_contact point is 300.08); the Distance and Normal match"
+		},
+		{
+			"line": "shapewedge C front 0 C pos ",
+			"why": "a client's Blockcast or Shapecast Position against a wedge, a corner wedge or a wedge cast is its GJK cast's witness point along the contact edge or face (300.23 where ree's box_contact point is 300.08); the Distance and Normal match"
+		},
+		{
+			"line": "shapewedge C side 0 C pos ",
+			"why": "a client's Blockcast or Shapecast Position against a wedge, a corner wedge or a wedge cast is its GJK cast's witness point along the contact edge or face (300.23 where ree's box_contact point is 300.08); the Distance and Normal match"
+		},
+		{
+			"line": "shapewedge C front 0.5 C pos ",
+			"why": "a client's Blockcast or Shapecast Position against a wedge, a corner wedge or a wedge cast is its GJK cast's witness point along the contact edge or face (300.23 where ree's box_contact point is 300.08); the Distance and Normal match"
+		},
+		{
+			"line": "shapewedge C side 0.5 C pos ",
+			"why": "a client's Blockcast or Shapecast Position against a wedge, a corner wedge or a wedge cast is its GJK cast's witness point along the contact edge or face (300.23 where ree's box_contact point is 300.08); the Distance and Normal match"
+		},
+		{
+			"line": "shapewedge T side -0.5 T pos ",
+			"why": "a client's Blockcast or Shapecast Position against a wedge, a corner wedge or a wedge cast is its GJK cast's witness point along the contact edge or face (300.23 where ree's box_contact point is 300.08); the Distance and Normal match"
+		},
+		{
+			"line": "shapewedge T front 0 T pos ",
+			"why": "a client's Blockcast or Shapecast Position against a wedge, a corner wedge or a wedge cast is its GJK cast's witness point along the contact edge or face (300.23 where ree's box_contact point is 300.08); the Distance and Normal match"
+		},
+		{
+			"line": "sphere WT diag WT pos ",
+			"why": "a client's contact carries its iteration's error (about 1e-4 at a turned wedge or a corner wedge's slope edge), ree's is exact"
+		},
+		{
+			"line": "block WT front 0 WT pos ",
+			"why": "a client's normal carries a tiny negative component from its iteration (prints -0.000 for ree's 0); position and distance match"
+		},
+		{
+			"line": "shapeball WT side -0.5 WT pos ",
+			"why": "a client's contact carries its iteration's error (about 1e-4 at a turned wedge or a corner wedge's slope edge), ree's is exact"
+		},
+		{
+			"line": "shapewedge WT front -0.5 WT pos ",
+			"why": "a client's normal carries a tiny negative component from its iteration (prints -0.000 for ree's 0); position and distance match"
 		}
 	],
 	"readonly_properties": [

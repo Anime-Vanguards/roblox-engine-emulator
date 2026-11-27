@@ -425,13 +425,17 @@ fn find_parts_listed(lua: &Lua, engine: &Rc<Engine>, root: InstanceId, args: &Ar
     query::parts_table(lua, engine, found.parts)
 }
 
-/// A listed part's collision test against another (`ball` a sphere, anything else its box): how far they overlap, negative
-/// when apart.
+/// A listed part's collision test against another (`ball` a sphere, a wedge and a corner wedge their own shapes, anything else
+/// its box): how far they overlap, negative when apart (measured: a block above a wedge's slope, inside its box, does not touch
+/// it; tools/parity/probes/query_wedges.luau).
 fn depth(a: &Solid, b: &Solid) -> f32 {
     match (a.shape, b.shape) {
         (Shape::Ball(ra), Shape::Ball(rb)) => ra + rb - frame::translation(&a.frame).distance(frame::translation(&b.frame)),
+        (Shape::Ball(radius), _) if b.hull().is_some() => ball_hull(frame::translation(&a.frame), radius, b),
+        (_, Shape::Ball(radius)) if a.hull().is_some() => ball_hull(frame::translation(&b.frame), radius, a),
         (Shape::Ball(radius), _) => ball_box(frame::translation(&a.frame), radius, b),
         (_, Shape::Ball(radius)) => ball_box(frame::translation(&b.frame), radius, a),
+        _ if a.hull().is_some() || b.hull().is_some() => super::convex::depth(&a.polytope(), &b.polytope()),
         _ => {
             let (a, b) = (query::Oriented::of(&a.frame, a.half_extents()), query::Oriented::of(&b.frame, b.half_extents()));
             let offset = b.center - a.center;
@@ -450,6 +454,12 @@ struct Walked {
     off: usize,
     far: usize,
     touched: bool,
+}
+
+/// A sphere against a wedge's or corner wedge's shape: its radius less the distance to it, or plus how deep its centre is inside.
+fn ball_hull(center: Vec3, radius: f32, solid: &Solid) -> f32 {
+    let Some(hull) = solid.hull() else { return f32::NEG_INFINITY };
+    radius - hull.signed_distance(solid.frame.inverse().transform_point3(center))
 }
 
 /// A sphere against a solid's box: its radius less the distance to the box, or plus how deep its centre is inside.

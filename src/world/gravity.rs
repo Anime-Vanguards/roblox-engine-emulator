@@ -513,9 +513,24 @@ fn massless(state: &State, setup: &Setup, part: InstanceId) -> bool {
     setup.massless.is_some_and(|name| state.dom.boolean(part, name) == Some(true))
 }
 
-/// What the assembly reads take from a part (joints::Point): its position, its mass and whether it is Massless.
+/// What the assembly reads take from a part (joints::Point): its centre of mass (its position, but a wedge's and a corner wedge's
+/// own: [`part_body`]), its mass and whether it is Massless.
 fn part_point(state: &State, setup: &Setup, part: InstanceId) -> joints::Point {
-    (Vec3::from(frame::affine_of(state.dom.raw_get(part, setup.cframe)).translation), part_body(state, setup, part).0, massless(state, setup, part))
+    let (mass, _, centre) = part_body(state, setup, part);
+    let at = frame::affine_of(state.dom.raw_get(part, setup.cframe));
+    let point = if centre == Vec3::ZERO { Vec3::from(at.translation) } else { at.transform_point3(centre) };
+    (point, mass, massless(state, setup, part))
+}
+
+/// An assembly's centre of mass's offset from its root's position, from its offset from the root's centre of mass (what the
+/// assembly reads work out from [`part_point`]): the same unless the root is a wedge or a corner wedge.
+fn from_root(state: &State, setup: &Setup, root: InstanceId, offset: Vec3) -> Vec3 {
+    let (_, _, centre) = part_body(state, setup, root);
+    if centre == Vec3::ZERO {
+        return offset;
+    }
+    let at = frame::affine_of(state.dom.raw_get(root, setup.cframe));
+    offset + (at.transform_point3(centre) - Vec3::from(at.translation))
 }
 
 /// A part's Mass and GetMass(): its mass ([`part_body`]), or 0 when it is Massless in an assembly another part roots (a Massless
@@ -526,10 +541,11 @@ fn own_mass(state: &mut State, reflection: &Reflection, setup: &Setup, part: Ins
     if massless(state, setup, part) && joints::root_part(state, reflection, part).is_some_and(|root| root != part) { 0.0 } else { mass }
 }
 
-/// A part's mass, Massless or not ([`massless`] says when it counts), and its principal moments of inertia about its centre, in
-/// its own frame: a box's from its Size, a sphere's for a Ball, a cylinder's (along X) for a Cylinder, half a box's volume for a
-/// wedge and a third for a corner wedge (their moments a box's).
-fn part_body(state: &State, setup: &Setup, part: InstanceId) -> (f32, Vec3) {
+/// A part's mass, Massless or not ([`massless`] says when it counts), its inertia tensor about its centre of mass and that centre,
+/// in its own frame: a box's from its Size, a sphere's for a Ball, a cylinder's (along X) for a Cylinder, each about the part's
+/// position; a wedge's and a corner wedge's own, half and a third of the box's volume, about their own centres (world/convex.rs
+/// mass_properties: measured, Studio 0.747, client and server).
+fn part_body(state: &State, setup: &Setup, part: InstanceId) -> (f32, Mat3, Vec3) {
     let size = match setup.size.and_then(|name| state.dom.raw_get(part, name)) {
         Some(Value::Vector3(v)) => Vec3::new(v.x, v.y, v.z),
         _ => Vec3::ONE,
@@ -563,6 +579,13 @@ fn part_body(state: &State, setup: &Setup, part: InstanceId) -> (f32, Vec3) {
     });
     let boxed = Vec3::new(size.y * size.y + size.z * size.z, size.x * size.x + size.z * size.z, size.x * size.x + size.y * size.y) / 12.0;
     let volume = size.x * size.y * size.z;
+    // (a wedge's or corner wedge's own inertia and centre, per unit of its volume)
+    let own = |kind: super::convex::Kind, part_volume: f32| {
+        let (exact, centre, inertia) = super::convex::mass_properties(kind, (size * 0.5).max(Vec3::ZERO));
+        let mass = part_volume * density;
+        let scale = if exact > 0.0 { f64::from(mass) / exact } else { 0.0 };
+        (mass, super::convex::inertia_matrix(&inertia, scale), centre.as_vec3())
+    };
     let (volume, moments) = if shape.is_some() && shape == setup.ball {
         let r = size.min_element() * 0.5;
         (4.0 / 3.0 * std::f32::consts::PI * r * r * r, Vec3::splat(0.4 * r * r))
@@ -570,15 +593,15 @@ fn part_body(state: &State, setup: &Setup, part: InstanceId) -> (f32, Vec3) {
         let (r, h) = (size.y.min(size.z) * 0.5, size.x);
         let across = (3.0 * r * r + h * h) / 12.0;
         (std::f32::consts::PI * r * r * h, Vec3::new(0.5 * r * r, across, across))
-    } else if (shape.is_some() && shape == setup.wedge_shape) || Some(class) == setup.wedge_part {
-        (volume * 0.5, boxed)
-    } else if (shape.is_some() && shape == setup.corner_shape) || Some(class) == setup.corner_part {
-        (volume / 3.0, boxed)
+    } else if (shape.is_some() && shape == setup.wedge_shape) || (shape.is_none() && Some(class) == setup.wedge_part) {
+        return own(super::convex::Kind::Wedge, volume * 0.5);
+    } else if (shape.is_some() && shape == setup.corner_shape) || (shape.is_none() && Some(class) == setup.corner_part) {
+        return own(super::convex::Kind::CornerWedge, volume / 3.0);
     } else {
         (volume, boxed)
     };
     let mass = volume * density;
-    (mass, moments * mass)
+    (mass, Mat3::from_diagonal(moments * mass), Vec3::ZERO)
 }
 
 /// An assembly's mass, centre of mass and inertia about it (world axes).
@@ -591,21 +614,23 @@ struct Body {
 /// The body of an assembly's parts (`assembly`, its root first: joints::assembly_parts), each counted as the assembly reads count
 /// it (a Massless part but the root weighs nothing), its centre worked out about the root as they work it out (joints::mass_centre).
 fn body_of(state: &State, setup: &Setup, assembly: &[InstanceId]) -> Body {
-    let parts: Vec<(Affine3A, f32, Vec3)> = assembly
+    let parts: Vec<(Affine3A, Vec3, f32, Mat3)> = assembly
         .iter()
         .enumerate()
         .map(|(index, &part)| {
-            let (mass, moments) = if index > 0 && massless(state, setup, part) { (0.0, Vec3::ZERO) } else { part_body(state, setup, part) };
-            (frame::affine_of(state.dom.raw_get(part, setup.cframe)), mass, moments)
+            let (mass, own, centre) = if index > 0 && massless(state, setup, part) { (0.0, Mat3::ZERO, Vec3::ZERO) } else { part_body(state, setup, part) };
+            let at = frame::affine_of(state.dom.raw_get(part, setup.cframe));
+            let point = if centre == Vec3::ZERO { Vec3::from(at.translation) } else { at.transform_point3(centre) };
+            (at, point, mass, own)
         })
         .collect();
-    let (mass, offset) = joints::mass_centre(parts.iter().map(|(at, part_mass, _)| (Vec3::from(at.translation), *part_mass)));
-    let centre = parts.first().map_or(Vec3::ZERO, |(at, ..)| Vec3::from(at.translation)) + offset;
+    let (mass, offset) = joints::mass_centre(parts.iter().map(|(_, point, part_mass, _)| (*point, *part_mass)));
+    let centre = parts.first().map_or(Vec3::ZERO, |(_, point, ..)| *point) + offset;
     let mut inertia = Mat3::ZERO;
-    for (at, part_mass, moments) in &parts {
+    for (at, point, part_mass, own) in &parts {
         let rotation = Mat3::from(at.matrix3);
-        inertia += rotation * Mat3::from_diagonal(*moments) * rotation.transpose();
-        let r = Vec3::from(at.translation) - centre;
+        inertia += rotation * *own * rotation.transpose();
+        let r = *point - centre;
         inertia += (Mat3::IDENTITY * r.length_squared() - Mat3::from_cols(r * r.x, r * r.y, r * r.z)) * *part_mass;
     }
     Body { mass, centre, inertia }
@@ -639,6 +664,7 @@ fn assign(state: &mut State, reflection: &Reflection, setup: &Setup, id: Instanc
     }
     let (parts, offset) = joints::assembly_frame(state, reflection, id, |state, part| part_point(state, setup, part));
     let root = parts[0];
+    let offset = from_root(state, setup, root, offset);
     let vector = |state: &State, part: InstanceId, name: Option<NameId>| name.and_then(|name| state.dom.raw_get(part, name)).and_then(frame::vector_of).unwrap_or(Vec3::ZERO);
     // (the motion before the write, from what it left: the root's Velocity is its position's, and of the two names of the spin the
     // one not written still holds it)
@@ -750,6 +776,7 @@ pub(crate) fn assemblies_changed(state: &mut State, reflection: &Reflection) {
         if !done.insert(parts[0]) {
             continue;
         }
+        let offset = from_root(state, &setup, parts[0], offset);
         // (an assembly that does not move and holds no part that moved has nothing to change)
         let gravity = &state.gravity;
         let still = !gravity.bodies.contains_key(&parts[0])

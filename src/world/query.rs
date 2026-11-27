@@ -3,10 +3,10 @@
 //! `FindPartOnRay`, `FindPartOnRayWithIgnoreList`, `FindPartOnRayWithWhitelist` (the Region3 queries and
 //! ArePartsTouchingOthers: region.rs).
 //!
-//! Fidelity: parts are their collision primitives where Roblox's are simple (Block a box, Ball a
-//! sphere of the smallest axis, Cylinder along X), and their oriented bounding box otherwise
-//! (wedges, corner wedges, MeshParts, unions, trusses: no mesh geometry is loaded). Terrain holds
-//! no voxels and is never hit. Casts follow Roblox's documented rules: nothing a ray starts inside
+//! Fidelity: parts are their collision shapes where Roblox's are simple (Block a box, Ball a
+//! sphere of the smallest axis, Cylinder along X, a wedge and a corner wedge their own: world/convex.rs; a TrussPart is its box,
+//! measured), and their oriented bounding box otherwise (MeshParts, unions: no mesh geometry is loaded). Terrain holds
+//! no voxels and is never hit. GetPartBoundsInBox, GetPartBoundsInRadius and the Region3 queries meet a wedge's box (measured). Casts follow Roblox's documented rules: nothing a ray starts inside
 //! or a shape starts overlapping is hit, parts with CanQuery and CanCollide both off are skipped (CanQuery off alone hides
 //! nothing: measured), RespectCanCollide skips parts with CanCollide off, and a part whose collision group does not collide with
 //! the params' CollisionGroup is skipped ([`Filter::groups_pass`]). A
@@ -29,6 +29,7 @@ use mlua::prelude::*;
 use rbx_dom_weak::types as dom;
 
 use super::broadphase::{self, Entry};
+use super::convex;
 use super::grid::{self, Passed, Walked};
 use super::{cframe_arg, cframe_name, frame, vector_arg};
 use crate::{
@@ -47,6 +48,11 @@ pub enum Shape {
     Ball(f32),
     /// Along the part's X axis: half length, radius
     Cylinder(f32, f32),
+    /// A wedge's or a corner wedge's own shape (world/convex.rs), its box's half extents
+    Wedge(Vec3),
+    CornerWedge(Vec3),
+    /// A TrussPart: its box, but a ray entering it through an edge or touching it ([`ray_truss`])
+    Truss(Vec3),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -60,9 +66,28 @@ impl Solid {
     /// The oriented box that bounds it (its half extents).
     pub fn half_extents(&self) -> Vec3 {
         match self.shape {
-            Shape::Box(half) => half,
+            Shape::Box(half) | Shape::Truss(half) => half,
             Shape::Ball(radius) => Vec3::splat(radius),
             Shape::Cylinder(half_length, radius) => Vec3::new(half_length, radius, radius),
+            Shape::Wedge(half) | Shape::CornerWedge(half) => half,
+        }
+    }
+
+    /// Its hull, for a wedge or a corner wedge
+    pub(crate) fn hull(&self) -> Option<convex::Hull> {
+        match self.shape {
+            Shape::Wedge(half) => Some(convex::Hull::new(convex::Kind::Wedge, half)),
+            Shape::CornerWedge(half) => Some(convex::Hull::new(convex::Kind::CornerWedge, half)),
+            _ => None,
+        }
+    }
+
+    /// The convex shape a box query, a Blockcast or a Shapecast meets: a wedge's hull, else its box (a ball's and a cylinder's
+    /// too, as a Blockcast meets them)
+    pub(crate) fn polytope(&self) -> convex::Polytope {
+        match self.hull() {
+            Some(hull) => convex::Polytope::of_hull(&self.frame, &hull),
+            None => convex::Polytope::of_box(&self.frame, self.half_extents()),
         }
     }
 }
@@ -315,7 +340,8 @@ pub fn solid(state: &State, engine: &Engine, part: InstanceId) -> Solid {
 }
 
 /// The shape `part` collides as at `size`: a Block part a box, a Ball a sphere of the smallest axis,
-/// a Cylinder a cylinder along X, anything else its bounding box.
+/// a Cylinder a cylinder along X, a WedgePart and a Part whose Shape is Wedge a wedge, a CornerWedgePart and a Part whose Shape
+/// is CornerWedge a corner wedge, anything else its bounding box.
 fn shape_of(state: &State, engine: &Engine, part: InstanceId, size: Vec3) -> Shape {
     let reflection = &engine.reflection;
     let half = (size * 0.5).max(Vec3::ZERO);
@@ -324,7 +350,13 @@ fn shape_of(state: &State, engine: &Engine, part: InstanceId, size: Vec3) -> Sha
     match shape {
         Some("Ball") => Shape::Ball(half.min_element()),
         Some("Cylinder") => Shape::Cylinder(half.x, half.y.min(half.z)),
-        _ => Shape::Box(half),
+        Some("Wedge") => Shape::Wedge(half),
+        Some("CornerWedge") => Shape::CornerWedge(half),
+        Some(_) => Shape::Box(half),
+        None if reflection.is_a(class, "WedgePart") => Shape::Wedge(half),
+        None if reflection.is_a(class, "CornerWedgePart") => Shape::CornerWedge(half),
+        None if reflection.is_a(class, "TrussPart") => Shape::Truss(half),
+        None => Shape::Box(half),
     }
 }
 
@@ -583,10 +615,15 @@ pub(crate) fn ray_solid(solid: &Solid, origin: Vec3, direction: Vec3, grow: f32)
     let o = inverse.transform_point3(origin);
     let d = inverse.transform_vector3(direction);
     match solid.shape {
-        Shape::Box(half) if grow > 0.0 => sweep_sphere_box(o, d, half, grow),
+        Shape::Box(half) | Shape::Truss(half) if grow > 0.0 => sweep_sphere_box(o, d, half, grow),
         Shape::Box(half) => ray_box(o, d, half + Vec3::splat(grow)),
+        Shape::Truss(half) => ray_truss(o, d, half),
         Shape::Ball(radius) => ray_sphere(o, d, radius + grow),
         Shape::Cylinder(half_length, radius) => ray_cylinder(o, d, half_length + grow, radius + grow),
+        Shape::Wedge(_) | Shape::CornerWedge(_) => {
+            let hull = solid.hull()?;
+            if grow > 0.0 { hull.sweep_sphere(o, d, grow) } else { hull.ray(o, d) }
+        }
     }
 }
 
@@ -621,6 +658,44 @@ pub fn ray_box(o: Vec3, d: Vec3, half: Vec3) -> Option<(f32, Vec3)> {
         }
     }
     (enter > 0.0 && enter < 1.0 && enter <= exit).then_some((enter, normal))
+}
+
+/// A ray against a TrussPart (its box centred at the origin, half extents `half`): a client's ray meets a truss as its box, but one
+/// entering it exactly through an edge or a corner is given the ray's own direction reversed as its normal, and one only touching
+/// an edge misses (measured, Studio 0.747, client and server, tools/parity/probes/query_wedges.luau: a ray down and along +Z onto a
+/// truss's top front edge reads Normal (0, 0.70711, -0.70711), one along (-25, -20, 25) onto a side edge (0.615, 0.492, -0.615),
+/// rays grazing its bottom front and top back edges nil).
+pub fn ray_truss(o: Vec3, d: Vec3, half: Vec3) -> Option<(f32, Vec3)> {
+    let (mut enter, mut exit) = (f32::NEG_INFINITY, f32::INFINITY);
+    let (mut normal, mut tied) = (Vec3::ZERO, false);
+    for axis in 0..3 {
+        let (origin, direction, extent) = (o[axis], d[axis], half[axis]);
+        if direction.abs() < 1e-12 {
+            if origin.abs() > extent {
+                return None;
+            }
+            continue;
+        }
+        let (mut near, mut far) = ((-extent - origin) / direction, (extent - origin) / direction);
+        let mut sign = -1.0;
+        if near > far {
+            std::mem::swap(&mut near, &mut far);
+            sign = 1.0;
+        }
+        if near > enter {
+            tied = enter.is_finite() && near - enter <= 1e-6 * near.abs().max(1.0);
+            enter = near;
+            normal = Vec3::ZERO;
+            normal[axis] = sign;
+        } else if enter - near <= 1e-6 * near.abs().max(1.0) {
+            tied = true;
+        }
+        exit = exit.min(far);
+    }
+    if !(enter > 0.0 && enter < 1.0 && enter < exit) {
+        return None;
+    }
+    Some((enter, if tied { -d.normalize_or(Vec3::Y) } else { normal }))
 }
 
 /// Whether a cast's entry fraction `t` hits: past the start and short of the end (a cast touching a part only at its start or only
@@ -763,13 +838,20 @@ pub fn cast_ray<'a>(near: impl IntoIterator<Item = (InstanceId, &'a Entry)>, see
             continue;
         }
         let Some((t, local_normal)) = ray_solid(&entry.solid, origin, direction, grow) else { continue };
-        let distance = direction.length() * t;
+        let hull = entry.solid.hull().is_some();
+        // (a client reads a wedge's Distance off the hit's float position: 10.79999 for a hit at z 296.79999 from 286)
+        let distance = if hull && grow == 0.0 { (origin + direction * t - origin).length() } else { direction.length() * t };
         if best.is_some_and(|hit| hit.distance <= distance) || !sees(part, entry) {
             continue;
         }
         let normal = entry.solid.frame.transform_vector3(local_normal).normalize_or(Vec3::Y);
-        // a swept sphere touches the surface one radius short of its centre
-        let position = origin + direction * t - normal * grow;
+        // a swept sphere touches the surface one radius short of its centre (worked in doubles against a wedge's shape, whose
+        // contact a client puts at the float nearest its own)
+        let position = if hull && grow > 0.0 {
+            (origin.as_dvec3() + direction.as_dvec3() * f64::from(t) - normal.as_dvec3() * f64::from(grow)).as_vec3()
+        } else {
+            origin + direction * t - normal * grow
+        };
         best = Some(Hit { part, position, normal, distance });
     }
     best
@@ -898,9 +980,22 @@ fn box_contact(moving: &Oriented, signed: Vec3, normal: Vec3, other: &Oriented) 
 pub fn cast_box(near: &[(InstanceId, Entry)], sees: impl Fn(InstanceId, &Entry) -> bool, frame: &Affine3A, size: Vec3, direction: Vec3, except: Option<InstanceId>) -> Option<Hit> {
     // (a negative side sweeps as its size: measured, the distance of a cast down with size (1, -2, 1) is a 2-stud box's)
     let moving = Oriented::of(&unit_frame(frame), (size * 0.5).abs());
+    // (a wedge's or corner wedge's own shape is met by separating axes: world/convex.rs)
+    let shape = convex::Polytope::of_box(&unit_frame(frame), size * 0.5);
     let mut best: Option<Hit> = None;
     for (part, entry) in near {
         if except == Some(*part) {
+            continue;
+        }
+        if entry.solid.hull().is_some() {
+            let other = entry.solid.polytope();
+            let Some((t, normal)) = convex::sweep(&shape, direction, &other) else { continue };
+            let distance = (direction.as_dvec3().length() * t) as f32;
+            if best.is_some_and(|hit| hit.distance <= distance) || !sees(*part, entry) {
+                continue;
+            }
+            let position = convex::contact(&shape.moved(direction.as_dvec3() * t), normal, &other);
+            best = Some(Hit { part: *part, position, normal: normal.as_vec3(), distance });
             continue;
         }
         let other = Oriented::of(&entry.solid.frame, entry.solid.half_extents());
@@ -913,6 +1008,27 @@ pub fn cast_box(near: &[(InstanceId, Entry)], sees: impl Fn(InstanceId, &Entry) 
         let at = Oriented { center, ..moving };
         let position = box_contact(&at, size * 0.5, normal, &other).unwrap_or(center - normal * moving.radius(normal));
         best = Some(Hit { part: *part, position, normal, distance });
+    }
+    best
+}
+
+/// The closest part of `near` that `sees` lets through a wedge's or corner wedge's shape `moving` swept along `direction` touches,
+/// `except` aside (a Shapecast of such a part): each part's convex shape ([`Solid::polytope`]: a box for anything but a wedge) met
+/// by separating axes, the nearest kept, the first of equals.
+pub(crate) fn cast_polytope(near: &[(InstanceId, Entry)], sees: impl Fn(InstanceId, &Entry) -> bool, moving: &convex::Polytope, direction: Vec3, except: Option<InstanceId>) -> Option<Hit> {
+    let mut best: Option<Hit> = None;
+    for (part, entry) in near {
+        if except == Some(*part) {
+            continue;
+        }
+        let other = entry.solid.polytope();
+        let Some((t, normal)) = convex::sweep(moving, direction, &other) else { continue };
+        let distance = (direction.as_dvec3().length() * t) as f32;
+        if best.is_some_and(|hit| hit.distance <= distance) || !sees(*part, entry) {
+            continue;
+        }
+        let position = convex::contact(&moving.moved(direction.as_dvec3() * t), normal, &other);
+        best = Some(Hit { part: *part, position, normal: normal.as_vec3(), distance });
     }
     best
 }
@@ -945,6 +1061,26 @@ pub fn overlaps_sphere(solid: &Solid, center: Vec3, radius: f32) -> bool {
             (local - local.clamp(-half, half)).length() <= radius
         }
     }
+}
+
+/// Whether `solid` overlaps the part `query`, each as its own shape (GetPartsInPart: a wedge's and a corner wedge's own, measured;
+/// a ball's sphere; anything else its box)
+pub fn overlaps_part(solid: &Solid, query: &Solid) -> bool {
+    match (solid.hull(), query.hull()) {
+        (None, None) => match query.shape {
+            Shape::Ball(radius) => overlaps_sphere(solid, frame::translation(&query.frame), radius),
+            _ => overlaps_box(solid, &query.frame, query.half_extents() * 2.0),
+        },
+        (Some(hull), _) if matches!(query.shape, Shape::Ball(_)) => ball_meets_hull(&hull, &solid.frame, query),
+        (_, Some(hull)) if matches!(solid.shape, Shape::Ball(_)) => ball_meets_hull(&hull, &query.frame, solid),
+        _ => convex::overlap(&solid.polytope(), &query.polytope()),
+    }
+}
+
+/// Whether the ball `ball` meets `hull` in `frame`
+fn ball_meets_hull(hull: &convex::Hull, frame: &Affine3A, ball: &Solid) -> bool {
+    let Shape::Ball(radius) = ball.shape else { return false };
+    hull.signed_distance(frame.inverse().transform_point3(frame::translation(&ball.frame))) <= radius
 }
 
 // Script bindings
@@ -1640,6 +1776,7 @@ pub fn install(engine: &Rc<Engine>) {
         };
         let (hit, counts) = cast_and_count(engine, world, &filter, direction, enter, swept, |state, near| match cast.shape {
             Shape::Ball(radius) => cast_ray(near.iter().map(|(part, entry)| (*part, entry)), |part, entry| filter.sees(state, part, entry), center, direction, radius, Some(part)),
+            Shape::Wedge(_) | Shape::CornerWedge(_) => cast_polytope(near, |part, entry| filter.sees(state, part, entry), &cast.polytope(), direction, Some(part)),
             _ => cast_box(near, |part, entry| filter.sees(state, part, entry), &cast.frame, cast.half_extents() * 2.0, direction, Some(part)),
         });
         let first = if matches!(cast.shape, Shape::Ball(_)) { crate::cost::SPHERE_MET } else { crate::cost::BLOCK_MET };
@@ -1701,14 +1838,9 @@ pub fn install(engine: &Rc<Engine>) {
             _ => (frame::translation(&query.frame), box_extent(&query.frame, query.half_extents() * 2.0)),
         };
         let extent = extent.map(|extent| extent + Vec3::splat(PART_QUERY_GROWTH));
-        // (its own fitted prices cover its walk: QUERY_PART_EXACT, QUERY_PART_SIZE; not measured apart)
-        let parts = overlapping(engine, world, filter, center, extent, false, |s| {
-            s.part != part
-                && match query.shape {
-                    Shape::Ball(radius) => overlaps_sphere(s, frame::translation(&query.frame), radius),
-                    _ => overlaps_box(s, &query.frame, query.half_extents() * 2.0),
-                }
-        });
+        // (its own fitted prices cover its walk: QUERY_PART_EXACT, QUERY_PART_SIZE; not measured apart; each part met as its own
+        // shape, a wedge's too: overlaps_part)
+        let parts = overlapping(engine, world, filter, center, extent, false, |s| s.part != part && overlaps_part(s, &query));
         // (its own work grows with the query part's box: cost.rs QUERY_PART_SIZE)
         let box_size = query.half_extents() * 2.0;
         let area = 2.0 * (box_size.x * box_size.y + box_size.y * box_size.z + box_size.z * box_size.x);

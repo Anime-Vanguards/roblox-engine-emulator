@@ -675,6 +675,9 @@ struct Memo {
     /// The parts whose centre was read since the last move ([`Centre::read`]), which the next move works out again
     /// ([`refresh_centres`]), so a move looks at those alone however many parts' centres are kept
     reads: Vec<InstanceId>,
+    /// A part's centre of mass is not its position (a wedge's: world/gravity.rs part_point): a move leaves the centres to the next
+    /// read, which works them out from the points ([`refresh_centres`] works from positions)
+    centred: bool,
     /// The walks free assemblies' AssemblyMass reads summed the masses over, by the root walked from ([`Body`]), up to
     /// [`KEPT_BODIES`]: kept through the link changes whose walk is the same order with parts gone or after it ([`Joints::unlink`],
     /// [`Joints::join`])
@@ -2973,7 +2976,9 @@ fn kept_body(
     let at = points[0].0 + offset;
     // (every assembly of a component that holds an anchored part hangs from one)
     let mass = if free { total } else { f32::INFINITY };
+    let centred = order.iter().zip(&points).any(|(&other, &(at, _))| at != glam::Vec3::from(cframe_of(state, setup, other).translation));
     let mut memo = found.memo.borrow_mut();
+    memo.centred |= centred;
     let placed = memo.placed;
     let mut listed = false;
     for (&other, &(_, own)) in order.iter().zip(&points) {
@@ -3056,7 +3061,11 @@ pub fn assembly_offset(state: &mut State, reflection: &Reflection, part: Instanc
 /// The others are worked out when read.
 fn refresh_centres(state: &State, setup: &Setup, found: &Component) {
     let mut memo = found.memo.borrow_mut();
-    let Memo { members, mass, centre, masses, placed, reads, .. } = &mut *memo;
+    let Memo { members, mass, centre, masses, placed, reads, centred, .. } = &mut *memo;
+    if *centred {
+        reads.clear();
+        return;
+    }
     let mut left = REFRESHED_CENTRES;
     for part in std::mem::take(reads) {
         let Some(entry) = centre.get_mut(&part) else { continue };

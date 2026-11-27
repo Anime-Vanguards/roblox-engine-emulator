@@ -677,6 +677,86 @@ fn queries_leave_out_parts_their_params_group_does_not_collide_with() {
 /// touching a part only at its path's end or only at its start misses it; a Spherecast meets a box's edges and corners rounded;
 /// a Blockcast's Position divides the two centres by the boxes' half extents along the hit face, at the face's edge where both
 /// boxes' far edges coincide, and at the box's corner for a negative side.
+/// Wedges, corner wedges and trusses as a 0.747 client's queries meet them (tools/parity/probes/query_wedges.luau): rays onto a
+/// slope, from inside the box above it and along a box face's plane; a sphere and a box against the slope; GetPartsInPart and
+/// ArePartsTouchingOthers on the shape, GetPartBoundsInBox on the box; a truss's Size and its edge normal; a wedge's mass.
+#[test]
+fn queries_meet_wedges_corner_wedges_and_trusses_as_a_client_does() {
+    check(
+        r#"
+        workspace.Gravity = 0
+        local function R(V)
+            return string.format("%.4f %.4f %.4f", V.X, V.Y, V.Z)
+        end
+        local function Make(Class, Position, Size, Shape)
+            local Made = Instance.new(Class)
+            Made.Anchored, Made.Size, Made.Position = true, Size, Position
+            if Shape then
+                Made.Shape = Shape
+            end
+            Made.Parent = workspace
+            return Made
+        end
+        local W = Make("WedgePart", Vector3.new(300, 100, 300), Vector3.new(4, 6, 8))
+        local C = Make("CornerWedgePart", Vector3.new(320, 100, 300), Vector3.new(4, 6, 8))
+        local S = Make("Part", Vector3.new(360, 100, 300), Vector3.new(4, 6, 8), Enum.PartType.Wedge)
+        -- rays
+        local Hit = workspace:Raycast(Vector3.new(300, 113, 302), Vector3.new(0, -40, 0))
+        assert(Hit and Hit.Instance == W and R(Hit.Position) == "300.0000 101.5000 302.0000" and R(Hit.Normal) == "0.0000 0.8000 -0.6000", "onto the slope")
+        assert(workspace:Raycast(Vector3.new(360, 113, 302), Vector3.new(0, -40, 0)).Position.Y == 101.5, "a Part whose Shape is Wedge")
+        Hit = workspace:Raycast(Vector3.new(300, 102.5, 297), Vector3.new(0, -10, 0))
+        assert(Hit and R(Hit.Position) == "300.0000 97.7500 297.0000", "from the box above the slope")
+        assert(workspace:Raycast(Vector3.new(302, 110, 300), Vector3.new(0, -20, 0)) == nil, "along the side face's plane")
+        assert(workspace:Raycast(Vector3.new(300, 90, 296), Vector3.new(0, 20, 0)) == nil, "touching the bottom front edge")
+        Hit = workspace:Raycast(Vector3.new(288, 100, 300), Vector3.new(40, 0, 0))
+        assert(Hit and R(Hit.Normal) == "-1.0000 0.0000 0.0000" and Hit.Distance == 10, "along the slope's plane, into the side")
+        Hit = workspace:Raycast(Vector3.new(321, 110, 298), Vector3.new(0, -20, 0))
+        assert(Hit and Hit.Instance == C and R(Hit.Normal) == "-0.8321 0.5547 0.0000", "a corner wedge's ridge: its left slope")
+        Hit = workspace:Raycast(Vector3.new(300, 97.6, 286), Vector3.new(0, 0, 40))
+        assert(Hit and string.format("%.5f", Hit.Distance) == "10.79999", "Distance off the float position: " .. Hit.Distance)
+        -- casts
+        Hit = workspace:Spherecast(Vector3.new(292, 100, 298.8), 1, Vector3.new(20, 0, 0))
+        assert(Hit and math.abs(Hit.Distance - 5.30603) < 1e-5 and R(Hit.Normal) == "-0.6940 0.5760 -0.4320", "a sphere at the slope's edge: " .. Hit.Distance)
+        Hit = workspace:Blockcast(CFrame.new(300.1, 109, 301), Vector3.one, Vector3.new(0, -20, 0))
+        assert(Hit and math.abs(Hit.Distance - 7.375) < 1e-4 and R(Hit.Position) == "300.0800 101.1250 301.5000", "a box on the slope: " .. R(Hit.Position))
+        Hit = workspace:Blockcast(CFrame.new(292, 98.5, 298.8), Vector3.one, Vector3.new(20, 0, 0))
+        assert(Hit and R(Hit.Position) == "298.0000 98.7143 298.9333" and R(Hit.Normal) == "-1.0000 0.0000 0.0000", "a box on the side face")
+        -- overlaps: above the slope, inside the box
+        local Probe = Make("Part", Vector3.new(301, 102.7, 297), Vector3.one * 0.2)
+        local Params = OverlapParams.new()
+        Params.FilterType = Enum.RaycastFilterType.Include
+        Params.FilterDescendantsInstances = { W }
+        assert(#workspace:GetPartsInPart(Probe, Params) == 0 and #workspace:GetPartBoundsInBox(Probe.CFrame, Probe.Size, Params) == 1, "the shape and the box")
+        Probe.CanCollide = true
+        W.CanCollide = true
+        assert(workspace:ArePartsTouchingOthers({ Probe }) == false, "not touching above the slope")
+        Probe.Position = Vector3.new(300, 99, 300)
+        assert(workspace:ArePartsTouchingOthers({ Probe }) == true, "touching in it")
+        Params.FilterDescendantsInstances = { Probe }
+        assert(#workspace:GetPartsInPart(W, Params) == 1, "the wedge as the query's part")
+        Probe.Position = Vector3.new(301, 102.7, 297)
+        assert(#workspace:GetPartsInPart(W, Params) == 0, "the wedge as the query's part, above its slope")
+        -- a truss's size and an edge's normal
+        local T = Make("TrussPart", Vector3.new(340, 100, 300), Vector3.new(4, 6, 8))
+        assert(R(T.Size) == "2.0000 2.0000 8.0000", R(T.Size))
+        T.Size = Vector3.new(1.9, 2, 2)
+        assert(R(T.Size) == "1.9000 2.0000 2.0000", R(T.Size))
+        T.Size = Vector3.new(0.5, 0.5, 0.5)
+        assert(R(T.Size) == "2.0000 2.0000 2.0000", R(T.Size))
+        T.Size = Vector3.new(2, 2, 8)
+        Hit = workspace:Raycast(Vector3.new(340.2, 111, 286), Vector3.new(0, -30, 30))
+        assert(Hit and R(Hit.Normal) == "0.0000 0.7071 -0.7071", "through the top front edge")
+        assert(workspace:Raycast(Vector3.new(340.2, 109, 286), Vector3.new(0, -30, 30)) == nil, "touching the bottom front edge")
+        -- a wedge's mass, centre of mass and inertia
+        local M = Make("WedgePart", Vector3.new(400, 300, 300), Vector3.new(2, 4, 6))
+        M.Anchored = false
+        assert(math.abs(M.Mass - 16.8) < 1e-4, M.Mass)
+        assert(R(M.AssemblyCenterOfMass - M.Position) == "0.0000 -0.6667 1.0000", R(M.AssemblyCenterOfMass - M.Position))
+        assert(R(M:AngularAccelerationToTorque(Vector3.new(0, 0, 1))) == "0.0000 -11.2000 20.5333", R(M:AngularAccelerationToTorque(Vector3.new(0, 0, 1))))
+        "#,
+    );
+}
+
 #[test]
 fn casts_meet_a_parts_edges_as_a_client_does() {
     check(

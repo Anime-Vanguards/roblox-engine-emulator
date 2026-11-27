@@ -690,20 +690,41 @@ fn attachment_rotation(rows: [[f32; 3]; 3]) -> [[f32; 3]; 3] {
 
 /// A part's Size as a script's write leaves it: each axis held from 0.001 to 2048 (convert.rs vector3_for), and a write with an axis
 /// that is not a number changes nothing (measured, Studio 0.747, a client and a server: tools/parity/probes/datatype_edges.luau
-/// `size`: (nan, inf, -inf) leaves 2048, 2048, 2047.9 as it was).
+/// `size`: (nan, inf, -inf) leaves 2048, 2048, 2047.9 as it was); a TrussPart's as [`truss_size`] keeps it.
 fn size_as_stored(engine: &Engine, id: InstanceId, name: NameId, value: Value) -> Value {
     if name != K::Size as NameId {
         return value;
     }
     let Value::Vector3(size) = &value else { return value };
-    if !(size.x.is_nan() || size.y.is_nan() || size.z.is_nan()) {
-        return value;
-    }
+    let nan = size.x.is_nan() || size.y.is_nan() || size.z.is_nan();
     let state = engine.state.borrow();
-    if !engine.reflection.is_a(state.dom.at(id).class, "BasePart") {
-        return value;
+    let class = state.dom.at(id).class;
+    if nan && engine.reflection.is_a(class, "BasePart") {
+        return state.dom.raw_get(id, name).cloned().unwrap_or(value);
     }
-    state.dom.raw_get(id, name).cloned().unwrap_or(value)
+    if !nan && engine.reflection.is_a(class, "TrussPart") {
+        let [x, y, z] = truss_size([size.x, size.y, size.z]);
+        return Value::Vector3(rbx_dom_weak::types::Vector3::new(x, y, z));
+    }
+    value
+}
+
+/// A TrussPart's Size as a write leaves it: 2 studs on two axes, the other one kept up to 512 studs. The kept axis is the one
+/// written other than 2 when only one is (1.9 and 0.001 are kept so), else the largest, the first of equals in X, Y, Z order, at
+/// least 2 (measured, Studio 0.747, a client and a server: (4, 6, 8) reads (2, 2, 8), (4, 4, 2) (4, 2, 2), (1, 9, 9) (2, 9, 2),
+/// (0.5, 0.5, 0.5) (2, 2, 2), (1.9, 2, 2) as written, (2, 2, 3000) (2, 2, 512); whatever it held before;
+/// tools/parity/probes/query_wedges.luau).
+fn truss_size(size: [f32; 3]) -> [f32; 3] {
+    let mut kept = [2.0f32; 3];
+    let other = (0..3).filter(|&axis| size[axis] != 2.0).count();
+    if other == 1 {
+        let axis = (0..3).find(|&axis| size[axis] != 2.0).unwrap_or(0);
+        kept[axis] = size[axis].min(512.0);
+    } else if other > 1 {
+        let axis = (0..3).fold(0, |best, axis| if size[axis] > size[best] { axis } else { best });
+        kept[axis] = size[axis].clamp(2.0, 512.0);
+    }
+    kept
 }
 
 /// A script's property write: [`set_property`], charged to the work clock by what Studio spends on it
