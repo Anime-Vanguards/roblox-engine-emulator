@@ -1109,3 +1109,53 @@ fn value_curves_cast_their_arguments_and_keep_nothing() {
         0.1,
     );
 }
+
+/// IKControl's chain reads before any solve, the members a game script may not call, the node pins and the track parameters
+/// (measured: animation_members.luau).
+#[test]
+fn ik_chains_pins_parameters_and_locked_members() {
+    check(
+        r#"
+        local Model, Animator, Shoulder, Arm = Rig()
+        local IK = Instance.new("IKControl")
+        IK.ChainRoot = Model.HumanoidRootPart
+        IK.EndEffector = Arm
+        assert(IK:GetChainCount() == 1, IK:GetChainCount())
+        assert(near(IK:GetChainLength(), math.sqrt(2.5), 1e-5), IK:GetChainLength())
+        assert((IK:GetNodeWorldCFrame(2).Position - Vector3.new(1.5, 3.5, 0)).Magnitude < 1e-5, tostring(IK:GetNodeWorldCFrame(2)))
+        assert(IK:GetNodeWorldCFrame(0) == CFrame.identity and IK:GetNodeLocalCFrame(1) == IK:GetNodeWorldCFrame(1))
+        local Provider = game:GetService("KeyframeSequenceProvider")
+        local Ok, Why = pcall(function() return Provider:GetMemStats() end)
+        assert(Why == "The current thread cannot call 'GetMemStats' (lacking capability RobloxScript)", Why)
+        Ok, Why = pcall(function() return Provider:GetKeyframeSequence("rbxassetid://1") end)
+        assert(Why == "The current thread cannot call 'GetKeyframeSequence' (lacking capability Plugin)", Why)
+        Ok, Why = pcall(function() return Provider:GetAnimationsAsync("x") end)
+        assert(Why == "Unable to cast string to User", Why)
+        Ok, Why = pcall(function() return Provider:GetAnimationsAsync(1) end)
+        assert(Why == "HTTP 403", Why)
+        local Node = Instance.new("AnimationNodeDefinition")
+        local Fired = 0
+        Node.InputPinsChanged:Connect(function() Fired += 1 end)
+        Node:AddInputPin("a")
+        Node:AddInputPin("a")
+        Node:RemoveInputPin("zz")
+        Node:SetOrderedInputPinNames({ "x", 1 })
+        task.wait()
+        local Pins = Node:GetOrderedInputPinNames()
+        assert(#Pins == 2 and Pins[1] == "a" and Fired == 3, #Pins .. " " .. Fired)
+        local Track = Animator:LoadAnimation(Sequence({ {0, 0}, {1, 1} }))
+        Track:SetParameter("v", Vector3.new(1, 2, 3))
+        Track:SetParameter("v", {})
+        assert(Track:GetParameter("v") == Vector3.new(1, 2, 3), "a table changes nothing")
+        Track:SetParameter(5, 0 / 0)
+        assert(Track:GetParameter("5") == 0, "NaN is kept as 0")
+        Ok, Why = pcall(function() Track:GetTargetNames() end)
+        assert(Why == "AnimationTrack:GetTargetNames is not available yet!", Why)
+        Ok, Why = pcall(function() Animator:ApplyJointVelocities({ Arm }) end)
+        assert(Why == "Value at index 1 was not a Motor6D.", Why)
+        Ok, Why = pcall(function() Animator:RegisterEvaluationParallelCallback(print) end)
+        assert(Why == "RegisterEvaluationParallelCallback is not enabled!", Why)
+        "#,
+        1.0,
+    );
+}

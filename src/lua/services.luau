@@ -2117,4 +2117,45 @@ Method("MarketplaceService", "PromptSubscriptionPurchase", function(_, ...)
 	Missing("MarketplaceService", "PromptSubscriptionPurchase")
 end)
 
+-- KeyframeSequenceProvider's and AnimationClipProvider's GetAnimationsAsync(userId) and the deprecated GetAnimations (measured,
+-- a 0.747 playing client and server: tools/parity/probes/animation_members.luau): the id is cast as a "User" (an int64: a number,
+-- a boolean or a string of a number; nil "Argument 1 missing or nil", other values "Unable to cast string to User", "... Array to
+-- User", "... Material to User"), then a thread that cannot yield gets "thread is not yieldable", then the web answers "HTTP 403"
+-- after a wait (WebAnswerWait: the time the requests took there). AnimationClipProvider:GetClipEvaluatorAsync casts its ContentId
+-- and raises "AnimationClipProvider:GetClipEvaluatorAsync is not currently enabled" at once, also where the thread cannot yield.
+local WebAnswerWait = 0.2
+local function UserArg(Value)
+	local Kind = type(Value)
+	if Value == nil then
+		error("Argument 1 missing or nil", 0)
+	elseif Kind == "number" or Kind == "boolean" or (Kind == "string" and tonumber(Value)) then
+		return Value
+	elseif Kind == "table" then
+		Kind = if #Value > 0 or next(Value) == nil then "Array" else "Dictionary"
+	elseif Kind == "function" then
+		Kind = "Function"
+	elseif typeof(Value) == "EnumItem" then
+		Kind = tostring(Value.EnumType)
+	else
+		Kind = typeof(Value)
+	end
+	error(`Unable to cast {Kind} to User`, 0)
+end
+for _, Provider in { "KeyframeSequenceProvider", "AnimationClipProvider" } do
+	for _, Name in { "GetAnimationsAsync", "GetAnimations" } do
+		Method(Provider, Name, function(_, UserId)
+			UserArg(UserId)
+			if not coroutine.isyieldable() then
+				error("thread is not yieldable", 0)
+			end
+			task.wait(WebAnswerWait)
+			error("HTTP 403", 0)
+		end)
+	end
+end
+Method("AnimationClipProvider", "GetClipEvaluatorAsync", function(_, AssetId)
+	ContentIdArg(AssetId)
+	error("AnimationClipProvider:GetClipEvaluatorAsync is not currently enabled", 0)
+end)
+
 return true

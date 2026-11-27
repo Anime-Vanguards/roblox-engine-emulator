@@ -647,6 +647,8 @@ pub const CAPABILITY_EVENTS: &[(&str, &str, &str)] = &[
 /// (`user_input_platform.luau`): at identities 2 and 4 `UIS.GetPlatform` reads as a function (same function each read;
 /// lowercase `getPlatform` aliases it) and calls raise `lacking capability RobloxScript` before self or argument checks
 /// (at identity 8 it returns `Enum.Platform.Windows`).
+/// The animation classes' were measured the same on a 0.747 playing client and server (`animation_members.luau`); those that
+/// lack Plugin or PluginOrOpenCloud, which a plugin has, report themselves not emulated in edit mode.
 /// services::install_capability_calls gives each its function.
 pub const CAPABILITY_CALLS: &[(&str, &str, &str)] = &[
     ("DataModel", "DefineFastFlag", "RobloxScript"),
@@ -689,6 +691,52 @@ pub const CAPABILITY_CALLS: &[(&str, &str, &str)] = &[
     ("Selection", "AddFocusCallback", "RobloxScript"),
     ("Selection", "ClearTerrainSelectionHack", "RobloxScript"),
     ("Selection", "SetTerrainSelectionHack", "RobloxScript"),
+    // The animation classes' (measured the same on a 0.747 playing client and server, called with no arguments:
+    // tools/parity/probes/animation_members.luau)
+    ("KeyframeSequenceProvider", "GetKeyframeSequence", "Plugin"),
+    ("KeyframeSequenceProvider", "GetKeyframeSequenceById", "Plugin"),
+    ("KeyframeSequenceProvider", "GetMemStats", "RobloxScript"),
+    ("AnimationClipProvider", "GetAnimationClip", "Plugin"),
+    ("AnimationClipProvider", "GetAnimationClipById", "Plugin"),
+    ("AnimationClipProvider", "GetAnimationNodeDefinition", "RobloxScript"),
+    ("AnimationClipProvider", "GetAnimationNodeTypes", "RobloxScript"),
+    ("AnimationClipProvider", "GetAnimationValueNodeDefinition", "RobloxScript"),
+    ("AnimationClipProvider", "GetAnimationValueNodeTypes", "RobloxScript"),
+    ("AnimationClipProvider", "GetMemStats", "RobloxScript"),
+    ("AnimationClipProvider", "ReloadAnimationClipAsync", "RobloxScript"),
+    ("Animator", "GetPlayingAnimationTracksCoreScript", "RobloxScript"),
+    ("Animator", "LoadAnimationCoreScript", "RobloxScript"),
+    ("Animator", "LoadStreamAnimation", "RobloxScript"),
+    ("Animator", "LoadStreamAnimationForSelfieView_deprecated", "RobloxScript"),
+    ("Animator", "LoadStreamAnimationV2", "RobloxScript"),
+    ("Animator", "StepAnimationsInternal", "RobloxScript"),
+    ("Animator", "SynchronizeWith", "RobloxScript"),
+    ("AnimationTrack", "GetDebugData", "RobloxScript"),
+    ("AnimationTrack", "ResetGraph", "RobloxScript"),
+    ("AnimationTrack", "UpdateGraphNodeDefinition", "RobloxScript"),
+    ("AnimationTrack", "UpdateGraphNodeProperty", "RobloxScript"),
+    ("IKControl", "Solve", "RobloxScript"),
+    ("HumanoidRigDescription", "AutoRig", "RobloxScript"),
+    ("HumanoidRigDescription", "GetContainedJointLabels", "RobloxScript"),
+    ("HumanoidRigDescription", "GetJoint", "PluginOrOpenCloud"),
+    ("HumanoidRigDescription", "GetJointLabels", "RobloxScript"),
+    ("HumanoidRigDescription", "GetJointRangeMax", "RobloxScript"),
+    ("HumanoidRigDescription", "GetJointRangeMin", "RobloxScript"),
+    ("HumanoidRigDescription", "GetJointSize", "RobloxScript"),
+    ("HumanoidRigDescription", "GetR15JointLabels", "PluginOrOpenCloud"),
+    ("HumanoidRigDescription", "GetR6JointLabels", "RobloxScript"),
+    ("HumanoidRigDescription", "GetTposeAdjustment", "RobloxScript"),
+    ("HumanoidRigDescription", "SetJoint", "PluginOrOpenCloud"),
+    ("HumanoidRigDescription", "SetJointRangeMax", "RobloxScript"),
+    ("HumanoidRigDescription", "SetJointRangeMin", "RobloxScript"),
+    ("HumanoidRigDescription", "SetJointSize", "RobloxScript"),
+    ("HumanoidRigDescription", "SetTposeAdjustment", "PluginOrOpenCloud"),
+    ("HumanoidRigDescription", "ShowVolumes", "RobloxScript"),
+    ("DigitsRigDescription", "GetJoint", "RobloxScript"),
+    ("DigitsRigDescription", "GetJointLabels", "RobloxScript"),
+    ("DigitsRigDescription", "GetTposeAdjustment", "RobloxScript"),
+    ("DigitsRigDescription", "SetJoint", "PluginOrOpenCloud"),
+    ("DigitsRigDescription", "SetTposeAdjustment", "RobloxScript"),
 ];
 
 // Callbacks the dump leaves out (it lists none for any class): every callback Roblox's API dump lets

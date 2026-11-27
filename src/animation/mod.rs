@@ -639,6 +639,33 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
         add(behaviors, class, "GetPlayingAnimationTracks", method(move |lua, engine, id, _| playing_tracks(lua, engine, &s, &n, id)));
     }
 
+    // Animator:GetTrackByAnimationId(id): the first played of this animator's tracks that play or fade out whose Animation's
+    // AnimationId is that text exactly (measured, a 0.747 playing client: a track loaded and not played, or stopped and faded,
+    // is not found; " rbxassetid://0" and "rbxassetid://00" do not find one of "rbxassetid://0"; an AnimationId changed after the
+    // load counts as it is now). The id is a ContentId: nil "Argument 1 missing or nil", another value "Unable to cast <value> to
+    // ContentId".
+    let (s, n) = (shared.clone(), names.clone());
+    add(behaviors, "Animator", "GetTrackByAnimationId", method(move |lua, engine, id, args| {
+        let wanted = match args.get(1) {
+            LuaValue::Nil => return Err(Flow::Error(ScriptError::plain("Argument 1 missing or nil"))),
+            LuaValue::String(text) => text.as_bytes().to_vec(),
+            other => return Err(Flow::Error(ScriptError::plain(format!("Unable to cast {} to ContentId", crate::services::tween::cast_name(engine, other))))),
+        };
+        let mut found: Vec<(u64, InstanceId)> = s.borrow().tracks.iter().filter(|(_, track)| track.animator == id && track.active).map(|(&id, track)| (track.order, id)).collect();
+        crate::sort::ord(&mut found);
+        let matching = {
+            let state = engine.state.borrow();
+            found.into_iter().map(|(_, track)| track).find(|&track| match state.dom.get(track).and_then(|instance| instance.stored(n.animation)) {
+                Some(Value::Instance(animation)) => state.dom.get(*animation).is_some() && state.dom.raw_get(*animation, n.animation_id).and_then(Value::as_str).is_some_and(|text| text.as_bytes() == wanted.as_slice()),
+                _ => false,
+            })
+        };
+        match matching {
+            Some(track) => Ok(values([instance_value(lua, engine, track)?])),
+            None => Ok(values([LuaValue::Nil])),
+        }
+    }));
+
     // Animator:StepAnimations(delta): this animator's tracks advance and pose its rig, as the frame's step does for all.
     // Plugin security (Roblox's API reference): a game's script may not call it, the command bar and plugins of an edit
     // session may (measured there, Studio 0.747).

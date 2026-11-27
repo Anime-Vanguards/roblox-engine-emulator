@@ -1,0 +1,217 @@
+# engine: Roblox Studio 0.747.0.7471481, the server of a headless play session (a Script in ServerScriptService, script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-27
+RegisterKeyframeSequence error Usage error: RegisterKeyframeSequence can only be called in Studio.
+RegisterKeyframeSequence nil error Usage error: RegisterKeyframeSequence can only be called in Studio.
+RegisterActiveKeyframeSequence error Usage error: RegisterActiveKeyframeSequence can only be used in Solo mode.
+RegisterAnimationClip error Usage error: RegisterAnimationClip can only be called in Studio.
+RegisterActiveAnimationClip error Usage error: RegisterActiveKeyframeSequence can only be used in Solo mode.
+KeyframeSequenceProvider.GetKeyframeSequence error The current thread cannot call 'GetKeyframeSequence' (lacking capability Plugin)
+KeyframeSequenceProvider.GetKeyframeSequenceById error The current thread cannot call 'GetKeyframeSequenceById' (lacking capability Plugin)
+KeyframeSequenceProvider.GetMemStats error The current thread cannot call 'GetMemStats' (lacking capability RobloxScript)
+AnimationClipProvider.GetAnimationClip error The current thread cannot call 'GetAnimationClip' (lacking capability Plugin)
+AnimationClipProvider.GetAnimationClipById error The current thread cannot call 'GetAnimationClipById' (lacking capability Plugin)
+AnimationClipProvider.GetAnimationNodeDefinition error The current thread cannot call 'GetAnimationNodeDefinition' (lacking capability RobloxScript)
+AnimationClipProvider.GetAnimationNodeTypes error The current thread cannot call 'GetAnimationNodeTypes' (lacking capability RobloxScript)
+AnimationClipProvider.GetAnimationValueNodeDefinition error The current thread cannot call 'GetAnimationValueNodeDefinition' (lacking capability RobloxScript)
+AnimationClipProvider.GetAnimationValueNodeTypes error The current thread cannot call 'GetAnimationValueNodeTypes' (lacking capability RobloxScript)
+AnimationClipProvider.GetMemStats error The current thread cannot call 'GetMemStats' (lacking capability RobloxScript)
+AnimationClipProvider.ReloadAnimationClipAsync error The current thread cannot call 'ReloadAnimationClipAsync' (lacking capability RobloxScript)
+Animator.GetPlayingAnimationTracksCoreScript error The current thread cannot call 'GetPlayingAnimationTracksCoreScript' (lacking capability RobloxScript)
+Animator.LoadAnimationCoreScript error The current thread cannot call 'LoadAnimationCoreScript' (lacking capability RobloxScript)
+Animator.LoadStreamAnimation error The current thread cannot call 'LoadStreamAnimation' (lacking capability RobloxScript)
+Animator.LoadStreamAnimationForSelfieView_deprecated error The current thread cannot call 'LoadStreamAnimationForSelfieView_deprecated' (lacking capability RobloxScript)
+Animator.LoadStreamAnimationV2 error The current thread cannot call 'LoadStreamAnimationV2' (lacking capability RobloxScript)
+Animator.StepAnimationsInternal error The current thread cannot call 'StepAnimationsInternal' (lacking capability RobloxScript)
+Animator.SynchronizeWith error The current thread cannot call 'SynchronizeWith' (lacking capability RobloxScript)
+IKControl.Solve error The current thread cannot call 'Solve' (lacking capability RobloxScript)
+HumanoidRigDescription.AutoRig error The current thread cannot call 'AutoRig' (lacking capability RobloxScript)
+HumanoidRigDescription.GetContainedJointLabels error The current thread cannot call 'GetContainedJointLabels' (lacking capability RobloxScript)
+HumanoidRigDescription.GetJoint error The current thread cannot call 'GetJoint' (lacking capability PluginOrOpenCloud)
+HumanoidRigDescription.GetJointLabels error The current thread cannot call 'GetJointLabels' (lacking capability RobloxScript)
+HumanoidRigDescription.GetJointRangeMax error The current thread cannot call 'GetJointRangeMax' (lacking capability RobloxScript)
+HumanoidRigDescription.GetJointRangeMin error The current thread cannot call 'GetJointRangeMin' (lacking capability RobloxScript)
+HumanoidRigDescription.GetJointSize error The current thread cannot call 'GetJointSize' (lacking capability RobloxScript)
+HumanoidRigDescription.GetR15JointLabels error The current thread cannot call 'GetR15JointLabels' (lacking capability PluginOrOpenCloud)
+HumanoidRigDescription.GetR6JointLabels error The current thread cannot call 'GetR6JointLabels' (lacking capability RobloxScript)
+HumanoidRigDescription.GetTposeAdjustment error The current thread cannot call 'GetTposeAdjustment' (lacking capability RobloxScript)
+HumanoidRigDescription.SetJoint error The current thread cannot call 'SetJoint' (lacking capability PluginOrOpenCloud)
+HumanoidRigDescription.SetJointRangeMax error The current thread cannot call 'SetJointRangeMax' (lacking capability RobloxScript)
+HumanoidRigDescription.SetJointRangeMin error The current thread cannot call 'SetJointRangeMin' (lacking capability RobloxScript)
+HumanoidRigDescription.SetJointSize error The current thread cannot call 'SetJointSize' (lacking capability RobloxScript)
+HumanoidRigDescription.SetTposeAdjustment error The current thread cannot call 'SetTposeAdjustment' (lacking capability PluginOrOpenCloud)
+HumanoidRigDescription.ShowVolumes error The current thread cannot call 'ShowVolumes' (lacking capability RobloxScript)
+DigitsRigDescription.GetJoint error The current thread cannot call 'GetJoint' (lacking capability RobloxScript)
+DigitsRigDescription.GetJointLabels error The current thread cannot call 'GetJointLabels' (lacking capability RobloxScript)
+DigitsRigDescription.GetTposeAdjustment error The current thread cannot call 'GetTposeAdjustment' (lacking capability RobloxScript)
+DigitsRigDescription.SetJoint error The current thread cannot call 'SetJoint' (lacking capability PluginOrOpenCloud)
+DigitsRigDescription.SetTposeAdjustment error The current thread cannot call 'SetTposeAdjustment' (lacking capability RobloxScript)
+KeyframeSequenceProvider GetAnimationsAsync error HTTP 403 later
+KeyframeSequenceProvider GetAnimations error HTTP 403 later
+KeyframeSequenceProvider GetAnimationsAsync number string error HTTP 403 later
+KeyframeSequenceProvider GetAnimationsAsync bool error HTTP 403 later
+KeyframeSequenceProvider GetAnimationsAsync nil error Argument 1 missing or nil
+KeyframeSequenceProvider GetAnimationsAsync none error Argument 1 missing or nil
+KeyframeSequenceProvider GetAnimationsAsync string error Unable to cast string to User
+KeyframeSequenceProvider GetAnimationsAsync table error Unable to cast Array to User
+KeyframeSequenceProvider GetAnimationsAsync enum error Unable to cast Material to User
+KeyframeSequenceProvider GetAnimations string error Unable to cast string to User
+refused KeyframeSequenceProvider GetAnimationsAsync error thread is not yieldable
+refused KeyframeSequenceProvider GetAnimationsAsync cast error Unable to cast string to User
+AnimationClipProvider GetAnimationsAsync error HTTP 403 later
+AnimationClipProvider GetAnimations error HTTP 403 later
+AnimationClipProvider GetAnimationsAsync number string error HTTP 403 later
+AnimationClipProvider GetAnimationsAsync bool error HTTP 403 later
+AnimationClipProvider GetAnimationsAsync nil error Argument 1 missing or nil
+AnimationClipProvider GetAnimationsAsync none error Argument 1 missing or nil
+AnimationClipProvider GetAnimationsAsync string error Unable to cast string to User
+AnimationClipProvider GetAnimationsAsync table error Unable to cast Array to User
+AnimationClipProvider GetAnimationsAsync enum error Unable to cast Material to User
+AnimationClipProvider GetAnimations string error Unable to cast string to User
+refused AnimationClipProvider GetAnimationsAsync error thread is not yieldable
+refused AnimationClipProvider GetAnimationsAsync cast error Unable to cast string to User
+GetClipEvaluatorAsync rbxassetid://1 error AnimationClipProvider:GetClipEvaluatorAsync is not currently enabled at once
+GetClipEvaluatorAsync rbxassetid://0 error AnimationClipProvider:GetClipEvaluatorAsync is not currently enabled at once
+GetClipEvaluatorAsync  error AnimationClipProvider:GetClipEvaluatorAsync is not currently enabled at once
+GetClipEvaluatorAsync x error AnimationClipProvider:GetClipEvaluatorAsync is not currently enabled at once
+GetClipEvaluatorAsync nil error Argument 1 missing or nil
+GetClipEvaluatorAsync number error Unable to cast double to ContentId
+refused GetClipEvaluatorAsync error AnimationClipProvider:GetClipEvaluatorAsync is not currently enabled
+animator props CFrame 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1 number 0 boolean false boolean true
+write RootMotion error Unable to assign property RootMotion. Property is read only
+GetTrackByAnimationId none ok 1 nil nil
+GetTrackByAnimationId nil error Argument 1 missing or nil
+GetTrackByAnimationId number error Unable to cast double to ContentId
+GetTrackByAnimationId empty ok 1 nil nil
+loaded ok 2 boolean false ; boolean false
+playing ok 2 boolean false ; boolean true
+other spelling ok 2 boolean false ; boolean false
+spaced ok 2 boolean false ; boolean false
+changed id, old ok 2 boolean false ; boolean true
+changed id, new ok 2 boolean true ; boolean false
+fading ok 2 boolean false ; boolean true
+fading later ok 2 boolean false ; boolean true
+stopped ok 2 boolean false ; boolean true
+stopped, new ok 2 boolean true ; boolean false
+outside tracks false 0 0 false 0 0
+ApplyJointVelocities empty ok 0 
+ApplyJointVelocities motors ok 0 
+ApplyJointVelocities nil error Argument 1 missing or nil
+ApplyJointVelocities none error Argument 1 missing or nil
+ApplyJointVelocities number error motors must be an array.
+ApplyJointVelocities string error motors must be an array.
+ApplyJointVelocities dictionary error motors must be an array.
+ApplyJointVelocities hole error motors must be an array.
+ApplyJointVelocities mixed error Value at index 2 was not an instance.
+ApplyJointVelocities strings error Value at index 1 was not an instance.
+ApplyJointVelocities parts error Value at index 1 was not a Motor6D.
+RegisterEvaluationParallelCallback error RegisterEvaluationParallelCallback is not enabled!
+RegisterEvaluationParallelCallback nil error Argument 1 missing or nil
+RegisterEvaluationParallelCallback number error Unable to cast double to Function
+RegisterEvaluationParallelCallback string error Unable to cast string to Function
+RegisterEvaluationParallelCallback table error Unable to cast Array to Function
+GetParameter unset ok 1 nil nil
+GetParameter nil error Argument 1 missing or nil
+SetParameter ok 0 
+GetParameter set ok 1 number 1
+SetParameter no value error Argument 2 missing or nil
+SetParameter nil value error Argument 2 missing or nil
+SetParameter nil key error Argument 1 missing or nil
+SetParameter number key ok 2 string five ; string five
+parameter Vector3 Vector3 1, 2, 3
+parameter CFrame CFrame 1, 2, 3, 1, 0, 0, 0, 1, 0, 0, 0, 1
+parameter Vector2 Vector2 1, 2
+parameter Color3 Color3 1, 0, 0
+parameter UDim2 UDim2 {1, 2}, {3, 4}
+parameter EnumItem EnumItem Enum.Material.Wood
+parameter int number 7
+parameter float number 0.10000000000000001
+parameter string string s
+parameter bool boolean false
+parameter NumberRange NumberRange 1 2 
+parameter BrickColor BrickColor Bright red
+parameter nan number 0
+parameter Vector3int16 number 0
+parameter buffer number 0
+parameter table number 0
+parameter Instance number 0
+parameter function number 0
+parameter of a new key, table ok 1 nil nil
+parameter of another track ok 1 nil nil
+GetParameterDefaults ok 1 table#0{}
+GetParameterDefaults twice ok 1 boolean false
+GetTargetNames error AnimationTrack:GetTargetNames is not available yet!
+GetTargetInstance error AnimationTrack:GetTargetInstance is not available yet!
+SetTargetInstance error AnimationTrack:SetTargetInstance is not available yet!
+SetTargetInstance nil error AnimationTrack:SetTargetInstance is not available yet!
+node props string  EnumItem Enum.AnimationNodeType.InvalidNode
+NodeId write ok 1 string 5
+NodeType write ok 1 EnumItem Enum.AnimationNodeType.ClipNode
+InputPinData error InputPinData is not a valid member of AnimationNodeDefinition "Instance"
+pins new ok  table#0{} events 0
+pins add a ok  table#1{1=string:a} events 1
+pins add a again ok  table#2{1=string:a,2=string:a} events 1
+pins add b ok  table#3{1=string:a,2=string:a,3=string:b} events 1
+pins add number ok  table#4{1=string:a,2=string:a,3=string:b,4=string:5} events 1
+pins add fraction ok  table#5{1=string:a,2=string:a,3=string:b,4=string:5,5=string:1.5} events 1
+pins add empty ok  table#6{1=string:a,2=string:a,3=string:b,4=string:5,5=string:1.5,6=string:} events 1
+pins add nil error Argument 1 missing or nil table#6{1=string:a,2=string:a,3=string:b,4=string:5,5=string:1.5,6=string:} events 0
+pins remove a ok  table#5{1=string:a,2=string:b,3=string:5,4=string:1.5,5=string:} events 1
+pins remove absent ok  table#5{1=string:a,2=string:b,3=string:5,4=string:1.5,5=string:} events 1
+pins remove nil error Argument 1 missing or nil table#5{1=string:a,2=string:b,3=string:5,4=string:1.5,5=string:} events 0
+pins remove number ok  table#4{1=string:a,2=string:b,3=string:5,4=string:} events 1
+pins set ok  table#2{1=string:c,2=string:d} events 1
+pins set mixed ok  table#2{1=string:c,2=string:d} events 0
+pins set numbers ok  table#2{1=string:c,2=string:d} events 0
+pins set itself ok  table#2{1=string:c,2=string:d} events 1
+pins set twice the same ok  table#2{1=string:q,2=string:q} events 1
+pins set empty ok  table#0{} events 1
+pins set nil error Argument 1 missing or nil table#0{} events 0
+pins set number error Unable to cast double to Array table#0{} events 0
+pins set dictionary error Unable to cast Dictionary to Array table#0{} events 0
+ik top-hand 2 4.99999332 0:0 0 0 1 0 0 0 1 0 0 0 1/0 0 0 1 0 0 0 1 0 0 0 1 | 1:1 300 0 1 0 0 0 1 0 0 0 1/1 300 0 1 0 0 0 1 0 0 0 1 | 2:2 0 0 0.866025388 -0.5 0 0.5 0.866025388 0 0 0 1/3 300 0 0.866025388 -0.5 0 0.5 0.866025388 0 0 0 1 | 3:2.59806824 -1.5 0 0.866025388 0.5 0 -0.5 0.866025388 0 0 0 1/5.99999332 300 0 1 0 0 0 1 0 0 0 1 | 4:0 0 0 1 0 0 0 1 0 0 0 1/0 0 0 1 0 0 0 1 0 0 0 1
+ik root-hand 2 4.99999332 0:0 0 0 1 0 0 0 1 0 0 0 1/0 0 0 1 0 0 0 1 0 0 0 1 | 1:1 300 0 1 0 0 0 1 0 0 0 1/1 300 0 1 0 0 0 1 0 0 0 1 | 2:2 0 0 0.866025388 -0.5 0 0.5 0.866025388 0 0 0 1/3 300 0 0.866025388 -0.5 0 0.5 0.866025388 0 0 0 1 | 3:2.59806824 -1.5 0 0.866025388 0.5 0 -0.5 0.866025388 0 0 0 1/5.99999332 300 0 1 0 0 0 1 0 0 0 1 | 4:0 0 0 1 0 0 0 1 0 0 0 1/0 0 0 1 0 0 0 1 0 0 0 1
+ik arm-hand 1 2.99999332 0:0 0 0 1 0 0 0 1 0 0 0 1/0 0 0 1 0 0 0 1 0 0 0 1 | 1:2 0 0 0.866025388 -0.5 0 0.5 0.866025388 0 0 0 1/3 300 0 0.866025388 -0.5 0 0.5 0.866025388 0 0 0 1 | 2:2.59806824 -1.5 0 0.866025388 0.5 0 -0.5 0.866025388 0 0 0 1/5.99999332 300 0 1 0 0 0 1 0 0 0 1 | 3:0 0 0 1 0 0 0 1 0 0 0 1/0 0 0 1 0 0 0 1 0 0 0 1
+ik hand-hand 0 0 0:0 0 0 1 0 0 0 1 0 0 0 1/0 0 0 1 0 0 0 1 0 0 0 1 | 1:2.59806824 -1.5 0 0.866025388 0.5 0 -0.5 0.866025388 0 0 0 1/5.99999332 300 0 1 0 0 0 1 0 0 0 1 | 2:0 0 0 1 0 0 0 1 0 0 0 1/0 0 0 1 0 0 0 1 0 0 0 1
+ik root-arm 1 2 0:0 0 0 1 0 0 0 1 0 0 0 1/0 0 0 1 0 0 0 1 0 0 0 1 | 1:1 300 0 1 0 0 0 1 0 0 0 1/1 300 0 1 0 0 0 1 0 0 0 1 | 2:2 0 0 0.866025388 -0.5 0 0.5 0.866025388 0 0 0 1/3 300 0 0.866025388 -0.5 0 0.5 0.866025388 0 0 0 1 | 3:0 0 0 1 0 0 0 1 0 0 0 1/0 0 0 1 0 0 0 1 0 0 0 1
+ik hand-arm 1 2 0:0 0 0 1 0 0 0 1 0 0 0 1/0 0 0 1 0 0 0 1 0 0 0 1 | 1:1 300 0 1 0 0 0 1 0 0 0 1/1 300 0 1 0 0 0 1 0 0 0 1 | 2:2 0 0 0.866025388 -0.5 0 0.5 0.866025388 0 0 0 1/3 300 0 0.866025388 -0.5 0 0.5 0.866025388 0 0 0 1 | 3:0 0 0 1 0 0 0 1 0 0 0 1/0 0 0 1 0 0 0 1 0 0 0 1
+ik root-tip, welded 0 0 0:0 0 0 1 0 0 0 1 0 0 0 1/0 0 0 1 0 0 0 1 0 0 0 1 | 1:7.99999332 300 0 1 0 0 0 1 0 0 0 1/7.99999332 300 0 1 0 0 0 1 0 0 0 1 | 2:0 0 0 1 0 0 0 1 0 0 0 1/0 0 0 1 0 0 0 1 0 0 0 1
+ik loose-hand 2 4.99999332 0:0 0 0 1 0 0 0 1 0 0 0 1/0 0 0 1 0 0 0 1 0 0 0 1 | 1:1 300 0 1 0 0 0 1 0 0 0 1/1 300 0 1 0 0 0 1 0 0 0 1 | 2:2 0 0 0.866025388 -0.5 0 0.5 0.866025388 0 0 0 1/3 300 0 0.866025388 -0.5 0 0.5 0.866025388 0 0 0 1 | 3:2.59806824 -1.5 0 0.866025388 0.5 0 -0.5 0.866025388 0 0 0 1/5.99999332 300 0 1 0 0 0 1 0 0 0 1 | 4:0 0 0 1 0 0 0 1 0 0 0 1/0 0 0 1 0 0 0 1 0 0 0 1
+ik root-spare, a C1 3 5.99999332 0:0 0 0 1 0 0 0 1 0 0 0 1/0 0 0 1 0 0 0 1 0 0 0 1 | 1:1 300 0 1 0 0 0 1 0 0 0 1/1 300 0 1 0 0 0 1 0 0 0 1 | 2:2 0 0 0.866025388 -0.5 0 0.5 0.866025388 0 0 0 1/3 300 0 0.866025388 -0.5 0 0.5 0.866025388 0 0 0 1 | 3:2.59806824 -1.5 0 0.866025388 0.5 0 -0.5 0.866025388 0 0 0 1/5.99999332 300 0 1 0 0 0 1 0 0 0 1 | 4:1 0 0 1 0 0 0 1 0 0 0 1/6.99999332 300 0 1 0 0 0 1 0 0 0 1 | 5:0 0 0 1 0 0 0 1 0 0 0 1/0 0 0 1 0 0 0 1 0 0 0 1
+ik root-attachment 2 4.99999332 0:0 0 0 1 0 0 0 1 0 0 0 1/0 0 0 1 0 0 0 1 0 0 0 1 | 1:1 300 0 1 0 0 0 1 0 0 0 1/1 300 0 1 0 0 0 1 0 0 0 1 | 2:2 0 0 0.866025388 -0.5 0 0.5 0.866025388 0 0 0 1/3 300 0 0.866025388 -0.5 0 0.5 0.866025388 0 0 0 1 | 3:2.59806824 -1.5 0 0.866025388 0.5 0 -0.5 0.866025388 0 0 0 1/5.99999332 300 0 1 0 0 0 1 0 0 0 1 | 4:0 0 0 1 0 0 0 1 0 0 0 1/0 0 0 1 0 0 0 1 0 0 0 1
+ik no root 0 0 0:0 0 0 1 0 0 0 1 0 0 0 1/0 0 0 1 0 0 0 1 0 0 0 1 | 1:0 0 0 1 0 0 0 1 0 0 0 1/0 0 0 1 0 0 0 1 0 0 0 1 | 2:0 0 0 1 0 0 0 1 0 0 0 1/0 0 0 1 0 0 0 1 0 0 0 1
+ik no effector 0 0 0:0 0 0 1 0 0 0 1 0 0 0 1/0 0 0 1 0 0 0 1 0 0 0 1 | 1:0 0 0 1 0 0 0 1 0 0 0 1/0 0 0 1 0 0 0 1 0 0 0 1 | 2:0 0 0 1 0 0 0 1 0 0 0 1/0 0 0 1 0 0 0 1 0 0 0 1
+ik bones b1-b3 2 3 0:0 0 0 1 0 0 0 1 0 0 0 1/0 0 0 1 0 0 0 1 0 0 0 1 | 1:0 1 0 1 0 0 0 1 0 0 0 1/20 301 0 1 0 0 0 1 0 0 0 1 | 2:0 2 0 1 0 0 0 1 0 0 0 1/20 303 0 1 0 0 0 1 0 0 0 1 | 3:1 0 0 1 0 0 0 1 0 0 0 1/21 303 0 1 0 0 0 1 0 0 0 1 | 4:0 0 0 1 0 0 0 1 0 0 0 1/0 0 0 1 0 0 0 1 0 0 0 1
+ik bones part-b3 3 4 0:0 0 0 1 0 0 0 1 0 0 0 1/0 0 0 1 0 0 0 1 0 0 0 1 | 1:20 300 0 1 0 0 0 1 0 0 0 1/20 300 0 1 0 0 0 1 0 0 0 1 | 2:0 1 0 1 0 0 0 1 0 0 0 1/20 301 0 1 0 0 0 1 0 0 0 1 | 3:0 2 0 1 0 0 0 1 0 0 0 1/20 303 0 1 0 0 0 1 0 0 0 1 | 4:1 0 0 1 0 0 0 1 0 0 0 1/21 303 0 1 0 0 0 1 0 0 0 1 | 5:0 0 0 1 0 0 0 1 0 0 0 1/0 0 0 1 0 0 0 1 0 0 0 1
+ik bones b2-b3 1 1 0:0 0 0 1 0 0 0 1 0 0 0 1/0 0 0 1 0 0 0 1 0 0 0 1 | 1:0 2 0 1 0 0 0 1 0 0 0 1/20 303 0 1 0 0 0 1 0 0 0 1 | 2:1 0 0 1 0 0 0 1 0 0 0 1/21 303 0 1 0 0 0 1 0 0 0 1 | 3:0 0 0 1 0 0 0 1 0 0 0 1/0 0 0 1 0 0 0 1 0 0 0 1
+ik targets 1 2.99999332 0:0 0 0 1 0 0 0 1 0 0 0 1/0 0 0 1 0 0 0 1 0 0 0 1 | 1:2 0 0 0.866025388 -0.5 0 0.5 0.866025388 0 0 0 1/3 300 0 0.866025388 -0.5 0 0.5 0.866025388 0 0 0 1 | 2:2.59806824 -1.5 0 0.866025388 0.5 0 -0.5 0.866025388 0 0 0 1/5.99999332 300 0 1 0 0 0 1 0 0 0 1 | 3:0 0 0 1 0 0 0 1 0 0 0 1/0 0 0 1 0 0 0 1 0 0 0 1
+raw target ok 1 CFrame 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1
+smoothed target ok 1 CFrame 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1
+node index fraction ok 1 CFrame 5.99999332, 300, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1
+node index number string ok 1 CFrame 5.99999332, 300, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1
+node index string error Unable to cast string to int
+node index table error Unable to cast Array to int
+node index nil error Argument 1 missing or nil
+GetR15JointNames ok 1 table#15{10=string:LeftHip,11=string:LeftKnee,12=string:LeftAnkle,13=string:RightHip,14=string:RightKnee,15=string:RightAnkle,1=string:Root,2=string:Waist,3=string:Neck,4=string:LeftShoulder,5=string:LeftElbow,6=string:LeftWrist,7=string:RightShoulder,8=string:RightElbow,9=string:RightWrist}
+GetR6JointNames ok 1 table#6{1=string:Root,2=string:Neck,3=string:LeftShoulder,4=string:RightShoulder,5=string:LeftHip,6=string:RightHip}
+GetJointNames ok 1 table#22{10=string:LeftWrist,11=string:RightClavicle,12=string:RightShoulder,13=string:RightElbow,14=string:RightWrist,15=string:LeftHip,16=string:LeftKnee,17=string:LeftAnkle,18=string:LeftToeBase,19=string:RightHip,1=string:Root,20=string:RightKnee,21=string:RightAnkle,22=string:RightToeBase,2=string:Waist,3=string:Spine,4=string:Chest,5=string:Neck,6=string:HeadBase,7=string:LeftClavicle,8=string:LeftShoulder,9=string:LeftElbow}
+GetR15JointNames twice ok 1 boolean false
+GetJointFromName unset ok 1 nil nil
+GetJointFromName nil error Argument 1 missing or nil
+joints Root=J1,Waist=J2,Spine=J3,Chest=J4,Neck=J5,HeadBase=J6,LeftClavicle=J7,LeftShoulder=J8,LeftElbow=J9,LeftWrist=J10,RightClavicle=J11,RightShoulder=J12,RightElbow=J13,RightWrist=J14,LeftHip=J15,LeftKnee=J16,LeftAnkle=J17,LeftToeBase=J18,RightHip=J19,RightKnee=J20,RightAnkle=J21,RightToeBase=J22
+GetJointFromName lower ok 1 Instance Motor6D J1
+GetJointFromName upper ok 1 Instance Motor6D J15
+GetJointFromName number ok 1 nil nil
+GetJointFromName other ok 1 nil nil
+GetJointFromName joint name ok 1 nil nil
+finger controls -1=0, 0, 0 | 0=0, 0, 0 | 1=0.15000000596046448, 1, -1 | 2=0.25, 1, -1 | 3=0.3499999940395355, 1, -1 | 4=0.44999998807907104, 1, -1 | 5=0.550000011920929, 1, -1 | 6=0, 0, 0 | 7=0, 0, 0
+finger tips -1=0, 0, 0 | 0=0, 0, 0 | 1=0, 0, 0 | 2=0, 0, 0 | 3=0, 0, 0 | 4=0, 0, 0 | 5=0, 0, 0 | 6=0, 0, 0 | 7=0, 0, 0
+finger control inside ok 1 Vector3 0.25, 0.5, 0.75
+finger control below ok 1 Vector3 0, -1, 0
+finger control fraction ok 1 Vector3 0.25, 1, -1
+finger control number string ok 1 Vector3 0.25, 1, -1
+finger control string error Unable to cast string to int
+finger control nil error Argument 2 missing or nil
+finger tip vector2 error Unable to cast Vector2 to Vector3
+finger tip none error Argument 2 missing or nil
+finger tip no index error Argument 1 missing or nil
+finger props ok 3 Vector3 0, 0, 0 ; Vector3 0, 0, 0 ; number 0

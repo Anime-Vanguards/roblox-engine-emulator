@@ -648,7 +648,8 @@ pub fn install_capability_calls(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()>
     let plugin = engine.options.edit_mode();
     for &(class_name, member, capability) in crate::reflection::CAPABILITY_CALLS {
         let (Some(owner), Some(name)) = (class(&engine.reflection, class_name), engine.reflection.name_id(member)) else { continue };
-        if plugin && capability == "Plugin" {
+        // (a plugin has PluginOrOpenCloud as well: Animator:StepAnimations runs in edit mode)
+        if plugin && (capability == "Plugin" || capability == "PluginOrOpenCloud") {
             // A subclass method shadowing an emulated superclass method (Selection.Remove over Instance.Remove) would
             // fall through to the superclass's unrelated behaviour if left unregistered; bind its own unemulated
             // stand-in instead (lowercase Selection.remove still reaches Instance.Remove via alias_lookup_class).
