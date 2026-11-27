@@ -75,7 +75,7 @@ During `lua::start` (`Engine.Start`), `ree` installs core behaviors, derived vie
   - A server has no typesetting: `GetTextBoundsAsync` raises `Typesetting is not enabled in this DataModel` and `GetTextSize` returns `(0, 0)`.
   - A host's GUI layer (roblox-ui-renderer's) replaces both methods with its own font metrics, so the two always agree.
 - **Host bridges into core features:**
-  - Input actions: hosts forward device key/mouse transitions via `services::input_actions::deliver`.
+  - Input actions: hosts forward device key/mouse transitions via `services::input_actions::deliver`, and mouse wheel notches via `services::input_actions::deliver_wheel`.
   - `Path2D`: hosts supply parent rects via `path2d::set_frame_source` and signal layout via `path2d::laid_out` (without a layout host, `GuiObject` parents measure `0x0` at `(0, 0)` and `ScreenGui`/`SurfaceGui` measure `800x600`).
 
 ## Project mount (`src/mount.rs`, `src/project.rs`)
@@ -378,6 +378,7 @@ Matches playing-client behavior (`input_actions.luau`, `input_action_resets.luau
 - `InputAction:GetState()` returns type defaults (`Bool`: `false`, `Direction1D`: `0`, `Direction2D`: `(0, 0)`, `Direction3D`: `(0, 0, 0)`, `ViewportPosition`: `(-1, -1)`). State changes update immediately and queue deferred `Pressed`/`Released` (for `Bool`) followed by `StateChanged(state)`.
 - `InputAction:Fire(state)` requires enabled action and nearest enabled `InputContext` (or DataModel ancestry if no context); `InputBinding:Fire(state)` requires `Type = Scriptable`. Disabling or reparenting resets the action; changing `Type` resets to default.
 - Host device input (`services::input_actions::deliver`, called after `UserInputService` events when no `TextBox` is focused) routes to enabled DataModel actions (excluding `StarterGui`/`StarterPack`/`StarterPlayer`) via `Automatic` bindings, prioritized by modified `KeyCode` bindings, summed/clamped/scaled directional composites, and `InputContext.Priority` (newest first on ties, respecting sink contexts).
+- The mouse wheel (`services::input_actions::deliver_wheel(engine, notches)`): a `Direction1D` action bound to `KeyCode.MouseWheel` reads 60 x `Scale` x the frame's notches (forward positive), `StateChanged` alone, and goes back to 60 x `Scale` x 0 at the first frame the wheel does not turn; other action types get nothing.
 
 ## PhysicsService and WorldRoot collision groups (`src/services/physics.rs`)
 

@@ -36,6 +36,13 @@
 //!   binding it holds. A key held when its context is enabled does not press; a binding whose keys change while it
 //!   holds its action releases it. The UserInputService events of the input come first (the host fires them before it
 //!   calls [`deliver`]).
+//! - The mouse wheel ([`deliver_wheel`], measured with VirtualInputManager:SendMouseWheelEvent at identity 8, two sessions): a
+//!   Direction1D action bound to KeyCode.MouseWheel reads 60 x Scale x the frame's notches (forward positive: one notch 60, two
+//!   back in a frame -120, Scale 2 gives 120, Scale -0.5 gives -30), StateChanged alone, and goes back to 60 x Scale x 0 (-0
+//!   for a negative Scale) at the first frame the wheel does not turn, before its PreRender: it holds through the frame's
+//!   Heartbeat, and a notch the next frame keeps it. A Bool or Direction2D action bound to the wheel gets nothing; contexts,
+//!   priorities and Sink act as for a key; a modifier held does not stop a binding without one. Wheel input a GUI takes
+//!   (over a ScrollingFrame) reaches no action: a host does not deliver it.
 
 use std::{
     cell::{OnceCell, RefCell},
@@ -158,6 +165,7 @@ struct Names {
     kinds: [(EnumItemId, Kind); 5],
     scriptable: EnumItemId,
     no_key: EnumItemId,
+    mouse_wheel: Option<EnumItemId>,
 }
 
 /// A binding's device input holding its action: the keys it holds (its KeyCode, or its composite's directions held).
@@ -178,6 +186,9 @@ struct InputActions {
     order: RefCell<Vec<InstanceId>>,
     /// The keys and buttons down, as delivered
     down: RefCell<Vec<EnumItemId>>,
+    /// The (action, binding) pairs the wheel set, and the frame it last turned in ([`deliver_wheel`])
+    wheel: RefCell<Vec<(InstanceId, InstanceId)>>,
+    wheel_frame: std::cell::Cell<Option<u64>>,
 }
 
 impl crate::Extension for InputActions {}
@@ -221,6 +232,7 @@ fn names(engine: &Engine) -> Option<Rc<Names>> {
                 ],
                 scriptable: r.enum_item("InputBindingType", "Scriptable")?,
                 no_key: r.enum_item("KeyCode", "None")?,
+                mouse_wheel: r.enum_item("KeyCode", "MouseWheel"),
             }))
         })
         .clone()
@@ -397,6 +409,11 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
         }
     }
 
+    // (the wheel's actions go back at the first frame it did not turn in: deliver_wheel)
+    engine.state.borrow_mut().sched.add_hook(crate::scheduler::Phase::Simulation, Rc::new(|_, engine, _| {
+        wheel_rest(engine);
+        Ok(())
+    }));
     let weak = Rc::downgrade(engine);
     let mut hooks = engine.hooks.borrow_mut();
     let on_move: Weak<Engine> = weak.clone();
@@ -512,6 +529,82 @@ pub fn deliver(engine: &Engine, key: EnumItemId, down: bool) {
         press(&mut state, input, &names, key);
     } else {
         release(&mut state, input, &names, key);
+    }
+}
+
+/// The mouse wheel turned `notches` notches in this frame (an InputObject's Position.Z, forward positive): the Direction1D actions
+/// bound to KeyCode.MouseWheel take 60 x Scale x notches, as a client gives it (the module's comment), and go back at the first
+/// frame the wheel does not turn in. A host calls it as it calls [`deliver`], after UserInputService.InputChanged, and not for
+/// wheel input a GUI takes.
+pub fn deliver_wheel(engine: &Engine, notches: f64) {
+    let Some(names) = names(engine) else { return };
+    let Some(wheel) = names.mouse_wheel else { return };
+    let input = extension(engine);
+    let mut state = engine.state.borrow_mut();
+    input.wheel_frame.set(Some(state.sched.frame));
+    let groups = reachable(&state, input, &names);
+    let mut level: Option<f32> = None;
+    let mut sunk = false;
+    for (context, actions) in groups {
+        let priority = context.map_or(1000.0, |c| number(&state, c, names.priority, 1000.0));
+        if level != Some(priority) {
+            if sunk {
+                break;
+            }
+            level = Some(priority);
+        }
+        if context.is_some_and(|c| !flag(&state, c, names.enabled)) {
+            continue;
+        }
+        let sinks = context.is_some_and(|c| state.dom.boolean(c, names.sink).unwrap_or(false));
+        for action in actions {
+            if !flag(&state, action, names.enabled) || kind_of(&state, &names, action) != Kind::Direction1D {
+                continue;
+            }
+            let bindings: Vec<InstanceId> = state.dom.children_of(action).iter().copied().filter(|&b| class_of(&state, b) == Some(names.binding)).collect();
+            for binding in bindings {
+                if key(&state, binding, names.kind) == Some(names.scriptable) || key(&state, binding, names.key_code) != Some(wheel) {
+                    continue;
+                }
+                let modifiers_down = names.modifiers.iter().all(|&m| match key(&state, binding, m) {
+                    Some(modifier) if modifier != names.no_key => input.down.borrow().contains(&modifier),
+                    _ => true,
+                });
+                if !modifiers_down {
+                    continue;
+                }
+                let value = 60.0 * number(&state, binding, names.scale, 1.0) * notches as f32;
+                {
+                    let mut held = input.wheel.borrow_mut();
+                    held.retain(|&(_, b)| b != binding);
+                    held.push((action, binding));
+                }
+                set_state(&mut state, input, &names, action, Kind::Direction1D, ActionState::Number(value));
+                if sinks {
+                    sunk = true;
+                }
+            }
+        }
+    }
+}
+
+/// The wheel's actions back to 60 x Scale x 0 at the first frame the wheel did not turn in ([`deliver_wheel`]).
+fn wheel_rest(engine: &Engine) {
+    let input = extension(engine);
+    let Some(turned) = input.wheel_frame.get() else { return };
+    let Some(names) = names(engine) else { return };
+    let mut state = engine.state.borrow_mut();
+    if state.sched.frame <= turned {
+        return;
+    }
+    input.wheel_frame.set(None);
+    let held = std::mem::take(&mut *input.wheel.borrow_mut());
+    for (action, binding) in held {
+        if state.dom.get(action).is_none() || state.dom.get(binding).is_none() || kind_of(&state, &names, action) != Kind::Direction1D {
+            continue;
+        }
+        let rest = 60.0 * number(&state, binding, names.scale, 1.0) * 0.0;
+        set_state(&mut state, input, &names, action, Kind::Direction1D, ActionState::Number(rest));
     }
 }
 

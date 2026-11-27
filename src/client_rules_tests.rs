@@ -295,3 +295,50 @@ fn attachment_axis_writes_follow_a_client() {
     );
     done(&lines);
 }
+
+/// A Direction1D action bound to KeyCode.MouseWheel reads 60 x Scale x the frame's notches and goes back to 60 x Scale x 0 the next
+/// frame the wheel does not turn; a Bool bound to it gets nothing.
+#[test]
+fn the_mouse_wheel_drives_its_actions_for_a_frame() {
+    let (lua, engine) = start(play());
+    let lines = run_in(
+        &lua,
+        &engine,
+        r#"
+        local Context = Instance.new("InputContext")
+        for _, Spec in { { "One", Enum.InputActionType.Direction1D, 1 }, { "Back", Enum.InputActionType.Direction1D, -0.5 }, { "Flag", Enum.InputActionType.Bool, 1 } } do
+            local Action = Instance.new("InputAction")
+            Action.Name = Spec[1]
+            Action.Type = Spec[2]
+            local Binding = Instance.new("InputBinding")
+            Binding.KeyCode = Enum.KeyCode.MouseWheel
+            Binding.Scale = Spec[3]
+            Binding.Parent = Action
+            Action.Parent = Context
+            Action.StateChanged:Connect(function(State) print(Spec[1] .. " " .. tostring(State)) end)
+        end
+        Context.Parent = workspace
+        shared.Context = Context
+        "#,
+        0.1,
+    );
+    assert!(lines.is_empty(), "{lines:?}");
+    crate::services::input_actions::deliver_wheel(&engine, -2.0);
+    let lines = run_in(
+        &lua,
+        &engine,
+        r#"
+        local C = shared.Context
+        print("read", C.One:GetState(), C.Back:GetState(), C.Flag:GetState())
+        task.wait()
+        task.wait()
+        print("later", C.One:GetState(), C.Back:GetState() == 0)
+        "#,
+        0.2,
+    );
+    assert_eq!(lines.first().map(String::as_str), Some("print: read -120 60 false"), "{lines:?}");
+    assert_eq!(lines.last().map(String::as_str), Some("print: later 0 true"), "{lines:?}");
+    let mut events: Vec<&str> = lines[1..lines.len() - 1].iter().map(String::as_str).collect();
+    events.sort();
+    assert_eq!(events, ["print: Back -0", "print: Back 60", "print: One -120", "print: One 0"], "{lines:?}");
+}
