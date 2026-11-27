@@ -6896,23 +6896,24 @@ fn actors_run_their_scripts_in_a_vm_of_their_own_in_studios_order() {
     );
     let log = output.iter().find_map(|line| line.strip_prefix("print: ")).expect("a log").to_string();
     let log: Vec<&str> = log.split('|').collect();
+    // (each worker starts at the next deferred point, as a 0.747 client's does: actors.rs)
     let expected = [
         "placing Actor1",
-        "Actor1 start actor=true module-actor=none bump=1 _G.Seen=1 sync=true",
         "placed Actor1",
         "placing Actor2",
-        "Actor2 start actor=true module-actor=none bump=1 _G.Seen=1 sync=true",
         "placed Actor2",
         "main bump=1 _G.Seen=nil",
         "main ConnectParallel false Event.ConnectParallel: The calling script must be rooted under an Actor.",
         "late placed",
-        "Late start actor=true module-actor=none bump=1 _G.Seen=1 sync=true",
         "late enabled",
+        "Actor1 start actor=true module-actor=none bump=1 _G.Seen=1 sync=true",
+        "Actor2 start actor=true module-actor=none bump=1 _G.Seen=1 sync=true",
+        "Late start actor=true module-actor=none bump=1 _G.Seen=1 sync=true",
         // PreSimulation: the serial handlers newest first, then the parallel ones (newest first) in Studio's phases
         "Late serial",
-        "main second",
         "Actor2 serial",
         "Actor1 serial",
+        "main second",
         "main first",
         "Late parallel",
         "Actor2 parallel",
@@ -6928,6 +6929,194 @@ fn actors_run_their_scripts_in_a_vm_of_their_own_in_studios_order() {
         "Actor1 heartbeat",
     ];
     assert_eq!(log, expected);
+}
+
+/// Actor messages as a 0.747 playing client delivers them (lua/actors.rs; tools/parity/probes/actor_messages.luau): a serial
+/// binding's handler one deferred step after the send (sent at a resumption point, after the Heartbeat handlers, ahead of what
+/// that point's pass left queued), a parallel binding's and a ConnectParallel handler's at the event's parallel point after its
+/// flush, task.desynchronize in serial code resuming there, the re-entrancy cut at 80 named `Actor.ActorMessageEvent`, bindings
+/// taken at the send, a function sent from another VM raising when called, and the refusals.
+#[test]
+fn actor_messages_reach_their_bindings_where_a_client_runs_them() {
+    let (lua, engine) = start_with(Options { mode: "play".into(), ..Options::default() });
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    let call = start_script(
+        &lua,
+        &engine,
+        r##"
+        local RunService = game:GetService("RunService")
+        local Shared = SharedTable.new({ N = 0, Mode = "", Count = 0 })
+        game:GetService("SharedTableRegistry"):SetSharedTable("MessageTest", Shared)
+        local function Add(Text)
+            local Index = SharedTable.increment(Shared, "N", 1) + 1
+            Shared["L" .. Index] = Text
+        end
+        local Folder = Instance.new("Folder")
+        Folder.Parent = workspace
+        local Worker = Instance.new("LocalScript")
+        Worker.Source = [==[
+            local Shared = game:GetService("SharedTableRegistry"):GetSharedTable("MessageTest")
+            local Actor = script:GetActor()
+            local function Add(Text)
+                local Index = SharedTable.increment(Shared, "N", 1) + 1
+                Shared["L" .. Index] = Text
+            end
+            Add("worker started")
+            Actor:BindToMessage("S", function(Tag)
+                Add("S " .. Tag)
+                task.defer(function() Add("S's defer " .. Tag) end)
+            end)
+            Actor:BindToMessageParallel("P", function(Tag)
+                Add("P " .. Tag)
+                task.synchronize()
+                Add("P synchronized " .. Tag)
+            end)
+            Actor:BindToMessage("Ping", function(Left)
+                SharedTable.increment(Shared, "Count", 1)
+                if Left > 0 then
+                    Actor:SendMessage("Ping", Left - 1)
+                end
+            end)
+            Actor:BindToMessage("Call", function(F)
+                local Ok, Message = pcall(F)
+                Add("call " .. tostring(Ok) .. " " .. tostring(Message))
+            end)
+            game:GetService("RunService").Heartbeat:ConnectParallel(function()
+                if Shared.Mode == "hb" then
+                    Add("Heartbeat parallel")
+                end
+            end)
+            Add("desynchronizing")
+            task.desynchronize()
+            Add("desynchronized")
+        ]==]
+        local Actor = Instance.new("Actor")
+        Worker.Parent = Actor
+        Actor.Parent = Folder
+        Add("placed")
+        task.wait()
+        Shared.Mode = "hb"
+        Actor:SendMessage("S", "a")
+        Actor:SendMessage("P", "b")
+        Actor:SendMessage("Nobody", 1)
+        task.defer(function()
+            Add("defer")
+            task.defer(function() Add("defer's defer") end)
+        end)
+        local Hb
+        Hb = RunService.Heartbeat:Connect(function()
+            Hb:Disconnect()
+            Add("Heartbeat")
+            Actor:SendMessage("S", "c")
+            task.defer(function() Add("Heartbeat's defer") end)
+        end)
+        task.wait()
+        Shared.Mode = ""
+        Actor:SendMessage("Ping", 99)
+        task.wait()
+        Add("pings " .. Shared.Count)
+        Actor:SendMessage("Call", function() return "ran" end)
+        task.wait()
+        local Refused = {}
+        for _, F in {
+            function() Actor:BindToMessage("x", function() end) end,
+            function() Actor:SendMessage() end,
+            function() Actor:BindToMessage("x", 5) end,
+            function() Instance.new("Actor"):SendMessage("x") end,
+            function() Actor:SendMessage("S", (function() local T = {} T.T = T return T end)()) end,
+        } do
+            table.insert(Refused, select(2, pcall(F)))
+        end
+        Add(table.concat(Refused, " / "))
+        Shared.Done = true
+        "##,
+    );
+    for _ in 0..8 {
+        crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    }
+    if let Err(message) = call.finish(&lua, &engine) {
+        panic!("test script failed: {message}");
+    }
+    let output = run(
+        &lua,
+        &engine,
+        r#"
+        local Shared = game:GetService("SharedTableRegistry"):GetSharedTable("MessageTest")
+        assert(Shared.Done, "the test script finished")
+        local Lines = {}
+        for Index = 1, Shared.N do
+            table.insert(Lines, Shared["L" .. Index])
+        end
+        print(table.concat(Lines, "|"))
+        "#,
+    );
+    let log = output.iter().rev().find_map(|line| line.strip_prefix("print: ")).expect("a log").to_string();
+    let log: Vec<&str> = log.split('|').collect();
+    let expected = [
+        "placed",
+        "worker started",
+        "desynchronizing",
+        // (the next parallel point: the next frame's PreRender)
+        "desynchronized",
+        // the resumption point's pass, then the Heartbeat handlers, then the flush: the messages sent at the resumption first
+        "defer",
+        "Heartbeat",
+        "S a",
+        "defer's defer",
+        "Heartbeat's defer",
+        "S's defer a",
+        "S c",
+        "S's defer c",
+        // the parallel point after the flush
+        "P b",
+        "Heartbeat parallel",
+        "P synchronized b",
+        "pings 80",
+        "call false Attempt to load a function from a different Lua VM",
+        "Calling BindToMessage on an Actor is only allowed in scripts that are a descendent of that Actor / Argument 1 missing or nil / \
+         Unable to cast double to Function / Actor:SendMessage may only be called on Actors attached to the DataModel. / tables cannot be cyclic",
+    ];
+    assert_eq!(log, expected);
+    assert!(
+        lines(&engine).iter().any(|line| line.starts_with("error: Maximum event re-entrancy depth exceeded for Actor.ActorMessageEvent when calling anonymous function on line ")),
+        "{:?}",
+        lines(&engine)
+    );
+}
+
+/// SendMessage costs a client its copy (actors.rs MESSAGE_ARGUMENTS and after; a 0.747 playing client): one number 81 ns over none,
+/// a table of ten numbers 384, a dictionary of ten 1,056.
+#[test]
+fn a_message_costs_its_copy_as_a_client_pays_it() {
+    let (lua, engine) = start_with(Options { mode: "play".into(), ..Options::default() });
+    engine_lua::modules::interpret_all(&lua, &engine);
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    run(
+        &lua,
+        &engine,
+        r#"
+        local Actor = Instance.new("Actor")
+        Actor.Parent = workspace
+        local function Per(Body)
+            local N = 200
+            local Start = os.clock()
+            Body(N)
+            local Middle = os.clock()
+            for _ = 1, N do Actor:SendMessage("None") end
+            return ((Middle - Start) - (os.clock() - Middle)) / N * 1e9
+        end
+        local T10, D10 = table.create(10, 1), {}
+        for Index = 1, 10 do D10["k" .. Index] = Index end
+        local One = Per(function(N) for _ = 1, N do Actor:SendMessage("None", 1) end end)
+        local Table = Per(function(N) for _ = 1, N do Actor:SendMessage("None", T10) end end)
+        local Dictionary = Per(function(N) for _ = 1, N do Actor:SendMessage("None", D10) end end)
+        assert(One > 70 and One < 95, "one number: " .. One)
+        assert(Table > 340 and Table < 430, "a table of ten: " .. Table)
+        assert(Dictionary > 950 and Dictionary < 1150, "a dictionary of ten: " .. Dictionary)
+        print("ok")
+        "#,
+    );
+    assert!(lines(&engine).contains(&"print: ok".to_string()), "{:?}", lines(&engine));
 }
 
 /// Script.Source is plugin-writable in Studio and ree has no plugin boundary: a script can set it, and a module's new source is

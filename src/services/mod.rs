@@ -679,6 +679,8 @@ pub fn install(engine: &Rc<Engine>) {
     install_workspace_and_camera(&mut behaviors, &reflection, &options);
     install_players(engine, &mut behaviors, &reflection, &options);
     install_run_service(engine, &mut behaviors, &reflection, &options);
+    // Actor messages (lua/actors.rs)
+    crate::lua::actors::install(engine, &mut behaviors);
 
     // TweenService, Instance:QueryDescendants, AnimationTracks
     tween::install(engine, &mut behaviors);
@@ -1083,6 +1085,8 @@ fn install_run_service(engine: &Rc<Engine>, behaviors: &mut Behaviors, reflectio
             // The Animator step: AnimationTracks pose their rigs' joints (crate::animation)
             crate::luau_profile::engine_step("animation", || crate::animation::step(engine, delta));
             super::scheduler::flush_deferred(lua, engine)?;
+            // (each frame event's parallel point follows the flush of its handlers' deferred work: lua/actors.rs)
+            super::lua::actors::parallel_point(lua, engine)?;
             fire_frame_event(lua, engine, K::Stepped as NameId, &[Value::Number(now), Value::Number(delta)])?;
             fire_frame_event(lua, engine, K::PreSimulation as NameId, &[Value::Number(delta)])?;
             // The deferred handlers of what Stepped and PreSimulation handlers did (a Changed or ChildAdded handler of a write)
@@ -1090,6 +1094,7 @@ fn install_run_service(engine: &Rc<Engine>, behaviors: &mut Behaviors, reflectio
             // AttributeChanged and ChildAdded handlers between PreSimulation and PostSimulation, and a Motor6D.Transform one of
             // them writes is applied by the batch below the same frame (a deferred_phase probe)
             super::scheduler::flush_deferred(lua, engine)?;
+            super::lua::actors::parallel_point(lua, engine)?;
             // Motor6D.Transform: applied in a batch after PreSimulation (Roblox's Motor6D docs)
             crate::luau_profile::engine_step("joints", || crate::world::joints::step_transforms(engine));
             // (the legacy motors turn toward their DesiredAngle: world/joints.rs step_motors)
@@ -1100,7 +1105,12 @@ fn install_run_service(engine: &Rc<Engine>, behaviors: &mut Behaviors, reflectio
             // Workspace.DistributedGameTime takes the frame's game time after the step, before PostSimulation; a server fires its
             // Changed for it every frame, a playing client none (Studio 0.747, tools/parity/probes/distributed_game_time.luau)
             set_game_time(engine, engine.world().workspace, now, engine.options.server());
-            fire_frame_event(lua, engine, K::PostSimulation as NameId, &[Value::Number(delta)])
+            fire_frame_event(lua, engine, K::PostSimulation as NameId, &[Value::Number(delta)])?;
+            if super::lua::actors::parallel_waiting(engine) {
+                super::scheduler::flush_deferred(lua, engine)?;
+                super::lua::actors::parallel_point(lua, engine)?;
+            }
+            Ok(())
         }));
         state.sched.add_hook(Phase::Heartbeat, Rc::new(|lua, engine, delta| {
             fire_frame_event(lua, engine, K::Heartbeat as NameId, &[Value::Number(delta)])
@@ -1371,7 +1381,7 @@ const GET_CORE: &[&str] = &[
 /// A script value's name in "Unable to cast X to Y" as a method's argument cast writes it: "double", "bool", "Array" or
 /// "Dictionary" for a table, "Function", an enum item's enum (measured, 0.747: SetCoreGuiEnabled, GetPlayerByUserId,
 /// GetAssetFetchStatus; tools/parity/probes/service_answers.luau).
-fn cast_name(engine: &Engine, value: &LuaValue) -> String {
+pub(crate) fn cast_name(engine: &Engine, value: &LuaValue) -> String {
     match value {
         LuaValue::Number(_) | LuaValue::Integer(_) => "double".into(),
         LuaValue::Boolean(_) => "bool".into(),

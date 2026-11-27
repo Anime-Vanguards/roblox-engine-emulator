@@ -975,8 +975,9 @@ pub fn fire_immediate_costing(lua: &Lua, engine: &Rc<Engine>, signal: SignalId, 
             }
         }
     }
-    if !parallel.is_empty() {
-        super::actors::parallel_phase(lua, engine, parallel);
+    // (they run at the frame event's parallel point, after its flush: lua/actors.rs)
+    for (thread, values) in parallel {
+        super::actors::defer_parallel(engine, thread, values);
     }
     Ok(())
 }

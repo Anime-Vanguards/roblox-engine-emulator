@@ -620,9 +620,10 @@ fn require_pins_first_read_source_for_source_property_clones_and_actors() {
     let _ = std::fs::remove_dir_all(&folder);
     check(
         &lines,
+        // (the Actor's worker starts at the next deferred point, after the main script's line: lua/actors.rs)
         &[
-            "actor first-read",
             "main first-read first-read return \"first-read\"",
+            "actor first-read",
         ],
     );
 }

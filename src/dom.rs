@@ -66,6 +66,8 @@ pub struct InstanceSignals {
     pub events: Vec<(NameId, SignalId)>,
     pub properties: Vec<(NameId, SignalId)>,
     pub attributes: Vec<(Str, SignalId)>,
+    /// An Actor's message topics (lua/actors.rs)
+    pub messages: Vec<(Str, SignalId)>,
 }
 
 impl InstanceSignals {
@@ -81,12 +83,17 @@ impl InstanceSignals {
         self.attributes.iter().find(|(n, _)| n.as_bytes() == name).map(|(_, s)| *s)
     }
 
+    pub fn message(&self, topic: &[u8]) -> Option<SignalId> {
+        self.messages.iter().find(|(n, _)| n.as_bytes() == topic).map(|(_, s)| *s)
+    }
+
     pub fn all(&self) -> impl Iterator<Item = SignalId> + '_ {
         self.events
             .iter()
             .map(|(_, s)| *s)
             .chain(self.properties.iter().map(|(_, s)| *s))
             .chain(self.attributes.iter().map(|(_, s)| *s))
+            .chain(self.messages.iter().map(|(_, s)| *s))
     }
 }
 

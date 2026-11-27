@@ -73,6 +73,8 @@ pub enum JobTarget {
     Handler { connection: ConnectionId, kind: DispatchKind },
     /// Destroy's deferred signal cleanup
     DisconnectAll(InstanceId),
+    /// An Actor's message to one serial binding: when it runs, it queues the binding's handler (lua/actors.rs)
+    Post(ConnectionId),
 }
 
 pub struct Job {
@@ -863,6 +865,12 @@ impl Scheduler {
         self.event_depth += 1;
         self.defer_costing(target, args, resume_cost);
         self.event_depth -= 1;
+    }
+
+    /// An Actor's message to a serial binding of the topic `signal`: a job at the sender's depth that queues the handler when it runs
+    /// (lua/actors.rs)
+    pub fn post(&mut self, connection: ConnectionId, signal: SignalId, args: Vec<Value>) {
+        self.defer_signal(JobTarget::Post(connection), args, 0.0, signal);
     }
 
     /// A handler (or waiting thread) of `signal`, one level deeper than what fired it; one past the cut is refused
@@ -1719,6 +1727,18 @@ fn run_job(lua: &Lua, engine: &Rc<Engine>, job: Job) -> LuaResult<()> {
         return refuse(lua, engine, job);
     }
     match job.target {
+        // (a ConnectParallel handler of a deferred event waits for the next parallel point: lua/actors.rs)
+        JobTarget::Handler { connection, .. } if engine.state.borrow().signals.is_parallel(connection) => {
+            let begun = engine.state.borrow_mut().signals.begin_handler(connection);
+            if let Some((callback, _)) = begun {
+                let args = job_args(lua, engine, &job.args)?;
+                super::lua::actors::defer_parallel(engine, lua.create_thread(callback)?, args);
+            }
+        }
+        JobTarget::Post(connection) => {
+            let mut state = engine.state.borrow_mut();
+            super::lua::actors::queue_handler(&mut state, connection, job.signal, job.args);
+        }
         JobTarget::Thread(thread) => {
             engine.state.borrow_mut().sched.clear_task_state(&thread);
             let args = job_args(lua, engine, &job.args)?;
@@ -2064,6 +2084,8 @@ fn step_tweens_held(lua: &Lua, engine: &Rc<Engine>, phases: &[Phase], delta: f64
 fn heartbeat_handlers(lua: &Lua, engine: &Rc<Engine>, delta: f64) -> LuaResult<()> {
     run_hooks(lua, engine, Phase::Heartbeat, delta)?;
     flush_deferred(lua, engine)?;
+    // (Heartbeat's parallel point, before the log's delivery: lua/actors.rs)
+    super::lua::actors::parallel_point(lua, engine)?;
     deliver_log(lua, engine)
 }
 
@@ -2196,6 +2218,8 @@ fn render(lua: &Lua, engine: &Rc<Engine>, delta: f64) -> LuaResult<()> {
             }
         }
         flush_deferred(lua, engine)?;
+        // (PreRender's parallel point: lua/actors.rs)
+        super::lua::actors::parallel_point(lua, engine)?;
     } else {
         // A server (its tweens step before its Heartbeat handlers: heartbeat_timers) and edit mode: the tween step after the
         // bindings, its events after the RenderStepped and PreRender handlers, one pass for the bindings' deferred work (edit
@@ -2214,6 +2238,7 @@ fn render(lua: &Lua, engine: &Rc<Engine>, delta: f64) -> LuaResult<()> {
             state.sched.deferred.extend(held);
         }
         run_hooks(lua, engine, Phase::RenderEvents, delta)?;
+        super::lua::actors::parallel_point(lua, engine)?;
     }
     run_hooks(lua, engine, Phase::PreRender, delta)?;
     run_hooks(lua, engine, Phase::Render, delta)?;

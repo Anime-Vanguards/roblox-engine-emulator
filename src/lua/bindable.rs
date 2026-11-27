@@ -26,7 +26,8 @@
 //!   after another argument, a dictionary 150 deep, and a callback may return an array 300 deep (measured in a 0.747
 //!   playing client and server, tools/parity/probes/table_depth.luau). Remotes, data stores and MessagingService walk
 //!   the same way from heights of their own (loopback/wire.rs, server.luau `Data`).
-//! - A thread arrives as nil (in an array it leaves a hole, in a dictionary its entry is dropped); a buffer as a
+//! - A thread, or a userdata of a script's own (newproxy's; measured at top level, 0.747), arrives as nil (in an array it leaves a
+//!   hole, in a dictionary its entry is dropped); a buffer as a
 //!   new buffer with the same bytes; a SharedTable as a new handle of the same table (Studio 0.748, [`rebuild`]), an
 //!   InstanceHandle as a new handle of the same instance, or of none (Studio 0.748: `==` to the one sent, not rawequal, at
 //!   top level and in a table, Fire and Invoke alike); everything else (functions, Instances, datatypes, strings) as it is.
@@ -200,6 +201,9 @@ fn buffer_bytes(value: &LuaValue) -> usize {
 fn capture_value(lua: &Lua, engine: &Engine, value: &LuaValue, height: usize, ancestors: &mut Vec<*const c_void>, tally: &mut Tally) -> Result<Option<Sent>, Refused> {
     Ok(Some(match value {
         LuaValue::Thread(_) => return Ok(None),
+        // (a userdata of a script's own, newproxy's, arrives as nil too: measured at top level, a 0.747 playing client's
+        // BindableEvent and Actor message alike, tools/parity/probes/actor_message_args.luau)
+        LuaValue::UserData(_) if super::typeof_value(engine, value) == "userdata" => return Ok(None),
         LuaValue::Table(table) => capture_table(lua, engine, table, height, ancestors, tally)?,
         LuaValue::Buffer(buffer) => Sent::Buffer(buffer.to_vec().into()),
         other => {
@@ -459,6 +463,7 @@ pub fn sent_value(lua: &Lua, engine: &Engine, value: &LuaValue, height: usize, t
             Ok(Value::Lua(Box::new(LuaValue::UserData(userdata))))
         }
         LuaValue::Thread(_) => Ok(Value::Nil),
+        LuaValue::UserData(_) if super::typeof_value(engine, value) == "userdata" => Ok(Value::Nil),
         other => Ok(super::convert::from_lua(other)),
     }
 }

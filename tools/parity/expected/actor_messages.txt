@@ -1,0 +1,233 @@
+# engine: Roblox Studio 0.747.0.7471481, a headless playing client (script identity 4; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-27
+0:-- at a resumption
+0:a defer there
+0:main Heartbeat
+0:A1 SDefer a
+0:A1 S b
+0:what that defer deferred
+0:A1 SDefer's defer a
+1:main PreAnimation
+1:main PreSimulation
+1:main PostSimulation
+1:main Heartbeat
+2:main PreAnimation
+2:main PreSimulation
+2:main PostSimulation
+0:-- heartbeat
+0:main Heartbeat handler sends and defers
+0:main Heartbeat
+0:A1 SDefer at the resumption
+0:the Heartbeat handler's defer
+0:A1 SDefer's defer at the resumption
+0:A1 S from the Heartbeat handler
+0:A1 Heartbeat parallel handler
+0:A1 Heartbeat parallel handler synchronized
+0:log PARITY at the resumption
+0:log PARITY from the Heartbeat handler
+1:main PreAnimation
+1:main PreSimulation
+1:main PostSimulation
+1:main Heartbeat
+1:A1 Heartbeat parallel handler
+1:A1 Heartbeat parallel handler synchronized
+2:main PreAnimation
+2:main PreSimulation
+2:main PostSimulation
+0:-- events
+0:main Heartbeat
+0:PreRender handler sends
+0:PreRender's defer sends
+0:A1 S from PreRender
+0:A2 S from PreRender's defer
+0:A1 P from PreRender at PreRender
+0:A1 P synchronized from PreRender
+0:A1 P desynchronized from PreRender
+1:main PreAnimation
+1:A2 P from PreAnimation at PreAnimation
+1:A2 P synchronized from PreAnimation
+1:A2 P desynchronized from PreAnimation
+1:main PreSimulation
+1:A1 S from PreSimulation
+1:A1 P from PreSimulation at PreSimulation
+1:A1 P synchronized from PreSimulation
+1:A1 P desynchronized from PreSimulation
+1:main PostSimulation
+1:A2 P from PostSimulation at PostSimulation
+1:A2 P synchronized from PostSimulation
+1:A2 P desynchronized from PostSimulation
+1:main Heartbeat
+2:main PreAnimation
+2:main PreSimulation
+2:main PostSimulation
+0:-- chain
+0:main Heartbeat
+0:A1 Chain, sending on
+0:A2 S chained from A1
+0:A1 S chained to itself
+1:main PreAnimation
+1:main PreSimulation
+1:main PostSimulation
+1:main Heartbeat
+2:main PreAnimation
+2:main PreSimulation
+2:main PostSimulation
+0:-- serial sends a parallel message
+0:main Heartbeat
+0:A1 SendP x
+0:A1 SendP's defer
+0:A2 P from a serial handler at Heartbeat
+0:A2 P synchronized from a serial handler
+0:A2 P desynchronized from a serial handler
+1:main PreAnimation
+1:main PreSimulation
+1:main PostSimulation
+1:main Heartbeat
+2:main PreAnimation
+2:main PreSimulation
+2:main PostSimulation
+0:-- parallel sends
+0:main Heartbeat
+0:A1 Heartbeat parallel handler
+0:A1 Heartbeat parallel handler synchronized
+0:A2 P from a parallel handler at Heartbeat
+0:A2 P synchronized from a parallel handler
+0:A2 P desynchronized from a parallel handler
+0:A2 S from a parallel handler
+1:main PreAnimation
+1:main PreSimulation
+1:main PostSimulation
+1:main Heartbeat
+1:A1 Heartbeat parallel handler
+1:A1 Heartbeat parallel handler synchronized
+1:A2 P from a parallel handler at Heartbeat
+1:A2 P synchronized from a parallel handler
+1:A2 P desynchronized from a parallel handler
+1:A2 S from a parallel handler
+2:main PreAnimation
+2:main PreSimulation
+2:main PostSimulation
+0:-- parallel handler sends
+0:main Heartbeat
+0:A1 PSend parallel
+0:A1 PSend synchronized
+0:A2 P sent desynchronized at Heartbeat
+0:A2 P synchronized sent desynchronized
+0:A2 P desynchronized sent desynchronized
+0:A2 S sent desynchronized
+0:A1 PSend's defer
+0:A2 S sent synchronized
+1:main PreAnimation
+1:main PreSimulation
+1:main PostSimulation
+1:main Heartbeat
+2:main PreAnimation
+2:main PreSimulation
+2:main PostSimulation
+0:-- unbound topics
+0:main Heartbeat
+1:main PreAnimation
+1:main PreSimulation
+1:main PostSimulation
+1:main Heartbeat
+1:A1 binding Late
+2:main PreAnimation
+2:main PreSimulation
+2:main PostSimulation
+2:main Heartbeat
+2:A1 Late after the bind
+3:main PreAnimation
+3:main PreSimulation
+3:main PostSimulation
+3:main Heartbeat
+4:main PreAnimation
+4:main PreSimulation
+4:main PostSimulation
+0:-- two bindings
+0:main Heartbeat
+0:A1 Twice second binding 1
+0:A1 Twice first binding 1
+1:main PreAnimation
+1:main PreSimulation
+1:main PostSimulation
+1:main Heartbeat
+1:A1 dropped the second: true false
+1:A1 Twice first binding 2
+2:main PreAnimation
+2:main PreSimulation
+2:main PostSimulation
+2:main Heartbeat
+2:A1 Twice first binding 3
+3:main PreAnimation
+3:main PreSimulation
+3:main PostSimulation
+3:main Heartbeat
+4:main PreAnimation
+4:main PreSimulation
+4:main PostSimulation
+0:-- serial and parallel bindings
+0:main Heartbeat
+0:A2 Both second serial b
+0:A2 Both serial b
+0:A2 Both parallel b
+1:main PreAnimation
+1:main PreSimulation
+1:main PostSimulation
+1:main Heartbeat
+2:main PreAnimation
+2:main PreSimulation
+2:main PostSimulation
+0:-- top level desynchronize
+0:placed D
+0:D top level desynchronizing
+0:main Heartbeat
+0:D top level desynchronized at Heartbeat
+0:D top level synchronized
+1:main PreAnimation
+1:main PreSimulation
+1:main PostSimulation
+1:main Heartbeat
+2:main PreAnimation
+2:main PreSimulation
+2:main PostSimulation
+0:-- message handler desynchronize
+0:main Heartbeat
+0:A1 Desync d
+0:A1 Desync desynchronized d at Heartbeat
+0:A1 Desync synchronized again d
+1:main PreAnimation
+1:main PreSimulation
+1:main PostSimulation
+1:main Heartbeat
+2:main PreAnimation
+2:main PreSimulation
+2:main PostSimulation
+0:-- serial desynchronize
+0:A1 serial Heartbeat handler desynchronizing
+0:main Heartbeat
+0:A1 serial Heartbeat handler desynchronized at Heartbeat
+1:main PreAnimation
+1:main PreSimulation
+1:main PostSimulation
+1:main Heartbeat
+2:main PreAnimation
+2:main PreSimulation
+2:main PostSimulation
+0:-- lookup
+0:main Heartbeat handler sends Fresh
+0:main Heartbeat
+0:A1 bound Fresh in a deferred job
+1:main PreAnimation
+1:main PreSimulation
+1:main PostSimulation
+1:main Heartbeat
+2:main PreAnimation
+2:main PreSimulation
+2:main PostSimulation
+0:-- cuts
+0:log Maximum event re-entrancy depth exceeded for Actor.ActorMessageEvent when calling anonymous function on line 83 in PlayerScripts.ParityActorMessages.A1.Worker
+2:a chain of 100 messages, after each frame: 80 80
+2:log Maximum event re-entrancy depth exceeded for Actor.ActorMessageEvent when calling anonymous function on line 89 in PlayerScripts.ParityActorMessages.A1.Worker
+4:a chain of 100 messages and defers: 40 40
+6:a chain of 100 parallel messages: 100 100
+8:a chain of 12 sent synchronized: 12 12

@@ -1,0 +1,126 @@
+# engine: Roblox Studio 0.747.0.7471481, a headless playing client (script identity 4; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-27
+A1 bind nil topic: false Argument 1 missing or nil
+A1 bind number topic: true Connection
+A1 bind nil callback: false Argument 2 missing or nil
+A1 bind number callback: false Unable to cast double to Function
+A1 bind table callback: false Unable to cast Array to Function
+A1 bind dictionary callback: false Unable to cast Dictionary to Function
+A1 bind string callback: false Unable to cast string to Function
+A1 bind nothing: false Argument 2 missing or nil
+A1 bindparallel nil topic: false Argument 1 missing or nil
+A1 bindparallel nil callback: false Argument 2 missing or nil
+A1 bind on another Actor: false Calling BindToMessage on an Actor is only allowed in scripts that are a descendent of that Actor
+A1 bindparallel on another Actor: false Calling BindToMessageParallel on an Actor is only allowed in scripts that are a descendent of that Actor
+A1 bind on the Workspace: false BindToMessage is not a valid member of Workspace "Workspace"
+A1 bind dot call: false Expected ':' not '.' calling member function BindToMessage
+A1 a binding: RBXScriptConnection true
+A1 disconnected: false
+A1 a module outside the Actor binds: true Connection; its GetActor nil
+A1 a module inside the Actor binds: true Connection
+A1 ready
+A2 a module outside the Actor binds: true Connection; its GetActor nil
+A2 ready
+Inner a module outside the Actor binds: true Connection; its GetActor nil
+Inner an inner Actor's script binds on the outer: false Calling BindToMessage on an Actor is only allowed in scripts that are a descendent of that Actor
+Inner ready
+a module inside the Actor binds: false Calling BindToMessage on an Actor is only allowed in scripts that are a descendent of that Actor
+this script requires the inside module: true nil
+A1 the outside module's binding ran
+A1 the inside module's binding ran
+send nils: true
+send mixed: true
+send holes: true
+send nested: true
+send metatable: true
+send frozen: true
+send twice: true
+send cycle: false tables cannot be cyclic
+send function: true
+send thread: true
+send function in a table: true
+send instance: true
+send datatypes: true
+send buffer: true
+send sharedtable: true
+send keys: true
+send boolean key: false Invalid table key type used
+send userdata: true
+send changed after the send: true
+send many: true
+send a zero byte: true
+send vector: true
+a BindableEvent in this VM passes a userdata as nil
+a BindableEvent passes userdata in a table as 1=number 3=number
+a BindableEvent passes userdata in a table as B=number
+A1 arg n=3 nil(nil) | number(1) | nil(nil)
+A1 arg n=1 table(meta=false frozen=false){[number 1]=number(1); [number 2]=number(2)}
+A1 the older binding's table is its own: true
+A1 arg n=1 table(meta=false frozen=false){[number 1]="a"}
+A1 the older binding's table is its own: true
+A1 arg n=1 table(meta=false frozen=false){[string x]=table(meta=false frozen=false){[string y]=number(1)}}
+A1 the older binding's table is its own: true
+A1 arg n=1 table(meta=false frozen=false){[string a]=number(1)}
+A1 the older binding's table is its own: true
+A1 arg n=1 table(meta=false frozen=false){[number 1]=number(1)}
+A1 the older binding's table is its own: true
+A1 arg n=2 table(meta=false frozen=false){[number 1]=number(1)} | table(meta=false frozen=false){[number 1]=number(1)}
+A1 the older binding's table is its own: true
+A1 arg n=1 nil(nil)
+A1 arg n=1 table(meta=false frozen=false){[number 1]=number(1)}
+A1 the older binding's table is its own: true
+A1 arg n=1 Instance(Workspace)
+A1 arg n=5 Vector3(1, 2, 3) | CFrame(1, 2, 3, 1, 0, 0, 0, 1, 0, 0, 0, 1) | Color3(1, 0, 0) | EnumItem(Enum.Material.Plastic) | UDim2({1, 0}, {0, 0})
+A1 arg n=1 buffer(4 7)
+A1 arg n=1 SharedTable(same=true)
+A1 arg n=1 table(meta=false frozen=false){[string 1]="a"; [string <Instance> (Workspace)]="w"}
+A1 the older binding's table is its own: true
+A1 arg n=1 nil(nil)
+A1 arg n=1 table(meta=false frozen=false){[string V]=number(1)}
+A1 the older binding's table is its own: true
+A1 arg n=20 number(1) | number(2) | number(3) | number(4) | number(5) | number(6) | number(7) | number(8) | number(9) | number(10) | number(11) | number(12) | number(13) | number(14) | number(15) | number(16) | number(17) | number(18) | number(19) | number(20)
+A1 arg n=1 "a\000b"
+A1 arg n=1 Vector3(1, 2, 3)
+ScriptContext.Error Attempt to load a function from a different Lua VM | PlayerScripts.ParityActorArgs.A1.Worker, line 36 - function Show/PlayerScripts.ParityActorArgs.A1.Worker, line 48/ | PlayerScripts.ParityActorArgs.A1.Worker
+after delivery, the sender's table: Mutated nil V 2
+send nothing: false Argument 1 missing or nil
+send nil: false Argument 1 missing or nil
+send dot call: false Expected ':' not '.' calling member function SendMessage
+send's results: true 0
+bind from this script: false Calling BindToMessage on an Actor is only allowed in scripts that are a descendent of that Actor
+bindparallel from this script: false Calling BindToMessageParallel on an Actor is only allowed in scripts that are a descendent of that Actor
+bind on a new Actor: false Calling BindToMessage on an Actor is only allowed in scripts that are a descendent of that Actor
+send to a new Actor: false Actor:SendMessage may only be called on Actors attached to the DataModel.
+A1 Quick results
+A1 topic "5" got a number
+A1 topic "{}" got a table
+A1 topic "true" got a boolean
+A1 topic "1, 2, 3" got a vector
+log MessageWarning argument #1 expects a string, but table was passed
+log MessageWarning argument #1 expects a string, but boolean was passed
+log MessageWarning argument #1 expects a string, but Vector3 was passed
+A1 Fail raising
+A1 Quick after the failing handler
+ScriptContext.Error PlayerScripts.ParityActorArgs.A1.Worker:67: a handler failed on purpose | PlayerScripts.ParityActorArgs.A1.Worker, line 67/ | PlayerScripts.ParityActorArgs.A1.Worker
+ScriptContext.Error Error occurred, no output from Luau. | PlayerScripts.ParityActorArgs.A1.Worker, line 70/ | PlayerScripts.ParityActorArgs.A1.Worker
+log MessageError PlayerScripts.ParityActorArgs.A1.Worker:67: a handler failed on purpose
+log MessageError Error occurred, no output from Luau.
+A1 Yield starts y1
+A1 Quick q1
+A1 Yield starts y2
+A1 Yield resumed y1
+A1 Yield resumed y2
+A1 Thread a on thread #1, debug.info(2) nil, running
+A1 Thread b on thread #1, debug.info(2) nil, running
+A1 Thread yields on thread #1, debug.info(2) nil, running
+A1 Thread c on thread #2, debug.info(2) nil, running
+A1 Thread d on thread #2, debug.info(2) nil, running
+A1 a parallel handler binds: true Connection
+A1 BoundInParallel after
+send to an Actor that left: false Actor:SendMessage may only be called on Actors attached to the DataModel.
+A2 a module outside the Actor binds: true Connection; its GetActor nil
+A2 ready
+A2 Quick back in the DataModel
+A2 a module outside the Actor binds: true Connection; its GetActor nil
+A2 ready
+A2 Quick enabled again
