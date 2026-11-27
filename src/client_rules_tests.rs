@@ -253,3 +253,45 @@ fn euler_angles_lock_seven_steps_from_one_and_a_part_rounds_them() {
     );
     done(&lines);
 }
+
+/// An Attachment's Axis write shorter than 1e-4 and a SecondaryAxis write whose cross with the Axis is shorter leave it as it was
+/// and fire nothing; not-a-number is written; an Axis along the SecondaryAxis keeps the back vector; a SecondaryAxis write that
+/// keeps the Axis fires no Axis Changed.
+#[test]
+fn attachment_axis_writes_follow_a_client() {
+    let lines = run(
+        play(),
+        r#"
+        local A = Instance.new("Part")
+        A.Anchored = true
+        A.Parent = workspace
+        local function Fresh()
+            local Att = Instance.new("Attachment")
+            Att.Parent = A
+            Att.CFrame = CFrame.fromMatrix(Vector3.new(1, 2, 3), Vector3.new(0, 1, 0), Vector3.new(0, 0, 1))
+            return Att
+        end
+        local function Write(Name, Value)
+            local Att = Fresh()
+            local Fired = {}
+            Att.Changed:Connect(function(N) table.insert(Fired, N) end)
+            Att[Name] = Value
+            task.wait()
+            table.sort(Fired)
+            local C = { Att.CFrame:GetComponents() }
+            for I, V in C do C[I] = if V ~= V then "nan" elseif V == 0 then (if 1 / V < 0 then "-0" else "0") else string.format("%.9g", V) end
+            return table.concat(C, " ", 4) .. " | " .. table.concat(Fired, ",")
+        end
+        local Kept = "0 0 1 1 0 0 0 1 0 | "
+        assert(Write("Axis", Vector3.zero) == Kept and Write("Axis", Vector3.new(9.9e-5, 0, 0)) == Kept and Write("WorldAxis", Vector3.zero) == Kept)
+        assert(Write("SecondaryAxis", Vector3.new(3e-5, 0, 0)) == Kept and Write("SecondaryAxis", Vector3.new(0, 2, 0)) == Kept)
+        assert(Write("Axis", Vector3.new(0, 0, 3)) == "0 0 1 0 -1 0 1 0 -0 | Axis,CFrame,Orientation,SecondaryAxis,WorldAxis,WorldCFrame,WorldOrientation,WorldSecondaryAxis", Write("Axis", Vector3.new(0, 0, 3)))
+        assert(Write("Axis", Vector3.new(1, 0, 0)) == "1 0 0 0 0 -1 0 1 0 | Axis,CFrame,Orientation,SecondaryAxis,WorldAxis,WorldCFrame,WorldOrientation,WorldSecondaryAxis")
+        assert(Write("SecondaryAxis", Vector3.new(1, 0, 0)) == "0 1 0 1 0 0 0 0 -1 | CFrame,Orientation,SecondaryAxis,WorldCFrame,WorldOrientation,WorldSecondaryAxis")
+        assert(Write("Axis", Vector3.new(0 / 0, 0, 0)) == "nan nan nan 0 nan nan 0 nan nan | Axis,CFrame,Orientation,SecondaryAxis,WorldAxis,WorldCFrame,WorldOrientation,WorldSecondaryAxis")
+        print("done")
+        "#,
+        1.0,
+    );
+    done(&lines);
+}

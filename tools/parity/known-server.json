@@ -635,10 +635,6 @@
 	],
 	"part_methods": [
 		{
-			"line": "setaxis-bad ",
-			"why": "Attachment.Axis written the zero vector leaves the attachment as it was on a client; ree's Axis view turns it (derived.rs)"
-		},
-		{
 			"line": "part-joints ",
 			"why": "a client keeps a part's joints, constraints and Rotate joints in one list (one-attachment constraints first, each going to the end of its part when it becomes active and leaving by the last one taking its place), so a constraint coming and going reorders the joints too; ree keeps the joints' list exactly and lists the constraints and Rotate joints around it in the order they were made (docs/engine.md Part, model and attachment methods, Not followed)"
 		}
@@ -1121,6 +1117,36 @@
 		{
 			"line": "string-info [",
 			"why": "a string for TweenService:Create's TweenInfo gives a client's tween a style and direction that are no enum item (reading them raises `Invalid value for enum EasingStyle`, tostring leaves them empty) and \" \" a Time of 1; ree's is Linear, In and the string's number or 0, so the tween completes at once as there"
+		}
+	],
+	"attachment_axes": [
+		{
+			"line": "worldaxis along-secondary ",
+			"why": "the sign of a zero: an Axis written along or against the SecondaryAxis (a client keeps +0 where ree takes Y = old back x X) and a world-form write through its parent (ree composes with the parent inverse and loses -0) leave the other sign; every value is the client's"
+		},
+		{
+			"line": "axis against-secondary ",
+			"why": "the sign of a zero: an Axis written along or against the SecondaryAxis (a client keeps +0 where ree takes Y = old back x X) and a world-form write through its parent (ree composes with the parent inverse and loses -0) leave the other sign; every value is the client's"
+		},
+		{
+			"line": "worldaxis against-secondary ",
+			"why": "the sign of a zero: an Axis written along or against the SecondaryAxis (a client keeps +0 where ree takes Y = old back x X) and a world-form write through its parent (ree composes with the parent inverse and loses -0) leave the other sign; every value is the client's"
+		},
+		{
+			"line": "setaxis against-secondary ",
+			"why": "the sign of a zero: an Axis written along or against the SecondaryAxis (a client keeps +0 where ree takes Y = old back x X) and a world-form write through its parent (ree composes with the parent inverse and loses -0) leave the other sign; every value is the client's"
+		},
+		{
+			"line": "worldaxis negback ",
+			"why": "the sign of a zero: an Axis written along or against the SecondaryAxis (a client keeps +0 where ree takes Y = old back x X) and a world-form write through its parent (ree composes with the parent inverse and loses -0) leave the other sign; every value is the client's"
+		},
+		{
+			"line": "worldsecondary negback ",
+			"why": "the sign of a zero: an Axis written along or against the SecondaryAxis (a client keeps +0 where ree takes Y = old back x X) and a world-form write through its parent (ree composes with the parent inverse and loses -0) leave the other sign; every value is the client's"
+		},
+		{
+			"line": "worldaxis e ",
+			"why": "the sign of a zero: an Axis written along or against the SecondaryAxis (a client keeps +0 where ree takes Y = old back x X) and a world-form write through its parent (ree composes with the parent inverse and loses -0) leave the other sign; every value is the client's"
 		}
 	]
 }

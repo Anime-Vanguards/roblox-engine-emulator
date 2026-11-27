@@ -146,6 +146,54 @@ pub fn from_axes(position: Vec3, right: Vec3, up: Vec3) -> Affine3A {
     Affine3A::from_mat3_translation(Mat3::from_cols(right, up, back), position)
 }
 
+/// How short an Attachment's written axis may be, and the cross of its two axes, before the write is refused (studs)
+const AXIS_MIN: f32 = 1e-4;
+
+/// A vector times the inverse of its length, in float32; one that is not a number as it is
+fn unit(v: Vec3) -> Vec3 {
+    let length = v.dot(v);
+    if length > 0.0 { v * (1.0 / length.sqrt()) } else { v }
+}
+
+/// The frame a client makes of a first axis `x` and a second `y` (unit already where it is): `y` less its part along `x`, made
+/// unit, and Z = X x Y, as an Attachment's CFrame write keeps its first two columns (lua/instance.rs attachment_rotation)
+fn axes_frame(x: Vec3, y: Vec3, position: Vec3) -> Affine3A {
+    let along = x.dot(y);
+    let y = unit(y - along * x);
+    Affine3A::from_mat3_translation(Mat3::from_cols(x, y, x.cross(y)), position)
+}
+
+/// An Attachment's frame with its Axis written, as a client writes it (a 0.747 playing client and a server, two sessions each
+/// round: tools/parity/probes/attachment_axes.luau): an axis shorter than 1e-4 leaves the frame as it was (9.9e-5 does, 1.01e-4
+/// does not; not-a-number is written); else X is the axis made unit, the old SecondaryAxis less its part along X makes Y, and
+/// Z = X x Y; where X x the old SecondaryAxis is shorter than 1e-4, Y is the old back vector x X instead. The position stays.
+/// (The client's unit vectors here come from a reciprocal square root of its own: a slanted axis's X can read one float step
+/// above float32's 1 / sqrt, 0.70710683 for 0.70710677; not modelled.)
+pub fn with_axis(transform: &Affine3A, axis: Vec3) -> Affine3A {
+    if axis.length() < AXIS_MIN {
+        return *transform;
+    }
+    let x = unit(axis);
+    let old_y = Vec3::from(transform.matrix3.y_axis);
+    let position = translation(transform);
+    if x.cross(old_y).length() < AXIS_MIN {
+        let y = unit(Vec3::from(transform.matrix3.z_axis).cross(x));
+        return Affine3A::from_mat3_translation(Mat3::from_cols(x, y, x.cross(y)), position);
+    }
+    axes_frame(x, old_y, position)
+}
+
+/// An Attachment's frame with its SecondaryAxis written (as [`with_axis`] was measured): X stays; while X x the axis is shorter
+/// than 1e-4 (an axis that short, or that near X: the cross itself is measured, 3e-5 square to X is refused, 1e-4 taken, as is
+/// 1e-4 off a unit axis along X) the frame stays as it was; else the axis less its part along X makes Y and Z = X x Y.
+pub fn with_secondary_axis(transform: &Affine3A, secondary: Vec3) -> Affine3A {
+    let x = Vec3::from(transform.matrix3.x_axis);
+    if x.cross(secondary).length() < AXIS_MIN {
+        return *transform;
+    }
+    axes_frame(x, secondary, translation(transform))
+}
+
 pub fn translation(transform: &Affine3A) -> Vec3 {
     Vec3::from(transform.translation)
 }

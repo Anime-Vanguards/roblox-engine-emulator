@@ -377,13 +377,26 @@ fn notify_changed_events(state: &mut State, reflection: &Reflection, hooks: &Hoo
             },
             _ => None,
         };
-        let (rotated, moved) = match (cframe_of(old), cframe_of(state.dom.raw_get(id, name))) {
-            (Some(before), Some(after)) => (before.orientation != after.orientation, before.position != after.position),
-            _ => (true, true),
+        // (Axis and WorldAxis fire only when the first column changed: a SecondaryAxis write that keeps the Axis fires neither,
+        // while an Axis write that keeps the SecondaryAxis still fires its two; measured, tools/parity/probes/attachment_axes.luau)
+        let column = |cframe: &rbx_dom_weak::types::CFrame, index: usize| {
+            let o = &cframe.orientation;
+            let rows = [o.x, o.y, o.z];
+            rows.map(|row| [row.x, row.y, row.z][index])
+        };
+        let (rotated, moved, turned) = match (cframe_of(old), cframe_of(state.dom.raw_get(id, name))) {
+            (Some(before), Some(after)) => {
+                let differs = column(&before, 0).iter().zip(column(&after, 0)).any(|(a, b)| *a != b);
+                (before.orientation != after.orientation, before.position != after.position, differs)
+            }
+            _ => (true, true, true),
         };
         let rotation = if rotated { events.rotation.as_slice() } else { &[] };
         let position = if moved { events.position.as_slice() } else { &[] };
         for &view in rotation.iter().chain(position) {
+            if events.axis.contains(&view) && !turned {
+                continue;
+            }
             fire_changed_only(state, reflection, id, view);
         }
         fire_changed(state, reflection, id, name);

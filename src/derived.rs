@@ -106,6 +106,8 @@ pub struct AttachmentEvents {
     pub class: ClassId,
     pub cframe: NameId,
     pub rotation: Vec<NameId>,
+    /// Axis and WorldAxis, fired only when the first column changed (lua instance.rs notify_changed_events)
+    pub axis: Vec<NameId>,
     pub position: Vec<NameId>,
     pub world_cframe: NameId,
 }
@@ -177,6 +179,7 @@ impl DerivedViews {
             class,
             cframe,
             rotation: names(&["Axis", "WorldAxis", "SecondaryAxis", "WorldSecondaryAxis", "Orientation", "WorldOrientation"]),
+            axis: names(&["Axis", "WorldAxis"]),
             position: names(&["Position", "WorldPosition"]),
             world_cframe,
         }));

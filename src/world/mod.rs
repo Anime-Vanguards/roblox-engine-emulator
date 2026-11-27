@@ -530,7 +530,7 @@ fn read_axis(t: &Affine3A) -> Value {
 }
 
 fn write_axis(t: &Affine3A, value: &Value) -> Option<Affine3A> {
-    Some(frame::from_axes(frame::translation(t), frame::vector_of(value)?, Vec3::from(t.matrix3.y_axis)))
+    Some(frame::with_axis(t, frame::vector_of(value)?))
 }
 
 fn read_secondary_axis(t: &Affine3A) -> Value {
@@ -538,7 +538,7 @@ fn read_secondary_axis(t: &Affine3A) -> Value {
 }
 
 fn write_secondary_axis(t: &Affine3A, value: &Value) -> Option<Affine3A> {
-    Some(frame::from_axes(frame::translation(t), Vec3::from(t.matrix3.x_axis), frame::vector_of(value)?))
+    Some(frame::with_secondary_axis(t, frame::vector_of(value)?))
 }
 
 /// An attachment's world-space member: `read` of its world CFrame; `write` (when settable) the
@@ -566,6 +566,10 @@ fn world_member(engine: &Rc<Engine>, member: &str, read: fn(&Affine3A) -> Value,
         let Some(next) = write(&world, &assigned) else {
             return raise(format!("Unable to assign property {}", engine.reflection.name(name)));
         };
+        // (a write the attachment refuses leaves it as it was, without the float steps of going through its parent)
+        if next == world {
+            return Ok(());
+        }
         set_cframe(engine, id, &(parent.inverse() * next));
         Ok(())
     });

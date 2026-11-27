@@ -1,0 +1,98 @@
+# engine: Roblox Studio 0.747.0.7471481, the server of a headless play session (a Script in ServerScriptService, script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-27
+axis zero ok  0 0 1 1 0 0 0 1 0 | 
+secondary zero ok  0 0 1 1 0 0 0 1 0 | 
+worldaxis zero ok  0 0 1 1 0 0 0 1 0 | 
+worldsecondary zero ok  0 0 1 1 0 0 0 1 0 | 
+setaxis zero ok  0 0 1 1 0 0 0 1 0 | 
+setsecondary zero ok  0 0 1 1 0 0 0 1 0 | 
+axis negzero ok  0 0 1 1 0 0 0 1 0 | 
+secondary negzero ok  0 0 1 1 0 0 0 1 0 | 
+worldaxis negzero ok  0 0 1 1 0 0 0 1 0 | 
+worldsecondary negzero ok  0 0 1 1 0 0 0 1 0 | 
+setaxis negzero ok  0 0 1 1 0 0 0 1 0 | 
+setsecondary negzero ok  0 0 1 1 0 0 0 1 0 | 
+axis tiny ok  0 0 1 1 0 0 0 1 0 | 
+secondary tiny ok  0 0 1 1 0 0 0 1 0 | 
+worldaxis tiny ok  0 0 1 1 0 0 0 1 0 | 
+worldsecondary tiny ok  0 0 1 1 0 0 0 1 0 | 
+setaxis tiny ok  0 0 1 1 0 0 0 1 0 | 
+setsecondary tiny ok  0 0 1 1 0 0 0 1 0 | 
+axis small ok  0 0 1 1 0 0 0 1 0 | 
+secondary small ok  0 0 1 1 0 0 0 1 0 | 
+worldaxis small ok  0 0 1 1 0 0 0 1 0 | 
+worldsecondary small ok  0 0 1 1 0 0 0 1 0 | 
+setaxis small ok  0 0 1 1 0 0 0 1 0 | 
+setsecondary small ok  0 0 1 1 0 0 0 1 0 | 
+axis nan ok  nan nan nan 0 nan nan 0 nan nan | Axis,CFrame,Orientation,SecondaryAxis,WorldAxis,WorldCFrame,WorldOrientation,WorldSecondaryAxis
+secondary nan ok  0 nan nan 1 nan nan 0 nan nan | CFrame,Orientation,SecondaryAxis,WorldCFrame,WorldOrientation,WorldSecondaryAxis
+worldaxis nan ok  nan nan nan nan nan nan nan nan nan | Axis,CFrame,Orientation,SecondaryAxis,WorldAxis,WorldCFrame,WorldOrientation,WorldSecondaryAxis
+worldsecondary nan ok  0 nan nan 1 nan nan 0 nan nan | CFrame,Orientation,SecondaryAxis,WorldCFrame,WorldOrientation,WorldSecondaryAxis
+setaxis nan ok  nan nan nan 0 nan nan 0 nan nan | Axis,CFrame,Orientation,SecondaryAxis,WorldAxis,WorldCFrame,WorldOrientation,WorldSecondaryAxis
+setsecondary nan ok  0 nan nan 1 nan nan 0 nan nan | CFrame,Orientation,SecondaryAxis,WorldCFrame,WorldOrientation,WorldSecondaryAxis
+axis along-axis ok  0 0 1 1 0 0 0 1 0 | 
+secondary along-axis ok  0 0 1 1 0 0 0 1 0 | 
+worldaxis along-axis ok  0 0 1 1 0 0 0 1 0 | 
+worldsecondary along-axis ok  0 0 1 1 0 0 0 1 0 | 
+setaxis along-axis ok  0 0 1 1 0 0 0 1 0 | 
+setsecondary along-axis ok  0 0 1 1 0 0 0 1 0 | 
+axis along-secondary ok  0 0 1 0 -1 0 1 0 -0 | Axis,CFrame,Orientation,SecondaryAxis,WorldAxis,WorldCFrame,WorldOrientation,WorldSecondaryAxis
+secondary along-secondary ok  0 0 1 1 0 0 0 1 0 | 
+worldaxis along-secondary ok  0 0 1 0 -1 0 1 0 -0 | Axis,CFrame,Orientation,SecondaryAxis,WorldAxis,WorldCFrame,WorldOrientation,WorldSecondaryAxis
+worldsecondary along-secondary ok  0 0 1 1 0 0 0 1 0 | 
+setaxis along-secondary ok  0 0 1 0 -1 0 1 0 -0 | Axis,CFrame,Orientation,SecondaryAxis,WorldAxis,WorldCFrame,WorldOrientation,WorldSecondaryAxis
+setsecondary along-secondary ok  0 0 1 1 0 0 0 1 0 | 
+axis against-secondary ok  0 0 1 0 1 -0 -1 0 0 | Axis,CFrame,Orientation,SecondaryAxis,WorldAxis,WorldCFrame,WorldOrientation,WorldSecondaryAxis
+secondary against-secondary ok  0 0 -1 1 0 0 0 -1 0 | CFrame,Orientation,SecondaryAxis,WorldCFrame,WorldOrientation,WorldSecondaryAxis
+worldaxis against-secondary ok  0 0 1 0 1 -0 -1 0 0 | Axis,CFrame,Orientation,SecondaryAxis,WorldAxis,WorldCFrame,WorldOrientation,WorldSecondaryAxis
+worldsecondary against-secondary ok  0 0 -1 1 0 0 0 -1 0 | CFrame,Orientation,SecondaryAxis,WorldCFrame,WorldOrientation,WorldSecondaryAxis
+setaxis against-secondary ok  0 0 1 0 1 -0 -1 0 0 | Axis,CFrame,Orientation,SecondaryAxis,WorldAxis,WorldCFrame,WorldOrientation,WorldSecondaryAxis
+setsecondary against-secondary ok  0 0 -1 1 0 0 0 -1 0 | CFrame,Orientation,SecondaryAxis,WorldCFrame,WorldOrientation,WorldSecondaryAxis
+axis back ok  1 0 0 0 0 -1 0 1 0 | Axis,CFrame,Orientation,SecondaryAxis,WorldAxis,WorldCFrame,WorldOrientation,WorldSecondaryAxis
+secondary back ok  0 1 0 1 0 0 0 0 -1 | CFrame,Orientation,SecondaryAxis,WorldCFrame,WorldOrientation,WorldSecondaryAxis
+worldaxis back ok  1 0 0 0 0 -1 0 1 0 | Axis,CFrame,Orientation,SecondaryAxis,WorldAxis,WorldCFrame,WorldOrientation,WorldSecondaryAxis
+worldsecondary back ok  0 1 0 1 0 0 0 0 -1 | CFrame,Orientation,SecondaryAxis,WorldCFrame,WorldOrientation,WorldSecondaryAxis
+setaxis back ok  1 0 0 0 0 -1 0 1 0 | Axis,CFrame,Orientation,SecondaryAxis,WorldAxis,WorldCFrame,WorldOrientation,WorldSecondaryAxis
+setsecondary back ok  0 1 0 1 0 0 0 0 -1 | CFrame,Orientation,SecondaryAxis,WorldCFrame,WorldOrientation,WorldSecondaryAxis
+axis negback ok  -1 0 0 0 0 1 0 1 -0 | Axis,CFrame,Orientation,SecondaryAxis,WorldAxis,WorldCFrame,WorldOrientation,WorldSecondaryAxis
+secondary negback ok  0 -1 0 1 0 -0 0 0 1 | CFrame,Orientation,SecondaryAxis,WorldCFrame,WorldOrientation,WorldSecondaryAxis
+worldaxis negback ok  -1 0 0 0 0 1 0 1 -0 | Axis,CFrame,Orientation,SecondaryAxis,WorldAxis,WorldCFrame,WorldOrientation,WorldSecondaryAxis
+worldsecondary negback ok  0 -1 0 1 0 -0 0 0 1 | CFrame,Orientation,SecondaryAxis,WorldCFrame,WorldOrientation,WorldSecondaryAxis
+setaxis negback ok  -1 0 0 0 0 1 0 1 -0 | Axis,CFrame,Orientation,SecondaryAxis,WorldAxis,WorldCFrame,WorldOrientation,WorldSecondaryAxis
+setsecondary negback ok  0 -1 0 1 0 -0 0 0 1 | CFrame,Orientation,SecondaryAxis,WorldCFrame,WorldOrientation,WorldSecondaryAxis
+axis a ok  0.600000024 0 0.800000012 0.800000012 0 -0.600000024 0 1 0 | Axis,CFrame,Orientation,SecondaryAxis,WorldAxis,WorldCFrame,WorldOrientation,WorldSecondaryAxis
+secondary a ok  0 1 0 1 0 0 0 0 -1 | CFrame,Orientation,SecondaryAxis,WorldCFrame,WorldOrientation,WorldSecondaryAxis
+worldaxis a ok  0.600000024 0 0.800000012 0.800000012 0 -0.600000024 0 1 0 | Axis,CFrame,Orientation,SecondaryAxis,WorldAxis,WorldCFrame,WorldOrientation,WorldSecondaryAxis
+worldsecondary a ok  0 1 0 1 0 0 0 0 -1 | CFrame,Orientation,SecondaryAxis,WorldCFrame,WorldOrientation,WorldSecondaryAxis
+setaxis a ok  0.600000024 0 0.800000012 0.800000012 0 -0.600000024 0 1 0 | Axis,CFrame,Orientation,SecondaryAxis,WorldAxis,WorldCFrame,WorldOrientation,WorldSecondaryAxis
+setsecondary a ok  0 1 0 1 0 0 0 0 -1 | CFrame,Orientation,SecondaryAxis,WorldCFrame,WorldOrientation,WorldSecondaryAxis
+axis e ok  0 0 1 0.600000024 0.800000072 -0 -0.800000012 0.599999964 0 | Axis,CFrame,Orientation,SecondaryAxis,WorldAxis,WorldCFrame,WorldOrientation,WorldSecondaryAxis
+secondary e ok  0 0 -1 1 0 0 0 -1 0 | CFrame,Orientation,SecondaryAxis,WorldCFrame,WorldOrientation,WorldSecondaryAxis
+worldaxis e ok  0 0 1 0.600000024 0.800000072 -0 -0.800000012 0.599999964 0 | Axis,CFrame,Orientation,SecondaryAxis,WorldAxis,WorldCFrame,WorldOrientation,WorldSecondaryAxis
+worldsecondary e ok  0 0 -1 1 0 0 0 -1 0 | CFrame,Orientation,SecondaryAxis,WorldCFrame,WorldOrientation,WorldSecondaryAxis
+setaxis e ok  0 0 1 0.600000024 0.800000072 -0 -0.800000012 0.599999964 0 | Axis,CFrame,Orientation,SecondaryAxis,WorldAxis,WorldCFrame,WorldOrientation,WorldSecondaryAxis
+setsecondary e ok  0 0 -1 1 0 0 0 -1 0 | CFrame,Orientation,SecondaryAxis,WorldCFrame,WorldOrientation,WorldSecondaryAxis
+axis length 0.000015 kept
+axis length x 0.000015 kept
+axis length 0.00005 kept
+axis length x 0.00005 kept
+axis length 0.00009 kept
+axis length x 0.00009 kept
+axis length 0.000099 kept
+axis length x 0.000099 kept
+axis length 0.000101 turned
+axis length x 0.000101 turned
+axis length 0.00012 turned
+axis length x 0.00012 turned
+secondary cross 0.000001 kept
+secondary near-axis 0.000001 kept
+secondary cross 0.00001 kept
+secondary near-axis 0.00001 kept
+secondary cross 0.00003 kept
+secondary near-axis 0.00003 kept
+secondary cross 0.0001 turned
+secondary near-axis 0.0001 turned
+secondary cross 0.0003 turned
+secondary near-axis 0.0003 turned
+secondary cross 0.01 turned
+secondary near-axis 0.01 turned
