@@ -230,8 +230,8 @@ impl Wait {
     }
 
     /// Out of the wait, and out of the world's index at once (world/broadphase.rs wait_out)
-    fn remove(self, state: &mut State, part: InstanceId) {
-        super::broadphase::wait_out(state, self.root(), part);
+    fn remove(self, state: &mut State, reflection: &crate::Reflection, part: InstanceId) {
+        super::broadphase::wait_out(state, reflection, self.root(), part);
         if let Wait::Workspace(_) = self {
             super::broadphase::not_entered(state, part);
         }
@@ -552,7 +552,7 @@ pub(super) fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors, camera_cla
                 None => None,
             };
             let (from, to) = (wait(state, before), wait(state, after));
-            super::broadphase::fresh_write(state);
+            super::broadphase::parent_write(state, id);
             let moves = from != to && (to.is_some() || from.is_some_and(|from| from.holds_any(state)));
             // the WorldModels in the subtree (it too, if it is one) come into the DataModel with it, or leave it: asked only of a
             // subtree that can hold one
@@ -603,7 +603,7 @@ pub(super) fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors, camera_cla
                 match below {
                     None if moves => {
                         if let Some(from) = from {
-                            from.remove(state, node);
+                            from.remove(state, &reflection, node);
                         }
                         if let Some(to) = to {
                             to.insert(state, node);
@@ -622,9 +622,10 @@ pub(super) fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors, camera_cla
         }));
     }
     // A WorldModel freed takes its index and its wait with it, and a part freed leaves any index (world/region.rs)
-    hooks.instance_freed.push(Box::new(|state, id| {
+    let reflection = engine.reflection.clone();
+    hooks.instance_freed.push(Box::new(move |state, id| {
         super::broadphase::world_gone(state, id);
-        super::broadphase::freed(state, id);
+        super::broadphase::freed(state, &reflection, id);
     }));
     drop(hooks);
     // InterpolationFinished, after the PreRender handlers (and what they deferred)

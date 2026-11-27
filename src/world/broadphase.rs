@@ -73,7 +73,9 @@ enum Place {
     Loose,
 }
 
-/// What a world's grid files: a unit of parts, in the order a walk lists them (its first, then the rest), and where it is
+/// What a world's grid files: a unit, one rigid assembly (a part linked to no other alone), its parts in the order a walk lists
+/// them (its first, then the rest: two parts its root first, three or more in the order they were made: measured, Studio 0.747, a
+/// playing client and a server alike, tools/parity/probes/grid_welds.luau), and where it is
 #[derive(Debug)]
 struct Unit {
     first: u32,
@@ -81,6 +83,17 @@ struct Unit {
     place: Place,
     /// Its place in its world's wait or loose list, while it is in one
     at: u32,
+    /// Its root's entry ([`refresh_root`]), stale after a write that may have changed it
+    root: u32,
+    root_stale: bool,
+    /// Its parts are to be put in their walk order again ([`ready_unit`])
+    unsorted: bool,
+    /// In the settle's list of units to file again ([`Spatial::mark_dirty`])
+    dirty: bool,
+    /// How many times its slot was freed: a unit freed since a settle marked it is not the one marked
+    generation: u32,
+    /// How many of its parts are anchored (one at most once its assembly settled: each anchored part roots an assembly of its own)
+    anchored: u32,
 }
 
 impl Unit {
@@ -155,8 +168,10 @@ pub struct WorldIndex {
     root: InstanceId,
     grid: Grid,
     entries: Vec<Entry>,
-    /// Each entry's part (stale for a free entry) and unit
+    /// Each entry's part (stale for a free entry), when it was made (instance.rs serial: a unit of three or more lists its parts by
+    /// it) and its unit
     parts: Vec<InstanceId>,
+    serials: Vec<u32>,
     unit_of: Vec<u32>,
     free: Vec<u32>,
     /// The entries in use, in no particular order, and each one's place in that list ([`part_ids`] reads the parts held without
@@ -184,6 +199,7 @@ impl WorldIndex {
             grid: Grid::default(),
             entries: Vec::new(),
             parts: Vec::new(),
+            serials: Vec::new(),
             unit_of: Vec::new(),
             free: Vec::new(),
             live: Vec::new(),
@@ -222,11 +238,13 @@ impl WorldIndex {
         self.units[self.unit_of[entry as usize] as usize].place
     }
 
-    /// A new unit of the parts `entries` (in their walk order), nowhere yet (taken as waiting, put in no list)
+    /// A new unit of the parts `entries`, nowhere yet (taken as waiting, put in no list)
     fn new_unit(&mut self, entries: &[u32]) -> u32 {
-        let unit = Unit { first: entries[0], rest: entries[1..].to_vec(), place: Place::Waits, at: NONE };
+        let several = entries.len() > 1;
+        let mut unit = Unit { first: entries[0], rest: entries[1..].to_vec(), place: Place::Waits, at: NONE, root: entries[0], root_stale: several, unsorted: several, dirty: false, generation: 0, anchored: 0 };
         let id = match self.free_units.pop() {
             Some(id) => {
+                unit.generation = self.units[id as usize].generation;
                 self.units[id as usize] = unit;
                 id
             }
@@ -247,7 +265,29 @@ impl WorldIndex {
         held.first = NONE;
         held.rest = Vec::new();
         held.at = NONE;
+        held.dirty = false;
+        held.generation = held.generation.wrapping_add(1);
         self.free_units.push(unit);
+    }
+
+    /// Takes `unit` out of its place (its cells, the wait or the loose list, the list's last taking its place), in none until it is
+    /// given one ([`WorldIndex::set_place`] with `fresh`) or freed.
+    fn take_unit(&mut self, unit: u32, frame: u64) {
+        match self.units[unit as usize].place {
+            Place::Filed(filing) => self.grid.unfile(unit, &filing, frame),
+            Place::Loose => self.take_from(unit, false),
+            Place::Waits => self.take_from(unit, true),
+        }
+    }
+
+    /// A filed or loose `unit` out of its place and at the end of the wait; one that waits stays where it is.
+    fn requeue(&mut self, unit: u32, frame: u64) {
+        if self.units[unit as usize].place == Place::Waits {
+            return;
+        }
+        self.take_unit(unit, frame);
+        self.units[unit as usize].dirty = false;
+        self.set_place(unit, Place::Waits, true, frame);
     }
 
     /// Moves `unit` from its place to `place`: out of its cells (the lists' last taking its place), the wait or the loose list (the
@@ -311,8 +351,8 @@ impl WorldIndex {
 #[derive(Default)]
 pub struct Spatial {
     names: Option<Names>,
-    /// Which properties file a part again when written (by name id: CFrame, Size, Anchored, CanCollide, CanTouch)
-    watched: Vec<bool>,
+    /// What a write of each property does to its part's unit, by name id ([`stored`]: WATCH_*; 0 nothing)
+    watched: Vec<u8>,
     worlds: Vec<Option<Box<WorldIndex>>>,
     free_worlds: Vec<u32>,
     /// Each WorldRoot's index
@@ -326,25 +366,19 @@ pub struct Spatial {
     /// The WorldModels inside the Workspace its index met, whose indexes it makes (their parts are in the Workspace, and its
     /// collision groups' ids are theirs too: [`placed_parts`])
     nested: Vec<InstanceId>,
-    /// The links that started since [`links_started`] last took them (world/joints.rs relink), each with its two parts
-    links: Vec<(InstanceId, InstanceId)>,
-    /// The parts the Parent write going on put in a wait (camera_moves.rs's hierarchy hook): the links it starts leave them where
-    /// they came in
-    fresh: FxHashSet<InstanceId>,
+    /// What the writes since the last settle left for it ([`settle`])
+    pending: Pending,
+    /// The settle's pieces whose root had no unit yet (a part coming in later in the write), each with that root: joined at its end
+    orphans: Vec<(InstanceId, InstanceId)>,
+    /// While the settle splits units, the joins the splits ask for wait (a join could take in a unit not split yet): the parts to put in
+    /// units by their roots, and the parts whose units join the units their links reach
+    deferring: bool,
+    later_regroups: Vec<(u32, Vec<InstanceId>)>,
+    later_joins: Vec<(u32, InstanceId)>,
     /// When each part came into the Workspace's world through a Parent write, by a number that grows ([`entered`]); a part that
     /// leaves it is forgotten, and the parts there before any write (a mounted place's) have none
     entered: FxHashMap<InstanceId, u64>,
     entries: u64,
-}
-
-impl Spatial {
-    /// A link started between `first` and `second` (world/joints.rs relink): they are filed again at the write's end
-    /// ([`links_started`]).
-    pub(crate) fn link_started(&mut self, first: InstanceId, second: InstanceId) {
-        if self.names.is_some() {
-            self.links.push((first, second));
-        }
-    }
 }
 
 /// Resolves the names the indexes read (world/mod.rs install).
@@ -363,55 +397,99 @@ pub fn install(engine: &Engine) {
     };
     let mut state = engine.state.borrow_mut();
     let spatial = &mut state.spatial;
-    for name in [Some(cframe), Some(K::Size as NameId), names.anchored, names.can_collide, names.can_touch].into_iter().flatten() {
+    let watch = [
+        (Some(cframe), WATCH_GEOMETRY),
+        (names.can_collide, WATCH_GEOMETRY),
+        (names.can_touch, WATCH_GEOMETRY),
+        (Some(K::Size as NameId), WATCH_SIZE),
+        (reflection.name_id("Massless"), WATCH_RANK),
+        (reflection.name_id("RootPriority"), WATCH_RANK),
+        (Some(K::Name as NameId), WATCH_RANK),
+        (names.anchored, WATCH_ANCHORED),
+    ];
+    for (name, kind) in watch {
+        let Some(name) = name else { continue };
         if spatial.watched.len() <= name as usize {
-            spatial.watched.resize(name as usize + 1, false);
+            spatial.watched.resize(name as usize + 1, 0);
         }
-        spatial.watched[name as usize] = true;
+        spatial.watched[name as usize] = kind;
     }
     spatial.names = Some(names);
 }
+
+/// What a property's write does ([`Spatial::watched`]): files the unit again (CFrame, CanCollide, CanTouch), that and, in a unit of
+/// several, its root (Size), its root (Massless, RootPriority, Name), its list and its assemblies (Anchored)
+const WATCH_GEOMETRY: u8 = 1;
+const WATCH_SIZE: u8 = 2;
+const WATCH_RANK: u8 = 3;
+const WATCH_ANCHORED: u8 = 4;
 
 fn is_part(engine: &Engine, names: Names, class: ClassId) -> bool {
     let info = engine.reflection.class(class);
     info.is_a(names.base_part) && !info.is_a(names.terrain)
 }
 
-/// The filing a part's properties give it now: its frame and Size, its list (`list`, else its assembly's: [`list_of`]), CanCollide
-/// and CanTouch both off. None when its box is not finite.
-fn filing_of(state: &State, names: &Names, part: InstanceId, list: Option<u8>) -> Option<Filing> {
-    let dom = &state.dom;
-    let transform = frame::affine_of(dom.raw_get(part, names.cframe));
-    let size = match dom.raw_get(part, K::Size as NameId) {
-        Some(Value::Vector3(v)) => Vec3::new(v.x, v.y, v.z),
-        _ => Vec3::ONE,
-    };
-    let flag = |name: Option<NameId>| name.and_then(|n| dom.boolean(part, n));
-    let list = list.unwrap_or_else(|| list_of(state, names, part));
-    let off = flag(names.can_collide) == Some(false) && flag(names.can_touch) == Some(false);
-    Filing::of(&transform, size, list, off)
-}
-
-/// The place a unit's parts give it now, filed in `list` (else its assembly's): its filing, or the loose list.
-fn unit_place(state: &State, names: &Names, world: u32, unit: u32, list: Option<u8>) -> Place {
+/// The place a unit's parts give it now: the union of their filed boxes (each part's box grown by the margin in its own axes, then the
+/// world box of that, float32 at its position: grid.rs filed_box), on that union's level (measured: two 1-stud parts welded 147
+/// studs apart are on level 0, 149 apart on level 1), in the anchored list when one of them is anchored (an unanchored part welded to
+/// an anchored one is in the anchored list), off when every part has CanCollide and CanTouch both off (a pair one of whose parts has
+/// both off keeps its place: measured); the loose list when a part's box is not finite.
+fn unit_place(state: &State, names: &Names, world: u32, unit: u32) -> Place {
     let index = state.spatial.index(world);
-    let first = index.parts[index.units[unit as usize].first as usize];
-    placed(filing_of(state, names, first, list))
-}
-
-/// The list a part is filed in: its assembly's (measured: an unanchored part welded to an anchored one is in the anchored list,
-/// made so or welded later), read from its kept component (world/joints.rs grid_anchored), else its own Anchored.
-fn list_of(state: &State, names: &Names, part: InstanceId) -> u8 {
-    let own = names.anchored.and_then(|n| state.dom.boolean(part, n)) == Some(true);
-    if own || super::joints::grid_anchored(state, part) == Some(true) { grid::ANCHORED } else { grid::UNANCHORED }
-}
-
-/// The list `entry`'s unit is filed in now, if it is filed
-fn held_list(spatial: &Spatial, world: u32, entry: u32) -> Option<u8> {
-    match spatial.index(world).place_of(entry) {
-        Place::Filed(filing) => Some(filing.list),
-        _ => None,
+    let dom = &state.dom;
+    let flag = |part: InstanceId, name: Option<NameId>| name.and_then(|n| dom.boolean(part, n));
+    let (mut bounds, mut anchored, mut off) = (None::<(Vec3, Vec3)>, false, true);
+    for entry in index.units[unit as usize].parts() {
+        let part = index.parts[entry as usize];
+        let transform = frame::affine_of(dom.raw_get(part, names.cframe));
+        let size = match dom.raw_get(part, K::Size as NameId) {
+            Some(Value::Vector3(v)) => Vec3::new(v.x, v.y, v.z),
+            _ => Vec3::ONE,
+        };
+        let Some((lo, hi)) = grid::filed_box(&transform, size) else { return Place::Loose };
+        bounds = Some(match bounds {
+            Some((a, b)) => (a.min(lo), b.max(hi)),
+            None => (lo, hi),
+        });
+        anchored |= flag(part, names.anchored) == Some(true);
+        off &= flag(part, names.can_collide) == Some(false) && flag(part, names.can_touch) == Some(false);
     }
+    let Some((lo, hi)) = bounds else { return Place::Loose };
+    Place::Filed(Filing::of_box(lo, hi, if anchored { grid::ANCHORED } else { grid::UNANCHORED }, off))
+}
+
+/// How many of `unit`'s parts are anchored, counted from the dom (a unit just made)
+fn count_anchored(state: &mut State, names: &Names, world: u32, unit: u32) {
+    let index = state.spatial.index(world);
+    let count = index.units[unit as usize].parts().filter(|&entry| names.anchored.and_then(|n| state.dom.boolean(index.parts[entry as usize], n)) == Some(true)).count() as u32;
+    state.spatial.index_mut(world).units[unit as usize].anchored = count;
+}
+
+/// `unit` readied for a walk: its root worked out again if stale, its parts in the order a walk lists them (two: the root first;
+/// three or more: the order they were made)
+fn ready_unit(state: &mut State, reflection: &crate::Reflection, world: u32, unit: u32) {
+    let held = &state.spatial.index(world).units[unit as usize];
+    if held.root_stale {
+        refresh_root(state, reflection, world, unit);
+    }
+    let index = state.spatial.index_mut(world);
+    let held = &index.units[unit as usize];
+    if !held.unsorted {
+        return;
+    }
+    let mut parts: Vec<u32> = held.parts().collect();
+    if parts.len() == 2 {
+        if parts[1] == held.root {
+            parts.swap(0, 1);
+        }
+    } else {
+        let serials = &index.serials;
+        parts.sort_by_key(|&entry| serials[entry as usize]);
+    }
+    let held = &mut index.units[unit as usize];
+    held.first = parts[0];
+    held.rest = parts[1..].to_vec();
+    held.unsorted = false;
 }
 
 /// A part's entry, read from the dom now
@@ -478,8 +556,8 @@ impl Spatial {
         self.free_worlds.push(world);
     }
 
-    /// A new entry in `world` for `part` (taken out of any other index first), in no unit yet
-    fn add(&mut self, world: u32, part: InstanceId, entry: Entry, frame: u64) -> u32 {
+    /// A new entry in `world` for `part` (taken out of any other index first; `serial` when it was made), in no unit yet
+    fn add(&mut self, world: u32, part: InstanceId, entry: Entry, serial: u32, frame: u64) -> u32 {
         if let Some((other, old)) = self.holder(part) {
             self.remove(other, old, frame);
         } else if let Some(&(other, old)) = self.slots.get(part.index as usize).filter(|&&(other, _)| other != 0) {
@@ -496,12 +574,14 @@ impl Spatial {
             Some(at) => {
                 index.entries[at as usize] = entry;
                 index.parts[at as usize] = part;
+                index.serials[at as usize] = serial;
                 index.unit_of[at as usize] = NONE;
                 at
             }
             None => {
                 index.entries.push(entry);
                 index.parts.push(part);
+                index.serials.push(serial);
                 index.unit_of.push(NONE);
                 (index.entries.len() - 1) as u32
             }
@@ -520,8 +600,8 @@ impl Spatial {
     }
 
     /// A new entry in `world` for `part` in a unit of its own at `place`
-    fn add_alone(&mut self, world: u32, part: InstanceId, entry: Entry, place: Place, frame: u64) -> u32 {
-        let at = self.add(world, part, entry, frame);
+    fn add_alone(&mut self, world: u32, part: InstanceId, entry: Entry, serial: u32, place: Place, frame: u64) -> u32 {
+        let at = self.add(world, part, entry, serial, frame);
         let index = self.index_mut(world);
         let unit = index.new_unit(&[at]);
         index.set_place(unit, place, true, frame);
@@ -544,12 +624,17 @@ impl Spatial {
                 }
                 index.free_unit(unit);
             } else {
-                // (a part leaving a unit of several: the others stay in it)
+                // (a part leaving a unit of several: the others stay in it, its root to be worked out again)
                 if held.first == entry {
-                    held.first = held.rest.remove(0);
+                    held.first = held.rest.pop().expect("a unit of several");
                 } else if let Some(at) = held.rest.iter().position(|&e| e == entry) {
-                    held.rest.remove(at);
+                    held.rest.swap_remove(at);
                 }
+                if held.root == entry {
+                    held.root = held.first;
+                    held.root_stale = true;
+                }
+                held.unsorted = true;
                 if held.place == Place::Waits {
                     index.waiting -= 1;
                 }
@@ -569,61 +654,99 @@ impl Spatial {
     }
 }
 
-/// Where a part not waiting goes: its filing, or the loose list
-fn placed(filing: Option<Filing>) -> Place {
-    filing.map_or(Place::Loose, Place::Filed)
+/// What a write does to a part's unit, by the property written ([`stored`])
+#[derive(Clone, Copy, PartialEq)]
+enum Change {
+    /// CFrame, CanCollide, CanTouch: the unit's box or flags
+    Geometry,
+    /// Size: its box and, in a unit of several parts, its root
+    Size,
+    /// Massless, RootPriority, Name: the root of a unit of several parts
+    Rank,
+    Anchored,
 }
 
-/// A property of `id` was stored (instance.rs store: every write, signalled or not). A write of CFrame, Size, Anchored,
-/// CanCollide or CanTouch of a part an index holds files it at once.
+/// A property of `id` was stored (instance.rs store: every write, signalled or not). A write of CFrame, Size, CanCollide or
+/// CanTouch of a part an index holds files its unit again at the next settle ([`settle`]: a moved assembly once however many of its
+/// parts moved), an Anchored write moves its unit to its new list at once, and a write of Size, Massless, RootPriority or Name of a
+/// part of a unit of several files that unit again at the end of its world's wait (measured, Studio 0.747, a playing client and a
+/// server alike, tools/parity/probes/grid_assemblies.luau: a pair filed in a cell, one part resized or made Massless, its
+/// RootPriority or Name written, whether its root changes or not, is listed after the parts filed after it; a Material,
+/// CustomPhysicalProperties, Shape, Transparency, Color, CollisionGroup, CanCollide or CanTouch write keeps its place, and a waiting
+/// unit keeps its place in the wait).
 #[inline]
 pub fn stored(state: &mut State, reflection: &crate::Reflection, id: InstanceId, name: NameId) {
-    if !state.spatial.watched.get(name as usize).copied().unwrap_or(false) {
+    let Some(&kind) = state.spatial.watched.get(name as usize) else { return };
+    if kind == 0 {
         return;
     }
-    links_started(state, reflection);
-    let anchored = state.spatial.names.is_some_and(|names| names.anchored == Some(name));
-    refile(state, id, anchored);
-}
-
-/// `part`'s unit filed again as its properties stand now, if an index holds it and it does not wait: in its list as filed, or with
-/// `relist` (an Anchored write) its assembly's now; one whose Anchored write anchored or freed its whole kept component files the
-/// component's other parts again too, in their new list (measured: an unanchored pair welded, one of them anchored, both go to
-/// the end of the anchored list, that one first).
-fn refile(state: &mut State, part: InstanceId, relist: bool) {
-    let Some(names) = state.spatial.names else { return };
-    let Some((world, entry)) = state.spatial.holder(part) else { return };
-    let unit = state.spatial.index(world).unit_of[entry as usize];
-    if state.spatial.index(world).units[unit as usize].place == Place::Waits {
+    let Some((world, entry)) = state.spatial.holder(id) else { return };
+    let change = match kind {
+        WATCH_GEOMETRY => Change::Geometry,
+        WATCH_SIZE => Change::Size,
+        WATCH_RANK => Change::Rank,
+        _ => Change::Anchored,
+    };
+    let index = state.spatial.index(world);
+    let unit = index.unit_of[entry as usize];
+    if unit == NONE {
         return;
     }
-    let list = if relist { None } else { held_list(&state.spatial, world, entry) };
-    let place = unit_place(state, &names, world, unit, list);
-    let before = held_list(&state.spatial, world, entry);
+    let several = index.units[unit as usize].len() > 1;
     let frame = state.sched.frame;
-    state.spatial.index_mut(world).set_place(unit, place, false, frame);
-    let after = held_list(&state.spatial, world, entry);
-    if relist && before != after && super::joints::grid_anchored(state, part).is_some() {
-        for other in super::joints::grid_component(state, part).unwrap_or_default() {
-            if other == part {
-                continue;
-            }
-            let Some((world, entry)) = state.spatial.holder(other) else { continue };
-            if held_list(&state.spatial, world, entry).is_some_and(|list| list != list_of(state, &names, other)) {
-                let unit = state.spatial.index(world).unit_of[entry as usize];
-                let place = unit_place(state, &names, world, unit, None);
-                state.spatial.index_mut(world).set_place(unit, place, false, frame);
-            }
+    match change {
+        Change::Anchored => anchored_write(state, reflection, world, unit, entry, id),
+        Change::Rank | Change::Size if several => {
+            let index = state.spatial.index_mut(world);
+            index.units[unit as usize].root_stale = true;
+            index.units[unit as usize].unsorted = true;
+            index.requeue(unit, frame);
         }
+        Change::Rank => {}
+        Change::Geometry | Change::Size => state.spatial.mark_dirty(world, unit),
     }
 }
 
-/// The Parent write going on starts putting parts in waits (camera_moves.rs's hierarchy hook): what an earlier write left fresh
-/// is fresh no more.
-pub(crate) fn fresh_write(state: &mut State) {
-    if !state.spatial.fresh.is_empty() {
-        crate::dom::clear_set(&mut state.spatial.fresh);
+/// An Anchored write of `part` (its `entry`), in `unit` of `world`: the unit's anchored count and root kept up (an anchored part roots
+/// its assembly; the root freed, the root is worked out again when next needed) and, filed, the unit at the end of the other list when
+/// its list changed (measured: a pair or a chain welded, one part anchored, goes to the end of the anchored list as one, its root
+/// first; freed again, to the end of the free list). The assemblies it splits or joins are worked out at the settle.
+fn anchored_write(state: &mut State, reflection: &crate::Reflection, world: u32, unit: u32, entry: u32, part: InstanceId) {
+    let Some(names) = state.spatial.names else { return };
+    let now = names.anchored.and_then(|n| state.dom.boolean(part, n)) == Some(true);
+    let index = state.spatial.index_mut(world);
+    let before = index.parts[index.units[unit as usize].root as usize];
+    let held = &mut index.units[unit as usize];
+    let was = held.anchored;
+    if now {
+        held.anchored += 1;
+    } else {
+        held.anchored = held.anchored.saturating_sub(1);
     }
+    if now && was == 0 {
+        held.root = entry;
+        held.root_stale = false;
+        held.unsorted = true;
+    } else if !now && held.root == entry {
+        held.root_stale = true;
+        held.unsorted = true;
+    }
+    let list = if held.anchored > 0 { grid::ANCHORED } else { grid::UNANCHORED };
+    if let Place::Filed(filing) = held.place
+        && list != filing.list
+    {
+        ready_unit(state, reflection, world, unit);
+        let place = unit_place(state, &names, world, unit);
+        let frame = state.sched.frame;
+        state.spatial.index_mut(world).set_place(unit, place, false, frame);
+    }
+    state.spatial.pending.anchored.push((part, before));
+}
+
+/// The Parent write of `id` going on starts putting parts in waits (camera_moves.rs's hierarchy hook): they come in as `id`'s subtree
+/// is taken up ([`settle`]).
+pub(crate) fn parent_write(state: &mut State, id: InstanceId) {
+    state.spatial.pending.moved = Some(id);
 }
 
 /// `part` came into the Workspace's world (camera_moves.rs's hierarchy hook numbers a moved subtree's parts in the order a client
@@ -648,9 +771,10 @@ pub(crate) fn entered_at(state: &State, part: InstanceId) -> u64 {
     state.spatial.entered.get(&part).copied().unwrap_or(0)
 }
 
-/// `part` came into the world of the WorldRoot `root` (camera_moves.rs's hierarchy hook): it waits, in a unit of its own at the
-/// end of its world's wait (the world's index made first when it has none), until a query of that world or the physics step takes
-/// the wait in. A part already in that world's index stays where it is.
+/// `part` came into the world of the WorldRoot `root` (camera_moves.rs's hierarchy hook, in the order a client takes the moved
+/// subtree up): its world's index (made first when it has none) holds it from now, and the settle at the write's end puts it at the
+/// end of the world's wait in a unit of its own, joined to the units its links reach as they start ([`settle`]), until a query of
+/// that world or the physics step takes the wait in. A part already in that world's index stays where it is.
 pub(crate) fn wait_in(state: &mut State, root: InstanceId, part: InstanceId) {
     if state.spatial.names.is_none() {
         return;
@@ -663,95 +787,913 @@ pub(crate) fn wait_in(state: &mut State, root: InstanceId, part: InstanceId) {
         return;
     }
     let frame = state.sched.frame;
-    state.spatial.add_alone(world, part, Entry::unread(part), Place::Waits, frame);
-    if state.joints.created > 0 {
-        state.spatial.fresh.insert(part);
-    }
+    let serial = state.dom.at(part).serial;
+    state.spatial.add(world, part, Entry::unread(part), serial, frame);
+    state.spatial.pending.entering.push((root, part));
 }
 
-/// `part` left the world of the WorldRoot `root` (camera_moves.rs's hierarchy hook): out of its wait or its cells at once, if its
-/// index holds it.
-pub(crate) fn wait_out(state: &mut State, root: InstanceId, part: InstanceId) {
-    left(state, root, part);
-}
-
-/// The links that started (world/joints.rs relink, taken at the end of the joints' work on a write: instance.rs) file their two
-/// parts again, the one their assembly's root would be first (world/joints.rs root_first), unless both are anchored: a part
-/// waiting goes to the end of its wait, one filed to the end of its cells' lists, in its assembly's list (measured, Studio 0.747,
-/// a playing client and a server alike: two unanchored parts welded before the take-in come in as their root and then the
-/// other, whichever came in first, the larger first; welded after it, they leave and come at the end, root first; an
-/// unanchored part welded to an anchored one is filed after it in the anchored list; a far unanchored part welded to an
-/// anchored one files that one again at the end; two anchored parts welded keep their places). The parts the same Parent write
-/// put in a wait keep their places there (unmeasured: a model coming in with its welds).
-pub(crate) fn links_started(state: &mut State, reflection: &crate::Reflection) {
-    if state.spatial.links.is_empty() {
+/// `part` left the world of the WorldRoot `root` (camera_moves.rs's hierarchy hook, a moved subtree's parts in the order they would
+/// come in): out of its index at once. A unit whose parts all leave goes at once, from its cells, its wait or the loose list (the
+/// list's last taking its place: measured, a subtree's parts go out one at a time, tools/parity/probes/grid_subtree.luau); one that
+/// keeps some loses this one and splits at the settle by the links that are left, as a client's assembly splits ([`settle`]).
+pub(crate) fn wait_out(state: &mut State, reflection: &crate::Reflection, root: InstanceId, part: InstanceId) {
+    let Some(world) = state.spatial.world(root) else { return };
+    let Some((holder, entry)) = state.spatial.holder(part) else { return };
+    if holder != world {
         return;
     }
-    let Some(names) = state.spatial.names else { return };
-    let links = std::mem::take(&mut state.spatial.links);
-    let anchored = |state: &State, part: InstanceId| names.anchored.and_then(|n| state.dom.boolean(part, n)) == Some(true);
-    for &(a, b) in &links {
-        if state.dom.get(a).is_none() || state.dom.get(b).is_none() || (anchored(state, a) && anchored(state, b)) {
-            continue;
+    let frame = state.sched.frame;
+    let unit = state.spatial.index(world).unit_of[entry as usize];
+    if unit != NONE && state.spatial.index(world).units[unit as usize].len() > 1 {
+        // (the parts of its unit still in its world: the hook runs after the move, so a part leaving with it is in another world now)
+        let staying = {
+            let index = state.spatial.index(world);
+            let held = &index.units[unit as usize];
+            let stays = |other: u32| other != entry && state.dom.home(index.parts[other as usize]) == Some(root);
+            stays(held.root) || held.parts().any(stays)
+        };
+        if !staying {
+            // (the unit out of its place at once, then its parts' entries)
+            let index = state.spatial.index_mut(world);
+            let gone: Vec<u32> = index.units[unit as usize].parts().collect();
+            index.take_unit(unit, frame);
+            index.free_unit(unit);
+            for &other in &gone {
+                index.unit_of[other as usize] = NONE;
+            }
+            for other in gone {
+                let id = state.spatial.index(world).parts[other as usize];
+                state.spatial.remove(world, other, frame);
+                if let Some(instance) = state.dom.get_mut(id) {
+                    instance.flags &= !(flags::INDEXED | flags::LOGGED);
+                }
+            }
+            return;
         }
-        let pair = if super::joints::root_first(state, reflection, a, b) { [a, b] } else { [b, a] };
-        let pair = pair.map(|part| (!state.spatial.fresh.contains(&part)).then_some(part));
-        // (both out first, then both in, root first: measured, a pair welded after the take-in in the cell list u2 u4 u5 comes
-        // to u5 u4 u2)
-        let taken = pair.map(|part| part.and_then(|part| take_for_filing(state, part)));
-        for taken in taken.into_iter().flatten() {
-            file_back(state, &names, taken);
+        let generation = state.spatial.index(world).units[unit as usize].generation;
+        // (its joints in the order they named it, each with its other part: the piece through the first leaving part's oldest keeps the
+        // unit when that was the root; every leaving part's other parts start the race that splits it)
+        let mut links = super::joints::part_links(state, part);
+        links.sort_by_key(|&(_, _, named)| named);
+        let others = links.into_iter().map(|(_, other, _)| other);
+        match state.spatial.pending.splits.iter_mut().find(|split| split.world == world && split.unit == unit && split.generation == generation) {
+            Some(split) => split.links.extend(others),
+            None => {
+                let links = others.collect();
+                let old_root = root_part(state, reflection, world, unit);
+                state.spatial.pending.splits.push(Split { world, unit, generation, old_root, links });
+            }
         }
     }
-    let mut links = links;
-    links.clear();
-    state.spatial.links = links;
-    fresh_write(state);
+    if unit != NONE && state.spatial.names.and_then(|names| names.anchored).and_then(|n| state.dom.boolean(part, n)) == Some(true) {
+        let held = &mut state.spatial.index_mut(world).units[unit as usize];
+        held.anchored = held.anchored.saturating_sub(1);
+    }
+    state.spatial.remove(world, entry, frame);
+    if let Some(instance) = state.dom.get_mut(part) {
+        instance.flags &= !(flags::INDEXED | flags::LOGGED);
+    }
 }
 
-/// Where [`take_for_filing`] took a part's unit from: its world, the unit, and whether it waited
-struct Taken {
+/// What a write left for the settle at its end ([`settle`]): the subtree a Parent write moved and the parts it brought into waits
+/// (in the order they came), the units that lost parts that left, the parts whose Anchored changed, and the units whose box changed
+#[derive(Default)]
+pub(crate) struct Pending {
+    moved: Option<InstanceId>,
+    entering: Vec<(InstanceId, InstanceId)>,
+    splits: Vec<Split>,
+    /// Parts whose Anchored was written, each with its unit's root before the write
+    anchored: Vec<(InstanceId, InstanceId)>,
+    dirty: Vec<(u32, u32, u32)>,
+}
+
+impl Pending {
+    fn is_empty(&self) -> bool {
+        self.entering.is_empty() && self.splits.is_empty() && self.anchored.is_empty() && self.dirty.is_empty()
+    }
+}
+
+/// A unit that lost a part that left its world, to split by the links left: its world, the unit and its generation (a unit freed
+/// since is no longer this one), its root before, and the parts the leaving part's joints linked it to, in the order they named it
+#[derive(Debug)]
+struct Split {
     world: u32,
     unit: u32,
-    waited: bool,
+    generation: u32,
+    old_root: InstanceId,
+    links: Vec<InstanceId>,
 }
 
-/// `part`'s unit out of its wait if it waits, else out of its cells' lists, for [`file_back`]; None when it is in neither.
-fn take_for_filing(state: &mut State, part: InstanceId) -> Option<Taken> {
-    let (world, entry) = state.spatial.holder(part)?;
+/// Whether world/joints.rs kept the roots of the component of `unit`'s parts through the write ([`super::joints::roots_kept`]), read
+/// before the settle's own reads make it a tree: a component of one anchored part or none needs nothing kept
+fn claims_kept(state: &State, world: u32, unit: u32) -> bool {
+    let index = state.spatial.index(world);
+    let held = &index.units[unit as usize];
+    let any = index.parts[held.first as usize];
+    match super::joints::component_anchored(state, any) {
+        Some(count) if count <= 1 => true,
+        Some(_) => super::joints::roots_kept(state, any),
+        None => held.anchored == 0,
+    }
+}
+
+impl Spatial {
+    /// Marks `unit` of `world` to be filed again at the next settle, once
+    fn mark_dirty(&mut self, world: u32, unit: u32) {
+        let held = &mut self.index_mut(world).units[unit as usize];
+        if held.dirty || held.place == Place::Waits {
+            return;
+        }
+        held.dirty = true;
+        let generation = held.generation;
+        self.pending.dirty.push((world, unit, generation));
+    }
+
+    /// The world and unit of `part`, if an index holds it in a unit
+    fn unit_of(&self, part: InstanceId) -> Option<(u32, u32)> {
+        let (world, entry) = self.holder(part)?;
+        let unit = self.index(world).unit_of[entry as usize];
+        (unit != NONE).then_some((world, unit))
+    }
+}
+
+/// A write's settle (instance.rs, after the joints' work on every write; and before every query): what the write did to the worlds'
+/// units, as a playing client files its rigid assemblies (measured, Studio 0.747, a playing client and a server alike,
+/// tools/parity/probes/grid_welds.luau and grid_assemblies.luau). Each assembly is one unit of its world's grid ([`Unit`]):
+/// - **Joins.** A link that joins two units takes the one not holding the joined assembly's root out of its place (the list's last
+///   taking it), its parts into the root's unit; the root's unit keeps its place if it waits, and goes to the end of the wait if it
+///   was filed (a b c d waiting, a-b welded: d b a c; filed: d c b a).
+/// - **Parts coming in.** A Parent write's parts come in as the moved subtree is taken up (world/joints.rs taken_up), each at the end
+///   of its world's wait in a unit of its own; a link starts when the last of its joint and its two parts comes in, a part's links in
+///   the order its joints last named it, newest first (welds c-a and b-c made in that order, coming in with a x b y c, join b-c first:
+///   y x a b c).
+/// - **Splits.** A link that ends, or a part that leaves, splits its unit by the links left: the piece holding the root keeps the unit
+///   (the root gone, the piece through the leaving part's oldest joint), at its place if it waits, else at the end of the wait; the
+///   other pieces go to the end of the wait after it, by the leaving part's joints newest first (a hub of three leaves made a b c,
+///   leaving x: a x c b).
+/// - **Anchored writes** that split or join assemblies, and parts another anchored part claims when links change (a part two
+///   anchored parts reach), go the same ways.
+/// - Then the units whose box changed are filed again, in the order they changed.
+///
+/// Host work: a split is found by searches from the ends of what left, through the links among the unit's parts, the one with the
+/// fewest links left going on first, until one is left ([`race`]): only the pieces that split off are walked, so a leaf leaving a hub
+/// of 5,000 parts walks the leaf. A join moves the parts of the unit without the root. Where two anchored parts' assemblies meet, the
+/// parts of the units involved are put in units by their roots as world/joints.rs works them out ([`regroup`]).
+pub(crate) fn settle(state: &mut State, reflection: &crate::Reflection) {
+    if state.joints.grid_links.is_empty() && state.spatial.pending.is_empty() {
+        return;
+    }
+    // (a write that only moved or resized parts: their units filed again, nothing else to do)
+    if state.joints.grid_links.is_empty() && state.spatial.pending.entering.is_empty() && state.spatial.pending.splits.is_empty() && state.spatial.pending.anchored.is_empty() {
+        refile_marked(state);
+        return;
+    }
+    let links = std::mem::take(&mut state.joints.grid_links);
+    if state.spatial.names.is_none() {
+        state.spatial.pending = Pending::default();
+        return;
+    }
+    let mut pending = std::mem::take(&mut state.spatial.pending);
     let frame = state.sched.frame;
-    let index = state.spatial.index_mut(world);
-    let unit = index.unit_of[entry as usize];
-    let waited = match index.units[unit as usize].place {
-        Place::Waits => {
-            index.take_from(unit, true);
-            true
+    // the links that start as the write's parts come in, each when the last of its joint and parts comes in
+    let replayed = replay_order(state, &pending, &links);
+    // units that lost parts or links: each split once, by a race from every part next to what it lost (the leaving parts' joints'
+    // other parts, oldest named first, then the ends of the links that ended), so the rest of it is one piece
+    let mut work: Vec<Split> = Vec::new();
+    for split in pending.splits.drain(..) {
+        let live = state.spatial.worlds.get(split.world as usize).and_then(|index| index.as_deref()).is_some_and(|index| index.units.get(split.unit as usize).is_some_and(|held| held.generation == split.generation && held.first != NONE));
+        if live {
+            work.push(split);
         }
-        Place::Filed(filing) => {
-            index.grid.unfile(unit, &filing, frame);
-            false
+    }
+    let leaving = work.len();
+    // (the units on the far side of what a unit lost: with several anchored parts in their component, the change may have moved parts
+    // between their assemblies though no link of theirs changed)
+    let mut beside: Vec<(u32, u32, u32)> = Vec::new();
+    let mut near = |state: &State, part: InstanceId, from: Option<(u32, u32)>| {
+        if let Some((world, unit)) = state.spatial.unit_of(part)
+            && Some((world, unit)) != from
+            && !beside.iter().any(|&(w, u, _)| w == world && u == unit)
+        {
+            beside.push((world, unit, state.spatial.index(world).units[unit as usize].generation));
         }
-        Place::Loose => return None,
     };
-    Some(Taken { world, unit, waited })
+    for split in &work {
+        for &part in &split.links {
+            near(state, part, Some((split.world, split.unit)));
+        }
+    }
+    for &(_, first, second, started) in &links {
+        if started {
+            continue;
+        }
+        let (a, b) = (state.spatial.unit_of(first), state.spatial.unit_of(second));
+        if a != b || a.is_none() {
+            near(state, first, None);
+            near(state, second, None);
+        }
+        let (Some((world, a)), Some((other, b))) = (a, b) else { continue };
+        if world != other || a != b {
+            continue;
+        }
+        if super::joints::pair_linked(state, first, second) {
+            // (still linked by another joint: nothing splits, but which anchored part a part hangs from may have changed)
+            near(state, first, None);
+            continue;
+        }
+        match work.iter_mut().find(|split| split.world == world && split.unit == a) {
+            Some(split) => split.links.extend([first, second]),
+            None => {
+                let generation = state.spatial.index(world).units[a as usize].generation;
+                let old_root = root_part(state, reflection, world, a);
+                work.push(Split { world, unit: a, generation, old_root, links: vec![first, second] });
+            }
+        }
+    }
+    let kept: Vec<bool> = work.iter().map(|split| claims_kept(state, split.world, split.unit)).collect();
+    state.spatial.deferring = true;
+    let beside: Vec<(u32, u32, u32)> = beside.into_iter().filter(|&(world, unit, _)| !claims_kept(state, world, unit)).collect();
+    for (at, split) in work.into_iter().enumerate() {
+        // (a unit an earlier split joined to another is gone; its parts went with it)
+        let live = state.spatial.worlds.get(split.world as usize).and_then(|index| index.as_deref()).is_some_and(|index| index.units.get(split.unit as usize).is_some_and(|held| held.generation == split.generation && held.first != NONE));
+        if live {
+            split_leaving(state, reflection, split.world, split.unit, split.old_root, &split.links, at < leaving, kept[at], frame);
+        }
+    }
+    state.spatial.deferring = false;
+    flush_later(state, reflection, frame);
+    for (world, unit, generation) in beside {
+        let live = state.spatial.worlds.get(world as usize).and_then(|index| index.as_deref()).is_some_and(|index| index.units.get(unit as usize).is_some_and(|held| held.generation == generation && held.first != NONE));
+        if live {
+            let parts: Vec<InstanceId> = {
+                let index = state.spatial.index(world);
+                index.units[unit as usize].parts().map(|entry| index.parts[entry as usize]).collect()
+            };
+            regroup(state, reflection, world, &parts, frame);
+        }
+    }
+    // links that started outside the parts coming in
+    for &(joint, first, second, started) in &links {
+        if started && !replayed.joints.contains(&joint) {
+            join_parts(state, reflection, first, second, frame);
+        }
+    }
+    // Anchored writes that split or join assemblies
+    for (part, before) in pending.anchored.drain(..) {
+        reanchored(state, reflection, part, before, frame);
+    }
+    // the parts coming in, each with the links it completes
+    let mut next = 0;
+    for (at, &(root, part)) in pending.entering.iter().enumerate() {
+        while let Some(link) = replayed.order.get(next).filter(|link| link.when < replayed.part_events[at]) {
+            join_parts(state, reflection, link.parts[0], link.parts[1], frame);
+            next += 1;
+        }
+        if let Some(world) = state.spatial.world(root)
+            && let Some((holder, entry)) = state.spatial.holder(part)
+            && holder == world
+            && state.spatial.index(world).unit_of[entry as usize] == NONE
+        {
+            let names = state.spatial.names.expect("names");
+            let unit = state.spatial.index_mut(world).new_unit(&[entry]);
+            count_anchored(state, &names, world, unit);
+            state.spatial.index_mut(world).set_place(unit, Place::Waits, true, frame);
+        }
+        while let Some(link) = replayed.order.get(next).filter(|link| link.when == replayed.part_events[at]) {
+            join_parts(state, reflection, link.parts[0], link.parts[1], frame);
+            next += 1;
+        }
+    }
+    for link in &replayed.order[next..] {
+        join_parts(state, reflection, link.parts[0], link.parts[1], frame);
+    }
+    // the pieces whose root came in after them
+    for (part, root) in std::mem::take(&mut state.spatial.orphans) {
+        if let (Some((world, piece)), Some((other, home))) = (state.spatial.unit_of(part), state.spatial.unit_of(root))
+            && world == other
+            && piece != home
+            && super::joints::grid_root(state, reflection, part) == root
+        {
+            join_units(state, reflection, world, piece, home, frame);
+        }
+    }
+    // the units whose box changed, unless a bulk move is still placing parts (Model:PivotTo, ScaleTo: the next settle files them)
+    if state.joints.bulk_placing() {
+        pending.dirty.retain(|&(world, unit, generation)| state.spatial.worlds.get(world as usize).and_then(|index| index.as_deref()).is_some_and(|index| index.units.get(unit as usize).is_some_and(|held| held.generation == generation)));
+        state.spatial.pending.dirty.append(&mut pending.dirty);
+    } else {
+        for (world, unit, generation) in pending.dirty.drain(..) {
+            refile_dirty(state, world, unit, generation, frame);
+        }
+    }
+    // (the link list's storage back, if no link came since)
+    let mut links = links;
+    links.clear();
+    if state.joints.grid_links.is_empty() {
+        state.joints.grid_links = links;
+    }
 }
 
-/// A unit back where [`take_for_filing`] took it from, at the end: of its wait, or of its cells' lists in its assembly's list.
-fn file_back(state: &mut State, names: &Names, taken: Taken) {
-    let place = if taken.waited { Place::Waits } else { unit_place(state, names, taken.world, taken.unit, None) };
-    let frame = state.sched.frame;
-    state.spatial.index_mut(taken.world).set_place(taken.unit, place, true, frame);
+/// A unit marked to be filed again ([`Spatial::mark_dirty`]), filed as its parts stand now if it is still the one marked and filed
+fn refile_dirty(state: &mut State, world: u32, unit: u32, generation: u32, frame: u64) {
+    let Some(names) = state.spatial.names else { return };
+    let Some(index) = state.spatial.worlds.get(world as usize).and_then(|index| index.as_deref()) else { return };
+    let Some(held) = index.units.get(unit as usize).filter(|held| held.generation == generation && held.first != NONE) else { return };
+    if held.place == Place::Waits {
+        return;
+    }
+    let place = unit_place(state, &names, world, unit);
+    let index = state.spatial.index_mut(world);
+    index.units[unit as usize].dirty = false;
+    index.set_place(unit, place, false, frame);
 }
 
-/// `part` left the world of the WorldRoot `root` (camera_moves.rs's hierarchy hook): out of its index at once, if it holds it.
-pub(crate) fn left(state: &mut State, root: InstanceId, part: InstanceId) {
-    let State { spatial, dom, sched, .. } = state;
-    let Some(world) = spatial.world(root) else { return };
-    let Some((holder, entry)) = spatial.holder(part) else { return };
-    if holder == world {
-        spatial.remove(world, entry, sched.frame);
-        if let Some(instance) = dom.get_mut(part) {
-            instance.flags &= !(flags::INDEXED | flags::LOGGED);
+/// The links a write's parts complete as they come in ([`settle`]), in the order they start: each when the last of its joint and its
+/// two parts came in (by its place in the moved subtree's take-up, world/joints.rs taken_up), the links a part completes newest
+/// named first ([`super::joints::part_links`]), and the joints they belong to (their own starts are not joins again)
+#[derive(Default)]
+struct Replayed {
+    order: Vec<ReplayLink>,
+    joints: FxHashSet<InstanceId>,
+    /// The take-up place of each part coming in, by its place in the write's list of them
+    part_events: Vec<u32>,
+}
+
+struct ReplayLink {
+    when: u32,
+    newest: std::cmp::Reverse<u64>,
+    parts: [InstanceId; 2],
+}
+
+fn replay_order(state: &State, pending: &Pending, links: &[(InstanceId, InstanceId, InstanceId, bool)]) -> Replayed {
+    let mut replayed = Replayed::default();
+    if pending.entering.is_empty() {
+        return replayed;
+    }
+    // (each link once, by its joint; when each part coming in named each of its joints)
+    let mut candidates: FxHashMap<InstanceId, [InstanceId; 2]> = FxHashMap::default();
+    let mut named: FxHashMap<(InstanceId, InstanceId), u64> = FxHashMap::default();
+    if state.joints.created > 0 {
+        for &(_, part) in &pending.entering {
+            for (joint, other, stamp) in super::joints::part_links(state, part) {
+                candidates.entry(joint).or_insert([part, other]);
+                named.insert((joint, part), stamp);
+            }
+        }
+        for &(joint, first, second, started) in links {
+            if started {
+                candidates.entry(joint).or_insert([first, second]);
+            }
+        }
+    }
+    let Some(moved) = pending.moved.filter(|_| !candidates.is_empty()) else {
+        replayed.part_events = (1..=pending.entering.len() as u32).collect();
+        return replayed;
+    };
+    // (the take-up's places, from 1: a joint or part that was there before the write is at 0)
+    let order = super::joints::taken_up(state, moved, |_, _| false);
+    let place: FxHashMap<InstanceId, u32> = order.iter().enumerate().map(|(at, &id)| (id, at as u32 + 1)).collect();
+    let entering: FxHashMap<InstanceId, u32> = pending.entering.iter().map(|&(_, part)| (part, place.get(&part).copied().unwrap_or(0))).collect();
+    replayed.part_events = pending.entering.iter().map(|&(_, part)| entering[&part]).collect();
+    let came = |id: InstanceId| entering.get(&id).copied().unwrap_or(0);
+    for (joint, [first, second]) in candidates {
+        let when = place.get(&joint).copied().unwrap_or(0).max(came(first)).max(came(second));
+        if when == 0 {
+            continue;
+        }
+        // (the links a part completes, newest named first: the part that came in last of the three orders them)
+        let by = if came(first) == when { first } else { second };
+        let stamp = named.get(&(joint, by)).copied().unwrap_or(0);
+        replayed.joints.insert(joint);
+        replayed.order.push(ReplayLink { when, newest: std::cmp::Reverse(stamp), parts: [first, second] });
+    }
+    replayed.order.sort_by_key(|link| (link.when, link.newest));
+    replayed
+}
+
+/// The root of `unit`'s assembly worked out again from its parts: the part a client roots it at (world/joints.rs root_first: an
+/// anchored one, else the better ranked, of equal ones the later made)
+fn refresh_root(state: &mut State, reflection: &crate::Reflection, world: u32, unit: u32) {
+    let index = state.spatial.index(world);
+    let held = &index.units[unit as usize];
+    let mut best = held.first;
+    for entry in held.rest.iter().copied() {
+        if super::joints::root_first(state, reflection, index.parts[entry as usize], index.parts[best as usize]) {
+            best = entry;
+        }
+    }
+    let index = state.spatial.index_mut(world);
+    let held = &mut index.units[unit as usize];
+    if held.root != best {
+        held.unsorted = true;
+    }
+    held.root = best;
+    held.root_stale = false;
+}
+
+/// The root of `unit` as a part, worked out again first if stale
+fn root_part(state: &mut State, reflection: &crate::Reflection, world: u32, unit: u32) -> InstanceId {
+    if state.spatial.index(world).units[unit as usize].root_stale {
+        refresh_root(state, reflection, world, unit);
+    }
+    let index = state.spatial.index(world);
+    index.parts[index.units[unit as usize].root as usize]
+}
+
+/// A link that started between `first` and `second` joins their units when it joins their assemblies ([`join_units`]); two parts in
+/// one unit already, in no index or in two worlds stay. Two units that each hold an anchored part are two assemblies, which the link
+/// may only move parts between (a part both reach, claimed by the newer link's: world/joints.rs claims): their parts go in units by
+/// their roots ([`regroup`]).
+fn join_parts(state: &mut State, reflection: &crate::Reflection, first: InstanceId, second: InstanceId, frame: u64) {
+    let (Some((world, a)), Some((other, b))) = (state.spatial.unit_of(first), state.spatial.unit_of(second)) else { return };
+    if world != other || a == b {
+        return;
+    }
+    let index = state.spatial.index(world);
+    let (fixed_a, fixed_b) = (index.units[a as usize].anchored > 0, index.units[b as usize].anchored > 0);
+    if fixed_a && fixed_b {
+        // (a link between two anchored parts moves nothing: each roots its own assembly)
+        let anchored = |part: InstanceId| state.spatial.names.and_then(|names| names.anchored).and_then(|n| state.dom.boolean(part, n)) == Some(true);
+        if !(anchored(first) && anchored(second)) {
+            regroup(state, reflection, world, &[first, second], frame);
+        }
+        return;
+    }
+    // (a free unit meeting an anchored one, in a component of several anchored parts: its parts hang from the anchored part the newer
+    // links give them, which may be another's)
+    if fixed_a != fixed_b && super::joints::component_anchored(state, first).is_none_or(|count| count > 1) {
+        let (free, held) = if fixed_a { (b, a) } else { (a, b) };
+        let root = root_part(state, reflection, world, held);
+        let parts: Vec<InstanceId> = {
+            let index = state.spatial.index(world);
+            index.units[free as usize].parts().map(|entry| index.parts[entry as usize]).collect()
+        };
+        if !parts.iter().all(|&part| super::joints::grid_root(state, reflection, part) == root) {
+            let mut all = parts;
+            all.push(root);
+            regroup(state, reflection, world, &all, frame);
+            return;
+        }
+    }
+    join_units(state, reflection, world, a, b, frame);
+}
+
+/// Joins two units of `world` ([`settle`]): the one not holding the better root out of its place (the list's last taking it), its
+/// parts into the other; that one at the end of the wait if it was filed (or loose), else where it waits. Its survivor.
+fn join_units(state: &mut State, reflection: &crate::Reflection, world: u32, a: u32, b: u32, frame: u64) -> u32 {
+    let (root_a, root_b) = (root_part(state, reflection, world, a), root_part(state, reflection, world, b));
+    let (survivor, absorbed) = if super::joints::root_first(state, reflection, root_b, root_a) { (b, a) } else { (a, b) };
+    let index = state.spatial.index_mut(world);
+    index.take_unit(absorbed, frame);
+    let moved: Vec<u32> = index.units[absorbed as usize].parts().collect();
+    let anchored = index.units[absorbed as usize].anchored;
+    index.free_unit(absorbed);
+    for &entry in &moved {
+        index.unit_of[entry as usize] = survivor;
+    }
+    if index.units[survivor as usize].place == Place::Waits {
+        index.waiting += moved.len();
+    }
+    let held = &mut index.units[survivor as usize];
+    held.rest.extend(moved);
+    held.anchored += anchored;
+    held.unsorted = true;
+    index.requeue(survivor, frame);
+    survivor
+}
+
+/// What [`race`] found: the pieces its searches finished, each with the index of the start it came from (merged searches keep the
+/// lower), the start whose search was still going when all others had finished (its piece is the rest of the unit), and whether a
+/// search met a link to a part outside the unit
+struct Raced {
+    done: Vec<(usize, Vec<u32>)>,
+    open: Option<usize>,
+    outside: bool,
+    /// The parts it went through that link to a part outside the unit
+    borders: Vec<InstanceId>,
+}
+
+/// The pieces of `unit` of `world` from `starts` (parts in it), through the links among its parts but through no part of `skip`:
+/// one search from each start, the one with the fewest links left to follow going on first, two that meet one search, until at most
+/// one is still going. The others' parts are pieces of their own; the one going holds the rest of the unit, unwalked.
+fn race(state: &State, world: u32, unit: u32, starts: &[InstanceId]) -> Raced {
+    let index = state.spatial.index(world);
+    let in_unit = |part: InstanceId| state.spatial.holder(part).filter(|&(holder, _)| holder == world).map(|(_, entry)| entry).filter(|&entry| index.unit_of[entry as usize] == unit);
+    struct Search {
+        frontier: Vec<u32>,
+        found: Vec<u32>,
+        work: usize,
+        into: usize,
+    }
+    let mut searches: Vec<Search> = Vec::new();
+    let mut owner: FxHashMap<u32, usize> = FxHashMap::default();
+    let mut start_of: Vec<usize> = Vec::new();
+    for (at, &start) in starts.iter().enumerate() {
+        let Some(entry) = in_unit(start) else { continue };
+        if owner.contains_key(&entry) {
+            continue;
+        }
+        owner.insert(entry, searches.len());
+        start_of.push(at);
+        searches.push(Search { frontier: vec![entry], found: vec![entry], work: super::joints::link_count(state, start), into: usize::MAX });
+    }
+    fn find(searches: &[Search], mut at: usize) -> usize {
+        while searches[at].into != usize::MAX {
+            at = searches[at].into;
+        }
+        at
+    }
+    let mut outside = false;
+    let mut borders: Vec<InstanceId> = Vec::new();
+    loop {
+        let going: Vec<usize> = (0..searches.len()).filter(|&at| searches[at].into == usize::MAX && !searches[at].frontier.is_empty()).collect();
+        if going.len() <= 1 {
+            break;
+        }
+        let at = *going.iter().min_by_key(|&&at| searches[at].work).expect("two going");
+        let entry = searches[at].frontier.pop().expect("a frontier");
+        let part = index.parts[entry as usize];
+        searches[at].work = searches[at].work.saturating_sub(super::joints::link_count(state, part));
+        for (_, other, _) in super::joints::part_links(state, part) {
+            let Some(next) = in_unit(other) else {
+                if !outside || borders.last() != Some(&part) {
+                    borders.push(part);
+                }
+                outside = true;
+                continue;
+            };
+            match owner.get(&next).copied() {
+                Some(met) => {
+                    let met = find(&searches, met);
+                    if met != at {
+                        // (two searches meet: one piece, searched on by the first)
+                        let (keep, gone) = (at.min(met), at.max(met));
+                        let taken = std::mem::take(&mut searches[gone].frontier);
+                        let found = std::mem::take(&mut searches[gone].found);
+                        let work = searches[gone].work;
+                        searches[gone].into = keep;
+                        searches[keep].frontier.extend(taken);
+                        searches[keep].found.extend(found);
+                        searches[keep].work += work;
+                        // (one search now: the part's other links later, if the race goes on)
+                        searches[keep].frontier.push(entry);
+                        searches[keep].work += super::joints::link_count(state, part);
+                        break;
+                    }
+                }
+                None => {
+                    owner.insert(next, at);
+                    searches[at].frontier.push(next);
+                    searches[at].found.push(next);
+                    searches[at].work += super::joints::link_count(state, other);
+                }
+            }
+        }
+    }
+    let mut done = Vec::new();
+    let mut open = None;
+    for (at, search) in searches.into_iter().enumerate() {
+        if search.into != usize::MAX {
+            continue;
+        }
+        if search.frontier.is_empty() {
+            done.push((start_of[at], search.found));
+        } else {
+            open = Some(start_of[at]);
+        }
+    }
+    // (a single search left with nothing to follow is the whole rest too)
+    if open.is_none() && done.len() == 1 {
+        open = Some(done.pop().expect("one").0);
+    }
+    Raced { done, open, outside, borders }
+}
+
+/// `unit` of `world` lost parts (`lost`: they left, [`wait_out`]) or links ([`settle`]): it splits by the links left, a race from the
+/// parts next to what it lost (`links`: a leaving part's joints' other parts, oldest named first, then the ends of links that ended).
+#[allow(clippy::too_many_arguments)]
+fn split_leaving(state: &mut State, reflection: &crate::Reflection, world: u32, unit: u32, old_root: InstanceId, links: &[InstanceId], lost: bool, kept: bool, frame: u64) {
+    if lost && !links.iter().any(|&part| state.spatial.unit_of(part) == Some((world, unit))) {
+        // (none of its joints reached a part of the unit, as when it was freed: the unit's parts by their roots)
+        state.spatial.index_mut(world).requeue(unit, frame);
+        let parts: Vec<InstanceId> = {
+            let index = state.spatial.index(world);
+            index.units[unit as usize].parts().map(|entry| index.parts[entry as usize]).collect()
+        };
+        later_regroup(state, reflection, world, parts, frame);
+        return;
+    }
+    let raced = race(state, world, unit, links);
+    apply_split(state, reflection, world, unit, raced, old_root, links, lost, kept, frame);
+}
+
+/// The pieces [`race`] found, put in units ([`settle`]): the piece holding `old_root` keeps the unit (when it is gone, the piece of the
+/// first of `starts` that is in one), at its place if it waits, else at the end of the wait; the other pieces at the end of the wait
+/// after it, by `starts` from the last. `lost`: a part left the unit (its root worked out again; filed, the unit at the end). With
+/// several anchored parts in the component, or a link met to a part outside the unit, the pieces go in units by their roots.
+#[allow(clippy::too_many_arguments)]
+fn apply_split(state: &mut State, reflection: &crate::Reflection, world: u32, unit: u32, raced: Raced, old_root: InstanceId, starts: &[InstanceId], lost: bool, kept: bool, frame: u64) {
+    let Raced { mut done, open, outside, borders } = raced;
+    let names = state.spatial.names.expect("names");
+    // (several anchored parts in the component: a change may move parts between their assemblies while they stay linked, at the parts
+    // linked to another unit: when the race went through one whose root is another unit's now, the units' parts go in units by their
+    // roots; else the pieces that met a link out of the unit do)
+    let claims = outside;
+    let several = {
+        let any = state.spatial.index(world).parts[state.spatial.index(world).units[unit as usize].first as usize];
+        super::joints::component_anchored(state, any).is_none_or(|count| count > 1)
+    };
+    let mut borders = borders;
+    if several {
+        // (the race stops once one search is left: the free parts it started from that link out of their unit are borders too, but
+        // for one of many links, a hub, which the race would have to walk through)
+        let anchored = state.spatial.names.and_then(|names| names.anchored);
+        for &part in starts {
+            if borders.contains(&part) || anchored.and_then(|n| state.dom.boolean(part, n)) == Some(true) || super::joints::link_count(state, part) > 64 {
+                continue;
+            }
+            let home = state.spatial.unit_of(part);
+            if home.is_some() && super::joints::part_links(state, part).iter().any(|&(_, other, _)| state.spatial.unit_of(other) != home) {
+                borders.push(part);
+            }
+        }
+    }
+    let unsure = several && (!kept || borders.iter().any(|&part| {
+        let home = state.spatial.unit_of(part);
+        let root = super::joints::grid_root(state, reflection, part);
+        home.is_some_and(|(_, at)| state.spatial.unit_of(root).is_none_or(|(_, other)| other != at))
+    }));
+    if done.is_empty() {
+        // (one piece: the unit keeps its parts; one that lost a part is filed again, and one that lost its root may hang from another
+        // assembly now)
+        if lost {
+            state.spatial.index_mut(world).requeue(unit, frame);
+            let root_gone = state.spatial.holder(old_root).is_none_or(|(holder, entry)| holder != world || state.spatial.index(world).unit_of[entry as usize] != unit);
+            if root_gone {
+                state.spatial.index_mut(world).units[unit as usize].root_stale = true;
+                later_join(state, reflection, world, unit, frame);
+                return;
+            }
+        }
+        if unsure {
+            let parts: Vec<InstanceId> = {
+                let index = state.spatial.index(world);
+                index.units[unit as usize].parts().map(|entry| index.parts[entry as usize]).collect()
+            };
+            later_regroup(state, reflection, world, parts, frame);
+            later_join(state, reflection, world, unit, frame);
+        }
+        return;
+    }
+    // the piece that keeps the unit: the root's, else the first start's
+    let of_entry = |state: &State, part: InstanceId| state.spatial.holder(part).filter(|&(holder, _)| holder == world).map(|(_, entry)| entry);
+    let root_entry = of_entry(state, old_root).filter(|&entry| state.spatial.index(world).unit_of[entry as usize] == unit);
+    let piece_of = |state: &State, done: &[(usize, Vec<u32>)], entry: u32| -> Option<usize> {
+        let _ = state;
+        done.iter().position(|(_, found)| found.contains(&entry))
+    };
+    let kept_done: Option<usize> = match root_entry {
+        Some(entry) => piece_of(state, &done, entry),
+        None => {
+            // (the root left: the piece through its oldest joint)
+            let first_start = starts.iter().enumerate().find_map(|(at, &part)| of_entry(state, part).filter(|&entry| state.spatial.index(world).unit_of[entry as usize] == unit).map(|entry| (at, entry)));
+            match first_start {
+                Some((at, entry)) if open != Some(at) => piece_of(state, &done, entry),
+                _ => None,
+            }
+        }
+    };
+    // the rest of the unit (the open search's piece) as its own list when it does not keep the unit
+    if let Some(kept) = kept_done {
+        let taken: FxHashSet<u32> = done.iter().flat_map(|(_, found)| found.iter().copied()).collect();
+        let rest: Vec<u32> = state.spatial.index(world).units[unit as usize].parts().filter(|entry| !taken.contains(entry)).collect();
+        let kept_parts = std::mem::take(&mut done[kept].1);
+        done.remove(kept);
+        if !rest.is_empty() {
+            done.push((open.unwrap_or(usize::MAX), rest));
+        }
+        set_parts(state, &names, world, unit, kept_parts);
+    } else {
+        // (the unit keeps the rest: the done pieces' parts leave it, the rest unwalked)
+        let taken: Vec<u32> = done.iter().flat_map(|(_, found)| found.iter().copied()).collect();
+        let gone_anchored = taken.iter().filter(|&&entry| names.anchored.and_then(|n| state.dom.boolean(state.spatial.index(world).parts[entry as usize], n)) == Some(true)).count() as u32;
+        let index = state.spatial.index_mut(world);
+        let held = &mut index.units[unit as usize];
+        let small: FxHashSet<u32> = taken.iter().copied().collect();
+        held.rest.retain(|entry| !small.contains(entry));
+        if small.contains(&held.first) {
+            held.first = held.rest.pop().expect("the rest holds a part");
+        }
+        held.anchored = held.anchored.saturating_sub(gone_anchored);
+        held.unsorted = true;
+        if held.place == Place::Waits {
+            index.waiting -= taken.len();
+        }
+    }
+    if root_entry.is_none() || lost {
+        state.spatial.index_mut(world).units[unit as usize].root_stale = true;
+    }
+    state.spatial.index_mut(world).requeue(unit, frame);
+    // the other pieces at the end of the wait: by the starts from the last (the leaving part's newest joint first)
+    done.sort_by_key(|&(at, _)| std::cmp::Reverse(at));
+    let mut pieces = vec![unit];
+    for (_, found) in done {
+        let index = state.spatial.index_mut(world);
+        let piece = index.new_unit(&found);
+        index.set_place(piece, Place::Waits, true, frame);
+        count_anchored(state, &names, world, piece);
+        refresh_root(state, reflection, world, piece);
+        pieces.push(piece);
+    }
+    if claims {
+        let parts: Vec<InstanceId> = {
+            let index = state.spatial.index(world);
+            let from = if unsure { 0 } else { 1 };
+            pieces[from..].iter().flat_map(|&piece| index.units[piece as usize].parts().map(|entry| index.parts[entry as usize])).collect()
+        };
+        later_regroup(state, reflection, world, parts, frame);
+    }
+    // (each piece, and the unit when its root left, joins the units its parts' links reach: a piece that hung from the root may hang
+    // from another anchored part now)
+    let pieces: Vec<InstanceId> = {
+        let index = state.spatial.index(world);
+        pieces.iter().filter(|&&piece| index.units.get(piece as usize).is_some_and(|held| held.first != NONE)).map(|&piece| index.parts[index.units[piece as usize].first as usize]).collect()
+    };
+    for (at, first) in pieces.into_iter().enumerate() {
+        if at == 0 && root_entry.is_some() {
+            continue;
+        }
+        if let Some((holder, piece)) = state.spatial.unit_of(first)
+            && holder == world
+        {
+            later_join(state, reflection, world, piece, frame);
+        }
+    }
+}
+
+/// [`regroup`] now, or once the settle's splits are done ([`Spatial::deferring`])
+fn later_regroup(state: &mut State, reflection: &crate::Reflection, world: u32, parts: Vec<InstanceId>, frame: u64) {
+    if state.spatial.deferring {
+        state.spatial.later_regroups.push((world, parts));
+    } else {
+        regroup(state, reflection, world, &parts, frame);
+    }
+}
+
+/// [`join_neighbours`] now, or once the settle's splits are done ([`Spatial::deferring`]), for the unit holding `unit`'s first part
+fn later_join(state: &mut State, reflection: &crate::Reflection, world: u32, unit: u32, frame: u64) {
+    if state.spatial.deferring {
+        let first = state.spatial.index(world).parts[state.spatial.index(world).units[unit as usize].first as usize];
+        state.spatial.later_joins.push((world, first));
+    } else {
+        join_neighbours(state, reflection, world, unit, frame);
+    }
+}
+
+/// The joins the settle's splits asked for ([`later_regroup`], [`later_join`]), in turn
+fn flush_later(state: &mut State, reflection: &crate::Reflection, frame: u64) {
+    for (world, parts) in std::mem::take(&mut state.spatial.later_regroups) {
+        let parts: Vec<InstanceId> = parts.into_iter().filter(|&part| state.spatial.unit_of(part).is_some_and(|(holder, _)| holder == world)).collect();
+        if !parts.is_empty() {
+            regroup(state, reflection, world, &parts, frame);
+        }
+    }
+    for (world, part) in std::mem::take(&mut state.spatial.later_joins) {
+        if let Some((holder, unit)) = state.spatial.unit_of(part)
+            && holder == world
+        {
+            join_neighbours(state, reflection, world, unit, frame);
+        }
+    }
+}
+
+/// `unit` of `world` joins the units its parts' links reach ([`join_parts`]).
+fn join_neighbours(state: &mut State, reflection: &crate::Reflection, world: u32, unit: u32, frame: u64) {
+    let members: Vec<InstanceId> = {
+        let index = state.spatial.index(world);
+        index.units[unit as usize].parts().map(|entry| index.parts[entry as usize]).collect()
+    };
+    for member in members {
+        for (_, other, _) in super::joints::part_links(state, member) {
+            join_parts(state, reflection, member, other, frame);
+        }
+    }
+}
+
+/// `unit` of `world` holds `parts` (all already its, or moved to it), its anchored count recounted from them
+fn set_parts(state: &mut State, names: &Names, world: u32, unit: u32, parts: Vec<u32>) {
+    let index = state.spatial.index_mut(world);
+    let before = index.units[unit as usize].len();
+    for &entry in &parts {
+        index.unit_of[entry as usize] = unit;
+    }
+    let held = &mut index.units[unit as usize];
+    let count = parts.len();
+    held.first = parts[0];
+    held.rest = parts[1..].to_vec();
+    held.unsorted = true;
+    if held.place == Place::Waits {
+        index.waiting = index.waiting + count - before;
+    }
+    count_anchored(state, names, world, unit);
+}
+
+/// An Anchored write of `part` settled ([`settle`]): a part anchored in a unit that holds another anchored part roots an assembly of
+/// its own (a part linked to that unit alone, by one link to a part that keeps its root, splits off by itself; else the unit's parts go
+/// in units by their roots); a part freed has its unit join the units its parts' links reach (two anchored ones: by their roots).
+fn reanchored(state: &mut State, reflection: &crate::Reflection, part: InstanceId, before: InstanceId, frame: u64) {
+    let Some(names) = state.spatial.names else { return };
+    let Some((world, unit)) = state.spatial.unit_of(part) else { return };
+    let now = names.anchored.and_then(|n| state.dom.boolean(part, n)) == Some(true);
+    let held = &state.spatial.index(world).units[unit as usize];
+    if now {
+        if held.anchored <= 1 || held.len() == 1 {
+            return;
+        }
+        // (a leaf: one link, to a part of the unit that keeps its root: a newer link may have its other part claimed by this one)
+        let links = super::joints::part_links(state, part);
+        let leaf = links.len() == 1 && state.spatial.unit_of(links[0].1) == Some((world, unit)) && super::joints::grid_root(state, reflection, links[0].1) == before;
+        if leaf {
+            let (_, entry) = state.spatial.holder(part).expect("held");
+            let raced = Raced { done: vec![(1, vec![entry])], open: Some(0), outside: false, borders: Vec::new() };
+            apply_split(state, reflection, world, unit, raced, before, &[links[0].1, part], false, true, frame);
+            return;
+        }
+        let parts: Vec<InstanceId> = {
+            let index = state.spatial.index(world);
+            index.units[unit as usize].parts().map(|entry| index.parts[entry as usize]).collect()
+        };
+        regroup(state, reflection, world, &parts, frame);
+        return;
+    }
+    // freed: its unit joins the units its parts' links reach (a piece an anchored part held joins the assembly it hangs from now)
+    join_neighbours(state, reflection, world, unit, frame);
+}
+
+/// The units holding `parts` (of `world`) made again by their parts' roots, as world/joints.rs works them out now: each unit keeps the
+/// parts its root's assembly holds (the root's unit, the root of none of them gone: the piece of its first part), the others go to the
+/// end of the wait (the better root first), and each piece joins the unit of its root when that root is in another unit.
+fn regroup(state: &mut State, reflection: &crate::Reflection, world: u32, parts: &[InstanceId], frame: u64) {
+    let names = state.spatial.names.expect("names");
+    // the units involved, each with its parts by root
+    let mut units: Vec<u32> = Vec::new();
+    for &part in parts {
+        if let Some((holder, unit)) = state.spatial.unit_of(part)
+            && holder == world
+            && !units.contains(&unit)
+        {
+            units.push(unit);
+        }
+    }
+    let mut pieces: Vec<(InstanceId, u32)> = Vec::new();
+    for unit in units {
+        let members: Vec<u32> = state.spatial.index(world).units[unit as usize].parts().collect();
+        let mut groups: Vec<(InstanceId, Vec<u32>)> = Vec::new();
+        for entry in members {
+            let part = state.spatial.index(world).parts[entry as usize];
+            let root = super::joints::grid_root(state, reflection, part);
+            match groups.iter_mut().find(|(r, _)| *r == root) {
+                Some((_, list)) => list.push(entry),
+                None => groups.push((root, vec![entry])),
+            }
+        }
+        if groups.len() == 1 {
+            pieces.push((groups[0].0, unit));
+            state.spatial.index_mut(world).units[unit as usize].root_stale = true;
+            continue;
+        }
+        let old_root = root_part(state, reflection, world, unit);
+        let kept = groups.iter().position(|(_, list)| list.iter().any(|&entry| state.spatial.index(world).parts[entry as usize] == old_root)).unwrap_or(0);
+        let (kept_root, kept_parts) = groups.remove(kept);
+        set_parts(state, &names, world, unit, kept_parts);
+        state.spatial.index_mut(world).units[unit as usize].root_stale = true;
+        state.spatial.index_mut(world).requeue(unit, frame);
+        pieces.push((kept_root, unit));
+        groups.sort_by(|x, y| if super::joints::root_first(state, reflection, x.0, y.0) { std::cmp::Ordering::Less } else { std::cmp::Ordering::Greater });
+        for (root, list) in groups {
+            let index = state.spatial.index_mut(world);
+            let piece = index.new_unit(&list);
+            index.set_place(piece, Place::Waits, true, frame);
+            count_anchored(state, &names, world, piece);
+            state.spatial.index_mut(world).units[piece as usize].root_stale = true;
+            pieces.push((root, piece));
+        }
+    }
+    // each piece into the unit of its root, when that is another
+    for (root, piece) in pieces {
+        let Some(index) = state.spatial.worlds.get(world as usize).and_then(|index| index.as_deref()) else { return };
+        if index.units.get(piece as usize).is_none_or(|held| held.first == NONE) {
+            continue;
+        }
+        match state.spatial.unit_of(root) {
+            Some((holder, home)) if holder == world && home != piece => {
+                join_units(state, reflection, world, piece, home, frame);
+            }
+            None if root != state.spatial.index(world).parts[state.spatial.index(world).units[piece as usize].first as usize] => {
+                let first = state.spatial.index(world).parts[state.spatial.index(world).units[piece as usize].first as usize];
+                state.spatial.orphans.push((first, root));
+            }
+            _ => {}
         }
     }
 }
@@ -768,12 +1710,12 @@ pub(crate) fn world_gone(state: &mut State, root: InstanceId) {
     spatial.drop_world(dom, root);
 }
 
-/// `id` is about to be freed: out of any index (its slot is reused).
-pub(crate) fn freed(state: &mut State, id: InstanceId) {
+/// `id` is about to be freed: out of any index (its slot is reused), as a part leaving its world ([`wait_out`]).
+pub(crate) fn freed(state: &mut State, reflection: &crate::Reflection, id: InstanceId) {
     not_entered(state, id);
-    let State { spatial, sched, .. } = state;
-    if let Some((world, entry)) = spatial.holder(id) {
-        spatial.remove(world, entry, sched.frame);
+    if let Some((world, _)) = state.spatial.holder(id) {
+        let root = state.spatial.index(world).root;
+        wait_out(state, reflection, root, id);
     }
 }
 
@@ -787,19 +1729,25 @@ fn put(state: &mut State, engine: &Engine, names: Names, world: u32, part: Insta
     match state.spatial.holder(part).filter(|&(holder, _)| holder == world) {
         Some((_, at)) => {
             state.spatial.index_mut(world).entries[at as usize] = entry;
-            // (a unit that waits stays where it is until taken in; one filed keeps its list, which only an Anchored write or a link
-            // changes)
-            let index = state.spatial.index(world);
-            let unit = index.unit_of[at as usize];
-            if index.units[unit as usize].place != Place::Waits {
-                let list = held_list(&state.spatial, world, at);
-                let place = unit_place(state, &names, world, unit, list);
-                state.spatial.index_mut(world).set_place(unit, place, false, frame);
+            // (a unit that waits stays where it is until taken in; one filed is filed again as its parts stand, once however many of
+            // its parts the log names: open's end)
+            let unit = state.spatial.index(world).unit_of[at as usize];
+            if unit != NONE {
+                state.spatial.mark_dirty(world, unit);
             }
         }
         None => {
-            let place = placed(filing_of(state, &names, part, None));
-            state.spatial.add_alone(world, part, entry, place, frame);
+            // (a part that came in without a Parent write: filed at once, joined to the units holding the rest of its assembly)
+            let serial = state.dom.at(part).serial;
+            let at = state.spatial.add_alone(world, part, entry, serial, Place::Waits, frame);
+            let unit = state.spatial.index(world).unit_of[at as usize];
+            count_anchored(state, &names, world, unit);
+            let place = unit_place(state, &names, world, unit);
+            state.spatial.index_mut(world).take_unit(unit, frame);
+            state.spatial.index_mut(world).set_place(unit, place, true, frame);
+            for (_, other, _) in super::joints::part_links(state, part) {
+                join_parts(state, &engine.reflection, part, other, frame);
+            }
         }
     }
     // (the Workspace's log keeps the writes of the parts its index holds from their first read: a part that came into the wait is
@@ -809,17 +1757,14 @@ fn put(state: &mut State, engine: &Engine, names: Names, world: u32, part: Insta
     }
 }
 
-/// Takes `part` out of `world`'s index, if it is in; whether it was.
-fn take_out(state: &mut State, world: u32, part: InstanceId) -> bool {
-    let State { spatial, dom, sched, .. } = state;
-    let Some((holder, entry)) = spatial.holder(part) else { return false };
+/// Takes `part` out of `world`'s index, if it is in, as a part leaving its world ([`wait_out`]); whether it was.
+fn take_out(state: &mut State, reflection: &crate::Reflection, world: u32, part: InstanceId) -> bool {
+    let Some((holder, _)) = state.spatial.holder(part) else { return false };
     if holder != world {
         return false;
     }
-    spatial.remove(world, entry, sched.frame);
-    if let Some(instance) = dom.get_mut(part) {
-        instance.flags &= !(flags::INDEXED | flags::LOGGED);
-    }
+    let root = state.spatial.index(world).root;
+    wait_out(state, reflection, root, part);
     true
 }
 
@@ -833,17 +1778,33 @@ pub(crate) fn open(engine: &Engine, root: InstanceId) -> (Option<u32>, f64) {
     let Some(names) = engine.state.borrow().spatial.names else { return (None, 0.0) };
     let mut state = engine.state.borrow_mut();
     let state = &mut *state;
+    settle(state, &engine.reflection);
     if state.dom.get(root).is_none() {
         return (None, 0.0);
     }
     if root == workspace {
-        return (Some(open_workspace(state, engine, names, workspace)), 0.0);
+        let world = open_workspace(state, engine, names, workspace);
+        refile_marked(state);
+        return (Some(world), 0.0);
     }
     if !in_game(state, engine, root) {
         return (None, 0.0);
     }
     let (world, looked, filed) = open_model(state, engine, names, root);
+    refile_marked(state);
     (Some(world), looked as f64 * crate::cost::FIND_NODE + filed as f64 * crate::cost::MODEL_INDEX_PART)
+}
+
+/// The units marked to be filed again ([`Spatial::mark_dirty`]) filed now, in the order they were marked, unless a bulk move is
+/// still placing parts
+fn refile_marked(state: &mut State) {
+    if state.spatial.pending.dirty.is_empty() || state.joints.bulk_placing() {
+        return;
+    }
+    let frame = state.sched.frame;
+    for (world, unit, generation) in std::mem::take(&mut state.spatial.pending.dirty) {
+        refile_dirty(state, world, unit, generation, frame);
+    }
 }
 
 /// Whether the WorldModel `model` is in the DataModel (a WorldModel outside it has no world): read off the outermost home above
@@ -912,7 +1873,7 @@ fn open_workspace_log(state: &mut State, engine: &Engine, names: Names, workspac
             continue;
         }
         if state.dom.get(id).is_none() {
-            removed += u64::from(take_out(state, world, id));
+            removed += u64::from(take_out(state, &engine.reflection, world, id));
             continue;
         }
         let inside = state.dom.is_descendant_of_home(id, workspace);
@@ -931,7 +1892,7 @@ fn open_workspace_log(state: &mut State, engine: &Engine, names: Names, workspac
             if inside && is_part(engine, names, class) && state.dom.home(node) == Some(workspace) {
                 put(state, engine, names, world, node);
             } else if indexed || state.spatial.holder(node).is_some_and(|(holder, _)| holder == world) {
-                removed += u64::from(take_out(state, world, node));
+                removed += u64::from(take_out(state, &engine.reflection, world, node));
             }
         }
     }
@@ -995,7 +1956,7 @@ fn open_model(state: &mut State, engine: &Engine, names: Names, model: InstanceI
         }
         if state.dom.get(id).is_none() || state.dom.home(id) != Some(model) {
             looked += 1;
-            take_out(state, world, id);
+            take_out(state, &engine.reflection, world, id);
             continue;
         }
         // (a world inside it keeps its own parts)
@@ -1006,7 +1967,7 @@ fn open_model(state: &mut State, engine: &Engine, names: Names, model: InstanceI
             if is_part(engine, names, class) && state.dom.home(node) == Some(model) {
                 put(state, engine, names, world, node);
             } else {
-                take_out(state, world, node);
+                take_out(state, &engine.reflection, world, node);
             }
         }
     }
@@ -1077,6 +2038,7 @@ fn walk_world(state: &mut State, engine: &Engine, names: Names, world: u32, root
     let visited = order.len();
     let mut found: FxHashSet<InstanceId> = FxHashSet::default();
     let mut filed = 0usize;
+    let mut new_parts: Vec<InstanceId> = Vec::new();
     // (the WorldModels the walk meets inside the Workspace, for their indexes: open_workspace)
     let in_workspace = root == engine.world().workspace || state.dom.homes_above(root).top == Some(engine.world().workspace);
     for &node in &order {
@@ -1086,10 +2048,41 @@ fn walk_world(state: &mut State, engine: &Engine, names: Names, world: u32, root
         }
         if is_part(engine, names, class) && state.dom.home(node) == Some(root) {
             found.insert(node);
-            let before = state.spatial.holder(node).map(|(holder, entry)| (holder, state.spatial.index(holder).place_of(entry)));
-            put(state, engine, names, world, node);
-            let now = state.spatial.holder(node).map(|(_, entry)| state.spatial.index(world).place_of(entry));
-            filed += usize::from(now.is_some_and(|place| place != Place::Waits) && !before.is_some_and(|(holder, place)| holder == world && place != Place::Waits));
+            if state.spatial.holder(node).is_some_and(|(holder, _)| holder == world) {
+                put(state, engine, names, world, node);
+            } else {
+                new_parts.push(node);
+            }
+        }
+    }
+    // the parts not in the index yet, filed in the walk's order: each assembly as one unit where its first part comes
+    if !new_parts.is_empty() {
+        let joined = state.joints.created > 0;
+        if joined {
+            super::joints::ready(state, &engine.reflection);
+        }
+        let fresh: FxHashSet<InstanceId> = if joined { new_parts.iter().copied().collect() } else { FxHashSet::default() };
+        let frame = state.sched.frame;
+        for &part in &new_parts {
+            if state.spatial.holder(part).is_some_and(|(holder, _)| holder == world) {
+                continue;
+            }
+            let members: Vec<InstanceId> = if joined { super::joints::assembly_parts(state, &engine.reflection, part).iter().copied().filter(|member| fresh.contains(member) && !state.spatial.holder(*member).is_some_and(|(holder, _)| holder == world)).collect() } else { vec![part] };
+            let mut entries = Vec::with_capacity(members.len());
+            for &member in &members {
+                let entry = entry_of(state, engine, &names, member);
+                let serial = state.dom.at(member).serial;
+                entries.push(state.spatial.add(world, member, entry, serial, frame));
+                if root == engine.world().workspace {
+                    state.dom.at_mut(member).flags |= flags::INDEXED;
+                }
+            }
+            let unit = state.spatial.index_mut(world).new_unit(&entries);
+            count_anchored(state, &names, world, unit);
+            ready_unit(state, &engine.reflection, world, unit);
+            let place = unit_place(state, &names, world, unit);
+            state.spatial.index_mut(world).set_place(unit, place, true, frame);
+            filed += entries.len();
         }
     }
     let stale: Vec<InstanceId> = {
@@ -1097,7 +2090,7 @@ fn walk_world(state: &mut State, engine: &Engine, names: Names, world: u32, root
         index.live.iter().map(|&entry| index.parts[entry as usize]).filter(|part| !found.contains(part)).collect()
     };
     for part in stale {
-        take_out(state, world, part);
+        take_out(state, &engine.reflection, world, part);
     }
     state.spatial.index_mut(world).walked = visited;
     state.spatial.index_mut(world).read = true;
@@ -1121,13 +2114,14 @@ pub(crate) fn take_in(engine: &Engine, root: InstanceId) -> (Option<u32>, usize,
 }
 
 fn take_in_world(state: &mut State, reflection: &crate::Reflection, world: u32) -> usize {
-    links_started(state, reflection);
+    settle(state, reflection);
     let Some(names) = state.spatial.names else { return 0 };
     let frame = state.sched.frame;
     let mut wait = std::mem::take(&mut state.spatial.index_mut(world).wait);
     let count = state.spatial.index(world).waiting;
     for &unit in &wait {
-        let place = unit_place(state, &names, world, unit, None);
+        ready_unit(state, reflection, world, unit);
+        let place = unit_place(state, &names, world, unit);
         let index = state.spatial.index_mut(world);
         index.units[unit as usize].at = NONE;
         index.set_place(unit, place, true, frame);
@@ -1326,6 +2320,40 @@ pub(crate) fn wait_capacity(state: &State, root: InstanceId) -> usize {
 #[cfg(test)]
 pub(crate) fn check_world(engine: &Engine, root: InstanceId) -> Result<(), String> {
     let world = open(engine, root).0.ok_or("no index")?;
+    {
+        // (each unit one rigid assembly: its parts those of their assembly in this world, as world/joints.rs works it out)
+        let mut state = engine.state.borrow_mut();
+        let state = &mut *state;
+        if state.joints.created > 0 {
+            let units: Vec<(u32, Vec<InstanceId>)> = {
+                let index = state.spatial.index(world);
+                index.units.iter().enumerate().filter(|(_, held)| held.first != NONE).map(|(unit, held)| (unit as u32, held.parts().map(|entry| index.parts[entry as usize]).collect())).collect()
+            };
+            for (unit, parts) in units {
+                let members = super::joints::assembly_parts(state, &engine.reflection, parts[0]);
+                let here = members.iter().filter(|&&member| state.spatial.holder(member).is_some_and(|(holder, _)| holder == world)).count();
+                for &part in &parts {
+                    if super::joints::assembly_parts(state, &engine.reflection, part)[0] != members[0] {
+                        let names = state.spatial.names.expect("names");
+                        let described: Vec<String> = parts
+                            .iter()
+                            .map(|&p| {
+                                let anchored = names.anchored.and_then(|n| state.dom.boolean(p, n)) == Some(true);
+                                let root = super::joints::assembly_parts(state, &engine.reflection, p)[0];
+                                let name = |id: InstanceId| String::from_utf8_lossy(state.dom.at(id).name.as_bytes()).to_string();
+                                let links: Vec<String> = super::joints::part_links(state, p).iter().map(|(j, o, _)| format!("{}->{}", name(*j), name(*o))).collect();
+                                format!("{}{} root {} links [{}]", name(p), if anchored { "A" } else { "" }, name(root), links.join(" "))
+                            })
+                            .collect();
+                        return Err(format!("unit {unit} holds parts of two assemblies: {}", described.join("; ")));
+                    }
+                }
+                if here != parts.len() {
+                    return Err(format!("unit {unit} holds {} of its assembly's {here} parts in its world: {parts:?}, assembly {members:?}", parts.len()));
+                }
+            }
+        }
+    }
     let state = engine.state.borrow();
     let names = state.spatial.names.expect("names");
     let index = state.spatial.index(world);
@@ -1380,7 +2408,7 @@ pub(crate) fn check_world(engine: &Engine, root: InstanceId) -> Result<(), Strin
         match held.place {
             Place::Filed(filing) => {
                 filed.push((unit, filing));
-                let now = unit_place(&state, &names, world, unit, Some(filing.list));
+                let now = unit_place(&state, &names, world, unit);
                 if now != held.place {
                     return Err(format!("unit {unit} filed as {:?}, its parts file it as {now:?}", held.place));
                 }

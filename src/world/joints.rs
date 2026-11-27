@@ -271,6 +271,9 @@ pub struct Joints {
     /// motion (gravity::assemblies_changed, after each write: [`property_changed`], [`reparented`])
     pub(crate) motion: bool,
     pub(crate) regrouped: Vec<InstanceId>,
+    /// The links that started or ended since the spatial grid last took them, in the order they did, each with its joint, its two
+    /// parts (Part0's first) and whether it started (world/broadphase.rs settle: a client files each rigid assembly as one unit)
+    pub(crate) grid_links: Vec<(InstanceId, InstanceId, InstanceId, bool)>,
 }
 
 /// The joints indexed under one part (the rigid ones and WeldConstraints: [`link_in`]), in the order
@@ -1129,6 +1132,12 @@ impl Drop for BulkMoving<'_> {
 }
 
 impl Joints {
+    /// Whether a bulk move is placing parts (Model:PivotTo, ScaleTo, BulkMoveTo): the spatial grid files the units it moved once it
+    /// ends (world/broadphase.rs settle).
+    pub(crate) fn bulk_placing(&self) -> bool {
+        self.batch > 0 || self.bulk > 0
+    }
+
     /// An instance of `class` was made (instance::create).
     #[inline]
     pub fn note_created(&mut self, class: ClassId) {
@@ -1151,11 +1160,14 @@ impl Joints {
             let place = old.places[side] as usize;
             self.by_part.get(&part).filter(|list| list.slots.get(place) == Some(&Some(joint)) && list.is_linking(place)).map(|_| part)
         };
-        let kept_up = keep_up
-            && match (linking(0), linking(1)) {
-                (Some(a), Some(b)) if a != b => self.unlink(joint, [a, b], old.places).is_some(),
-                _ => false,
-            };
+        let ended = match (linking(0), linking(1)) {
+            (Some(a), Some(b)) if a != b => Some([a, b]),
+            _ => None,
+        };
+        if let Some([a, b]) = ended {
+            self.grid_links.push((joint, a, b, false));
+        }
+        let kept_up = keep_up && ended.is_some_and(|parts| self.unlink(joint, parts, old.places).is_some());
         for side in 0..2 {
             let Some(part) = old.parts[side] else { continue };
             if side == 1 && old.parts[0] == Some(part) {
@@ -1803,9 +1815,9 @@ fn relink(state: &mut State, reflection: &Reflection, setup: &Setup, joint: Inst
             flips[side] = Some((part, on));
         }
     }
-    // (a link that started files its two parts again in the spatial grid: world/broadphase.rs links_started)
-    if let Some((first, second, true)) = clean_flip(&flips) {
-        state.spatial.link_started(first, second);
+    // (a link that started or ended joins or splits the spatial grid's units: world/broadphase.rs settle)
+    if let Some((first, second, on)) = clean_flip(&flips) {
+        state.joints.grid_links.push((joint, first, second, on));
     }
     state.joints.sync_pair(joint);
     flips
@@ -2467,25 +2479,73 @@ fn anchored(state: &State, setup: &Setup, part: InstanceId) -> bool {
     state.dom.boolean(part, setup.anchored) == Some(true)
 }
 
-/// Whether `part`'s assembly holds an anchored part, read from its kept component alone (world/broadphase.rs: the spatial grid files a
-/// part in its assembly's list); None when it links no other part or its component is not kept now, which this never works out.
-pub(crate) fn grid_anchored(state: &State, part: InstanceId) -> Option<bool> {
-    let found = state.joints.components.get(&part)?;
-    Some(!found.anchored.borrow().is_empty())
+/// The joints that link `part` to another part now, in the order they were indexed under it, each with that part and when it named
+/// `part` ([`Indexed::named`]: a later naming, a newer link): what the spatial grid's units are joined by (world/broadphase.rs).
+pub(crate) fn part_links(state: &State, part: InstanceId) -> Vec<(InstanceId, InstanceId, u64)> {
+    let joints = &state.joints;
+    let Some(list) = joints.by_part.get(&part) else { return Vec::new() };
+    if list.linking == 0 {
+        return Vec::new();
+    }
+    list.linking()
+        .filter_map(|joint| {
+            let entry = joints.indexed.get(&joint)?;
+            let [Some(first), Some(second)] = entry.parts else { return None };
+            let (other, side) = if first == part { (second, 0) } else { (first, 1) };
+            (other != part).then_some((joint, other, entry.named[side]))
+        })
+        .collect()
 }
 
-/// The parts of `part`'s kept component, in no particular order (world/broadphase.rs: an Anchored write that anchors or frees the
-/// whole of it files them again); None when it is not kept.
-pub(crate) fn grid_component(state: &State, part: InstanceId) -> Option<Vec<InstanceId>> {
-    let found = state.joints.components.get(&part)?;
-    let mut parts: Vec<InstanceId> = found.links.borrow().keys().copied().collect();
-    parts.sort_unstable();
-    Some(parts)
+/// Readies the joints' index for reads (the joints made before anything needed it), as an assembly read does (world/broadphase.rs).
+pub(crate) fn ready(state: &mut State, reflection: &Reflection) {
+    if let Some(setup) = setup_of(state) {
+        ensure_scanned(state, reflection, &setup);
+    }
 }
 
-/// Of two parts a joint links, whether `a` comes before `b` as their assembly's root would: an anchored part first, else the
-/// better ranked ([`root_rank`]), of equal parts the later made (world/broadphase.rs: a link that starts files its parts again in
-/// that order, measured).
+/// Whether a joint links `a` and `b` to each other now (world/broadphase.rs: a link between them that ended splits nothing)
+pub(crate) fn pair_linked(state: &State, a: InstanceId, b: InstanceId) -> bool {
+    state.joints.pairs.contains_key(&pair_key([a, b]))
+}
+
+/// How many joints link `part` to another part now (world/broadphase.rs: the work a search through its links has left)
+pub(crate) fn link_count(state: &State, part: InstanceId) -> usize {
+    state.joints.by_part.get(&part).map_or(0, |list| list.linking)
+}
+
+/// The root of the assembly `part` is in now, as [`root_part`] works it out but deriving nothing (world/broadphase.rs: which unit of
+/// the spatial grid a part belongs to): from its kept component's known roots when it has them, else its tree.
+pub(crate) fn grid_root(state: &mut State, reflection: &Reflection, part: InstanceId) -> InstanceId {
+    let Some(setup) = setup_of(state) else { return part };
+    if state.joints.created == 0 || anchored(state, &setup, part) {
+        return part;
+    }
+    ensure_scanned(state, reflection, &setup);
+    let Some(found) = component(state, reflection, &setup, part) else { return part };
+    if let Some(root) = found.single_root().or_else(|| found.kept_root(part)) {
+        return root;
+    }
+    let tree = assemblies_of(state, reflection, &setup, &found, part, None, false);
+    tree.of(part).map_or(part, |(assembly, ..)| assembly.nodes[0].part)
+}
+
+/// Whether the kept component of `part` kept its parts' roots through the link changes since its last tree ([`KeptRoots`]: each change
+/// left every part's path from its root as it was, but for a side split off or hung from a part): world/broadphase.rs trusts a split's
+/// pieces then, where the changes could otherwise have moved parts between its anchored parts' assemblies.
+pub(crate) fn roots_kept(state: &State, part: InstanceId) -> bool {
+    state.joints.components.get(&part).is_some_and(|found| found.roots.borrow().is_some())
+}
+
+/// How many anchored parts the kept component of `part` holds, if one is kept (world/broadphase.rs: with more than one, an assembly's
+/// parts can be claimed by another anchored part when links change)
+pub(crate) fn component_anchored(state: &State, part: InstanceId) -> Option<usize> {
+    state.joints.components.get(&part).map(|found| found.anchored.borrow().len())
+}
+
+/// Of two parts, whether `a` comes before `b` as their assembly's root would: an anchored part first, else the better ranked
+/// ([`root_rank`]), of equal parts the later made (world/broadphase.rs: the unit holding the root keeps its place when two units
+/// join, measured).
 pub(crate) fn root_first(state: &State, reflection: &Reflection, a: InstanceId, b: InstanceId) -> bool {
     let Some(setup) = state.joints.setup.clone() else { return true };
     let (anchored_a, anchored_b) = (anchored(state, &setup, a), anchored(state, &setup, b));
@@ -4432,7 +4492,7 @@ fn part_moved(state: &mut State, reflection: &Reflection, hooks: &Hooks, setup: 
 /// Sub [x3]]`: the Folder, x2, x3, Sub). This is neither Dom::descendants' order (each instance before its descendants) nor
 /// Dom::spread_home's (which takes the last child first), and it matters: it is the order joints leave and join their parts'
 /// lists. The walk does not go below an instance `stop` marks (it takes that instance itself up).
-fn taken_up(state: &State, root: InstanceId, stop: impl Fn(&State, InstanceId) -> bool) -> Vec<InstanceId> {
+pub(crate) fn taken_up(state: &State, root: InstanceId, stop: impl Fn(&State, InstanceId) -> bool) -> Vec<InstanceId> {
     let mut order = vec![root];
     if stop(state, root) {
         return order;

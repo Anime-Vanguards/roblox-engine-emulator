@@ -12234,3 +12234,112 @@ fn requires_cost_what_a_client_spends_loading_a_module() {
         ),
     );
 }
+
+/// The spatial grid's units follow the rigid assemblies through random rounds of welds made, destroyed, disabled, re-pointed and
+/// moved between parts, parts anchored, freed, moved, resized, made Massless, taken out and back, models moved in and out whole,
+/// with queries between some of them (world/broadphase.rs settle): after each round each unit holds one assembly whole, filed as its
+/// parts file it or waiting, and the grid, the waits and the loose lists are sound.
+#[test]
+fn the_grids_units_follow_the_assemblies_through_random_rounds() {
+    for seed in [5u64, 91, 2026, 7, 13, 77, 404, 999, 31337, 8080, 123456, 42, 1002, 1021] {
+        let (lua, engine) = start_play();
+        run(
+            &lua,
+            &engine,
+            &r##"
+            workspace.Gravity = 0
+            local Rng = Random.new(__SEED__)
+            local Store = Instance.new("Folder")
+            Store.Parent = game:GetService("ReplicatedStorage")
+            local Models = {}
+            for I = 1, 4 do
+                local M = Instance.new("Model")
+                M.Name = "M" .. I
+                M.Parent = if I % 2 == 0 then workspace else Store
+                table.insert(Models, M)
+            end
+            local Parts, Welds = {}, {}
+            local Made = 0
+            local function NewPart()
+                local P = Instance.new("Part")
+                P.Size = Vector3.one * Rng:NextNumber(0.5, 3)
+                P.Anchored = Rng:NextNumber() < 0.2
+                P.CFrame = CFrame.new(Rng:NextInteger(-40, 40), Rng:NextInteger(-40, 40), 0)
+                P.Parent = Models[Rng:NextInteger(1, #Models)]
+                table.insert(Parts, P)
+                Made += 1
+                P.Name = "P" .. Made
+            end
+            for _ = 1, 24 do
+                NewPart()
+            end
+            local function Any(List)
+                return List[Rng:NextInteger(1, #List)]
+            end
+            function shared.Step()
+                local Roll = Rng:NextNumber()
+                shared.Last = Roll
+                pcall(function()
+                        if Roll < 0.25 then
+                            local W = Instance.new(if Rng:NextNumber() < 0.5 then "WeldConstraint" else "Weld")
+                            W.Part0, W.Part1 = Any(Parts), Any(Parts)
+                            W.Parent = if Rng:NextNumber() < 0.5 then W.Part0 else Any(Models)
+                            table.insert(Welds, W)
+                            Made += 1
+                            W.Name = "W" .. Made
+                        elseif Roll < 0.32 and #Welds > 0 then
+                            Any(Welds):Destroy()
+                        elseif Roll < 0.38 and #Welds > 0 then
+                            local W = Any(Welds)
+                            W.Enabled = not W.Enabled
+                        elseif Roll < 0.43 and #Welds > 0 then
+                            Any(Welds).Part1 = Any(Parts)
+                        elseif Roll < 0.53 then
+                            local P = Any(Parts)
+                            P.Anchored = not P.Anchored
+                        elseif Roll < 0.63 then
+                            Any(Parts).CFrame = CFrame.new(Rng:NextInteger(-40, 40), Rng:NextInteger(-40, 40), 0)
+                        elseif Roll < 0.68 then
+                            Any(Parts).Size = Vector3.one * Rng:NextNumber(0.5, 3)
+                        elseif Roll < 0.71 then
+                            local P = Any(Parts)
+                            P.Massless = not P.Massless
+                        elseif Roll < 0.78 then
+                            local P = Any(Parts)
+                            P.Parent = if P.Parent == nil then Any(Models) else nil
+                        elseif Roll < 0.84 then
+                            local M = Any(Models)
+                            M.Parent = if M.Parent == workspace then Store else workspace
+                            local Held = {}
+                            for _, D in M:GetDescendants() do
+                                table.insert(Held, D.Name .. (if D:IsA("JointInstance") or D:IsA("WeldConstraint") then `({D.Part0 and D.Part0.Name}-{D.Part1 and D.Part1.Name} {D.Enabled})` else "") .. "<" .. D.Parent.Name)
+                            end
+                            shared.Last = `{Roll} {M.Name} to {M.Parent.Name}: {table.concat(Held, " ")}`
+                        elseif Roll < 0.88 then
+                            Any(Parts).Parent = Any(Models)
+                        elseif Roll < 0.92 then
+                            local P = table.remove(Parts, Rng:NextInteger(1, #Parts))
+                            P:Destroy()
+                            NewPart()
+                        else
+                            workspace:GetPartBoundsInBox(CFrame.new(), Vector3.new(100, 100, 4))
+                        end
+                end)
+            end
+            "##
+            .replace("__SEED__", &seed.to_string()),
+        );
+        // (the index checked after each change, so a failure names the change that left it unsound)
+        for step in 0..1200 {
+            run(&lua, &engine, "shared.Step()");
+            if step % 40 == 39 {
+                run(&lua, &engine, "workspace:GetPartBoundsInBox(CFrame.new(), Vector3.new(100, 100, 4))");
+            }
+            super::query::index_matches_a_walk(&engine).unwrap_or_else(|error| {
+                let shared: LuaTable = engine.lua.borrow().shared.as_ref().expect("shared globals").get("shared").expect("shared");
+                let last: String = shared.get::<LuaValue>("Last").ok().and_then(|value| value.to_string().ok()).unwrap_or_default();
+                panic!("seed {seed}, step {step} ({last}): {error}")
+            });
+        }
+    }
+}

@@ -70,9 +70,15 @@ impl Filing {
     /// The filing of a part whose frame is `frame` (unit axes) and size `size`, in `list`: None when its box is not finite.
     pub fn of(frame: &Affine3A, size: Vec3, list: u8, off: bool) -> Option<Filing> {
         let (lo, hi) = filed_box(frame, size)?;
+        Some(Filing::of_box(lo, hi, list, off))
+    }
+
+    /// The filing of a filed box `lo`..`hi` (a part's, or the union of an assembly's parts' filed boxes: world/broadphase.rs), in
+    /// `list`: on that box's level, in its closed cells.
+    pub fn of_box(lo: Vec3, hi: Vec3, list: u8, off: bool) -> Filing {
         let level = part_level(hi - lo);
         let (lo, hi) = cells(lo, hi, level, true);
-        Some(Filing { level, lo, hi, list, off })
+        Filing { level, lo, hi, list, off }
     }
 
     /// Whether it holds no cell (all beyond the far bound)

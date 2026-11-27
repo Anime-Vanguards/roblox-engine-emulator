@@ -435,8 +435,8 @@ fn notify_changed_hooks(state: &mut State, reflection: &Reflection, hooks: &Hook
     }
     // Rigid assemblies: a part's CFrame moves its assembly, a joint's change settles it
     super::world::joints::property_changed(state, reflection, hooks, id, name, old.as_ref());
-    // (the links that started file their parts again in the spatial grid: world/broadphase.rs links_started)
-    super::world::broadphase::links_started(state, reflection);
+    // (what the write did to the spatial grid's units: world/broadphase.rs settle)
+    super::world::broadphase::settle(state, reflection);
 }
 
 /// Changed and the property's own signal for a property the engine computes rather than stores (no hooks run): Camera's
@@ -943,7 +943,7 @@ fn reparent(
     // Joints and parts entering a WorldRoot link up, and those leaving every world leave their parts' lists of active joints
     // (world::joints)
     super::world::joints::reparented(state, reflection, hooks, id, old_parent, new_parent);
-    super::world::broadphase::links_started(state, reflection);
+    super::world::broadphase::settle(state, reflection);
     Ok(())
 }
 

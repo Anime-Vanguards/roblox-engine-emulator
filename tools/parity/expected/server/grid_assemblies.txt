@@ -1,0 +1,138 @@
+# engine: Roblox Studio 0.747.0.7471481, the server of a headless play session (a Script in ServerScriptService, script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-27
+A1 p0,p4,p2,p3,p1
+A2 p0,p4,p2,p3,p1
+A3 p0,p3,p1,p2,p4
+A4 p0,p1,p3,p2,p4
+A5 p0,p4,p2,p3,p1
+A6 p0,p3,p1,p2,p4
+B1 s0,s1,b1,b2,s2,s3
+B2 s0,s1,b1,b2,s2,s3
+B3 s0,s1,c1,c2,b1,b2,b3,s3,s2
+B4 s0,s1,c1,c2,b1,b2,b3,s3,s2
+C1 a,b,c,x,y
+C2 y,x,a,b,c
+C3 y,x,a,b,c
+C4 a,b,c,x,y
+C5 y,x,a,b,c
+D1 b,a,x
+D2 z,x,b,a
+D3 b,a,z,x
+E1 d,c,b,a
+F1 d,c,e,b,a
+G1 c,e,b,a
+H1 b,x,y,a
+H2 c,x,y,a
+I1 x,b,a
+I2 y,x,b,a
+J1 x,a,b
+K1 y,x,b,a
+K2 y,x,b,a
+E2 c,d,a,b
+E3 d,c,a,b
+E4 c,d,b,a
+I3 x,a,b
+I4 x,a,b
+I5 y,x,a,b
+D4 b,a,x
+D5 a,b,z,x
+S1 d,c,x,b,a
+S2 p,b,q,a
+S3 p,a,q,b
+H3 b,a,x,y
+H4 a,x,y,c
+H5 c,x,y,z,b,a
+Y1 x,c,b,a
+Y2 c,x,b,a
+Z1 a,b,c,x,y
+Z2 y,x,a,b,c
+Z3 a,b,c,x,y
+W1 d,b,a,c
+W2 d,b,a,c
+W3 a,b,d,c
+W4 d,b,a,c
+W5 d,b,a,c
+H6 c,x,y,a
+H7 a,x,y,c
+H8 a,x,c,b
+H9 y,x,a,c
+H10 b,a,x,y,d
+H11 c,x,y,a
+H12 a,x,y,c
+H13 a,x,y,c
+H14 c,x,a,b
+H15 a,x,c,b
+P1 in b,a,x,y
+P1 a-grown y,x,a,b
+P1 a-back y,x,b,a
+P2 in b,a,x,y
+P2 b-massless y,x,a,b
+P3 in a,b,c,x,y
+P3 a-grown y,x,a,b,c
+V1 y,b,a,x
+V2 y,b,a,x
+N1 in x,A,B,u
+N1 w2-ends x,B,A,u
+N1 w1-ends x,u,B,A
+N2 in x,A,u,B
+N2 w2-ends x,A,B,u
+N3 in x,A,u,v
+N3 v-anchored x,A,v,u
+N3 v-free x,A,u,v
+N3 A-free x,A,u,v
+N4 in x,A,u
+N4 A-free x,u,A
+N4 u-anchored x,u,A
+R1 in b,a,x,c,y
+R1 to-c y,x,b,c,a
+R2 in b,a,x,y
+R2 off y,x,b,a
+R2 on y,x,b,a
+R3 off b,x,y,a
+R3 on y,x,b,a
+T1 in b,a,x,y
+T1 out y,x,b,a
+T1 back y,x,b,a
+T2 in a,b,c,x,y
+T2 b-out y,x,c,a
+T2 b-back y,x,a,b,c
+P4 in b,a,x,y
+P4 a-grown y,x,b,a
+P5 in b,a,x,y
+P5 a-massless y,x,b,a
+P6 in b,a,x,y
+P6 named y,x,Torso,b
+P7 in a,b,c,x,y
+P7 b-grown y,x,a,b,c
+P7 c-grown y,x,a,b,c
+P8 grown-waiting a,b,x,y
+P9 in x,b,a,y
+P9 b-shrunk x,y,b,a
+Q1 in b,a,x,y
+Q1 after b,a,x,y
+Q2 in b,a,x,y
+Q2 after b,a,x,y
+Q3 in b,a,x,y
+Q3 after b,a,x,y
+Q4 in b,a,x,y
+Q4 after y,x,b,a
+Q5 in b,a,x,y
+Q5 after b,a,x,y
+Q6 in b,a,x,y
+Q6 after b,a,x,y
+Q7 in b,a,x,y
+Q7 after b,a,x,y
+Q8 in b,a,x,y
+Q8 after b,a,x,y
+Q9 in b,a,x,y
+Q9 after b,a,x,y
+Q10 in b,a,x,y
+Q10 after b,a,x,y
+Q11 in b,a,x,y
+Q11 after b,a,x,y
+Q12 in b,a,x,y
+Q12 after b,a,x,y
+Q13 in b,a,x,y
+Q13 after b,a,x,y
+Q14 in x,a,y
+Q14 after x,Torso,y
