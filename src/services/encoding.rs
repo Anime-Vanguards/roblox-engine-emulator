@@ -4,7 +4,8 @@
 //! playing client and server (tools/parity/probes/encoding.luau): every member answers a buffer; an argument that is no
 //! buffer is "missing or nil"; Base64Decode refuses input that is not padded Base64; the errors' texts are the client's.
 //! ComputeBufferHash / ComputeStringHash answer each HashAlgorithm's digest (digest.rs), as measured in the same client and
-//! server (tools/parity/probes/encoding_hash.luau): see [`hash_algorithm`] and [`install`].
+//! server (tools/parity/probes/encoding_hash.luau): see [`hash_algorithm`] and [`install`]. Each member costs the work clock what a
+//! client spends on what it handles once it answered (cost.rs `hash_algorithm_prices` and after; [`charge`]).
 
 mod digest;
 
@@ -80,6 +81,14 @@ fn hashed(lua: &Lua, engine: &Engine, member: &str, algorithm: &str, input: &[u8
     digest
 }
 
+/// Charges a member's price for what it handled (cost.rs), once it answered
+fn charge(engine: &Engine, seconds: f64) {
+    if seconds > 0.0 {
+        engine.state.borrow().sched.charge(seconds);
+        crate::boundary::add_cost(seconds);
+    }
+}
+
 /// The decompressed size a Zstd frame holds, when it holds one within the limit.
 fn decompressed_size(input: &[u8]) -> Option<u64> {
     zstd::zstd_safe::get_frame_content_size(input).ok().flatten().filter(|&size| size <= MAX_DECOMPRESSED)
@@ -104,6 +113,7 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
                 return raise("CompressBuffer: unsupported compression level for Zstd");
             }
             let compressed = zstd::bulk::compress(&input, level as i32).or_else(|error| raise(format!("CompressBuffer: {error}")))?;
+            charge(engine, crate::cost::compressed(input.len(), compressed.len(), level));
             Ok(values([LuaValue::Buffer(lua.create_buffer(compressed)?)]))
         }));
     }
@@ -119,6 +129,7 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
             if output.len() as u64 != size {
                 return raise(FAILED);
             }
+            charge(engine, crate::cost::decompressed(output.len()));
             Ok(values([LuaValue::Buffer(lua.create_buffer(output)?)]))
         }));
     }
@@ -130,8 +141,9 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
         }));
     }
     if let Some(n) = name("Base64Encode") {
-        behaviors.add_method(service, n, method(|lua, _, _, args| {
+        behaviors.add_method(service, n, method(|lua, engine, _, args| {
             let input = buffer_argument(args, 1)?;
+            charge(engine, crate::cost::base64(input.len()));
             Ok(values([LuaValue::Buffer(lua.create_buffer(base64::encode(input))?)]))
         }));
     }
@@ -141,6 +153,7 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
             let algorithm = hash_algorithm(lua, engine, args)?;
             let input = buffer_argument(args, 1)?;
             let digest = hashed(lua, engine, "ComputeBufferHash", &algorithm, &input);
+            charge(engine, crate::cost::hash_algorithm_prices(&algorithm, input.len(), false));
             Ok(values([digest.map_or(Ok(LuaValue::Nil), |digest| lua.create_buffer(digest).map(LuaValue::Buffer))?]))
         }));
     }
@@ -155,11 +168,12 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
                 _ => return raise("Argument 1 missing or nil"),
             };
             let digest = hashed(lua, engine, "ComputeStringHash", &algorithm, &input);
+            charge(engine, crate::cost::hash_algorithm_prices(&algorithm, input.len(), true));
             Ok(values([digest.map_or(Ok(LuaValue::Nil), |digest| lua.create_string(digest).map(LuaValue::String))?]))
         }));
     }
     if let Some(n) = name("Base64Decode") {
-        behaviors.add_method(service, n, method(|lua, _, _, args| {
+        behaviors.add_method(service, n, method(|lua, engine, _, args| {
             let input = buffer_argument(args, 1)?;
             // (measured: unpadded input is refused)
             const INVALID: &str = "Base64Decode: input is not a base64 string";
@@ -167,6 +181,7 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
                 return raise(INVALID);
             }
             let decoded = base64::decode(input).or_else(|_| raise(INVALID))?;
+            charge(engine, crate::cost::base64(decoded.len()));
             Ok(values([LuaValue::Buffer(lua.create_buffer(decoded)?)]))
         }));
     }

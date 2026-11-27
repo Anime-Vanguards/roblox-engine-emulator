@@ -2297,6 +2297,78 @@ pub const SHARED_FAR_SLOT: f64 = 0.7e-9;
 /// 0.72x of an earlier session's 554-596 us at 10,000 and 7,676-8,397 at 100,000, most likely a colder state (10 entries took 0.25
 /// and 0.27 us, 1.6x under it).
 pub const SHARED_CLEARED_ENTRY: f64 = 40e-9;
+/// EncodingService's members by what they handle, beyond the price of a call the cost table does not name ([`CALL`]) and the Luau
+/// around it (services/encoding.rs), in seconds. A playing client (roblox-sim, Studio 0.747, a headless client, three sessions;
+/// os.clock around 1 to 200 calls on inputs of 3 bytes to 1 MB, the median of 15 less an empty loop, each sample beside a part's
+/// unchanged CastShadow write; a text of a repeated 44-byte pattern and a pseudo-random one, which Zstd squeezes to 62-150 and to
+/// 1,034-15,396 bytes), each fitted for the least relative error over the sessions' geometric means:
+/// - ComputeBufferHash, the call and a byte by algorithm ([`hash_algorithm_prices`]): Blake2b 0.39 us + 0.62 ns a byte, Blake3 0.38 +
+///   0.73 ns a byte up to 1 KB and 0.08 past it (within x0.89 to x1.18 but x0.38 at 1 KB without the first kilobyte's price), Md5 0.67 +
+///   1.19, Sha1 0.63 + 0.78, Sha256 0.44 + 2.02 (within x0.90 to x1.14); ComputeStringHash 0.15 us less (Sha256 0.30 + 2.01, Blake3
+///   0.22 + 0.08), as its digest is a string and no new buffer. ree charged the call alone for each, 0.07 in all.
+/// - Base64Encode by its input's bytes and Base64Decode by its output's ([`base64`]): 0.10 us at 3 bytes, 1.6 to 2.3 at 1 KB, 9.2 to
+///   14 at 16 KB, 36 to 48 at 64 KB, 100 to 166 at 256 KB, 430 to 576 at 1 MB: its first kilobyte 1.7 ns a byte, 0.65 to 64 KB and
+///   0.45 past it.
+/// - CompressBuffer ([`compressed`]): 1.5 us + 0.06 ns an input byte + 0.55 ns an output byte at level 1 (a 1 KB text 1.75 to 2.2
+///   us, the same of noise 3.6 to 3.8, 16 KB of noise 9.4 to 11.5, 1 MB of text 50 and of noise 76 to 82), each byte's price times
+///   [`compression_level`]'s for the level (64 KB: text 6.7 / 6.3 / 12.2 / 34.3 us at levels -7 / 3 / 10 / 19, noise 12.2 / 13.9 /
+///   78.4 / 268: a level's search costs most where the data compresses least).
+/// - DecompressBuffer by its output's bytes ([`decompressed`]): 0.44 us + 1.35 ns a byte of its first kilobyte + 0.3 past it (1 KB 1.6
+///   to 1.9, 64 KB 15 to 28, 1 MB 117 to 303, text dearer than noise).
+/// - GetDecompressedBufferSize 0.045 to 0.05 us in all: [`method`]'s price.
+/// The digests, the codecs and the copies run on the host; a client pays for its input's copy too, which these include.
+///
+/// This: what a ComputeBufferHash or ComputeStringHash of `bytes` bytes with `algorithm` costs (HashAlgorithm's item name; an item this
+/// does not know, which answers nil, costs the call alone).
+pub fn hash_algorithm_prices(algorithm: &str, bytes: usize, string: bool) -> f64 {
+    let n = bytes as f64;
+    let (call, per_byte) = match algorithm {
+        "Blake2b" => (0.39e-6, 0.62e-9 * n),
+        "Blake3" => (0.38e-6, if bytes <= 1024 { 0.73e-9 * n } else { (0.73e-9_f64 * 1024.0).max(0.08e-9 * n) }),
+        "Md5" => (0.67e-6, 1.19e-9 * n),
+        "Sha1" => (0.63e-6, 0.78e-9 * n),
+        "Sha256" => (0.44e-6, 2.02e-9 * n),
+        _ => return 0.0,
+    };
+    // (the call measured with its own Luau, which ree counts apart: 0.07 us in all with CALL)
+    (call - ENCODING_COUNTED).max(0.0) + per_byte - if string { HASH_STRING_LESS } else { 0.0 }
+}
+/// The part of each EncodingService call ree counts already (CALL and the Luau around a call in a loop, 0.07 us), which the fitted calls
+/// above include, and what ComputeStringHash spends less than ComputeBufferHash
+pub const ENCODING_COUNTED: f64 = 0.07e-6;
+pub const HASH_STRING_LESS: f64 = 0.15e-6;
+/// Base64Encode of `bytes` input bytes or Base64Decode of `bytes` output bytes
+pub fn base64(bytes: usize) -> f64 {
+    let (first, next) = (bytes.min(1024) as f64, bytes.clamp(1024, 65536) as f64 - 1024.0);
+    (0.10e-6 - ENCODING_COUNTED) + first * 1.7e-9 + next * 0.65e-9 + bytes.saturating_sub(65536) as f64 * 0.45e-9
+}
+/// CompressBuffer of `input` bytes to `output` bytes at `level`
+pub fn compressed(input: usize, output: usize, level: f64) -> f64 {
+    let (per_input, per_output) = compression_level(level);
+    (1.5e-6 - ENCODING_COUNTED) + input as f64 * 0.06e-9 * per_input + output as f64 * 0.55e-9 * per_output
+}
+/// How much more a Zstd level costs an input byte and an output byte than level 1, fitted on the text (the input's) and the noise
+/// (the output's) at -7, 1, 3, 10 and 19: 1 and 1 up to level 1, 1.25 and 1.3 at 3, 2.7 and 11 at 10, 8.4 and 40 at 19, straight
+/// between them, 19's past it (20 to 22 not measured)
+pub fn compression_level(level: f64) -> (f64, f64) {
+    const POINTS: [(f64, f64, f64); 4] = [(1.0, 1.0, 1.0), (3.0, 1.25, 1.3), (10.0, 2.7, 11.0), (19.0, 8.4, 40.0)];
+    if level <= 1.0 {
+        return (1.0, 1.0);
+    }
+    for pair in POINTS.windows(2) {
+        let ((l0, i0, o0), (l1, i1, o1)) = (pair[0], pair[1]);
+        if level <= l1 {
+            let t = (level - l0) / (l1 - l0);
+            return (i0 + (i1 - i0) * t, o0 + (o1 - o0) * t);
+        }
+    }
+    (8.4, 40.0)
+}
+/// DecompressBuffer to `output` bytes
+pub fn decompressed(output: usize) -> f64 {
+    (0.44e-6 - ENCODING_COUNTED) + output.min(1024) as f64 * 1.35e-9 + output.saturating_sub(1024) as f64 * 0.3e-9
+}
+
 /// TextService:GetTextSize (the parity bench: "Hello" and "World" at 14 in SourceSans 7.3 us on the fastest client sessions)
 pub const TEXT_MEASURED: f64 = 7.3e-6;
 
@@ -2592,6 +2664,9 @@ pub fn method(name: &str) -> f64 {
         "GetValue" => 0.027,
         // ReflectionService:GetClass's lookup; the entry it makes is [`REFLECTED_CLASS`]'s
         "GetClass" => 0.28,
+        // (EncodingService:GetDecompressedBufferSize, 0.045-0.05 us in all on a headless 0.747 client, three sessions; its other members
+        // add what they handle: [`hash_algorithm_prices`] and after)
+        "GetDecompressedBufferSize" => 0.035,
         // (SharedTableRegistry, whose methods are the engine's Luau (services.luau): a playing client and a server, Studio 0.747, two
         // sessions each, 1,000 calls a sample beside a part's unchanged CastShadow write: GetSharedTable 0.16-0.19 us, SetSharedTable of
         // the table the name holds 0.42-0.44; ree charged a call the table does not name, 0.08 in all)
@@ -2652,7 +2727,7 @@ pub fn method_kinds(name: &str) -> u8 {
         | "FindFirstAncestorOfClass" | "FindFirstAncestorWhichIsA" | "GetFullName" | "GetPlayers" | "HasTag" | "GetTags" | "AddTag" | "RemoveTag" | "Emit"
         | "WorldToViewportPoint" | "WorldToScreenPoint" | "ViewportPointToRay" | "ScreenPointToRay" | "GetAttribute" | "Create" | "Raycast"
         | "Blockcast" | "Spherecast" | "GetPartBoundsInBox" | "GetPartBoundsInRadius" | "GetPartsInPart" | "JSONEncode" | "JSONDecode"
-        | "GetValue" | "GetClass" | "GetSharedTable" | "SetSharedTable" | "Fire" | "GetPivot" | "GetScale" | "GetBoundingBox" | "GetExtentsSize" | "PivotTo" | "ScaleTo"
+        | "GetValue" | "GetClass" | "GetDecompressedBufferSize" | "GetSharedTable" | "SetSharedTable" | "Fire" | "GetPivot" | "GetScale" | "GetBoundingBox" | "GetExtentsSize" | "PivotTo" | "ScaleTo"
         | "FindPartsInRegion3" | "FindPartsInRegion3WithIgnoreList" | "FindPartsInRegion3WithWhiteList"
         | "findPartsInRegion3" | "IsRegion3Empty" | "IsRegion3EmptyWithIgnoreList" | "ArePartsTouchingOthers" | "GetRootPart" | "GetConnectedParts"
         | "GetJoints" | "GetNoCollisionConstraints" | "IsGrounded" | "GetRenderCFrame" | "GetClosestPointOnSurface" | "GetVelocityAtPosition"

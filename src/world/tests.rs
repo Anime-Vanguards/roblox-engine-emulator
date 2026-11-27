@@ -12024,3 +12024,54 @@ fn shared_tables_marked_long_keys_and_far_slots_cost_what_a_client_spends() {
         ),
     );
 }
+
+/// EncodingService's members cost what a client spends on what they handle (cost.rs hash_algorithm_prices and after; Studio 0.747,
+/// a headless client, three sessions): a hash by its algorithm and bytes, Base64 by its bytes, CompressBuffer by its input and
+/// output bytes and level, DecompressBuffer by its output. Each was charged a call the cost table does not name, whatever it
+/// handled (0.07 us in all).
+#[test]
+fn encoding_calls_cost_what_a_client_spends_on_what_they_handle() {
+    use crate::cost::*;
+    let (lua, engine) = start_play();
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    let hashed = |algorithm: &str, string: bool| hash_algorithm_prices(algorithm, 100_000, string) - hash_algorithm_prices(algorithm, 3, string);
+    run(
+        &lua,
+        &engine,
+        &format!(
+            r##"
+        local Encoding = game:GetService("EncodingService")
+        local Small, Large = buffer.fromstring("abc"), buffer.create(100000)
+        local SmallText, LargeText = "abc", string.rep("a", 100000)
+        local Zstd = Enum.CompressionAlgorithm.Zstd
+        local function Cost(Call)
+            Call()
+            local Start = os.clock()
+            Call()
+            return os.clock() - Start
+        end
+        local function Is(Name, Got, Want)
+            assert(math.abs(Got - Want) < 1e-10 + 1e-6 * Want, `{{Name}}: {{Got}} s more, not {{Want}}`)
+        end
+        for Name, Want in {{ Sha256 = {sha256:e}, Md5 = {md5:e}, Blake3 = {blake3:e} }} do
+            local Algorithm = Enum.HashAlgorithm[Name]
+            Is(Name, Cost(function() Encoding:ComputeBufferHash(Large, Algorithm) end) - Cost(function() Encoding:ComputeBufferHash(Small, Algorithm) end), Want)
+        end
+        Is("ComputeStringHash", Cost(function() Encoding:ComputeStringHash(LargeText, Enum.HashAlgorithm.Sha256) end) - Cost(function() Encoding:ComputeStringHash(SmallText, Enum.HashAlgorithm.Sha256) end), {string:e})
+        Is("Base64Encode", Cost(function() Encoding:Base64Encode(Large) end) - Cost(function() Encoding:Base64Encode(Small) end), {base64:e})
+        local Packed = Encoding:CompressBuffer(Large, Zstd)
+        local SmallPacked = buffer.len(Encoding:CompressBuffer(Small, Zstd))
+        Is("CompressBuffer", Cost(function() Encoding:CompressBuffer(Large, Zstd) end) - Cost(function() Encoding:CompressBuffer(Small, Zstd) end), {compress:e} + (buffer.len(Packed) - SmallPacked) * {out_byte:e})
+        Is("DecompressBuffer", Cost(function() Encoding:DecompressBuffer(Packed, Zstd) end) - Cost(function() Encoding:GetDecompressedBufferSize(Packed, Zstd) end), {decompress:e})
+        "##,
+            sha256 = hashed("Sha256", false),
+            md5 = hashed("Md5", false),
+            blake3 = hashed("Blake3", false),
+            string = hashed("Sha256", true),
+            base64 = base64(100_000) - base64(3),
+            compress = compressed(100_000, 0, 1.0) - compressed(3, 0, 1.0),
+            out_byte = compressed(0, 1, 1.0) - compressed(0, 0, 1.0),
+            decompress = decompressed(100_000) + CALL - method("GetDecompressedBufferSize"),
+        ),
+    );
+}

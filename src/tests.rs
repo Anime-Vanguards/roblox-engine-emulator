@@ -15064,42 +15064,6 @@ fn a_test_script_that_never_ends_fails_its_test() {
     assert_script("while true do task.wait() end");
 }
 
-/// EncodingService's hashes cost the work clock what its other members do: the price of a call the cost table does not name
-/// (cost.rs CALL), whatever the input's size. A playing client spends more (Studio 0.747, a headless client: 0.32 to 0.67 us for a
-/// 3-byte input, and 0.076 ns a byte for Blake3, 0.59 for Blake2b, 0.88 for Sha1, 1.2 for Md5 and 2.1 for Sha256), as it does for
-/// CompressBuffer (1.4 us for 3 bytes) and Base64Encode (0.45 ns a byte), which ree prices the same way.
-#[test]
-fn hashes_cost_the_work_clock_what_other_encoding_calls_do() {
-    let (lua, engine) = start();
-    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
-    let output = run(
-        &lua,
-        &engine,
-        &format!(
-            r#"{MOVE_HELPERS}
-        local EncodingService = game:GetService("EncodingService")
-        local Small, Large, Text = buffer.fromstring("abc"), buffer.create(100000), "abc"
-        local Md5, Zstd = Enum.HashAlgorithm.Md5, Enum.CompressionAlgorithm.Zstd
-        local Compress = Each(function() EncodingService:CompressBuffer(Small, Zstd) end)
-        local Hash = Each(function() EncodingService:ComputeBufferHash(Small, Md5) end)
-        local Long = Each(function() EncodingService:ComputeBufferHash(Large, Md5) end)
-        local Hashed = Each(function() EncodingService:ComputeStringHash(Text, Md5) end)
-        print(string.format("compress %.4f buffer %.4f large %.4f string %.4f", Compress, Hash, Long, Hashed))
-        print("answers", typeof(EncodingService:ComputeBufferHash(Small, Md5)), typeof(EncodingService:ComputeStringHash(Text, Md5)))
-        "#
-        ),
-    );
-    assert!(output.contains(&"print: answers buffer string".to_string()), "{output:?}");
-    let line = output.iter().find(|line| line.starts_with("print: compress")).expect("the prices");
-    let prices: Vec<&str> = line.split(' ').skip(2).step_by(2).collect();
-    assert!(prices.iter().all(|price| *price == prices[0]), "{line}");
-    // (each the call's price and the Luau around it)
-    let price: f64 = prices[0].parse().expect("a price");
-    assert!((crate::cost::CALL * 1e6..0.2).contains(&price), "{line}");
-    assert_eq!(crate::cost::method("ComputeBufferHash"), crate::cost::CALL);
-    assert_eq!(crate::cost::method("ComputeStringHash"), crate::cost::CALL);
-}
-
 /// A field read through workspace, game, script or shared reads the value of the moment, as a playing client's and a server's
 /// do (Studio 0.747, tools/parity/probes/field_imports.luau): the compiler imports the global and not the chain through it
 /// (modules::FIELD_GLOBALS), so `workspace.Gravity` reads what a write through a local left. The imports were resolved when the
