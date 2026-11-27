@@ -157,3 +157,38 @@ fn a_servers_cameras_have_no_window() {
     let lines = run(play(), r#"assert(workspace.CurrentCamera.ViewportSize.X > 1 and math.abs(workspace.CurrentCamera.NearPlaneZ + 0.1) < 1e-6) print("done")"#, 0.0);
     done(&lines);
 }
+
+/// GetTranslatorForLocaleAsync casts its locale, raises for fewer than two characters at once, refuses a thread that cannot yield,
+/// and answers after 10 s, calls made together waiting together.
+#[test]
+fn translator_for_locale_waits_ten_seconds() {
+    let lines = run(
+        play(),
+        r#"
+        local L = game:GetService("LocalizationService")
+        local Line
+        table.sort({ 2, 1 }, function(A, B)
+            if not Line then Line = select(2, pcall(function() return L:GetTranslatorForLocaleAsync({}) end)) end
+            return A < B
+        end)
+        assert(Line == "thread is not yieldable", Line)
+        assert(select(2, pcall(function() return L:GetTranslatorForLocaleAsync("x") end)) == "Too few characters in locale id!")
+        local Done = {}
+        local T0 = time()
+        for _, Locale in { "fr-fr", true } do
+            task.spawn(function()
+                local T = L:GetTranslatorForLocaleAsync(Locale)
+                table.insert(Done, T.LocaleId .. " " .. string.format("%.1f", time() - T0))
+            end)
+        end
+        task.wait(9.9)
+        assert(#Done == 0, "still waiting")
+        task.wait(0.2)
+        table.sort(Done)
+        assert(table.concat(Done, ",") == "fr-fr 10.0,true 10.0", table.concat(Done, ","))
+        print("done")
+        "#,
+        11.0,
+    );
+    done(&lines);
+}

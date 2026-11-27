@@ -1,16 +1,8 @@
 {
 	"arg_checks": [
 		{
-			"line": "translator-for-locale ",
-			"why": "LocalizationService:GetTranslatorForLocaleAsync casts a non-string locale and waits for the web in a client and a server (and refuses where the thread cannot yield); ree answers a translator at once"
-		},
-		{
 			"line": "refused CreateEditableMeshAsync",
 			"why": "AssetService:CreateEditableMeshAsync casts its argument before it refuses to wait (`Argument 1 missing or nil`, `Unable to cast double to Content`, `Unable to cast Array to Content`) and raises `UnpublishedPlaceNotInStudio` for an asset offline; ree's message and order differ"
-		},
-		{
-			"line": "refused GetTranslatorForLocaleAsync",
-			"why": "LocalizationService:GetTranslatorForLocaleAsync casts a non-string locale and waits for the web in a client and a server (and refuses where the thread cannot yield); ree answers a translator at once"
 		},
 		{
 			"line": "loaders-logged ",

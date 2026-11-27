@@ -129,8 +129,9 @@ fn probe_job(scratch: &Path, empty: &Path, name: &str, source: &str, server: boo
         harness.to_string_lossy().into_owned(),
         "--roots".into(),
         empty.to_string_lossy().into_owned(),
+        // (300 s of the run's clock, the capture's cap on one job: run.mjs runInRee)
         "--seconds".into(),
-        "120".into(),
+        "300".into(),
         "--max-wall-seconds".into(),
         "60".into(),
     ];

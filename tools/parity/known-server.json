@@ -9,10 +9,6 @@
 			"why": "ree's server run has no player (the capture's server has its client's); PromptSubscriptionPurchase's lines that pass the player differ for that alone"
 		},
 		{
-			"line": "translator-for-locale ",
-			"why": "LocalizationService:GetTranslatorForLocaleAsync casts a non-string locale and waits for the web in a client and a server (and refuses where the thread cannot yield); ree answers a translator at once"
-		},
-		{
 			"line": "refused CreateEditableMeshAsync",
 			"why": "AssetService:CreateEditableMeshAsync casts its argument before it refuses to wait (`Argument 1 missing or nil`, `Unable to cast double to Content`, `Unable to cast Array to Content`) and raises `UnpublishedPlaceNotInStudio` for an asset offline; ree's message and order differ"
 		},
@@ -31,10 +27,6 @@
 		{
 			"line": "refused GetAnimationClipAsync",
 			"why": "the capture server's animation loader knows no rbxassetid scheme and raises `Invalid animation id 'rbxassetid://1': Unrecognized scheme` at once, where a client refuses to wait first; the same server fetches the same assets by their http://www.roblox.com/asset/?id= URL and meshes by rbxassetid (animation_stepping.luau), so ree keeps the client's rule on a server too (a capture artifact, not followed)"
-		},
-		{
-			"line": "refused GetTranslatorForLocaleAsync",
-			"why": "LocalizationService:GetTranslatorForLocaleAsync casts a non-string locale and waits for the web in a client and a server (and refuses where the thread cannot yield); ree answers a translator at once"
 		}
 	],
 	"assembly_motion": [

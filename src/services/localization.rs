@@ -1199,6 +1199,8 @@ const FIVE: &[StringParam] = &[StringParam::at(1), StringParam::at(2), StringPar
 const SECOND: &[StringParam] = &[StringParam::at(2)];
 /// GetTranslatorForLocaleAsync's locale: cast without the warning (a method that yields)
 const QUIET: &[StringParam] = &[StringParam::quiet(1)];
+/// How long GetTranslatorForLocaleAsync waits for the experience's table, which an offline client never gets (seconds)
+const TABLE_WAIT: f64 = 10.0;
 
 /// The string argument at `index` (cast already: [`strings`])
 fn text_arg(args: &Args, index: usize) -> Bytes {
@@ -1750,14 +1752,21 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
             Ok(values([instance_value(lua, engine, made)?]))
         }));
     }
+    // (the locale cast as a string parameter: a table is "{}", true "true", an Instance "instance", a Vector3 "1, 1, 1"; then fewer
+    // than two characters raise at once, a thread that cannot yield is refused, and the translator comes after 10 s, the time a
+    // client and a server wait for the experience's table off the web, calls made together waiting together: measured on a 0.747
+    // playing client and a server, two sessions, tools/parity/probes/translator_wait.luau)
     if let Some(id) = member("GetTranslatorForLocaleAsync") {
         behaviors.add_method(service, id, strings(QUIET, method(move |lua, engine, _, args| {
             let given = text_arg(args, 1);
             if given.len() < 2 {
                 return raise("Too few characters in locale id!");
             }
+            let thread = lua.current_thread();
+            crate::lua::refuse_unyieldable(&thread, crate::lua::NOT_YIELDABLE)?;
             let made = new_translator(engine, &names, Scope::Service, locale(&given));
-            Ok(values([instance_value(lua, engine, made)?]))
+            engine.state.borrow_mut().sched.schedule_call(crate::scheduler::TimerKind::Delay, TABLE_WAIT, thread, vec![Value::Instance(made)]);
+            Err(Flow::Yield)
         })));
     }
     if let Some(id) = member("GetTableEntries") {

@@ -1,0 +1,19 @@
+# engine: Roblox Studio 0.747.0.7471481, a headless playing client (script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-27
+refused x error Too few characters in locale id!
+refused 5 error Too few characters in locale id!
+refused empty error Too few characters in locale id!
+refused other self error Expected ':' not '.' calling member function GetTranslatorForLocaleAsync
+refused vector error thread is not yieldable
+other self error Expected ':' not '.' calling member function GetTranslatorForLocaleAsync
+no self error Expected ':' not '.' calling member function GetTranslatorForLocaleAsync
+locale fr-fr ok Instance Translator Instance fr-fr | after 10.0 s
+locale table ok Instance Translator Instance {} | after 10.0 s
+locale true ok Instance Translator Instance true | after 10.0 s
+locale instance ok Instance Translator Instance instance | after 10.0 s
+locale number error Too few characters in locale id! | at once
+locale x error Too few characters in locale id! | at once
+locale EN_us ok Instance Translator Instance en-us | after 10.0 s
+locale empty error Too few characters in locale id! | at once
+locale vector ok Instance Translator Instance 1, 1, 1 | after 10.0 s
+again true de-de 10.0 s true
