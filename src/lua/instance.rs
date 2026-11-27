@@ -413,7 +413,7 @@ pub fn not_a_member_message(engine: &Engine, id: InstanceId, key: &[u8]) -> Stri
 /// NumberRange, NumberSequence, ColorSequence, PhysicalProperties, Ray, ...) is a userdata of its own: not rawequal to another
 /// read's nor to the value written, so a table keyed by one read does not find the next (measured in a playing client and a
 /// server, Studio 0.747: tools/parity/probes/value_read_identity.luau). A Vector3 is a value.
-fn read_property(lua: &Lua, engine: &Rc<Engine>, id: InstanceId, name: NameId) -> Result<LuaValue, Flow> {
+pub(crate) fn read_property(lua: &Lua, engine: &Rc<Engine>, id: InstanceId, name: NameId) -> Result<LuaValue, Flow> {
     let value = engine.state.borrow().dom.raw_get(id, name).cloned();
     let Some(value) = value else { return Ok(LuaValue::Nil) };
     if let Value::Lua(held) = &value

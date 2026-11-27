@@ -179,6 +179,31 @@ pub fn load(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     )?;
     let e = engine.clone();
     r.set(
+        // a getter that passes what the property's own getter answers (a derived view's, else the stored value) through
+        // `filter(instance, value)` and answers what it returns (an EditableImage's Content read back: lua/services.luau)
+        "ContentGetter",
+        super::lua_fn(lua, move |_, (class_name, name, filter): (String, String, LuaFunction)| {
+            let (Some(class), Some(name)) = (e.reflection.class_id(&class_name), e.reflection.name_id(&name)) else {
+                return Ok(());
+            };
+            let previous = e.behaviors.borrow().find_getter(&e.reflection, class, name).cloned();
+            e.behaviors.borrow_mut().add_getter(
+                class,
+                name,
+                Rc::new(move |lua, engine, id| {
+                    let value = match &previous {
+                        Some(previous) => previous(lua, engine, id)?,
+                        None => super::instance::read_property(lua, engine, id, name)?,
+                    };
+                    Ok(filter.call::<LuaValue>((instance_value(lua, engine, id)?, value))?)
+                }),
+            );
+            e.clear_member_cache();
+            Ok(())
+        })?,
+    )?;
+    let e = engine.clone();
+    r.set(
         "Create",
         super::lua_fn(lua, move |lua, class_name: String| {
             let class = e.reflection.class_id(&class_name).ok_or_else(|| LuaError::runtime(format!("Unable to create an Instance of type \"{class_name}\"")))?;
@@ -189,16 +214,18 @@ pub fn load(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     let e = engine.clone();
     r.set(
         "RawSet",
-        super::lua_fn(lua, move |_, (target, name, value, silent): (LuaValue, String, LuaValue, bool)| {
+        // (`mode`: true for a silent store, "unsignalled" for one scripts get no Changed event of but the recorder sees, as
+        // an engine-computed value: instance::raw_set_unsignalled)
+        super::lua_fn(lua, move |_, (target, name, value, mode): (LuaValue, String, LuaValue, LuaValue)| {
             let id = instance_of(&target)?;
             let Some(name) = e.reflection.name_id(&name) else { return Ok(false) };
             let value = convert::from_lua(&value);
             let hooks = e.hooks.borrow();
             let mut state = e.state.borrow_mut();
-            Ok(if silent {
-                core::raw_set_silent(&mut state, &e.reflection, id, name, value)
-            } else {
-                core::raw_set(&mut state, &e.reflection, &hooks, id, name, value)
+            Ok(match mode {
+                LuaValue::String(text) if text.as_bytes() == b"unsignalled" => core::raw_set_unsignalled(&mut state, &e.reflection, &hooks, id, name, value),
+                LuaValue::Nil | LuaValue::Boolean(false) => core::raw_set(&mut state, &e.reflection, &hooks, id, name, value),
+                _ => core::raw_set_silent(&mut state, &e.reflection, id, name, value),
             })
         })?,
     )?;
@@ -577,6 +604,16 @@ pub fn load(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
         super::lua_fn(lua, move |_, (width, height, pixels): (u32, u32, mlua::Buffer)| match crate::images::save(&e, width, height, &pixels.to_vec()) {
             Ok(path) => Ok((Some(path.to_string_lossy().replace('\\', "/")), None)),
             Err(error) => Ok((None, Some(error))),
+        })?,
+    )?;
+    // One pixel of an EditableImage draw (crate::images::combine): the source's channels in 0-1 combined by an ImageCombineType's
+    // name into the 4 bytes at `offset` of `pixels` (`solid`: a shape's colour, not an image's pixel)
+    r.set(
+        "Combine",
+        super::lua_fn(lua, |_, (pixels, offset, kind, red, green, blue, alpha, solid, coverage): (mlua::Buffer, usize, LuaString, f32, f32, f32, f32, Option<bool>, Option<f32>)| {
+            let target = pixels.read_bytes::<4>(offset);
+            pixels.write_bytes(offset, &crate::images::combine(&kind.to_string_lossy(), [red, green, blue, alpha], target, solid.unwrap_or(false), coverage.unwrap_or(1.0)));
+            Ok(())
         })?,
     )?;
     // AssetService:CreateDataModelContentAsync (lua/services.luau): a copy of an EditableMesh as it is now (its file URI,

@@ -61,6 +61,60 @@ pub fn decode(bytes: &[u8]) -> Result<Pixels, String> {
     Ok(Pixels { width: frame.width, height: frame.height, rgba })
 }
 
+/// One pixel of an EditableImage draw: `source` (red, green, blue, alpha in 0-1) combined into `target` (bytes) by an
+/// ImageCombineType, as a 0.747 client combines them (measured byte for byte, 120 pixels a type over 3 colour pairs, 8 source
+/// and 5 target alphas: tools/parity/probes/editable_image_draw.luau). BlendSourceOver (the default) and AlphaBlend work in
+/// single precision, each result cut down to a byte (`x * 255` truncated): BlendSourceOver's alpha is `sa + da * (1 - sa)`
+/// and its colour the source's and the target's weighed by `sa` and `da * (1 - sa)` over that alpha (where that alpha is 0,
+/// the target's colour, a solid draw's (`solid`: DrawRectangle, DrawCircle, DrawLine) the source's); AlphaBlend's every
+/// channel, alpha too, `s * sa + d * (1 - sa)`; each sum's last term fused into it (`mul_add`: measured, one pixel a level
+/// higher than a separate product gives); a shape's edge pixel at `coverage`. Add and Subtract work in
+/// bytes: each colour channel the target's plus or minus the source's times its alpha over 255 (truncated), the alpha the
+/// target's plus or minus the source's, clamped. Multiply: every channel `s * d / 255` rounded up. Overwrite: the source.
+pub fn combine(kind: &str, source: [f32; 4], target: [u8; 4], solid: bool, coverage: f32) -> [u8; 4] {
+    let byte = |x: f32| (x * 255.0).clamp(0.0, 255.0) as u8;
+    let unit = |b: u8| f32::from(b) / 255.0;
+    // (a shape's edge pixel, covered in part: Overwrite mixes the pixel toward the source by the share, the others take the
+    // source's alpha times it; measured in a 0.747 client on circles)
+    if coverage < 1.0 {
+        if kind == "Overwrite" {
+            return [0, 1, 2, 3].map(|i| byte(unit(target[i]) + (source[i] - unit(target[i])) * coverage));
+        }
+        return combine(kind, [source[0], source[1], source[2], source[3] * coverage], target, solid, 1.0);
+    }
+    let d = target.map(unit);
+    let (sa, da) = (source[3], d[3]);
+    // (the byte modes read the source back as the bytes it was made from)
+    let source_bytes = || source.map(|x| (x * 255.0).round().clamp(0.0, 255.0) as u8);
+    match kind {
+        "Overwrite" => source_bytes(),
+        "AlphaBlend" => {
+            let inverse = 1.0 - sa;
+            [0, 1, 2, 3].map(|i| byte(d[i].mul_add(inverse, source[i] * sa)))
+        }
+        "Add" | "Subtract" => {
+            let s = source_bytes();
+            let sign = if kind == "Add" { 1 } else { -1 };
+            let colour = |i: usize| (i32::from(target[i]) + sign * (i32::from(s[i]) * i32::from(s[3]) / 255)).clamp(0, 255) as u8;
+            [colour(0), colour(1), colour(2), (i32::from(target[3]) + sign * i32::from(s[3])).clamp(0, 255) as u8]
+        }
+        "Multiply" => {
+            let s = source_bytes();
+            [0, 1, 2, 3].map(|i| ((u32::from(s[i]) * u32::from(target[i]) + 254) / 255) as u8)
+        }
+        _ => {
+            let inverse = 1.0 - sa;
+            let alpha = da.mul_add(inverse, sa);
+            if alpha <= 0.0 {
+                let kept = if solid { source_bytes() } else { target };
+                return [kept[0], kept[1], kept[2], 0];
+            }
+            let colour = |i: usize| byte((d[i] * da).mul_add(inverse, source[i] * sa) / alpha);
+            [colour(0), colour(1), colour(2), byte(alpha)]
+        }
+    }
+}
+
 static NEXT: AtomicU64 = AtomicU64::new(0);
 static PRUNED: AtomicBool = AtomicBool::new(false);
 
@@ -116,6 +170,29 @@ fn prune(directory: &std::path::Path) {
 mod tests {
     use super::*;
     use crate::Options;
+
+    /// The combine types byte for byte as a 0.747 client combines them (tools/parity/probes/editable_image_draw.luau: a few of
+    /// its 600 pixels, the fused sum's included).
+    #[test]
+    fn combine_types_follow_a_client() {
+        let unit = |pixel: [u8; 4]| pixel.map(|b| f32::from(b) / 255.0);
+        let cases: [(&str, [u8; 4], [u8; 4], [u8; 4]); 8] = [
+            ("BlendSourceOver", [200, 50, 25, 64], [10, 100, 230, 64], [118, 71, 112, 111]),
+            ("BlendSourceOver", [200, 50, 25, 0], [10, 100, 230, 0], [10, 100, 230, 0]),
+            ("AlphaBlend", [200, 50, 25, 64], [10, 100, 230, 128], [57, 87, 178, 111]),
+            ("AlphaBlend", [200, 50, 25, 153], [10, 100, 200, 160], [124, 70, 94, 155]),
+            ("Add", [200, 50, 25, 64], [10, 100, 230, 255], [60, 112, 236, 255]),
+            ("Subtract", [200, 50, 25, 1], [10, 100, 230, 1], [10, 100, 230, 0]),
+            ("Multiply", [200, 50, 25, 64], [10, 100, 230, 64], [8, 20, 23, 17]),
+            ("Overwrite", [200, 50, 25, 0], [10, 100, 230, 255], [200, 50, 25, 0]),
+        ];
+        for (kind, source, target, want) in cases {
+            assert_eq!(combine(kind, unit(source), target, false, 1.0), want, "{kind} {source:?} over {target:?}");
+        }
+        // a solid draw keeps its own colour where the alpha comes out 0, and an edge pixel's share mixes Overwrite
+        assert_eq!(combine("BlendSourceOver", unit([204, 51, 25, 0]), [10, 100, 230, 0], true, 1.0), [204, 51, 25, 0]);
+        assert_eq!(combine("BlendSourceOver", [1.0, 1.0, 1.0, 1.0], [0, 0, 0, 0], true, 0.625), [255, 255, 255, 159]);
+    }
 
     #[test]
     fn save_does_not_overwrite_existing_snapshot_from_reused_pid() {

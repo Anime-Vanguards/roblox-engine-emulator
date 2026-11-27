@@ -499,9 +499,6 @@ end)
 --
 --
 --
---
---
---
 
 -- EditableImage: RGBA pixels (images/rs: an image loaded from an asset holds the asset's, decoded; a new
 -- one starts transparent black). One never written keeps its asset's id, so a SurfaceAppearance built
@@ -542,9 +539,6 @@ local function Snapshot(Image)
 	return Data.Snapshot
 end
 
--- (set while a snapshot is assigned to an image's users: their Content setters keep it registered)
-local Refreshing = false
-
 local function TakeSnapshots()
 	SnapshotScheduled = false
 	local Due = SnapshotsDue
@@ -558,20 +552,9 @@ local function TakeSnapshots()
 		if Map then
 			for Surface, Properties in Users do
 				for Property in Properties do
-					if Surface:IsA("SurfaceAppearance") then
-						-- (its maps are read-only to scripts)
-						RawSet(Surface, Property, Map, false)
-					else
-						-- through the property's setter, which a Content view of a string id writes through
-						Refreshing = true
-						local Ok, Problem = pcall(function()
-							Surface[Property] = Map
-						end)
-						Refreshing = false
-						if not Ok then
-							warn(`EditableImage: {Surface:GetFullName()}.{Property} did not take its snapshot ({Problem})`)
-						end
-					end
+					-- (a SurfaceAppearance's map, else the string id a Content view writes; an engine write: scripts get no
+					-- Changed event, as a client's image writes give none, but the recorder sees it change)
+					RawSet(Surface, Property, if Surface:IsA("SurfaceAppearance") then Map else Map.Uri, "unsignalled")
 				end
 			end
 		end
@@ -601,41 +584,22 @@ local function Rectangle(Image, Position, Size)
 	return X, Y, W, H, Width
 end
 
-for _, Name in { "DrawTriangle", "DrawImageProjected" } do
-	Method("EditableImage", Name, function(Self)
-		Extra(Self).Source = nil
-		Extra(Self).Snapshot = nil
+-- (a game script may not call DrawTriangle: measured in a 0.747 client; DrawImageProjected and SampleImageProjected check their projection's Direction there, and project nothing here)
+Method("EditableImage", "DrawTriangle", function() error("The current thread cannot call 'DrawTriangle' (lacking capability RobloxScript)", 0) end)
+for _, Name in { "DrawImageProjected", "SampleImageProjected" } do
+	Method("EditableImage", Name, function(Self, _, Projection)
+		if type(Projection) ~= "table" or Projection.Direction == nil then error("EditableImage::DrawImageProjected Param ProjectionParams, is missing Direction", 0) end
+		Missing("EditableImage", Name)
 	end)
 end
 
--- One pixel of an ImageCombineType, channels 0-1 (Roblox's ImageCombineType reference): the result's
--- r, g, b, a.
-local function Combine(Kind, SR, SG, SB, SA, DR, DG, DB, DA)
-	if Kind == "Overwrite" then
-		return SR, SG, SB, SA
-	elseif Kind == "AlphaBlend" then
-		return SR * SA + DR * (1 - SA), SG * SA + DG * (1 - SA), SB * SA + DB * (1 - SA), SA + DA * (1 - SA)
-	elseif Kind == "Add" then
-		return DR + SR * SA, DG + SG * SA, DB + SB * SA, DA + SA
-	elseif Kind == "Subtract" then
-		return DR - SR * SA, DG - SG * SA, DB - SB * SA, DA - SA
-	elseif Kind == "Multiply" then
-		return DR * SR, DG * SG, DB * SB, DA * SA
-	end
-	-- BlendSourceOver (the default) and NormalMapBlend's blend
-	local A = SA + DA * (1 - SA)
-	if A <= 0 then
-		return 0, 0, 0, 0
-	end
-	return (SR * SA + DR * DA * (1 - SA)) / A, (SG * SA + DG * DA * (1 - SA)) / A, (SB * SA + DB * DA * (1 - SA)) / A, A
-end
+-- A colour channel and an opacity (1 - transparency) as the draw methods take them, in 0-1 (measured in a 0.747 client: `x * 256` cut toward zero and kept under 256, a negative one wrapping as a byte: a transparency of 1.5 draws at half); an argument a client requires
+local function Channel(Value) local Scaled = Value * 256 Scaled = if Scaled < 0 then math.ceil(Scaled) else math.floor(Scaled) return (math.min(Scaled, 255) % 256) / 255 end
+local function Opacity(Transparency) return Channel(1 - (Transparency or 0)) end
+local function Required(Value, Index) if Value == nil then error(`Argument {Index} missing or nil`, 0) end return Value end
 
-local function Byte(Value)
-	return math.clamp(math.floor(Value * 255 + 0.5), 0, 255)
-end
-
--- Combines Source(x, y) (r, g, b, a in 0-1, or nil to leave the pixel) into the clipped rectangle.
-local function Draw(Self, X0, Y0, W0, H0, CombineType, Source)
+-- Combines Source(x, y) (r, g, b, a in 0-1, or nil to leave the pixel) into the clipped rectangle, each pixel as a client combines it (images.rs combine)
+local function Draw(Self, X0, Y0, W0, H0, CombineType, Source, Solid)
 	local Width, Height = ImageSize(Self)
 	local X1, Y1 = math.max(X0, 0), math.max(Y0, 0)
 	local X2, Y2 = math.min(X0 + W0, Width), math.min(Y0 + H0, Height)
@@ -648,38 +612,20 @@ local function Draw(Self, X0, Y0, W0, H0, CombineType, Source)
 		for X = X1, X2 - 1 do
 			local SR, SG, SB, SA = Source(X - X0, Y - Y0)
 			if SR then
-				local Offset = (Y * Width + X) * 4
-				local R, G, B, A = Combine(
-					Kind, SR, SG, SB, SA,
-					buffer.readu8(Pixels, Offset) / 255, buffer.readu8(Pixels, Offset + 1) / 255,
-					buffer.readu8(Pixels, Offset + 2) / 255, buffer.readu8(Pixels, Offset + 3) / 255
-				)
-				buffer.writeu8(Pixels, Offset, Byte(R))
-				buffer.writeu8(Pixels, Offset + 1, Byte(G))
-				buffer.writeu8(Pixels, Offset + 2, Byte(B))
-				buffer.writeu8(Pixels, Offset + 3, Byte(A))
+				R.Combine(Pixels, (Y * Width + X) * 4, Kind, SR, SG, SB, SA, Solid)
 			end
 		end
 	end
 	Written(Self)
 end
 
--- Studio 0.747 lists seven more ImageCombineType items (Darken, Lighten, Screen, Overlay, SoftLight, HardLight,
--- Difference) and gives each Draw method an alphaBlendType (ImageAlphaType) after its other arguments, and plays
--- neither yet (measured there): such a combine type, as an item, its name or its value, raises "EditableImage:DrawImage:
--- the requested Enum.ImageCombineType is not yet supported", and after it an alpha type other than Default raises
--- "EditableImage:DrawImage: Enum.ImageAlphaType other than Default is not yet supported". The image is left as it was.
+-- Studio 0.747 lists seven more ImageCombineType items (Darken, Lighten, Screen, Overlay, SoftLight, HardLight, Difference) and gives each Draw method an alphaBlendType (ImageAlphaType) after its other arguments, and plays neither yet (measured there): such a combine type, as an item, its name or its value, raises "EditableImage:DrawImage:
+-- the requested Enum.ImageCombineType is not yet supported", and after it an alpha type other than Default raises "EditableImage:DrawImage: Enum.ImageAlphaType other than Default is not yet supported". The image is left as it was.
 local UnsupportedCombine = { Darken = true, Lighten = true, Screen = true, Overlay = true, SoftLight = true, HardLight = true, Difference = true }
 
 local function ItemName(EnumType, Value)
-	if typeof(Value) == "EnumItem" then
-		return Value.Name
-	elseif type(Value) == "string" then
-		return Value
-	elseif type(Value) == "number" then
-		local Item = EnumType:FromValue(Value)
-		return Item and Item.Name
-	end
+	if typeof(Value) == "EnumItem" then return Value.Name elseif type(Value) == "string" then return Value end
+	if type(Value) == "number" then local Item = EnumType:FromValue(Value) return Item and Item.Name end
 	return nil
 end
 
@@ -694,15 +640,19 @@ local function CheckBlend(Name, CombineType, AlphaType)
 	end
 end
 
+-- (measured in a 0.747 client: DrawRectangle, DrawCircle and DrawLine require their combine type, DrawImage its combine type and its image)
 Method("EditableImage", "DrawRectangle", function(Self, Position, Size, Color, Transparency, CombineType, AlphaBlendType)
+	Required(CombineType, 5)
 	CheckBlend("DrawRectangle", CombineType, AlphaBlendType)
-	local R, G, B, A = Color.R, Color.G, Color.B, 1 - math.clamp(Transparency or 0, 0, 1)
+	local R_, G, B, A = Channel(Color.R), Channel(Color.G), Channel(Color.B), Opacity(Transparency)
 	Draw(Self, math.floor(Position.X), math.floor(Position.Y), math.floor(Size.X), math.floor(Size.Y), CombineType, function()
-		return R, G, B, A
-	end)
+		return R_, G, B, A
+	end, true)
 end)
 
 Method("EditableImage", "DrawImage", function(Self, Position, Image, CombineType, AlphaBlendType)
+	Required(CombineType, 3)
+	if typeof(Image) ~= "Instance" or not Image:IsA("EditableImage") then error("EditableImage:DrawImage expects non nil srcImage", 0) end
 	CheckBlend("DrawImage", CombineType, AlphaBlendType)
 	local Width, Height = ImageSize(Image)
 	local Source = ImagePixels(Image)
@@ -712,57 +662,74 @@ Method("EditableImage", "DrawImage", function(Self, Position, Image, CombineType
 			buffer.readu8(Source, Offset + 2) / 255, buffer.readu8(Source, Offset + 3) / 255
 	end)
 end)
--- Whether a Draw call anti-aliases its edges: its AntiAliasing argument, Enabled by default (Roblox's
--- EditableImage reference gives DrawCircle and DrawLine `antiAliasing: AntiAliasing = Enabled`).
-local function Smooth(AntiAliasing)
-	return not (typeof(AntiAliasing) == "EnumItem" and AntiAliasing.Name == "Disabled")
+-- Whether a Draw call anti-aliases its edges: its AntiAliasing argument, Enabled by default (Roblox's EditableImage reference gives DrawCircle and DrawLine `antiAliasing: AntiAliasing = Enabled`).
+local function Smooth(AntiAliasing) return not (typeof(AntiAliasing) == "EnumItem" and AntiAliasing.Name == "Disabled") end
+
+-- One pixel of a shape (DrawCircle, DrawLine) covered by `Cover` (0-1): its colour combined at that share (images.rs combine: the alpha scaled, Overwrite mixed with the pixel)
+local function Plot(Self, X, Y, Kind, Colour, Cover)
+	local Width, Height = ImageSize(Self)
+	if Cover > 0 and X >= 0 and Y >= 0 and X < Width and Y < Height then
+		R.Combine(ImagePixels(Self), (Y * Width + X) * 4, Kind, Colour[1], Colour[2], Colour[3], Colour[4], true, Cover)
+	end
 end
+local function KindOf(CombineType) return if typeof(CombineType) == "EnumItem" then CombineType.Name else "BlendSourceOver" end
 
+-- DrawCircle (measured in a 0.747 client, 8 circles: the centre the pixel it lies in, the radius rounded, under 1 "EditableImage:DrawCircle expects radius must be > 0"; a pixel at distance d from the centre pixel covered smoothstep(radius - d) clamped to 0-1, all of it
+-- inside when not smoothed, d^2 at most radius^2)
 Method("EditableImage", "DrawCircle", function(Self, Center, Radius, Color, Transparency, CombineType, AntiAliasing, AlphaBlendType)
+	Required(CombineType, 5)
+	Radius = math.floor(Radius + 0.5)
+	if Radius <= 0 then error("EditableImage:DrawCircle expects radius must be > 0", 0) end
 	CheckBlend("DrawCircle", CombineType, AlphaBlendType)
-	local R, G, B, A = Color.R, Color.G, Color.B, 1 - math.clamp(Transparency or 0, 0, 1)
-	local Soft = Smooth(AntiAliasing)
-	local X0, Y0 = math.floor(Center.X - Radius - 1), math.floor(Center.Y - Radius - 1)
-	local Span = math.ceil(Radius * 2) + 3
-	Draw(Self, X0, Y0, Span, Span, CombineType, function(X, Y)
-		-- the pixel's centre against the circle's edge: a pixel-wide ramp when smoothed
-		local Distance = math.sqrt((X0 + X + 0.5 - Center.X) ^ 2 + (Y0 + Y + 0.5 - Center.Y) ^ 2)
-		local Cover = if Soft then math.clamp(Radius + 0.5 - Distance, 0, 1) elseif Distance <= Radius then 1 else 0
-		if Cover <= 0 then
-			return nil
+	local Colour, Kind, Soft = { Channel(Color.R), Channel(Color.G), Channel(Color.B), Opacity(Transparency) }, KindOf(CombineType), Smooth(AntiAliasing)
+	local CX, CY = math.floor(Center.X), math.floor(Center.Y)
+	for Y = CY - Radius, CY + Radius do
+		for X = CX - Radius, CX + Radius do
+			local D2 = (X - CX) ^ 2 + (Y - CY) ^ 2
+			local T = math.clamp(Radius - math.sqrt(D2), 0, 1)
+			Plot(Self, X, Y, Kind, Colour, if Soft then T * T * (3 - 2 * T) elseif D2 <= Radius * Radius then 1 else 0)
 		end
-		return R, G, B, A * Cover
-	end)
+	end
+	Written(Self)
 end)
 
+-- DrawLine: from the pixel each end lies in (an end under 0 "EditableImage:DrawLine expects p1 to be greater than or equal to 0, 0"); smoothed, Xiaolin Wu's line (measured in a 0.747 client, 15 lines: each end's pixels at half, a pixel plotted twice combined twice); not smoothed, one pixel a step along its longer axis, the nearest
 Method("EditableImage", "DrawLine", function(Self, P1, P2, Color, Transparency, CombineType, AntiAliasing, AlphaBlendType)
+	Required(CombineType, 5)
 	CheckBlend("DrawLine", CombineType, AlphaBlendType)
-	local R, G, B, A = Color.R, Color.G, Color.B, 1 - math.clamp(Transparency or 0, 0, 1)
-	local Soft = Smooth(AntiAliasing)
-	local X0, Y0 = math.floor(math.min(P1.X, P2.X)) - 1, math.floor(math.min(P1.Y, P2.Y)) - 1
-	local W = math.floor(math.max(P1.X, P2.X)) - X0 + 2
-	local H = math.floor(math.max(P1.Y, P2.Y)) - Y0 + 2
-	local DX, DY = P2.X - P1.X, P2.Y - P1.Y
-	local Length2 = DX * DX + DY * DY
-	Draw(Self, X0, Y0, W, H, CombineType, function(X, Y)
-		-- a one-pixel line: each pixel's distance from the segment (its centre to the nearest point on it)
-		local PX, PY = X0 + X + 0.5 - (P1.X + 0.5), Y0 + Y + 0.5 - (P1.Y + 0.5)
-		local T = if Length2 > 0 then math.clamp((PX * DX + PY * DY) / Length2, 0, 1) else 0
-		local Distance = math.sqrt((PX - T * DX) ^ 2 + (PY - T * DY) ^ 2)
-		local Cover = if Soft then math.clamp(1 - Distance, 0, 1) elseif Distance <= 0.5 then 1 else 0
-		if Cover <= 0 then
-			return nil
-		end
-		return R, G, B, A * Cover
-	end)
+	for Index, Point in { P1, P2 } do if Point.X < 0 or Point.Y < 0 then error(`EditableImage:DrawLine expects p{Index} to be greater than or equal to 0, 0`, 0) end end
+	local Colour, Kind = { Channel(Color.R), Channel(Color.G), Channel(Color.B), Opacity(Transparency) }, KindOf(CombineType)
+	local X0, Y0, X1, Y1 = math.floor(P1.X), math.floor(P1.Y), math.floor(P2.X), math.floor(P2.Y)
+	local Steep = math.abs(Y1 - Y0) > math.abs(X1 - X0)
+	if Steep then X0, Y0, X1, Y1 = Y0, X0, Y1, X1 end
+	if X0 > X1 then X0, X1, Y0, Y1 = X1, X0, Y1, Y0 end
+	-- (in single precision, as a client steps it: a Vector3's component is a float32)
+	local function F32(Value) return Vector3.new(Value, 0, 0).X end
+	local Gradient = if X1 == X0 then 1 else F32((Y1 - Y0) / (X1 - X0))
+	local function Put(X, Y, Cover) if Steep then Plot(Self, Y, X, Kind, Colour, Cover) else Plot(Self, X, Y, Kind, Colour, Cover) end end
+	if not Smooth(AntiAliasing) then
+		for X = X0, X1 do Put(X, math.floor(Y0 + Gradient * (X - X0) + 0.5), 1) end
+		Written(Self)
+		return
+	end
+	-- (ends on whole pixels: each end's pixel at half, the one beside it at nothing)
+	Put(X0, Y0, 0.5)
+	Put(X1, Y1, 0.5)
+	local Y = F32(Y0 + Gradient)
+	for X = X0 + 1, X1 - 1 do
+		local Row = math.floor(Y)
+		Put(X, Row, F32(1 - F32(Y - Row)))
+		Put(X, Row + 1, F32(Y - Row))
+		Y = F32(Y + Gradient)
+	end
+	Written(Self)
 end)
 
--- DrawImageTransformed(position, scale, rotation, image, options): the image scaled, turned by `rotation`
--- degrees about its PivotPoint (default its centre) and placed with that pivot at `position`, sampled
--- bilinearly (SamplingMode Pixelated: the nearest pixel), combined by options.CombineType (default
--- AlphaBlend), as Roblox's EditableImage reference and its samples describe it.
+-- DrawImageTransformed(position, scale, rotation, image, options): the image scaled, turned by `rotation` degrees about its PivotPoint (default its centre) and placed with that pivot at `position`, sampled
+-- bilinearly (SamplingMode Pixelated: the nearest pixel), combined by options.CombineType (default AlphaBlend), as Roblox's EditableImage reference describes it (measured in a 0.747 client: the same pixels but for a few a level apart, the sample's float rounding; no image "EditableImage:DrawImageTransformed expects non-nil srcImage")
 Method("EditableImage", "DrawImageTransformed", function(Self, Position, Scale, Rotation, Image, Options)
 	Options = Options or {}
+	if typeof(Image) ~= "Instance" or not Image:IsA("EditableImage") then error("EditableImage:DrawImageTransformed expects non-nil srcImage", 0) end
 	CheckBlend("DrawImageTransformed", Options.CombineType, Options.AlphaBlendType)
 	local Width, Height = ImageSize(Image)
 	local Source = ImagePixels(Image)
@@ -788,7 +755,7 @@ Method("EditableImage", "DrawImageTransformed", function(Self, Position, Scale, 
 		return buffer.readu8(Source, Offset) / 255, buffer.readu8(Source, Offset + 1) / 255,
 			buffer.readu8(Source, Offset + 2) / 255, buffer.readu8(Source, Offset + 3) / 255
 	end
-	local Combine = Options.CombineType or Enum.ImageCombineType.AlphaBlend
+	local Combine = if typeof(Options.CombineType) == "EnumItem" then Options.CombineType else Enum.ImageCombineType.AlphaBlend
 	Draw(Self, X0, Y0, math.ceil(MaxX) - X0 + 1, math.ceil(MaxY) - Y0 + 1, Combine, function(X, Y)
 		-- the destination pixel's centre back into the source image
 		local DX, DY = X0 + X + 0.5 - Position.X, Y0 + Y + 0.5 - Position.Y
@@ -807,19 +774,28 @@ Method("EditableImage", "DrawImageTransformed", function(Self, Position, Scale, 
 		local R2, G2, B2, A2 = Texel(IU + 1, IV)
 		local R3, G3, B3, A3 = Texel(IU, IV + 1)
 		local R4, G4, B4, A4 = Texel(IU + 1, IV + 1)
+		-- (the sample a byte, rounded, before it is combined: measured)
 		local function Mix(P, Q, Rr, Ss)
-			return (P * (1 - TU) + Q * TU) * (1 - TV) + (Rr * (1 - TU) + Ss * TU) * TV
+			return math.floor(((P * (1 - TU) + Q * TU) * (1 - TV) + (Rr * (1 - TU) + Ss * TU) * TV) * 255 + 0.5) / 255
 		end
 		return Mix(R1, R2, R3, R4), Mix(G1, G2, G3, G4), Mix(B1, B2, B3, B4), Mix(A1, A2, A3, A4)
 	end)
 end)
 
+-- (measured in a 0.747 client: a destroyed image reads as one transparent pixel, its Size 1, 1, and draws go on)
 Method("EditableImage", "Destroy", function(Self)
 	local Data = Extra(Self)
+	RawSet(Self, "Size", Vector2.new(1, 1), true)
 	Data.Pixels = nil
 	Data.Users = nil
 end)
+-- (measured: a rectangle past the image's edge "EditableImage:ReadPixelsBuffer expects position + size to be within EditableImage bounds", WritePixelsBuffer's too, and a buffer of another length than the rectangle's "EditableImage:WritePixelsBuffer expects buffer length to equal size.X * size.Y * 4 bytes")
+local function Within(Self, Name, Position, Size)
+	local Width, Height = ImageSize(Self)
+	if Position.X < 0 or Position.Y < 0 or Position.X + Size.X > Width or Position.Y + Size.Y > Height then error(`EditableImage:{Name} expects position + size to be within EditableImage bounds`, 0) end
+end
 Method("EditableImage", "ReadPixelsBuffer", function(Self, Position, Size)
+	Within(Self, "ReadPixelsBuffer", Position, Size)
 	local X, Y, W, H, Stride = Rectangle(Self, Position, Size)
 	local Out = buffer.create(W * H * 4)
 	local Pixels = ImagePixels(Self)
@@ -829,6 +805,8 @@ Method("EditableImage", "ReadPixelsBuffer", function(Self, Position, Size)
 	return Out
 end)
 Method("EditableImage", "WritePixelsBuffer", function(Self, Position, Size, Source)
+	if buffer.len(Source) ~= math.floor(Size.X) * math.floor(Size.Y) * 4 then error("EditableImage:WritePixelsBuffer expects buffer length to equal size.X * size.Y * 4 bytes", 0) end
+	Within(Self, "WritePixelsBuffer", Position, Size)
 	local X, Y, W, H, Stride = Rectangle(Self, Position, Size)
 	local Pixels = ImagePixels(Self)
 	local Rows = math.min(H, buffer.len(Source) // math.max(W * 4, 1))
@@ -837,9 +815,13 @@ Method("EditableImage", "WritePixelsBuffer", function(Self, Position, Size, Sour
 	end
 	Written(Self)
 end)
+-- (measured in a 0.747 client: a Size whole numbers, cut down; under 1 "AssetService:CreateEditableImage expects size.X and size.Y to be positive", over 1024 "... to be less than 1024"; 512 by 512 by default)
 local function CreateEditableImage(_, Settings)
 	local Image = Create("EditableImage")
 	local Size = if type(Settings) == "table" and Settings.Size then Settings.Size else Vector2.new(512, 512)
+	Size = Vector2.new(math.floor(Size.X), math.floor(Size.Y))
+	if Size.X < 1 or Size.Y < 1 then error("AssetService:CreateEditableImage expects size.X and size.Y to be positive", 0) end
+	if Size.X > 1024 or Size.Y > 1024 then error("AssetService:CreateEditableImage expects size.X and size.Y to be less than 1024", 0) end
 	RawSet(Image, "Size", Size, true)
 	return Image
 end
@@ -892,11 +874,21 @@ Method("AssetService", "CreateSurfaceAppearanceAsync", function(_, Maps)
 		Data.Users = Data.Users or setmetatable({}, { __mode = "k" })
 		Data.Users[Surface] = Data.Users[Surface] or {}
 		Data.Users[Surface][Property] = true
+		Extra(Surface).Shown = Extra(Surface).Shown or {}
+		Extra(Surface).Shown[Property] = Image
 		local Drawn = if Data.Source then Content.fromUri(Data.Source) else Snapshot(Image)
 		RawSet(Surface, Property, Drawn or Map, true)
 	end
 	return Surface
 end)
+-- (its maps read back the image's Content, as a client's do: measured, editable_image_content.luau)
+for _, Property in SURFACE_MAPS do
+	R.ContentGetter("SurfaceAppearance", Property, function(Self, Value)
+		local Held = Extras[Self]
+		local Image = Held and Held.Shown and Held.Shown[Property]
+		return if Image then Content.fromObject(Image) else Value
+	end)
+end
 
 -- CreateDataModelContentAsync: an EditableMesh's or EditableImage's Content made into one of its own, a copy of the object
 -- as it is (measured in a 0.747 client, tools/parity/probes/data_model_content.luau): it yields, then answers
@@ -924,37 +916,36 @@ Method("AssetService", "CreateDataModelContentAsync", function(_, Source)
 	return Enum.CreateContentResult.Success, R.OpaqueContent(Uri)
 end)
 
--- Any other Content property that takes an image shows an EditableImage too (Roblox's EditableImage
--- reference: "EditableImage can be used in any Content property which takes an image, such as
--- ImageLabel.ImageContent or MeshPart.TextureContent", by Content.fromObject): the property holds the
--- image's asset while it is never written, else a snapshot of its pixels, and follows its later writes
--- as a SurfaceAppearance's maps do (a script reading it back gets that snapshot's Uri, not the Object).
+-- Any other Content property that takes an image shows an EditableImage too (Roblox's EditableImage reference: "EditableImage can be used in any Content property which takes an image, such as ImageLabel.ImageContent or MeshPart.TextureContent", by Content.fromObject): the string id the property's Content view
+-- writes holds the image's asset while it is never written, else a snapshot of its pixels, and follows its later writes as a SurfaceAppearance's maps do. A script reads the property back as a client does (measured in a 0.747 client, 13 properties: tools/parity/probes/editable_image_content.luau): the image's Content (written or destroyed since), and "" for
+-- the string id; assigning either property anything else drops the image.
 local IMAGE_CONTENT = {
-	ImageLabel = { "ImageContent" },
-	ImageButton = { "ImageContent", "HoverImageContent", "PressedImageContent" },
-	ImageHandleAdornment = { "ImageContent" },
-	Decal = { "ColorMapContent", "TextureContent" },
-	MeshPart = { "TextureContent" },
-	FileMesh = { "TextureContent" },
-	ParticleEmitter = { "TextureContent" },
-	Beam = { "TextureContent" },
-	Trail = { "TextureContent" },
+	ImageLabel = { ImageContent = "Image" },
+	ImageButton = { ImageContent = "Image", HoverImageContent = "HoverImage", PressedImageContent = "PressedImage" },
+	ImageHandleAdornment = { ImageContent = "Image" },
+	Decal = { ColorMapContent = "Texture", TextureContent = "Texture" },
+	MeshPart = { TextureContent = "TextureID" },
+	FileMesh = { TextureContent = "TextureId" },
+	ParticleEmitter = { TextureContent = "Texture" },
+	Beam = { TextureContent = "Texture" },
+	Trail = { TextureContent = "Texture" },
 }
+local function ShownImage(Self, Key) local Held = Extras[Self] return Held and Held.Shown and Held.Shown[Key] end
+local function Unshow(Self, Sibling)
+	local Previous = ShownImage(Self, Sibling)
+	if Previous then
+		local Users = Extra(Previous).Users
+		if Users and Users[Self] then
+			Users[Self][Sibling] = nil
+		end
+		Extra(Self).Shown[Sibling] = nil
+	end
+end
+local Wrapped = {}
 for ClassName, Properties in IMAGE_CONTENT do
-	for _, Property in Properties do
+	for Property, Sibling in Properties do
 		ContentSetter(ClassName, Property, function(Self, Value)
-			if Refreshing then
-				return Value
-			end
-			local Shown = Extra(Self).Shown
-			local Previous = Shown and Shown[Property]
-			if Previous then
-				local Users = Extra(Previous).Users
-				if Users and Users[Self] then
-					Users[Self][Property] = nil
-				end
-				Shown[Property] = nil
-			end
+			Unshow(Self, Sibling)
 			if typeof(Value) ~= "Content" or Value.SourceType ~= Enum.ContentSourceType.Object then
 				return Value
 			end
@@ -965,11 +956,20 @@ for ClassName, Properties in IMAGE_CONTENT do
 			local Data = Extra(Image)
 			Data.Users = Data.Users or setmetatable({}, { __mode = "k" })
 			Data.Users[Self] = Data.Users[Self] or {}
-			Data.Users[Self][Property] = true
-			Extra(Self).Shown = Shown or {}
-			Extra(Self).Shown[Property] = Image
+			Data.Users[Self][Sibling] = true
+			Extra(Self).Shown = Extra(Self).Shown or {}
+			Extra(Self).Shown[Sibling] = Image
 			return (if Data.Source then Content.fromUri(Data.Source) else Snapshot(Image)) or Value
 		end)
+		R.ContentGetter(ClassName, Property, function(Self, Value)
+			local Image = ShownImage(Self, Sibling)
+			return if Image then Content.fromObject(Image) else Value
+		end)
+		if not Wrapped[ClassName .. "." .. Sibling] then
+			Wrapped[ClassName .. "." .. Sibling] = true
+			ContentSetter(ClassName, Sibling, function(Self, Value) Unshow(Self, Sibling) return Value end)
+			R.ContentGetter(ClassName, Sibling, function(Self, Value) return if ShownImage(Self, Sibling) then "" else Value end)
+		end
 	end
 end
 

@@ -1991,7 +1991,8 @@ fn an_editable_image_reaches_every_image_content_property() {
         Label.Parent = Gui
         Gui.Parent = Part
         Part.Parent = workspace
-        assert(Part.TextureContent.SourceType == Enum.ContentSourceType.Uri, "holds the snapshot")
+        -- (a script reads the image's Content back, as a client does; the recording holds the snapshot)
+        assert(Part.TextureContent.Object == Image and Part.TextureID == "", "reads the image back")
         task.delay(0.1, function()
             Image:DrawCircle(Vector2.new(2, 2), 3, Color3.fromRGB(250, 0, 0), 0, Enum.ImageCombineType.Overwrite)
         end)
@@ -2030,8 +2031,8 @@ fn an_editable_image_reaches_every_image_content_property() {
     assert_eq!(&read(decal_sets[1]["set"]["TextureContent"].as_str().unwrap()).rgba[..4], &[0, 0, 250, 255]);
 }
 
-/// DrawCircle and DrawLine draw (anti-aliased unless AntiAliasing is Disabled) and DrawImageTransformed
-/// places a scaled, turned image by its pivot.
+/// DrawCircle and DrawLine draw (anti-aliased unless AntiAliasing is Disabled, as a 0.747 client covers their edges) and
+/// DrawImageTransformed places a scaled, turned image by its pivot.
 #[test]
 fn draw_circle_line_and_transformed_images() {
     let (_, _, _, _) = record(
@@ -2045,15 +2046,17 @@ fn draw_circle_line_and_transformed_images() {
         Image:DrawCircle(Vector2.new(8, 8), 4, Color3.new(1, 1, 1), 0, Enum.ImageCombineType.Overwrite)
         local R, _, _, A = Pixel(Image, 8, 8)
         assert(R == 255 and A == 255, `inside: {R} {A}`)
-        -- (pixel 11, 10's centre lies 4.3 from the circle's: a fifth covered)
+        -- (pixel 11, 10 lies 3.6 from the circle's centre pixel: smoothstep(0.4) covered, as a client covers it)
         local _, _, _, Edge = Pixel(Image, 11, 10)
         assert(Edge > 0 and Edge < 255, `a smoothed edge: {Edge}`)
         local _, _, _, Out = Pixel(Image, 14, 8)
         assert(Out == 0, `outside: {Out}`)
         local Hard = AssetService:CreateEditableImage({ Size = Vector2.new(16, 16) })
         Hard:DrawCircle(Vector2.new(8, 8), 4, Color3.new(1, 1, 1), 0, Enum.ImageCombineType.Overwrite, Enum.AntiAliasing.Disabled)
-        local _, _, _, HardEdge = Pixel(Hard, 11, 10)
-        assert(HardEdge == 0, `a hard edge: {HardEdge}`)
+        -- (all of a pixel whose squared distance is at most the radius squared, none past it)
+        local _, _, _, HardIn = Pixel(Hard, 11, 10)
+        local _, _, _, HardEdge = Pixel(Hard, 12, 11)
+        assert(HardIn == 255 and HardEdge == 0, `a hard edge: {HardIn} {HardEdge}`)
         local Line = AssetService:CreateEditableImage({ Size = Vector2.new(16, 16) })
         Line:DrawLine(Vector2.new(0, 5), Vector2.new(15, 5), Color3.new(0, 1, 0), 0, Enum.ImageCombineType.Overwrite)
         local _, G, _, LineA = Pixel(Line, 7, 5)

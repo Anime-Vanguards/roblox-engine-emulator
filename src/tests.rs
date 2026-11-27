@@ -16275,3 +16275,29 @@ fn editable_mesh_queries_merges_and_bones_follow_a_client() {
         "##,
     );
 }
+
+/// An image property given an EditableImage's Content reads that Content back and its string id "" (measured in a 0.747 client:
+/// tools/parity/probes/editable_image_content.luau), while the property keeps a snapshot for the recorder; assigning another
+/// value drops the image.
+#[test]
+fn image_properties_read_an_editable_images_content_back() {
+    assert_script(
+        r#"
+        local AssetService = game:GetService("AssetService")
+        local Image = AssetService:CreateEditableImage({ Size = Vector2.new(2, 2) })
+        local Label = Instance.new("ImageLabel")
+        local Given = Content.fromObject(Image)
+        Label.ImageContent = Given
+        assert(Label.ImageContent.Object == Image and Label.ImageContent == Given and Label.Image == "", "read back")
+        Image:WritePixelsBuffer(Vector2.zero, Vector2.new(2, 2), buffer.create(16))
+        assert(Label.ImageContent.Object == Image, "after a write")
+        Label.Image = "rbxassetid://5"
+        assert(Label.ImageContent.Uri == "rbxassetid://5", "a string id drops the image")
+        local Decal = Instance.new("Decal")
+        Decal.ColorMapContent = Given
+        assert(Decal.TextureContent.Object == Image and Decal.Texture == "", "a Decal's two views of one id")
+        local Surface = AssetService:CreateSurfaceAppearanceAsync({ ColorMap = Given })
+        assert(Surface.ColorMapContent.Object == Image, "a SurfaceAppearance's map")
+        "#,
+    );
+}

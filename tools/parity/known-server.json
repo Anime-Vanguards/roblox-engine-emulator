@@ -99,6 +99,34 @@
 			"why": "a server has no NetworkClient; ree's probe line is the service it made"
 		}
 	],
+	"editable_image_content": [
+		{
+			"line": "Decal.ColorMapContent ok",
+			"why": "a client's Decal.ColorMap, Texture, ColorMapContent and TextureContent are one property (decal-alias), so a ColorMap write drops the image; ree keeps ColorMap apart"
+		},
+		{
+			"line": "clone ok",
+			"why": "a clone of a property showing an EditableImage keeps the image's Content on a client; ree's clone reads the snapshot's Uri"
+		},
+		{
+			"line": "decal-alias ok",
+			"why": "a client's Decal.ColorMap, Texture, ColorMapContent and TextureContent are one property; ree's ColorMap is a property of its own"
+		}
+	],
+	"editable_image_draw": [
+		{
+			"line": "t-rot45 3",
+			"why": "DrawImageTransformed: one sample a level apart (the client's float rounding of the bilinear sample)"
+		},
+		{
+			"line": "t-wide 4",
+			"why": "DrawImageTransformed: a row of samples a level apart (the client's float rounding of the bilinear sample)"
+		},
+		{
+			"line": "line-point 3",
+			"why": "a smoothed DrawLine of one point plots its pixel twice at half: the client's colour comes out a level lower (254), ree's 255"
+		}
+	],
 	"errors": [
 		{
 			"line": "error require-number | Downloading asset failed for asset id 5.  Is the asset id correct and is the asset type \"Model\"?",
