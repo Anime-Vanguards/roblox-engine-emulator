@@ -1160,35 +1160,5 @@
 			"line": "Register",
 			"why": "a running game (the capture client and its server) refuses the providers' registration, \"Usage error: RegisterKeyframeSequence can only be called in Studio.\" and \"... can only be used in Solo mode.\" (RegisterActiveAnimationClip names RegisterActiveKeyframeSequence), before its argument; ree registers in play mode as in edit mode, because previews of unpublished animations play that way (a Studio solo test registers; not measured)"
 		}
-	],
-	"engine_data_methods": [
-		{
-			"line": "DataStoreIncrementOptions SetMetadata(5): error Unable to cast double to Dictionary",
-			"why": "server.luau checks a DataStore options object's metadata with the stores' own message (513: Attribute metadata format is invalid.) and takes no argument as none, and SetExperimentalFeatures raises Argument 1 missing or nil for any value that is no table; a server casts them as its engine does (Unable to cast double|Array to Dictionary, Argument 1 missing or nil): server.luau is the server stores package's"
-		},
-		{
-			"line": "DataStoreIncrementOptions SetMetadata(): error Argument 1 missing or nil",
-			"why": "server.luau checks a DataStore options object's metadata with the stores' own message (513: Attribute metadata format is invalid.) and takes no argument as none, and SetExperimentalFeatures raises Argument 1 missing or nil for any value that is no table; a server casts them as its engine does (Unable to cast double|Array to Dictionary, Argument 1 missing or nil): server.luau is the server stores package's"
-		},
-		{
-			"line": "DataStoreIncrementOptions SetMetadata(array): error Unable to cast Array to Dictionary",
-			"why": "server.luau checks a DataStore options object's metadata with the stores' own message (513: Attribute metadata format is invalid.) and takes no argument as none, and SetExperimentalFeatures raises Argument 1 missing or nil for any value that is no table; a server casts them as its engine does (Unable to cast double|Array to Dictionary, Argument 1 missing or nil): server.luau is the server stores package's"
-		},
-		{
-			"line": "DataStoreSetOptions SetMetadata(5): error Unable to cast double to Dictionary",
-			"why": "server.luau checks a DataStore options object's metadata with the stores' own message (513: Attribute metadata format is invalid.) and takes no argument as none, and SetExperimentalFeatures raises Argument 1 missing or nil for any value that is no table; a server casts them as its engine does (Unable to cast double|Array to Dictionary, Argument 1 missing or nil): server.luau is the server stores package's"
-		},
-		{
-			"line": "DataStoreSetOptions SetMetadata(): error Argument 1 missing or nil",
-			"why": "server.luau checks a DataStore options object's metadata with the stores' own message (513: Attribute metadata format is invalid.) and takes no argument as none, and SetExperimentalFeatures raises Argument 1 missing or nil for any value that is no table; a server casts them as its engine does (Unable to cast double|Array to Dictionary, Argument 1 missing or nil): server.luau is the server stores package's"
-		},
-		{
-			"line": "DataStoreSetOptions SetMetadata(array): error Unable to cast Array to Dictionary",
-			"why": "server.luau checks a DataStore options object's metadata with the stores' own message (513: Attribute metadata format is invalid.) and takes no argument as none, and SetExperimentalFeatures raises Argument 1 missing or nil for any value that is no table; a server casts them as its engine does (Unable to cast double|Array to Dictionary, Argument 1 missing or nil): server.luau is the server stores package's"
-		},
-		{
-			"line": "SetExperimentalFeatures(5): error Unable to cast double to Dictionary",
-			"why": "server.luau checks a DataStore options object's metadata with the stores' own message (513: Attribute metadata format is invalid.) and takes no argument as none, and SetExperimentalFeatures raises Argument 1 missing or nil for any value that is no table; a server casts them as its engine does (Unable to cast double|Array to Dictionary, Argument 1 missing or nil): server.luau is the server stores package's"
-		}
 	]
 }

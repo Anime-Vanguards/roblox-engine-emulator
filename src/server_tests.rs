@@ -502,11 +502,89 @@ fn a_client_keeps_its_stubs() {
         RunContext::Client,
         r#"
         local RunService = game:GetService("RunService")
-        print("client", RunService:IsClient(), RunService:IsServer(), game.Players.LocalPlayer.Name, select('#', game:GetService("DataStoreService"):GetDataStore("X")))
+        local DataStoreService = game:GetService("DataStoreService")
+        local Store = DataStoreService:GetDataStore("X")
+        print("client", RunService:IsClient(), RunService:IsServer(), game.Players.LocalPlayer.Name, Store.ClassName, Store.Parent == DataStoreService)
+        print("memory", pcall(function() return game:GetService("MemoryStoreService"):GetSortedMap("m") end))
+        print("get", select('#', Store:GetAsync("k")))
         "#,
         0.1,
     );
-    assert!(has(&lines, "print: client true false Player 0"), "{lines:?}");
+    // (a client makes the stores as a server does and is refused its memory stores; the stores' network members report themselves
+    // not emulated on a client: measured, a 0.747 client, tools/parity/probes/stores_sync.luau)
+    for wanted in ["print: client true false Player DataStore true", "print: memory false MemoryStoreService must be called from a Server.", "print: get 0"] {
+        assert!(has(&lines, wanted), "{wanted}: {lines:?}");
+    }
+}
+
+/// The stores' members a capture cannot answer (roblox-sim's stores are its own Luau), as Roblox's documentation describes them:
+/// ListDataStoresAsync lists the data stores that hold a key by name, with their first and last write; OnUpdate runs its callback
+/// with each value this server writes, as a deferred handler, until disconnected; BatchGetAsync reads an OrderedDataStore's keys at
+/// once, leaving out those that hold nothing, and a standard data store raises; SetRateLimitForRequestType's limit is the budget.
+#[test]
+fn data_stores_list_watch_and_batch_as_documented() {
+    let lines = run(
+        RunContext::Server,
+        r#"
+        local DataStoreService = game:GetService("DataStoreService")
+        local A, B, Empty = DataStoreService:GetDataStore("Alpha"), DataStoreService:GetDataStore("Beta", "other"), DataStoreService:GetDataStore("Empty")
+        local Seen = {}
+        local Connection = A:OnUpdate("k", function(Value)
+            table.insert(Seen, tostring(Value))
+        end)
+        print("connection", typeof(Connection))
+        A:SetAsync("k", 1)
+        A:IncrementAsync("k", 2)
+        A:UpdateAsync("k", function(Old) return Old * 10 end)
+        A:SetAsync("other", 5)
+        B:SetAsync("k", 1)
+        task.wait()
+        print("updates", table.concat(Seen, ","))
+        Connection:Disconnect()
+        A:SetAsync("k", 7)
+        task.wait()
+        print("after disconnect", #Seen)
+        local Pages = DataStoreService:ListDataStoresAsync()
+        local Names = {}
+        for _, Info in Pages:GetCurrentPage() do
+            assert(Info:IsA("DataStoreInfo") and Info.CreatedTime <= Info.UpdatedTime)
+            table.insert(Names, Info.DataStoreName)
+        end
+        print("stores", Pages.ClassName, table.concat(Names, ","), Pages.IsFinished)
+        local Small = DataStoreService:ListDataStoresAsync("", 1)
+        print("first page", Small:GetCurrentPage()[1].DataStoreName, Small.IsFinished, Small.Cursor)
+        Small:AdvanceToNextPageAsync()
+        print("second page", Small:GetCurrentPage()[1].DataStoreName, Small.IsFinished)
+        print("prefix", #DataStoreService:ListDataStoresAsync("Be"):GetCurrentPage())
+        local Ordered = DataStoreService:GetOrderedDataStore("Scores")
+        Ordered:SetAsync("x", 3)
+        Ordered:SetAsync("y", 4)
+        local Batch = Ordered:BatchGetAsync({ "x", "y", "z" })
+        print("batch", Batch.x.value, Batch.y.value, Batch.z)
+        print("batch standard", pcall(function() return A:BatchGetAsync({ "k" }) end))
+        print("batch empty", pcall(function() return Ordered:BatchGetAsync({}) end))
+        DataStoreService:SetRateLimitForRequestType(Enum.DataStoreRequestType.GetSortedAsync, 3, 1)
+        print("budget", DataStoreService:GetRequestBudgetForRequestType(Enum.DataStoreRequestType.GetSortedAsync))
+        print("counter", pcall(function() return game:GetService("MemoryStoreService"):GetDistributedCounter("c") end))
+        "#,
+        1.0,
+    );
+    for wanted in [
+        "print: connection RBXScriptConnection",
+        "print: updates 1,3,30",
+        "print: after disconnect 3",
+        "print: stores DataStoreListingPages Alpha,Beta true",
+        "print: first page Alpha false Beta",
+        "print: second page Beta true",
+        "print: prefix 1",
+        "print: batch 3 4 nil",
+        "print: batch empty false Test:38: BatchGetAsync: the keys array must contain at least one key",
+        "print: budget 3",
+        "print: counter false MemoryStoreDistributedCounter is not enabled.",
+    ] {
+        assert!(has(&lines, wanted), "{wanted}: {lines:?}");
+    }
+    assert!(lines.iter().any(|line| line.starts_with("print: batch standard false") && line.ends_with("BatchGetAsync is currently only supported on OrderedDataStore")), "{lines:?}");
 }
 
 /// EncodingService answers buffers on a playing client as on a server, with the client's errors (measured in a 0.747

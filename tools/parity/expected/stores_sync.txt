@@ -1,0 +1,97 @@
+# engine: Roblox Studio 0.747.0.7471481, a headless playing client (script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-27
+GetDataStore nil error Argument 1 missing or nil
+GetDataStore string ok Instance DataStore 's1' parent DataStoreService
+GetDataStore number ok Instance DataStore '5' parent DataStoreService
+GetDataStore fraction ok Instance DataStore '1.5' parent DataStoreService
+GetDataStore bool ok Instance DataStore 'true' parent DataStoreService
+GetDataStore table ok Instance DataStore '{}' parent DataStoreService
+GetDataStore array ok Instance DataStore '{}' parent DataStoreService
+GetDataStore vector ok Instance DataStore '1, 2, 3' parent DataStoreService
+GetDataStore instance ok Instance DataStore 'Instance' parent DataStoreService
+GetDataStore enum ok Instance DataStore 'A' parent DataStoreService
+GetDataStore empty error DataStore name can't be empty string
+GetDataStore long error DataStore name is too long
+GetDataStore 50 ok Instance DataStore 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' parent DataStoreService
+GetDataStore scope nil ok Instance DataStore 'scoped' parent DataStoreService
+GetDataStore scope string ok Instance DataStore 'scoped' parent DataStoreService
+GetDataStore scope number ok Instance DataStore 'scoped' parent DataStoreService
+GetDataStore scope fraction ok Instance DataStore 'scoped' parent DataStoreService
+GetDataStore scope bool ok Instance DataStore 'scoped' parent DataStoreService
+GetDataStore scope table ok Instance DataStore 'scoped' parent DataStoreService
+GetDataStore scope array ok Instance DataStore 'scoped' parent DataStoreService
+GetDataStore scope vector ok Instance DataStore 'scoped' parent DataStoreService
+GetDataStore scope instance ok Instance DataStore 'scoped' parent DataStoreService
+GetDataStore scope enum ok Instance DataStore 'scoped' parent DataStoreService
+GetDataStore scope empty error DataStore scope can't be empty string
+GetDataStore scope long error DataStore scope is too long
+GetDataStore scope 50 ok Instance DataStore 'scoped' parent DataStoreService
+GetOrderedDataStore nil error Argument 1 missing or nil
+GetOrderedDataStore string ok Instance OrderedDataStore 's1' parent DataStoreService
+GetOrderedDataStore number ok Instance OrderedDataStore '5' parent DataStoreService
+GetOrderedDataStore fraction ok Instance OrderedDataStore '1.5' parent DataStoreService
+GetOrderedDataStore bool ok Instance OrderedDataStore 'true' parent DataStoreService
+GetOrderedDataStore table ok Instance OrderedDataStore '{}' parent DataStoreService
+GetOrderedDataStore array ok Instance OrderedDataStore '{}' parent DataStoreService
+GetOrderedDataStore vector ok Instance OrderedDataStore '1, 2, 3' parent DataStoreService
+GetOrderedDataStore instance ok Instance OrderedDataStore 'Instance' parent DataStoreService
+GetOrderedDataStore enum ok Instance OrderedDataStore 'A' parent DataStoreService
+GetOrderedDataStore empty error DataStore name can't be empty string
+GetOrderedDataStore long error DataStore name is too long
+GetOrderedDataStore 50 ok Instance OrderedDataStore 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' parent DataStoreService
+GetDataStore options number error Unable to cast value to Object
+GetDataStore options instance error 510: Options instance not of type DataStoreOptions
+GetGlobalDataStore ok Instance DataStore '' parent DataStoreService
+same store ok boolean true, boolean true
+children ok number 29, string DataStore:,DataStore:1, 2, 3,DataStore:1.5,DataStore:5,DataStore:A,DataStore:Instance,DataStore:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb,DataStore:s1,DataStore:scoped,DataStore:scoped,DataStore:scoped,DataStore:scoped,DataStore:scoped,DataStore:scoped,DataStore:scoped,DataStore:scoped,DataStore:scoped,DataStore:scoped,DataStore:true,DataStore:{},OrderedDataStore:1, 2, 3,OrderedDataStore:1.5,OrderedDataStore:5,OrderedDataStore:A,OrderedDataStore:Instance,OrderedDataStore:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb,OrderedDataStore:s1,OrderedDataStore:true,OrderedDataStore:{}
+budget nil error Argument 1 missing or nil
+budget number ok string number
+budget string ok string number
+budget enum ok string number
+budget other enum error Unable to cast KeyCode to DataStoreRequestType
+ratelimit none error Argument 3 missing or nil
+ratelimit one error Argument 3 missing or nil
+ratelimit two error Argument 3 missing or nil
+ratelimit three ok 
+ratelimit three nil type error Argument 1 missing or nil
+ratelimit three number type ok 
+ratelimit three string type ok 
+ratelimit three bad base error Unable to cast string to int
+ratelimit three bad per error Unable to cast string to int
+ratelimit updateasync error SetRateLimitForRequestType: Does not apply to DataStoreRequestType.UpdateAsync.
+ratelimit onupdate error SetRateLimitForRequestType: Does not apply to DataStoreRequestType.OnUpdate.
+ratelimit over error SetRateLimitForRequestType: proposed base limit 61 for DataStoreRequestType.GetAsync is out of range [0, 60].
+ratelimit negative error SetRateLimitForRequestType: proposed base limit -1 for DataStoreRequestType.GetAsync is out of range [0, 60].
+ratelimit fraction ok 
+GetSortedMap nil error Argument 1 missing or nil
+GetSortedMap string error MemoryStoreService must be called from a Server.
+GetSortedMap number error MemoryStoreService must be called from a Server.
+GetSortedMap fraction error MemoryStoreService must be called from a Server.
+GetSortedMap bool error MemoryStoreService must be called from a Server.
+GetSortedMap table error MemoryStoreService must be called from a Server.
+GetSortedMap array error MemoryStoreService must be called from a Server.
+GetSortedMap vector error MemoryStoreService must be called from a Server.
+GetSortedMap instance error MemoryStoreService must be called from a Server.
+GetSortedMap enum error MemoryStoreService must be called from a Server.
+GetSortedMap empty error MemoryStoreService must be called from a Server.
+GetSortedMap long error MemoryStoreService must be called from a Server.
+GetSortedMap 50 error MemoryStoreService must be called from a Server.
+GetDistributedCounter nil error Argument 1 missing or nil
+GetDistributedCounter string error MemoryStoreDistributedCounter is not enabled.
+GetDistributedCounter number error MemoryStoreDistributedCounter is not enabled.
+GetDistributedCounter fraction error MemoryStoreDistributedCounter is not enabled.
+GetDistributedCounter bool error MemoryStoreDistributedCounter is not enabled.
+GetDistributedCounter table error MemoryStoreDistributedCounter is not enabled.
+GetDistributedCounter array error MemoryStoreDistributedCounter is not enabled.
+GetDistributedCounter vector error MemoryStoreDistributedCounter is not enabled.
+GetDistributedCounter instance error MemoryStoreDistributedCounter is not enabled.
+GetDistributedCounter enum error MemoryStoreDistributedCounter is not enabled.
+GetDistributedCounter empty error MemoryStoreDistributedCounter is not enabled.
+GetDistributedCounter long error MemoryStoreDistributedCounter is not enabled.
+GetDistributedCounter 50 error MemoryStoreDistributedCounter is not enabled.
+GetQueue timeout string error Unable to cast string to int
+GetQueue no name error Argument 1 missing or nil
+GetHashMap no name error Argument 1 missing or nil
+GetQueue name error MemoryStoreService must be called from a Server.
+GetHashMap name error MemoryStoreService must be called from a Server.
+memory children ok number 0

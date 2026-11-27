@@ -2757,4 +2757,154 @@ Method("HumanoidDescription", "SetAccessories", function(Self, List, Include)
 	end
 end)
 
+
+-- The data stores' and memory stores' synchronous members, a playing client's and a server's alike (Studio 0.747 through roblox-sim,
+-- whose stores' network members answer from its own Luau while their constructors and argument casts are the engine's:
+-- tools/parity/probes/stores_sync.luau). A store's name and scope are string parameters (StringParam: 5 "5", true "true", a table
+-- "{}", a Vector3 "1, 2, 3", an Instance "Instance", an enum item its name, the engine's warning before a value that is no number):
+-- no name raises "Argument 1 missing or nil" and no scope is "global", "" raises "DataStore name can't be empty string" ("DataStore
+-- scope can't be empty string") and more than 50 bytes "DataStore name is too long" ("DataStore scope is too long"), all without a
+-- position; options that are no Instance raise "Unable to cast value to Object", an Instance of another class "510: Options instance
+-- not of type DataStoreOptions". A store is made once for its kind, name and scope, a child of DataStoreService named its name
+-- (GetGlobalDataStore's is a DataStore named ""). GetRequestBudgetForRequestType casts its type as an enum argument.
+-- SetRateLimitForRequestType casts from the last argument to the first ("Argument 3 missing or nil" with fewer than three, "Unable to
+-- cast string to int"), then refuses UpdateAsync and OnUpdate ("SetRateLimitForRequestType: Does not apply to
+-- DataStoreRequestType.UpdateAsync.") and a base limit out of its range ("SetRateLimitForRequestType: proposed base limit 61 for
+-- DataStoreRequestType.GetAsync is out of range [0, 60]."); the ranges are Roblox's documentation's, the per-player limit's text is
+-- taken as the base limit's (not measured), and the limit set is the budget GetRequestBudgetForRequestType answers from then on (the
+-- documentation: it overrides the default). MemoryStoreService's GetSortedMap, GetHashMap and GetQueue cast their arguments (no name
+-- "Argument 1 missing or nil", a timeout that is no number "Unable to cast string to int") and then refuse a client: "MemoryStoreService
+-- must be called from a Server." (a server's structures are server.luau's); GetDistributedCounter raises "MemoryStoreDistributedCounter
+-- is not enabled." on both sides once its name is cast. The stores' network members and MessagingService's report themselves not
+-- emulated on a client: roblox-sim answers them from its own Luau, so what a client raises is not measured.
+-- (a store's or a memory structure's name: server.luau's memory stores read theirs the same way)
+local function StoreText(Value, Argument)
+	return StringParam.Read(Value, Argument)
+end
+R.StoreText = StoreText
+R.CastAll = CastAll
+local function StoreName(Value, Label, Default, Argument)
+	if Value == nil then
+		if Default then
+			return Default
+		end
+		error(`Argument {Argument} missing or nil`, 0)
+	end
+	local Text = StoreText(Value, Argument)
+	if #Text == 0 then
+		error(`DataStore {Label} can't be empty string`, 0)
+	elseif #Text > 50 then
+		error(`DataStore {Label} is too long`, 0)
+	end
+	return Text
+end
+local StoreInstances = {}
+-- (made once for its kind, name and scope; a server's data for it is server.luau's: R.StoreMade)
+local function StoreInstance(Kind, Class, Name, Scope)
+	local Id = `{Kind}\0{Name}\0{Scope}`
+	local Made = StoreInstances[Id]
+	if not Made then
+		Made = R.Create(Class)
+		R.RawSet(Made, "Name", Name, true)
+		R.SetParent(Made, game:GetService("DataStoreService"))
+		StoreInstances[Id] = Made
+		if R.StoreMade then
+			R.StoreMade(Made, Kind, Name, Scope)
+		end
+	end
+	return Made
+end
+Method("DataStoreService", "GetDataStore", function(_, Name, Scope, Options)
+	if Options ~= nil and typeof(Options) ~= "Instance" then
+		error("Unable to cast value to Object", 0)
+	end
+	Scope = StoreName(Scope, "scope", "global", 2)
+	Name = StoreName(Name, "name", nil, 1)
+	if Options ~= nil and not Options:IsA("DataStoreOptions") then
+		error("510: Options instance not of type DataStoreOptions", 0)
+	end
+	if Options ~= nil and Options.AllScopes then
+		R.Missing("DataStoreOptions", "AllScopes")
+	end
+	return StoreInstance("Standard", "DataStore", Name, Scope)
+end)
+Method("DataStoreService", "GetGlobalDataStore", function()
+	return StoreInstance("Global", "DataStore", "", "global")
+end)
+Method("DataStoreService", "GetOrderedDataStore", function(_, Name, Scope)
+	Scope = StoreName(Scope, "scope", "global", 2)
+	Name = StoreName(Name, "name", nil, 1)
+	return StoreInstance("Ordered", "OrderedDataStore", Name, Scope)
+end)
+-- The budget a minute as Roblox's documentation gives it ({base, per player}): the legacy request types' table and the Standard /
+-- Ordered ones'; SetRateLimitForRequestType's limits in their place once set. Requests are never throttled and spend nothing.
+local Budgets = {
+	GetAsync = { 60, 10 },
+	SetIncrementAsync = { 60, 10 },
+	UpdateAsync = { 60, 10 },
+	GetSortedAsync = { 5, 2 },
+	SetIncrementSortedAsync = { 30, 5 },
+	OnUpdate = { 30, 5 },
+	ListAsync = { 5, 2 },
+	GetVersionAsync = { 5, 2 },
+	RemoveVersionAsync = { 5, 2 },
+	StandardRead = { 60, 40 },
+	StandardWrite = { 60, 40 },
+	StandardList = { 5, 2 },
+	StandardRemove = { 60, 40 },
+	OrderedRead = { 60, 40 },
+	OrderedWrite = { 30, 5 },
+	OrderedList = { 5, 2 },
+	OrderedRemove = { 30, 5 },
+}
+-- (the most SetRateLimitForRequestType takes: Roblox's documentation; UpdateAsync and OnUpdate take none)
+local RateRanges = {
+	GetAsync = { 60, 40 },
+	SetIncrementAsync = { 60, 40 },
+	GetSortedAsync = { 5, 2 },
+	SetIncrementSortedAsync = { 30, 5 },
+	ListAsync = { 5, 2 },
+	GetVersionAsync = { 5, 2 },
+	RemoveVersionAsync = { 5, 2 },
+	StandardRead = { 10000, 200 },
+	StandardWrite = { 10000, 200 },
+	StandardList = { 10000, 200 },
+	StandardRemove = { 10000, 200 },
+	OrderedRead = { 10000, 200 },
+	OrderedWrite = { 10000, 200 },
+	OrderedList = { 10000, 200 },
+	OrderedRemove = { 10000, 200 },
+}
+local RateLimits = {}
+Method("DataStoreService", "GetRequestBudgetForRequestType", function(_, ...)
+	local Type = CastAll({ { "DataStoreRequestType" } }, ...)
+	local Budget = RateLimits[Type.Name] or Budgets[Type.Name] or { 60, 10 }
+	return Budget[1] + Budget[2] * #game:GetService("Players"):GetPlayers()
+end)
+Method("DataStoreService", "SetRateLimitForRequestType", function(_, ...)
+	local Type, Base, PerPlayer = CastAll({ { "DataStoreRequestType" }, { "int" }, { "int" } }, ...)
+	local Range = RateRanges[Type.Name]
+	if not Range then
+		error(`SetRateLimitForRequestType: Does not apply to DataStoreRequestType.{Type.Name}.`, 0)
+	elseif Base < 0 or Base > Range[1] then
+		error(`SetRateLimitForRequestType: proposed base limit {Base} for DataStoreRequestType.{Type.Name} is out of range [0, {Range[1]}].`, 0)
+	elseif PerPlayer < 0 or PerPlayer > Range[2] then
+		error(`SetRateLimitForRequestType: proposed per player limit {PerPlayer} for DataStoreRequestType.{Type.Name} is out of range [0, {Range[2]}].`, 0)
+	end
+	RateLimits[Type.Name] = { Base, PerPlayer }
+end)
+for _, Name in { "GetSortedMap", "GetHashMap", "GetQueue" } do
+	Method("MemoryStoreService", Name, function(_, Structure, Timeout)
+		if Name == "GetQueue" then
+			Cast.int(Timeout, 2, 30)
+		end
+		StoreText(Structure, 1)
+		error("MemoryStoreService must be called from a Server.", 0)
+	end)
+end
+Method("MemoryStoreService", "GetDistributedCounter", function(_, Name)
+	StoreText(Name, 1)
+	error("MemoryStoreDistributedCounter is not enabled.", 0)
+end)
+
 return true

@@ -17,6 +17,7 @@ local Method = R.Method
 local Create = R.Create
 local RawSet = R.RawSet
 local Missing = R.Missing
+local Mute = R.Mute
 local Pack, Unpack = table.pack, table.unpack
 
 local Players = game:GetService("Players")
@@ -262,7 +263,6 @@ local MAX_VALUE = 4194304
 local MAX_METADATA = 300
 local MAX_NAME = 50
 
-local Stores = {}
 local Handles = setmetatable({}, { __mode = "k" })
 local Infos = setmetatable({}, { __mode = "k" })
 local OptionMetadata = setmetatable({}, { __mode = "k" })
@@ -335,90 +335,25 @@ local function Handle(Self, Member, At)
 	return Store
 end
 
-local function StoreName(Name, Label, Default, At)
-	if Name == nil and Default then
-		return Default
-	elseif type(Name) == "number" then
-		Name = tostring(Name)
+-- The data of a store services.luau made (its constructors are a client's and a server's alike): its keys, and the time its first
+-- and its last write came (ListDataStoresAsync)
+local StoreList = {}
+R.StoreMade = function(Instance_, Kind, Name, Scope)
+	local Store = { Kind = Kind, Name = Name, Scope = Scope, Keys = {}, Instance = Instance_ }
+	Handles[Instance_] = Store
+	table.insert(StoreList, Store)
+	-- (the client profile's data: SeedStore, at the end)
+	if R.SeedStore then
+		R.SeedStore(Store)
 	end
-	if type(Name) ~= "string" then
-		Fail(if Name == nil then "Argument 1 missing or nil" else `Unable to cast {typeof(Name)} to string`, At)
-	elseif #Name == 0 then
-		Fail(`{Label} can't be empty.`, At)
-	elseif #Name > MAX_NAME then
-		Fail(`{Label} exceeds the 50 character limit.`, At)
-	end
-	return Name
 end
 
-local function GetStore(Kind, Class, Name, Scope)
-	local Id = `{Kind}\0{Name}\0{Scope}`
-	local Store = Stores[Id]
-	if not Store then
-		local Instance_ = Create(Class)
-		RawSet(Instance_, "Name", Name, true)
-		Store = { Kind = Kind, Name = Name, Scope = Scope, Keys = {}, Instance = Instance_ }
-		Stores[Id] = Store
-		Handles[Instance_] = Store if R.SeedStore then R.SeedStore(Store) end -- (the client profile's data: SeedStore, at the end)
-	end
-	return Store.Instance
-end
-
-Method("DataStoreService", "GetDataStore", function(_, Name, Scope, Options)
-	Name = StoreName(Name, "DataStore name", nil, At)
-	Scope = StoreName(Scope, "Scope", "global", At)
-	if Options ~= nil and typeof(Options) == "Instance" and Options:IsA("DataStoreOptions") and Options.AllScopes then
-		Missing("DataStoreOptions", "AllScopes")
-	end
-	return GetStore("Standard", "DataStore", Name, Scope)
-end)
-Method("DataStoreService", "GetGlobalDataStore", function()
-	return GetStore("Global", "GlobalDataStore", "GlobalDataStore", "global")
-end)
-Method("DataStoreService", "GetOrderedDataStore", function(_, Name, Scope)
-	Name = StoreName(Name, "DataStore name", nil, At)
-	Scope = StoreName(Scope, "Scope", "global", At)
-	return GetStore("Ordered", "OrderedDataStore", Name, Scope)
-end)
-
--- The server's budget a minute as Roblox's documentation gives it ({base, per player}): the legacy request
--- types' table and the Standard / Ordered ones'. Requests here are never throttled and spend nothing.
-local Budgets = {
-	GetAsync = { 60, 10 },
-	SetIncrementAsync = { 60, 10 },
-	UpdateAsync = { 60, 10 },
-	GetSortedAsync = { 5, 2 },
-	SetIncrementSortedAsync = { 30, 5 },
-	OnUpdate = { 30, 5 },
-	ListAsync = { 5, 2 },
-	GetVersionAsync = { 5, 2 },
-	RemoveVersionAsync = { 5, 2 },
-	StandardRead = { 60, 40 },
-	StandardWrite = { 60, 40 },
-	StandardList = { 5, 2 },
-	StandardRemove = { 60, 40 },
-	OrderedRead = { 60, 40 },
-	OrderedWrite = { 30, 5 },
-	OrderedList = { 5, 2 },
-	OrderedRemove = { 30, 5 },
-}
-Method("DataStoreService", "GetRequestBudgetForRequestType", function(_, RequestType)
-	if RequestType == nil then
-		Raise("Argument 1 missing or nil")
-	elseif not IsEnum(RequestType, "DataStoreRequestType") then
-		Raise("Unable to cast value to Enum.DataStoreRequestType")
-	end
-	local Budget = Budgets[RequestType.Name] or { 60, 10 }
-	return Budget[1] + Budget[2] * #Players:GetPlayers()
-end)
-
-Method("DataStoreOptions", "SetExperimentalFeatures", function(_, Features)
-	if type(Features) ~= "table" then
-		Raise("Argument 1 missing or nil")
-	end
-end)
+-- (an options object's metadata casts as a client's does, services.luau: "Unable to cast double to Dictionary", "Argument 1 missing
+-- or nil"; a server then holds it to the stores' metadata limit; SetExperimentalFeatures is services.luau's: measured, a 0.747 server,
+-- tools/parity/probes/engine_data_methods.luau)
 for _, Class in { "DataStoreSetOptions", "DataStoreIncrementOptions" } do
-	Method(Class, "SetMetadata", function(Self, Attributes)
+	Method(Class, "SetMetadata", function(Self, ...)
+		local Attributes = R.CastAll({ { "Dictionary" } }, ...)
 		OptionMetadata[Self] = CheckMetadata(Attributes, true, 1)
 	end)
 	Method(Class, "GetMetadata", function(Self)
@@ -458,8 +393,20 @@ Method("DataStoreKeyInfo", "GetUserIds", function(Self)
 	return Clone(if Version then Version.UserIds else {})
 end)
 
+-- OnUpdate's events, by store and key
+local UpdateEvents = setmetatable({}, { __mode = "k" })
+
 local function Write(Store, Key, Value, UserIds, Metadata, Deleted)
 	local Millis = NowMillis()
+	Store.Created = Store.Created or Millis
+	Store.Updated = Millis
+	local Events = UpdateEvents[Store]
+	if Events and Events[Key] and not Deleted then
+		-- (the key's OnUpdate callbacks get the new value as deferred handlers: the engine's own dispatch, which no script pays for)
+		Mute(true)
+		Events[Key]:Fire(Clone(Value))
+		Mute(false)
+	end
 	local Record = Store.Keys[Key]
 	if not Record or (Store.Kind == "Ordered" and Deleted) then
 		Record = { Created = Millis, Versions = {} }
@@ -603,6 +550,57 @@ Method("GlobalDataStore", "RemoveAsync", function(Self, Key)
 	return Clone(Version.Value), KeyInfo(Record, Version)
 end)
 
+-- OnUpdate (deprecated; Roblox's documentation): the callback runs with the key's new value each time a SetAsync, an UpdateAsync or an
+-- IncrementAsync of this server writes it (there is no other server to poll), as a deferred handler; the RBXScriptConnection it
+-- returns disconnects it. The key is checked as GetAsync checks one; a callback that is no function raises as UpdateAsync's does.
+Method("GlobalDataStore", "OnUpdate", function(Self, Key, Callback)
+	local Store = Handle(Self, "OnUpdate", At)
+	Key = CheckKey(Key, At)
+	if type(Callback) ~= "function" then
+		Fail(if Callback == nil then "Argument 2 missing or nil" else "Unable to cast value to function", At)
+	end
+	local Events = UpdateEvents[Store]
+	if not Events then
+		Events = {}
+		UpdateEvents[Store] = Events
+	end
+	local Event = Events[Key]
+	if not Event then
+		Event = Create("BindableEvent")
+		Events[Key] = Event
+	end
+	return Event.Event:Connect(Callback)
+end)
+
+-- BatchGetAsync (Roblox's documentation): an OrderedDataStore's values of 1 to 100 keys in one request, a dictionary of each key that
+-- holds a value to `{ value = <its value> }`, the others left out; the options are unused. A standard or the global data store
+-- raises; the texts of its errors are ree's own, the documentation gives none.
+local BATCH_KEYS = 100
+Method("GlobalDataStore", "BatchGetAsync", function(Self, Keys, _Options)
+	local Store = Handle(Self, "BatchGetAsync", At)
+	Keys = R.CastAll({ { "Array" } }, Keys)
+	if Store.Kind ~= "Ordered" then
+		Fail("BatchGetAsync is currently only supported on OrderedDataStore", At)
+	elseif #Keys == 0 then
+		Fail("BatchGetAsync: the keys array must contain at least one key", At)
+	elseif #Keys > BATCH_KEYS then
+		Fail(`BatchGetAsync: the keys array may contain at most {BATCH_KEYS} keys`, At)
+	end
+	local Checked = {}
+	for Index, Key in Keys do
+		Checked[Index] = CheckKey(Key, At)
+	end
+	task.wait()
+	local Found = {}
+	for _, Key in Checked do
+		local Version = Current(Store.Keys[Key])
+		if Version then
+			Found[Key] = { value = Clone(Version.Value) }
+		end
+	end
+	return Found
+end)
+
 local function CheckVersion(Version, At)
 	if type(Version) ~= "string" or not string.match(Version, "^%x+%.%d+%.%x+%.%d+$") then
 		Fail("The version is not valid.", At)
@@ -685,7 +683,7 @@ local function PageCopy(Page)
 	return Copy
 end
 
-for _, Class in { "DataStorePages", "DataStoreVersionPages", "DataStoreKeyPages", "MemoryStoreHashMapPages" } do
+for _, Class in { "DataStorePages", "DataStoreVersionPages", "DataStoreKeyPages", "MemoryStoreHashMapPages", "DataStoreListingPages" } do
 	Method(Class, "GetCurrentPage", function(Self)
 		local Pages = PageLists[Self]
 		return if Pages then PageCopy(Pages.List[Pages.Index]) else {}
@@ -763,6 +761,51 @@ Method("DataStore", "ListKeysAsync", function(Self, Prefix, Size, Cursor, Exclud
 	return NewPages("DataStoreKeyPages", Items, PageSize(Size, 50, 1024), function(Index, List)
 		local Page = List[Index]
 		return Page and Page[1] and Page[1].KeyName
+	end)
+end)
+
+-- ListDataStoresAsync (Roblox's documentation): the experience's data stores that hold a key, by name (a name's scopes once), whose
+-- name starts with the prefix, from the cursor on, 32 a page when the page size is 0 (no largest size is documented): a
+-- DataStoreListingPages of DataStoreInfo (DataStoreName, CreatedTime and UpdatedTime: its first and its last write, in milliseconds),
+-- its Cursor the next page's first name. The arguments cast as a client's methods cast them.
+Method("DataStoreService", "ListDataStoresAsync", function(_, ...)
+	local Prefix, Size, Cursor = R.CastAll({ { "string", "" }, { "int", 0 }, { "string", "" } }, ...)
+	task.wait()
+	local Named = {}
+	for _, Store in StoreList do
+		local Holds = false
+		for _, Record in Store.Keys do
+			if Current(Record) then
+				Holds = true
+				break
+			end
+		end
+		if Store.Kind == "Standard" and Holds and string.sub(Store.Name, 1, #Prefix) == Prefix and Store.Name >= Cursor then
+			local Entry = Named[Store.Name]
+			if not Entry then
+				Named[Store.Name] = { Created = Store.Created, Updated = Store.Updated }
+			else
+				Entry.Created = math.min(Entry.Created, Store.Created)
+				Entry.Updated = math.max(Entry.Updated, Store.Updated)
+			end
+		end
+	end
+	local Names = {}
+	for Name in Named do
+		table.insert(Names, Name)
+	end
+	table.sort(Names)
+	local Items = {}
+	for _, Name in Names do
+		local Info = Create("DataStoreInfo")
+		RawSet(Info, "DataStoreName", Name, true)
+		RawSet(Info, "CreatedTime", Named[Name].Created, true)
+		RawSet(Info, "UpdatedTime", Named[Name].Updated, true)
+		table.insert(Items, Info)
+	end
+	return NewPages("DataStoreListingPages", Items, if Size > 0 then Size else 32, function(Index, List)
+		local Page = List[Index]
+		return Page and Page[1] and Page[1].DataStoreName
 	end)
 end)
 
@@ -852,18 +895,30 @@ local function Live(Items, Key)
 	return Item
 end
 
+-- A structure by its name, which takes any value as its text, as a data store's name does (services.luau StoreText): one instance a
+-- name (a queue's a name and invisibility timeout), a child of MemoryStoreService named "Instance" (measured, a 0.747 server:
+-- tools/parity/probes/stores_sync.luau)
+local MemoryInstances = {}
 local function Memory(Kind, Class, Name, At, Extra)
-	if type(Name) ~= "string" or #Name == 0 then
-		Fail(if Name == nil then "Argument 1 missing or nil" else "The name must be a non-empty string.", At)
-	end
+	Name = R.StoreText(Name, 1)
 	local Structure = MemoryStores[Kind][Name]
 	if not Structure then
 		Structure = { Name = Name, Items = {}, Serial = 0, Reads = {} }
-		MemoryStores[Kind][Name] = Structure if R.SeedMemory then R.SeedMemory(Kind, Name, Structure) end -- (and here: SeedMemory)
+		MemoryStores[Kind][Name] = Structure
+		-- (and here: SeedMemory)
+		if R.SeedMemory then
+			R.SeedMemory(Kind, Name, Structure)
+		end
 	end
-	local Instance_ = Create(Class)
-	RawSet(Instance_, "Name", Name, true)
-	MemoryHandles[Instance_] = { Structure = Structure, Extra = Extra }
+	local Id = `{Kind}\0{Name}\0{Extra}`
+	local Instance_ = MemoryInstances[Id]
+	if not Instance_ then
+		Instance_ = Create(Class)
+		RawSet(Instance_, "Name", "Instance", true)
+		R.SetParent(Instance_, game:GetService("MemoryStoreService"))
+		MemoryInstances[Id] = Instance_
+		MemoryHandles[Instance_] = { Structure = Structure, Extra = Extra }
+	end
 	return Instance_
 end
 
@@ -881,8 +936,8 @@ end)
 Method("MemoryStoreService", "GetHashMap", function(_, Name)
 	return Memory("HashMap", "MemoryStoreHashMap", Name, true)
 end)
-Method("MemoryStoreService", "GetQueue", function(_, Name, InvisibilityTimeout)
-	local Timeout = if type(InvisibilityTimeout) == "number" then InvisibilityTimeout else 30
+Method("MemoryStoreService", "GetQueue", function(_, Name, ...)
+	local Timeout = R.CastAll({ { "int", 30 } }, ...)
 	return Memory("Queue", "MemoryStoreQueue", Name, true, Timeout)
 end)
 
@@ -1381,7 +1436,7 @@ end)
 
 -- The client profile's data (client_profile.rs, R.Profile.data): what a data store or a memory store structure holds when
 -- the run starts, as if written before it: a version each with no user ids or metadata; memory items at the longest
--- expiration, a queue's at priority 0 in their order. Only a run whose profile has data sets these (GetStore and Memory
+-- expiration, a queue's at priority 0 in their order. Only a run whose profile has data sets these (R.StoreMade and Memory
 -- call them where they make a store), so every other run's stores start empty as before.
 local ProfileData = R.Profile and R.Profile.data
 if ProfileData then
