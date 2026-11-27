@@ -6951,8 +6951,9 @@ fn actor_messages_reach_their_bindings_where_a_client_runs_them() {
             local Index = SharedTable.increment(Shared, "N", 1) + 1
             Shared["L" .. Index] = Text
         end
+        -- (a LocalScript runs in the player's PlayerScripts, as a client runs it: scripts.rs)
         local Folder = Instance.new("Folder")
-        Folder.Parent = workspace
+        Folder.Parent = game:GetService("Players").LocalPlayer:FindFirstChildOfClass("PlayerScripts")
         local Worker = Instance.new("LocalScript")
         Worker.Source = [==[
             local Shared = game:GetService("SharedTableRegistry"):GetSharedTable("MessageTest")

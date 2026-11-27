@@ -2449,6 +2449,27 @@ pub const REQUIRE_KEPT: f64 = 0.085e-6;
 /// before) and 1,328 to 1,732 on the server, where ree charged 6 us.
 pub const REQUIRE_FAILED: [f64; 2] = [1.17e-3, 1.3e-3];
 
+/// A write that takes a script to where it runs, or enables it there, queuing its start (scripts.rs start), beyond the write: on a
+/// client and on a server. A playing client and a server (roblox-sim, Studio 0.747, two sessions a round; os.clock around single
+/// writes at a frame's start after a warm-up write, the median of 9 or 15, clones of a started script so the engine had compiled the
+/// source): a LocalScript's Parent write into the PlayerGui 46.2-54.3 us over a disabled one's (four rounds, 32 B to 62 KB of
+/// source alike), a Client Script's into a Folder in the Workspace 36.5-57.6, an Enabled true there 40-51 over a parentless
+/// script's; a server's Script into ServerScriptService 30-48 and the Workspace 45-53, an Enabled true 52-76. The start's own run
+/// at its turn costs what a deferred thread's resume does (0.2-0.4 us more, not charged).
+pub const SCRIPT_START_QUEUED: [f64; 2] = [46.0e-6, 41.0e-6];
+/// A script's run stopping (Enabled false, Parent nil, a move out, Destroy: scripts.rs retire), beyond the write, on a client and a
+/// server: the same rounds, a running script against the same write of one that does not run, 5.6-10.3 us on a client (Enabled
+/// false 5.6-7.9, Destroy 6.3-9.3, Parent nil 6.1-10.3) and 9.7-17.5 on a server's Workspace, plus [`SCRIPT_STOPPED_CONNECTION`]
+/// for each connection it made that is connected. Threads it has waiting add 0.04-0.09 us each, which ree does not count.
+pub const SCRIPT_STOPPED: [f64; 2] = [7.0e-6, 10.0e-6];
+/// [`SCRIPT_STOPPED`]'s price of each connection the run holds: 200 Heartbeat connections added 27-66 us on a client, 58-66 on a
+/// server
+pub const SCRIPT_STOPPED_CONNECTION: f64 = 0.27e-6;
+/// What a script's run stopping costs with `connections` connected
+pub fn script_stopped(connections: usize, server: bool) -> f64 {
+    SCRIPT_STOPPED[usize::from(server)] + connections as f64 * SCRIPT_STOPPED_CONNECTION
+}
+
 /// TextService:GetTextSize (the parity bench: "Hello" and "World" at 14 in SourceSans 7.3 us on the fastest client sessions)
 pub const TEXT_MEASURED: f64 = 7.3e-6;
 

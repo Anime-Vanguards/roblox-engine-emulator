@@ -1,12 +1,11 @@
 //! Actors: the scripts under an Actor run in a VM of their own, as in Studio, and the Actor's messages reach them.
 //!
 //! An Actor's scripts have their own `_G` and their own copy of every module they require (modules.rs
-//! `Vm`, modules.rs `environment_in`). A Script (RunContext Client) or LocalScript that is enabled and
-//! under an Actor in the DataModel starts at the next deferred point after the assignment that put it there (or enabled it),
-//! as a deferred job queued then ([`start_under`]; measured in a 0.747 playing client, SignalBehavior Deferred,
-//! tools/parity/probes/actor_messages.luau: the lines after `Actor.Parent = ...` print first, and a script placed at a
-//! resumption point starts in that point's pass, before the Heartbeat handlers. A Studio session in Immediate mode started
-//! it inside the assignment).
+//! `Vm`, modules.rs `environment_in`). A script under an Actor starts as any script does, at its turn in the deferred queue
+//! after the write that put it there or enabled it (scripts.rs; measured in a 0.747 playing client and server,
+//! SignalBehavior Deferred: a script parented into an Actor in the Workspace, and an Actor holding one parented to the
+//! Workspace, start after the write's ChildAdded handlers, tools/parity/probes/actor_messages.luau and script_starts.luau; a
+//! Studio session in Immediate mode started it inside the assignment), in its Actor's VM, and stops as any script does.
 //!
 //! Parallel work runs at a frame event's parallel point ([`parallel_point`]): after the event's serial handlers and the flush of
 //! the deferred work they left, and before the flush that follows (measured in a 0.747 playing client and server,
@@ -51,7 +50,7 @@ use std::rc::Rc;
 use mlua::prelude::*;
 use rustc_hash::FxHashMap;
 
-use super::{Args, Flow, Ret, modules::{self, vm_key}, none, raise, values};
+use super::{Args, Flow, Ret, modules::vm_key, none, raise, values};
 use crate::signal::{ConnectionId, SignalId};
 use crate::value::{Str, Value};
 use crate::{Engine, InstanceId};
@@ -68,88 +67,6 @@ pub fn actor_of(engine: &Engine, id: InstanceId) -> Option<InstanceId> {
         at = state.dom.parent_of(current);
     }
     None
-}
-
-/// Whether the DataModel has an Actor (the fast Parent write steps aside for them: [`start_under`]).
-pub fn any_actor(engine: &Engine) -> bool {
-    engine.class_id("Actor").is_some_and(|actor| engine.state.borrow_mut().dom.count_of_class(actor) > 0)
-}
-
-/// The scripts of `ids` that run in an Actor and have not started: enabled, in the DataModel, a LocalScript or a Script with
-/// RunContext Client. Pairs of (actor, script). A server (`--run-context server`) runs no client script, and its own
-/// Scripts are the harness's to start, as everywhere else in the DataModel.
-fn startable(engine: &Engine, ids: &[InstanceId]) -> Vec<(InstanceId, InstanceId)> {
-    if engine.options.server() {
-        return Vec::new();
-    }
-    let (Some(script_class), Some(local_class)) = (engine.class_id("Script"), engine.class_id("LocalScript")) else { return Vec::new() };
-    let (Some(enabled), Some(run_context)) = (engine.reflection.name_id("Enabled"), engine.reflection.name_id("RunContext")) else { return Vec::new() };
-    let client = engine.reflection.enum_item("RunContext", "Client");
-    let mut found = Vec::new();
-    for &id in ids {
-        let (class, ready) = {
-            let state = engine.state.borrow();
-            let class = state.dom.class_of(id);
-            let ready = (class == script_class || class == local_class)
-                && !engine.modules.borrow().started(id)
-                && state.dom.boolean(id, enabled) != Some(false)
-                && (class == local_class || state.dom.raw_get(id, run_context).and_then(crate::Value::as_enum) == client)
-                && crate::services::in_data_model(&state, id);
-            (class, ready)
-        };
-        if ready {
-            if let Some(actor) = actor_of(engine, id) {
-                found.push((actor, id));
-            }
-        }
-        let _ = class;
-    }
-    found
-}
-
-fn start(lua: &Lua, engine: &Rc<Engine>, pending: Vec<(InstanceId, InstanceId)>) -> LuaResult<()> {
-    for (actor, script) in pending {
-        if engine.modules.borrow().started(script) {
-            continue;
-        }
-        engine.modules.borrow_mut().mark_started(script);
-        let Some(source) = modules::source_of(engine, script) else { continue };
-        let name = engine.state.borrow().dom.full_name(&engine.reflection, script);
-        match modules::compile_in(lua, engine, script, &source, Some(vm_key(actor))) {
-            Ok(chunk) => {
-                let thread = lua.create_thread(chunk)?;
-                engine.state.borrow_mut().sched.defer(crate::scheduler::JobTarget::Thread(thread), Vec::new());
-            }
-            Err(error) => engine.output("error", format!("{name}: {}", crate::scheduler::error_message(&error)), None),
-        }
-    }
-    Ok(())
-}
-
-/// The subtree of `root` entered the DataModel, or the script `root` got enabled: starts the scripts under Actors in it (each at
-/// the next deferred point).
-pub fn start_under(lua: &Lua, engine: &Rc<Engine>, root: InstanceId) -> LuaResult<()> {
-    let Some(actor_class) = engine.class_id("Actor") else { return Ok(()) };
-    if engine.state.borrow_mut().dom.count_of_class(actor_class) == 0 {
-        return Ok(());
-    }
-    let mut ids = vec![root];
-    ids.extend(engine.state.borrow().dom.descendants(root));
-    start(lua, engine, startable(engine, &ids))
-}
-
-/// Starts every script under an Actor that has not started (a frame step's sweep for what no assignment reported).
-pub fn start_scripts(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
-    let Some(actor_class) = engine.class_id("Actor") else { return Ok(()) };
-    let actors = engine.state.borrow_mut().dom.instances_of_class(actor_class);
-    let mut ids = Vec::new();
-    for actor in actors {
-        ids.extend(engine.state.borrow().dom.descendants(actor));
-    }
-    if ids.is_empty() {
-        return Ok(());
-    }
-    start(lua, engine, startable(engine, &ids))
 }
 
 /// Parallel work waiting for the next parallel point ([`parallel_point`]).
@@ -273,13 +190,19 @@ pub fn parallel_point(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
                 Work::Handler(thread, values) => threads.push((thread, values)),
                 Work::Resume(thread) => threads.push((thread, LuaMultiValue::new())),
                 Work::Message(connection, args) => {
+                    if !crate::scripts::handler_may_run(&mut engine.state.borrow_mut(), connection) {
+                        continue;
+                    }
+                    let maker = crate::scripts::maker(engine, connection);
                     let begun = engine.state.borrow_mut().signals.begin_handler(connection);
                     if let Some((callback, _)) = begun {
                         let mut values = LuaMultiValue::with_capacity(args.len());
                         for value in &args {
                             values.push_back(super::convert::to_lua(lua, engine, value)?);
                         }
-                        threads.push((lua.create_thread(callback)?, values));
+                        let thread = lua.create_thread(callback)?;
+                        crate::scripts::adopt_if(lua, &thread, maker.as_ref());
+                        threads.push((thread, values));
                     }
                 }
             }
@@ -502,9 +425,15 @@ fn bind(lua: &Lua, engine: &Rc<Engine>, id: InstanceId, args: &Args, member: &st
     let signal = topic_signal(engine, id, &topic, true).expect("a topic signal");
     engine.state.borrow().sched.charge(crate::cost::CONNECT);
     let connection = engine.state.borrow_mut().signals.connect_with(signal, callback, false, parallel);
-    // (a new thread of the binding's takes the binding thread's memory category, as a connection's does: lua/globals.rs handler_thread)
-    if super::globals::memory_categories_set() {
-        engine.state.borrow_mut().signals.set_connector(connection, lua.current_thread());
+    // (a new thread of the binding's takes the binding thread's memory category, as a connection's does: lua/globals.rs handler_thread;
+    // and a script's thread's owner tag and globals: a stopped script's bindings run nothing, scripts.rs)
+    let thread = lua.current_thread();
+    let scripted = crate::scripts::scripted(&thread);
+    if super::globals::memory_categories_set() || scripted {
+        engine.state.borrow_mut().signals.set_connector(connection, thread);
+    }
+    if scripted {
+        crate::scripts::connected(lua, &mut engine.state.borrow_mut(), connection);
     }
     let userdata = lua.create_any_userdata(super::types::LConnection(connection))?;
     Ok(values([LuaValue::UserData(userdata)]))

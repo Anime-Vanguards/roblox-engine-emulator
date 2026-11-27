@@ -65,8 +65,6 @@ pub struct ModuleRecords {
     /// The modules whose chunk a require is running now, outermost first: each was required from the chunk (or a thread that
     /// chunk runs) of the one before, without a yield between ([`require_run`])
     loading_now: Vec<(Vm, InstanceId)>,
-    /// The scripts under Actors that started (actors.rs)
-    started: rustc_hash::FxHashSet<InstanceId>,
     /// The parallel phases running (actors.rs)
     pub parallel: super::actors::Parallel,
     /// Source files of the modules required so far (`--dependencies`: what a run read)
@@ -113,15 +111,6 @@ pub struct ModuleRecords {
 type ChunkKey = (Vm, usize, u64);
 
 impl ModuleRecords {
-    /// Whether an Actor's script has started (actors.rs).
-    pub fn started(&self, script: InstanceId) -> bool {
-        self.started.contains(&script)
-    }
-
-    pub fn mark_started(&mut self, script: InstanceId) {
-        self.started.insert(script);
-    }
-
     /// A script got another source: the prefetched bytecode of the old one is stale.
     pub fn forget_bytecode(&mut self, script: InstanceId) {
         self.bytecode.remove(&script);
@@ -2032,7 +2021,11 @@ fn finish(lua: &Lua, engine: &Rc<Engine>, vm: Vm, module: InstanceId, result: Re
 pub fn require_run(lua: &Lua, engine: &Rc<Engine>, (chunk, module, vm): (LuaFunction, LuaValue, Vm)) -> LuaResult<LuaMultiValue> {
     let LuaValue::UserData(ud) = module else { return Err(LuaError::runtime("RequireRun: module expected")) };
     let module = instance_of_ud(&ud).ok_or_else(|| LuaError::runtime("RequireRun: module expected"))?;
+    let globals = chunk.environment();
     let thread = lua.create_thread(chunk)?;
+    // (the chunk's thread reads the module's environment as its globals and belongs to no script's run: a 0.747 client's module
+    // chunk reads getfenv(0) as its own, and what it starts goes on when the requiring script stops: scripts.rs)
+    crate::scripts::set_thread(lua, &thread, globals.as_ref(), 0);
     {
         let mut refs = engine.modules.borrow_mut();
         if let Some(record) = refs.records.get_mut(&(vm, module)) {

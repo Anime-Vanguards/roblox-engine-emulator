@@ -485,8 +485,9 @@ pub fn assign(lua: &Lua, engine: &Rc<Engine>, id: InstanceId, key: &LuaValue, va
             if engine.loopback.borrow().is_some() && matches!(value, LuaValue::Function(_)) {
                 crate::loopback::remotes::callback_set(lua, engine, id)?;
             }
-            // (its thread takes the setting thread's memory category at every run, once categories are in use: lua/bindable.rs)
-            if super::globals::memory_categories_set() {
+            // (its thread takes the setting thread's memory category at every run, once categories are in use, and a script's thread's
+            // owner tag and globals: lua/bindable.rs, scripts.rs)
+            if super::globals::memory_categories_set() || crate::scripts::scripted(&lua.current_thread()) {
                 super::bindable::callback_set(lua, value)?;
             }
             return Ok(());
@@ -959,19 +960,26 @@ pub fn fire_immediate_costing(lua: &Lua, engine: &Rc<Engine>, signal: SignalId, 
                 scheduler::resume_ready(lua, engine, &thread, values);
             }
             Handler::Connection(connection) => {
+                // (a stopped script's connection runs no handler: it disconnects as the signal reaches it, scripts.rs)
+                if !crate::scripts::handler_may_run(&mut engine.state.borrow_mut(), connection) {
+                    continue;
+                }
                 let census = crate::census::handler_site(engine, connection);
                 let is_parallel = engine.state.borrow().signals.is_parallel(connection);
                 let (kept, connector) = if is_parallel { (None, None) } else { engine.state.borrow_mut().signals.take_threads(connection) };
+                let maker = crate::scripts::maker(engine, connection);
                 let callback = engine.state.borrow_mut().signals.begin_handler(connection);
                 if let Some((callback, signal)) = callback {
                     if is_parallel {
-                        parallel.push((lua.create_thread(callback)?, values));
+                        let thread = lua.create_thread(callback)?;
+                        crate::scripts::adopt_if(lua, &thread, maker.as_ref());
+                        parallel.push((thread, values));
                         continue;
                     }
                     let sample = scheduler::sample_handler(engine, signal, &callback);
                     let _scope = crate::microprofile::enabled()
                         .then(|| crate::microprofile::scope(scheduler::handler_label(engine, signal, &callback)));
-                    let thread = super::globals::handler_thread(lua, kept, connector, callback)?;
+                    let thread = super::globals::handler_thread(lua, kept, connector, maker, callback)?;
                     if let Some(site) = census {
                         crate::census::handler_ran(site, &thread);
                     }
@@ -1539,26 +1547,11 @@ fn install_base(behaviors: &mut Behaviors, reflection: &crate::Reflection) {
                 return raise_at_caller(format!("invalid argument #3 (Instance expected, got {})", typeof_value(engine, &value)));
             }
         };
+        let _ = lua;
         set_parent(engine, id, parent)?;
-        if parent.is_some() {
-            super::actors::start_under(lua, engine, id)?;
-        }
         Ok(())
     });
     behaviors.add_setter(base, K::Parent as NameId, parent_setter);
-    // A script under an Actor starts when it is enabled, if it is in the DataModel by then
-    if let (Some(script), Some(enabled)) = (reflection.class_id("BaseScript"), reflection.name_id("Enabled")) {
-        behaviors.add_setter(script, enabled, Rc::new(move |lua, engine, id, value| {
-            let LuaValue::Boolean(on) = value else {
-                return raise(format!("Unable to assign property Enabled. boolean expected, got {}", typeof_value(engine, &value)));
-            };
-            set_property(engine, id, enabled, Value::Bool(on));
-            if on {
-                super::actors::start_under(lua, engine, id)?;
-            }
-            Ok(())
-        }));
-    }
     // Script.Source: Studio lets a plugin write it (a game's scripts cannot), and ree has no plugin or game boundary, so a
     // script may. It replaces the source file the instance was mounted from: the next require or start reads the text.
     if let Some(container) = reflection.class_id("LuaSourceContainer") {

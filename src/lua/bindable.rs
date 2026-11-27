@@ -547,11 +547,16 @@ pub(crate) fn run_own(lua: &Lua, engine: &Rc<Engine>, target: LuaValue, callback
         },
         None => None,
     };
+    let setter: Option<LuaThread> = setters.raw_get(&callback)?;
     let thread = match reused {
         Some(thread) => thread,
-        None => lua.create_thread(callback.clone())?,
+        None => {
+            let thread = lua.create_thread(callback.clone())?;
+            // (its setter's script globals and owner tag: a 0.747 client's OnInvoke reads the setting script's, scripts.rs)
+            crate::scripts::adopt_if(lua, &thread, setter.as_ref());
+            thread
+        }
     };
-    let setter: Option<LuaThread> = setters.raw_get(&callback)?;
     super::globals::memory_category_from(lua, &thread, setter.as_ref());
     let ran = if nested { crate::scheduler::resume_own(lua, engine, &thread, args, crate::scheduler::Report::Callback) } else { crate::scheduler::resume_apart(lua, engine, &thread, args, crate::scheduler::Report::Callback) };
     match ran {

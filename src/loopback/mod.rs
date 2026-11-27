@@ -215,7 +215,11 @@ pub fn join(client_lua: &Lua, client: &Rc<Engine>) -> Result<(), String> {
     let players = crate::services::get_service(&server, server.world().game, "Players").map_err(|_| "no Players")?;
     crate::lua::instance::set_parent(&server, server_player, Some(players)).map_err(|_| "the player cannot join".to_string())?;
     // (the containers a server makes for a joining player pair with the client's: by class, made where it has none)
-    replicate::join(&server_lua, &server, client_lua, client, &bridge, server_player, client_player)?;
+    // (the join's copy is the client's boot: its scripts are the harness's to start, scripts.rs)
+    let quiet = crate::scripts::Quiet::enter(&mut client.state.borrow_mut());
+    let joined = replicate::join(&server_lua, &server, client_lua, client, &bridge, server_player, client_player);
+    quiet.leave(&mut client.state.borrow_mut());
+    joined?;
     // (a client has an empty ServerScriptService: measured, tools/parity/probes/loopback/replicated_services.luau)
     let _ = crate::services::get_service(client, client.world().game, "ServerScriptService");
     // (instance streaming is not emulated: the client gets the whole Workspace, said once)
@@ -249,8 +253,10 @@ pub fn boot(lua: &Lua, engine: &Rc<Engine>, side: Side) -> Result<(), String> {
         copy_player_scripts(engine);
     }
     for script in eligible(engine, side) {
-        start_script(lua, engine, script);
+        crate::scripts::start_now(lua, engine, script).map_err(|error| error.to_string())?;
     }
+    // (from here on scripts that come to run start, and those that leave stop: scripts.rs)
+    crate::scripts::open(&mut engine.state.borrow_mut());
     Ok(())
 }
 
@@ -323,25 +329,6 @@ fn eligible(engine: &Rc<Engine>, side: Side) -> Vec<InstanceId> {
     }
     out
 }
-
-/// Runs a script's source on a scheduler thread of its own, once (a compile error is the script's output)
-fn start_script(lua: &Lua, engine: &Rc<Engine>, script: InstanceId) {
-    if engine.modules.borrow().started(script) {
-        return;
-    }
-    engine.modules.borrow_mut().mark_started(script);
-    let Some(source) = crate::lua::modules::source_of(engine, script) else { return };
-    let name = engine.state.borrow().dom.full_name(&engine.reflection, script);
-    match crate::lua::modules::compile(lua, engine, script, &source) {
-        Ok(chunk) => {
-            if let Ok(thread) = lua.create_thread(chunk) {
-                crate::scheduler::resume(lua, engine, &thread, LuaMultiValue::new());
-            }
-        }
-        Err(error) => engine.output("error", format!("{name}: {}", crate::scheduler::error_message(&error)), None),
-    }
-}
-
 
 /// The player leaves (Context.Leave), at a frame boundary: it leaves the server's Players (PlayerRemoving there), the
 /// client steps no more, and the calls waiting on the other side raise.

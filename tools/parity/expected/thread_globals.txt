@@ -1,0 +1,22 @@
+# engine: Roblox Studio 0.747.0.7471481, a headless playing client (script identity 4; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-27
+M chunk's thread M
+A main A, getfenv(0) == getfenv(1) true
+A task.spawn in M A
+A coroutine.wrap in M A
+A coroutine.create in M A
+A loadstring in M refused: loadstring() is not available
+A after setfenv(0, T): getfenv(0) T, getfenv(1) A
+A's child of a setfenv(0) thread: T
+A-T loadstring in M refused: loadstring() is not available
+A task.defer in M A
+A's Heartbeat handler: A
+B main B
+B task.spawn in M B
+B coroutine.wrap in M B
+B coroutine.create in M B
+A's OnInvoke invoked by B: A
+B fired
+B task.defer in M B
+A's handler of E3Event fired by B: A
+A's handler of Changed: A

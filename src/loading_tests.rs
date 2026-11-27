@@ -580,7 +580,8 @@ fn require_pins_first_read_source_for_source_property_clones_and_actors() {
     let second_text = "return \"second-read-modified-on-disk\"";
     std::fs::write(&config_file, first_text).unwrap();
 
-    let engine = Engine::new(Options::default()).expect("engine");
+    // (play mode: an edit DataModel starts no script)
+    let engine = Engine::new(Options { mode: "play".into(), ..Options::default() }).expect("engine");
     let lua = Lua::new();
     engine_lua::start(&lua, &engine).expect("start");
     super::project::mount_at(&engine, &super::project::Mount::parse(&format!("ReplicatedStorage/Mounted={}", folder.to_string_lossy()), false).unwrap()).unwrap();
@@ -613,14 +614,15 @@ fn require_pins_first_read_source_for_source_property_clones_and_actors() {
             print("actor", require(Config))
         ]]
         Worker.Parent = Actor
-        Actor.Parent = RS
+        -- (a LocalScript runs in the player's PlayerScripts, as a client runs it: scripts.rs)
+        Actor.Parent = game:GetService("Players").LocalPlayer:FindFirstChildOfClass("PlayerScripts")
         print("main", Initial, FromClone, SourceProp)
         "##,
     );
     let _ = std::fs::remove_dir_all(&folder);
     check(
         &lines,
-        // (the Actor's worker starts at the next deferred point, after the main script's line: lua/actors.rs)
+        // (the Actor's worker starts at its turn in the deferred queue, after the main script's line: scripts.rs)
         &[
             "main first-read first-read return \"first-read\"",
             "actor first-read",

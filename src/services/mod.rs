@@ -636,6 +636,8 @@ struct RenderStep {
     priority: f64,
     callback: LuaFunction,
     sequence: u64,
+    /// The script's thread that bound it: its calls take that thread's owner tag and globals (scripts.rs)
+    binder: Option<LuaThread>,
 }
 
 /// A RunService:BindToSimulation or BindToAnimation binding: its connection (Disconnect ends it), the steps between its calls
@@ -646,6 +648,8 @@ struct StepBinding {
     every: u32,
     priority: f64,
     sequence: u64,
+    /// The script's thread that bound it (scripts.rs)
+    binder: Option<LuaThread>,
 }
 
 /// The step bindings of a frame's simulation step (measured in a 0.747 playing client: tools/parity/probes/engine_data_methods.luau
@@ -664,7 +668,7 @@ struct StepBindings {
 }
 
 fn run_step_bindings(lua: &Lua, engine: &Rc<Engine>, bindings: &Rc<RefCell<StepBindings>>, animation: bool) -> LuaResult<()> {
-    let due: Vec<(LuaFunction, f64)> = {
+    let due: Vec<(LuaFunction, f64, Option<LuaThread>)> = {
         let mut all = bindings.borrow_mut();
         let state = engine.state.borrow();
         let steps = all.steps;
@@ -672,14 +676,15 @@ fn run_step_bindings(lua: &Lua, engine: &Rc<Engine>, bindings: &Rc<RefCell<StepB
         list.retain(|binding| state.signals.is_connected(binding.connection));
         list.iter()
             .filter(|binding| steps % u64::from(binding.every) == 0)
-            .map(|binding| (binding.callback.clone(), f64::from(binding.every) / 60.0))
+            .map(|binding| (binding.callback.clone(), f64::from(binding.every) / 60.0, binding.binder.clone()))
             .collect()
     };
     if due.is_empty() {
         return Ok(());
     }
-    for (callback, delta) in due {
+    for (callback, delta, binder) in due {
         let thread = lua.create_thread(callback)?;
+        crate::scripts::adopt_if(lua, &thread, binder.as_ref());
         super::scheduler::charge_dispatch_to(lua, engine, &thread, crate::cost::RENDER_STEP_DISPATCH, 0);
         super::scheduler::resume(lua, engine, &thread, LuaMultiValue::from_iter([LuaValue::Number(delta)]));
     }
@@ -729,6 +734,7 @@ pub fn install(engine: &Rc<Engine>) {
     install_run_service(engine, &mut behaviors, &reflection, &options);
     // Actor messages (lua/actors.rs)
     crate::lua::actors::install(engine, &mut behaviors);
+    crate::scripts::install(engine);
 
     // TweenService, Instance:QueryDescendants, AnimationTracks
     tween::install(engine, &mut behaviors);
@@ -1077,7 +1083,8 @@ fn install_run_service(engine: &Rc<Engine>, behaviors: &mut Behaviors, reflectio
                 value => String::from_utf8_lossy(&convert::string_param(lua, engine, value, 1, true)?).into_owned(),
             };
             let mut list = bind_steps.borrow_mut();
-            list.push(Rc::new(RenderStep { name, priority: level, callback, sequence: sequence.get() }));
+            let binder = Some(lua.current_thread()).filter(crate::scripts::scripted);
+            list.push(Rc::new(RenderStep { name, priority: level, callback, sequence: sequence.get(), binder }));
             crate::sort::by(&mut list, |a, b| a.priority.partial_cmp(&b.priority).unwrap_or(std::cmp::Ordering::Equal).then(a.sequence.cmp(&b.sequence)));
             Ok(none())
         }));
@@ -1122,7 +1129,7 @@ fn install_run_service(engine: &Rc<Engine>, behaviors: &mut Behaviors, reflectio
                 let connection = engine.state.borrow_mut().signals.connect_with(signal, callback.clone(), false, false);
                 let mut all = bindings.borrow_mut();
                 all.sequence += 1;
-                let binding = StepBinding { connection, callback, every, priority, sequence: all.sequence };
+                let binding = StepBinding { connection, callback, every, priority, sequence: all.sequence, binder: Some(lua.current_thread()).filter(crate::scripts::scripted) };
                 let list = if animation { &mut all.animation } else { &mut all.simulation };
                 list.push(binding);
                 crate::sort::by(list, |a, b| a.priority.partial_cmp(&b.priority).unwrap_or(std::cmp::Ordering::Equal).then(a.sequence.cmp(&b.sequence)));
@@ -1182,6 +1189,7 @@ fn install_run_service(engine: &Rc<Engine>, behaviors: &mut Behaviors, reflectio
                 if hook_steps.borrow().iter().any(|s| Rc::ptr_eq(s, &step)) {
                     // (a binding's call, booked to it: cost.rs RENDER_STEP_DISPATCH)
                     let thread = lua.create_thread(step.callback.clone())?;
+                    crate::scripts::adopt_if(lua, &thread, step.binder.as_ref());
                     super::scheduler::charge_dispatch_to(lua, engine, &thread, crate::cost::RENDER_STEP_DISPATCH, 0);
                     super::scheduler::resume(lua, engine, &thread, LuaMultiValue::from_iter([LuaValue::Number(delta)]));
                 }
@@ -1195,7 +1203,6 @@ fn install_run_service(engine: &Rc<Engine>, behaviors: &mut Behaviors, reflectio
             fire_frame_event(lua, engine, K::RenderStepped as NameId, &[Value::Number(delta)])?;
             fire_frame_event(lua, engine, K::PreRender as NameId, &[Value::Number(delta)])
         }));
-        state.sched.add_hook(Phase::Simulation, Rc::new(|lua, engine, _| crate::lua::actors::start_scripts(lua, engine)));
         let sim_bindings = step_bindings;
         state.sched.add_hook(Phase::Simulation, Rc::new(move |lua, engine, delta| {
             let now = engine.state.borrow().sched.now;
@@ -1722,6 +1729,8 @@ fn install_starter_actions_debris_sound(behaviors: &mut Behaviors, reflection: &
                     Ok(())
                 }))?;
                 let thread = lua.create_thread(body)?;
+                // (the engine's own timer: it belongs to no script's run, scripts.rs)
+                crate::scripts::adopt_if(lua, &thread, None);
                 engine.state.borrow_mut().sched.schedule_task(TimerKind::Delay, lifetime, thread, vec![Value::Instance(item)]);
             }
             Ok(none())

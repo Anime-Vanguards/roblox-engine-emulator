@@ -135,6 +135,8 @@ lua_State* luaE_newthread(lua_State* L)
     L1->activememcat = L->activememcat; // inherit the active memory category
     stack_init(L1, L);                  // init stack
     L1->gt = L->gt;                     // share table of globals
+    L1->sgt = L->sgt;                   // and the script globals and owner of the thread that made it
+    L1->owner = L->owner;
     L1->singlestep = L->singlestep;
     LUAU_ASSERT(iswhite(obj2gco(L1)));
     return L1;

@@ -472,6 +472,8 @@ static void traverseclosure(global_State* g, Closure* cl)
 static void traversestack(global_State* g, lua_State* l)
 {
     markobject(g, l->gt);
+    if (l->sgt)
+        markobject(g, l->sgt);
 
     if (l->namecall)
         stringmark(l->namecall);

@@ -111,7 +111,9 @@ pub fn loadstring(lua: &Lua, engine: &Rc<Engine>, args: LuaMultiValue) -> Ret {
             None => return raise_plain(format!("invalid argument #2 to 'loadstring' (string expected, got {})", value.type_name())),
         },
     };
-    let env = match caller_environment(lua, engine) {
+    // (the running thread's globals, as a client's chunk runs in them: a module's function on a script's thread loads in the
+    // script's environment, a thread setfenv(0) gave a table in that table; measured, a 0.747 server, scripts.rs)
+    let env = match crate::scripts::thread_globals(lua).or_else(|| caller_environment(lua, engine)) {
         Some(env) => env,
         None => lua.globals(),
     };

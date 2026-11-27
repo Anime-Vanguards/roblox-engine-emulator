@@ -1,0 +1,202 @@
+# engine: Roblox Studio 0.747.0.7471481, a headless playing client (script identity 4; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-27
+== where
+made all
+AtPlayerGui start
+AtPlayerGuiScreenGui start
+AtBackpack start
+AtBackpackTool start
+AtCharacter start
+AtCharacterPart start
+AtPlayerScripts start
+AtPlayerScriptsFolder start
+AtReplicatedFirst start
+AtReplicatedFirstFolder start
+== when
+A before
+A after
+A spawn
+A yield
+A defer-before
+A childadded A_s
+A_s start
+A defer-after
+A M0 Heartbeat
+A_s s-defer
+A M1 PreAnimation
+A M1 PreSimulation
+A M1 PostSimulation
+A delay0
+A resumed
+A_s s-resumed
+A M1 Heartbeat
+A M2 PreAnimation
+A M2 PreSimulation
+A M2 PostSimulation
+A M2 Heartbeat
+B before
+B after
+B spawn
+B handler end
+B M0 Heartbeat
+B defer-before
+B childadded B_s
+B_s start
+B defer-after
+B_s s-defer
+B M1 PreAnimation
+B M1 PreSimulation
+B M1 PostSimulation
+B delay0
+B_s s-resumed
+B M1 Heartbeat
+B M2 PreAnimation
+B M2 PreSimulation
+B M2 PostSimulation
+B M2 Heartbeat
+C M0 Heartbeat
+C M1 PreAnimation
+C before
+C after
+C spawn
+C handler end
+C M1 PreSimulation
+C defer-before
+C childadded C_s
+C_s start
+C defer-after
+C_s s-defer
+C M1 PostSimulation
+C delay0
+C_s s-resumed
+C M1 Heartbeat
+C M2 PreAnimation
+C M2 PreSimulation
+C M2 PostSimulation
+C M2 Heartbeat
+D yield
+D before
+D after
+D spawn
+D defer end
+D M0 Heartbeat
+D defer-before
+D childadded D_s
+D_s start
+D defer-after
+D_s s-defer
+D M1 PreAnimation
+D M1 PreSimulation
+D M1 PostSimulation
+D delay0
+D_s s-resumed
+D M1 Heartbeat
+D M2 PreAnimation
+D M2 PreSimulation
+D M2 PostSimulation
+D M2 Heartbeat
+E before
+E after
+E spawn
+E yield
+E defer-before
+E childadded E_outer
+E_outer start
+E_outer parented
+E defer-after
+E M0 Heartbeat
+E_inner start
+E_outer defer
+E_inner s-defer
+E M1 PreAnimation
+E M1 PreSimulation
+E M1 PostSimulation
+E delay0
+E_inner s-resumed
+E M1 Heartbeat
+E M2 PreAnimation
+E M2 PreSimulation
+E M2 PostSimulation
+E M2 Heartbeat
+F parented
+F enabled
+F_one start
+F_two start
+F M0 Heartbeat
+F_one s-defer
+F_two s-defer
+F M1 PreAnimation
+F M1 PreSimulation
+F M1 PostSimulation
+F_one s-resumed
+F_two s-resumed
+F M1 Heartbeat
+F M2 PreAnimation
+F M2 PreSimulation
+F M2 PostSimulation
+F M2 Heartbeat
+G before
+G after
+G spawn
+G yield
+G defer-before
+G childadded G_s
+G_s start
+G defer-after
+G M0 Heartbeat
+G_s s-defer
+G M1 PreAnimation
+G M1 PreSimulation
+G M1 PostSimulation
+G delay0
+G_s s-resumed
+G M1 Heartbeat
+G M2 PreAnimation
+G M2 PreSimulation
+G M2 PostSimulation
+G M2 Heartbeat
+H before
+H after
+H spawn
+H yield
+H defer-before
+H childadded Actor
+H_s start
+H defer-after
+H M0 Heartbeat
+H_s s-defer
+H M1 PreAnimation
+H M1 PreSimulation
+H M1 PostSimulation
+H delay0
+H_s s-resumed
+H M1 Heartbeat
+H M2 PreAnimation
+H M2 PreSimulation
+H M2 PostSimulation
+H M2 Heartbeat
+== order
+defer-before
+PG.DescendantAdded EvFolder
+game.DescendantAdded EvFolder
+PG.DescendantAdded Ev
+game.DescendantAdded Ev
+PG.ChildAdded EvFolder
+s.AncestryChanged EvFolder
+Ev start
+f.AncestryChanged EvFolder
+f.Changed Parent
+defer-after
+Ta start
+Tb1 start
+Tb2 start
+Tb start
+Tc start
+== thread
+E3T1 status running, below it 0 values
+E3T1 traceback 1 lines
+ScriptContext.Error <path>.E3T1:4: E3T1 boom || <path>.E3T1, line 4 |  || E3T1
+log MessageError <path>.E3T1:4: E3T1 boom |     Stack Begin |     Script '<path>.E3T1', Line 4 |     Stack End
+ScriptContext.Error <path>.E3T2:3: E3T2 boom after a wait || <path>.E3T2, line 3 |  || E3T2
+log MessageError <path>.E3T2:3: E3T2 boom after a wait |     Stack Begin |     Script '<path>.E3T2', Line 3 |     Stack End
+log MessageError <path>.E3T3:2: Expected identifier when parsing expression, got '='

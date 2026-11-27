@@ -1,0 +1,162 @@
+# Topic: a thread's script globals and owner, inherited by the threads made from it
+#
+# What it does: gives each thread two fields the host sets on a script's thread, `sgt` (the globals a script reads as
+# the thread's: getfenv(0), setfenv(0), the host's loadstring) and `owner` (the host's tag of the script run the thread
+# belongs to), copied into every thread made from it (coroutine.create and wrap, and the host's threads made on a
+# running thread), with an API to set and read them (lua_setthreadglobals, lua_getthreadglobals,
+# lua_threadglobalspointer, lua_setthreadowner, lua_getthreadowner). getfenv(0) and getfenv of a C function answer a
+# thread's script globals when it has them (patch 18's stack walk otherwise), and setfenv(0) sets them, leaving the
+# VM's globals as they are.
+#
+# Why upstream lacks it: upstream has one table of globals per thread, which a host that sandboxes each script's thread
+# makes the script's environment. This host keeps the VM's globals on every thread (its engine code reads them there)
+# and runs scripts in environments of their own, so it needs a field of its own for what a client's thread globals are:
+# a 0.747 client and server answer getfenv(0) with the running thread's script (a module's function a script's thread
+# calls reads the script's), a thread made by coroutine.create, task.spawn, task.defer or task.delay inherits them, a
+# handler reads its connecting script's, and loadstring's chunk runs in them. The owner lets the host stop what a
+# script's run left waiting when the script stops, as a client does.
+
+diff --git a/luau/VM/include/lua.h b/luau/VM/include/lua.h
+index 9233889..8e247d8 100644
+--- a/luau/VM/include/lua.h
++++ b/luau/VM/include/lua.h
+@@ -283,6 +283,12 @@ LUA_API int lua_status(lua_State* L);
+ LUA_API int lua_isyieldable(lua_State* L);
+ LUA_API void* lua_getthreaddata(lua_State* L);
+ LUA_API void lua_setthreaddata(lua_State* L, void* data);
++// A thread's script globals (getfenv(0)) and owner tag, inherited by the threads made from it: set pops a table (or nil, none)
++LUA_API void lua_setthreadglobals(lua_State* L, lua_State* thread);
++LUA_API int lua_getthreadglobals(lua_State* L, lua_State* thread);
++LUA_API const void* lua_threadglobalspointer(lua_State* thread);
++LUA_API void lua_setthreadowner(lua_State* thread, unsigned int owner);
++LUA_API unsigned int lua_getthreadowner(lua_State* thread);
+ LUA_API int lua_costatus(lua_State* L, lua_State* co);
+ LUA_API int lua_hasfinalizers(lua_State* L);
+ LUA_API void lua_pushfinalizerfunction(lua_State* L, lua_State* co, int toclose);
+diff --git a/luau/VM/src/lapi.cpp b/luau/VM/src/lapi.cpp
+index b57bfad..ca75da4 100644
+--- a/luau/VM/src/lapi.cpp
++++ b/luau/VM/src/lapi.cpp
+@@ -1428,6 +1428,50 @@ void lua_setthreaddata(lua_State* L, void* data)
+     L->userdata = data;
+ }
+ 
++void lua_setthreadglobals(lua_State* L, lua_State* thread)
++{
++    api_checknelems(L, 1);
++    const TValue* o = L->top - 1;
++    api_check(L, ttistable(o) || ttisnil(o));
++    if (ttistable(o))
++    {
++        thread->sgt = hvalue(o);
++        luaC_objbarrier(L, thread, hvalue(o));
++    }
++    else
++        thread->sgt = NULL;
++    L->top--;
++}
++
++int lua_getthreadglobals(lua_State* L, lua_State* thread)
++{
++    if (thread->sgt)
++    {
++        sethvalue(L, L->top, thread->sgt);
++    }
++    else
++    {
++        setnilvalue(L->top);
++    }
++    api_incr_top(L);
++    return thread->sgt ? LUA_TTABLE : LUA_TNIL;
++}
++
++const void* lua_threadglobalspointer(lua_State* thread)
++{
++    return thread->sgt;
++}
++
++void lua_setthreadowner(lua_State* thread, unsigned int owner)
++{
++    thread->owner = owner;
++}
++
++unsigned int lua_getthreadowner(lua_State* thread)
++{
++    return thread->owner;
++}
++
+ /*
+ ** Garbage-collection function
+ */
+diff --git a/luau/VM/src/lbaselib.cpp b/luau/VM/src/lbaselib.cpp
+index 9034104..d8b746f 100644
+--- a/luau/VM/src/lbaselib.cpp
++++ b/luau/VM/src/lbaselib.cpp
+@@ -130,6 +130,12 @@ static void getfunc(lua_State* L, int opt)
+ // keep the VM's globals
+ static void pushscriptenv(lua_State* L)
+ {
++    // (a thread the host gave script globals reads them, as a client's thread reads its globals)
++    if (L->sgt)
++    {
++        lua_getthreadglobals(L, L);
++        return;
++    }
+     lua_Debug ar;
+     for (int level = 1; lua_getinfo(L, level, "f", &ar); ++level)
+     {
+@@ -235,10 +241,8 @@ static int luaB_setfenv(lua_State* L)
+     lua_setsafeenv(L, -1, false);
+     if (lua_isnumber(L, 1) && lua_tonumber(L, 1) == 0)
+     {
+-        // change environment of current thread
+-        lua_pushthread(L);
+-        lua_insert(L, -2);
+-        lua_setfenv(L, -2);
++        // change environment of current thread: its script globals (the VM's globals the host's own code reads stay)
++        lua_setthreadglobals(L, L);
+         return 0;
+     }
+     else if (lua_iscfunction(L, -2) || lua_setfenv(L, -2) == 0)
+diff --git a/luau/VM/src/lgc.cpp b/luau/VM/src/lgc.cpp
+index e0b9ea7..3605a55 100644
+--- a/luau/VM/src/lgc.cpp
++++ b/luau/VM/src/lgc.cpp
+@@ -472,6 +472,8 @@ static void traverseclosure(global_State* g, Closure* cl)
+ static void traversestack(global_State* g, lua_State* l)
+ {
+     markobject(g, l->gt);
++    if (l->sgt)
++        markobject(g, l->sgt);
+ 
+     if (l->namecall)
+         stringmark(l->namecall);
+diff --git a/luau/VM/src/lstate.cpp b/luau/VM/src/lstate.cpp
+index c84a7b2..bce3b18 100644
+--- a/luau/VM/src/lstate.cpp
++++ b/luau/VM/src/lstate.cpp
+@@ -135,6 +135,8 @@ lua_State* luaE_newthread(lua_State* L)
+     L1->activememcat = L->activememcat; // inherit the active memory category
+     stack_init(L1, L);                  // init stack
+     L1->gt = L->gt;                     // share table of globals
++    L1->sgt = L->sgt;                   // and the script globals and owner of the thread that made it
++    L1->owner = L->owner;
+     L1->singlestep = L->singlestep;
+     LUAU_ASSERT(iswhite(obj2gco(L1)));
+     return L1;
+diff --git a/luau/VM/src/lstate.h b/luau/VM/src/lstate.h
+index 6c12fcb..abb237e 100644
+--- a/luau/VM/src/lstate.h
++++ b/luau/VM/src/lstate.h
+@@ -367,6 +367,11 @@ struct lua_State
+     LuaTable* finalizers; // optional table of all the callbacks to run when this thread completes (see coroutine.finally)
+ 
+     void* userdata;
++
++    // The thread's globals as a script reads them (getfenv(0), setfenv(0), the host's loadstring) and the host's tag of the
++    // script run the thread belongs to: both set by the host on a script's thread and inherited by every thread made from it
++    LuaTable* sgt;
++    unsigned int owner;
+ };
+ // clang-format on
+ 

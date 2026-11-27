@@ -75,6 +75,10 @@ pub enum JobTarget {
     DisconnectAll(InstanceId),
     /// An Actor's message to one serial binding: when it runs, it queues the binding's handler (lua/actors.rs)
     Post(ConnectionId),
+    /// A script's start, queued by the write that took it to where it runs (scripts.rs run_start: the key of its pending start)
+    Start(u32),
+    /// The connections of a script run that an Enabled false stopped (scripts.rs disconnect_run)
+    DisconnectRun(u32),
 }
 
 pub struct Job {
@@ -260,6 +264,8 @@ pub struct Scheduler {
     phase_clock_calls: u32,
     /// How many scheduler resumptions are running, nested (scheduler::resume)
     resume_depth: u32,
+    /// The threads those resumptions run, outermost first (a script's stop leaves the ones of its run going: scripts.rs retire)
+    resuming: Vec<usize>,
     /// What those reads past the allowance added (this phase) and the last clock they saw, without it
     clock_drift: f64,
     last_clock: f64,
@@ -432,6 +438,7 @@ impl Scheduler {
             clock_call_quantum: 1e-5,
             phase_clock_calls: 0,
             resume_depth: 0,
+            resuming: Vec::new(),
             clock_drift: 0.0,
             last_clock: f64::NEG_INFINITY,
             work: Rc::new(std::cell::Cell::new(0.0)),
@@ -1024,6 +1031,13 @@ impl Scheduler {
     }
 
     /// `thread` (suspended) ends later: hand its outcome to `end` when [`resume`] sees it return or raise
+    /// The threads the scheduler's resumptions are running now, outermost first (their states)
+    pub(crate) fn visit_resuming(&self, visit: &mut dyn FnMut(*mut mlua::ffi::lua_State)) {
+        for &thread in &self.resuming {
+            visit(thread as *mut mlua::ffi::lua_State);
+        }
+    }
+
     pub(crate) fn await_end(&mut self, thread: &LuaThread, end: ThreadEnd) {
         self.thread_ends.insert(thread.to_pointer() as usize, (thread.clone(), end));
     }
@@ -1211,7 +1225,7 @@ pub fn resume(lua: &Lua, engine: &Rc<Engine>, thread: &LuaThread, args: LuaMulti
 /// resumes with [`resume_ready`], so the thread is checked once.
 pub(crate) fn can_resume(engine: &Engine, thread: &LuaThread) -> bool {
     let state = engine.state.borrow();
-    thread_ready(&state.sched, thread)
+    state_ready(&state, thread)
 }
 
 fn thread_ready(scheduler: &Scheduler, thread: &LuaThread) -> bool {
@@ -1248,6 +1262,11 @@ pub(crate) fn refused_resume(lua: &Lua, engine: &Rc<Engine>, thread: &LuaThread)
     let frames = trace.as_deref().map_or(0, |trace| crate::stack_frames(trace).len());
     engine.output_error_with_script(NOT_SUSPENDED.into(), trace, script, true);
     engine.state.borrow().sched.charge(crate::cost::not_suspended_logged(frames));
+}
+
+/// [`thread_ready`], and not a thread a stopped script's run left waiting (scripts.rs): those never resume
+fn state_ready(state: &crate::State, thread: &LuaThread) -> bool {
+    thread_ready(&state.sched, thread) && crate::scripts::may_resume(state, thread)
 }
 
 /// Resumes a thread [`can_resume`] has just said can run, with no Luau run in between that could have changed that.
@@ -1541,10 +1560,10 @@ fn resume_core(lua: &Lua, engine: &Rc<Engine>, thread: &LuaThread, args: LuaMult
         (false, None)
     } else {
         let mut state = engine.state.borrow_mut();
-        let sched = &mut state.sched;
-        if check_ready && !thread_ready(sched, thread) {
+        if check_ready && !state_ready(&state, thread) {
             return None;
         }
+        let sched = &mut state.sched;
         // Build-time placement: a top-level resumption before the first Heartbeat is (part of) the
         // story build
         let top_level = sched.track_build
@@ -1559,6 +1578,7 @@ fn resume_core(lua: &Lua, engine: &Rc<Engine>, thread: &LuaThread, args: LuaMult
             sched.phase_clock_calls = 0;
         }
         sched.resume_depth += 1;
+        sched.resuming.push(thread.state() as usize);
         // (the script timeout times the outermost resumption of a nest: watchdog.rs)
         (top_level, Some(crate::watchdog::enter(sched.timeout.as_ref())))
     };
@@ -1568,7 +1588,9 @@ fn resume_core(lua: &Lua, engine: &Rc<Engine>, thread: &LuaThread, args: LuaMult
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| resume_raw(lua, thread, args, log_errors, keep)))
     };
     if !nested {
-        engine.state.borrow_mut().sched.resume_depth -= 1;
+        let mut state = engine.state.borrow_mut();
+        state.sched.resume_depth -= 1;
+        state.sched.resuming.pop();
     }
     let ran = match resumed {
         Ok(Ok(true)) if keep => Ran::Returned(thread_values(lua, thread, false)),
@@ -1788,6 +1810,10 @@ fn run_job(lua: &Lua, engine: &Rc<Engine>, job: Job) -> LuaResult<()> {
                 state.sched.clear_task_state(&thread);
                 deferred
             };
+            // (a thread a stopped script's run left queued never resumes, and costs nothing: scripts.rs)
+            if !crate::scripts::may_resume(&engine.state.borrow(), &thread) {
+                return Ok(());
+            }
             let args = job_args(lua, engine, &job.args)?;
             let _scope = crate::microprofile::scope("Resume thread");
             // (a thread a signal's Wait parked: its resumption is booked to its wait)
@@ -1800,15 +1826,20 @@ fn run_job(lua: &Lua, engine: &Rc<Engine>, job: Job) -> LuaResult<()> {
             }
         }
         JobTarget::Handler { connection, kind } => {
+            // (a stopped script's connection runs no handler: it disconnects here, as the signal reaches it: scripts.rs)
+            if !crate::scripts::handler_may_run(&mut engine.state.borrow_mut(), connection) {
+                return Ok(());
+            }
             let census = crate::census::handler_site(engine, connection);
             let (kept, connector) = engine.state.borrow_mut().signals.take_threads(connection);
+            let maker = crate::scripts::maker(engine, connection);
             let callback = engine.state.borrow_mut().signals.begin_handler(connection);
             if let Some((callback, signal)) = callback {
                 let args = job_args(lua, engine, &job.args)?;
                 let sample = sample_handler(engine, signal, &callback);
                 let _scope = crate::microprofile::enabled()
                     .then(|| crate::microprofile::scope(handler_label(engine, signal, &callback)));
-                let thread = super::lua::globals::handler_thread(lua, kept, connector, callback)?;
+                let thread = super::lua::globals::handler_thread(lua, kept, connector, maker, callback)?;
                 if let Some(site) = census {
                     crate::census::handler_ran(site, &thread);
                 }
@@ -1821,6 +1852,8 @@ fn run_job(lua: &Lua, engine: &Rc<Engine>, job: Job) -> LuaResult<()> {
         JobTarget::DisconnectAll(id) => {
             super::instance::disconnect_all(&mut engine.state.borrow_mut(), id);
         }
+        JobTarget::Start(key) => crate::scripts::run_start(lua, engine, key)?,
+        JobTarget::DisconnectRun(key) => crate::scripts::disconnect_run(&mut engine.state.borrow_mut(), key),
     }
     Ok(())
 }

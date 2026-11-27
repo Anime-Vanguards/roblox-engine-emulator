@@ -497,12 +497,6 @@
 			"why": "garbage collection: ree keeps a table and a signal a script dropped one collection longer than a client"
 		}
 	],
-	"loadmodule": [
-		{
-			"line": "env is-getfenv(f) true is-caller's false script true raw-script true thread-env-is-caller's true _G true shared true require true game true",
-			"why": "getfenv(0) is the running thread's globals in Roblox (the script whose thread runs, which a thread made by coroutine.create or task.spawn inherits from the thread that made it), not the calling function's environment: here the loaded module's function was called from the probe's thread"
-		}
-	],
 	"logservice_text": [
 		{
 			"line": "nested-functions out MessageError[@41: parity-text named /     Stack Begin /     Script '<probe>', Line @41 - function Named /     Script '<probe>', Line @44 - function Outer /     Stack End] trace [ServerScriptService.ParityProbe, line 241 - function Named / ServerScriptService.ParityProbe, line 244 - function Outer / ]",

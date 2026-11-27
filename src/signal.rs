@@ -66,6 +66,8 @@ pub struct ConnectionData {
     pub parallel: bool,
     pub signal: SignalId,
     generation: u32,
+    /// The owner tag of the script run whose thread made it (scripts.rs; 0: none): a stopped run's runs no handler
+    owner: u32,
 }
 
 #[derive(Default, Debug)]
@@ -107,6 +109,25 @@ impl Signals {
     pub fn set_connector(&mut self, id: ConnectionId, thread: mlua::Thread) {
         if let (Some(threads), Some(_)) = (&self.threads, self.connection(id)) {
             let _ = threads.raw_set(-(id.index as i64 + 1), thread);
+        }
+    }
+
+    /// The thread that connected `id`, when it was kept (memory categories in use, or a script run's thread: [`Self::set_connector`])
+    pub fn connector(&self, id: ConnectionId) -> Option<mlua::Thread> {
+        let threads = self.threads.as_ref()?;
+        self.connection(id)?;
+        threads.raw_get::<Option<mlua::Thread>>(-(id.index as i64 + 1)).ok().flatten()
+    }
+
+    /// The owner tag of the script run whose thread made `id` (scripts.rs), while it is connected
+    pub fn owner(&self, id: ConnectionId) -> Option<u32> {
+        self.connection(id).map(|data| data.owner)
+    }
+
+    /// Gives `id` the owner tag of the script run whose thread made it
+    pub fn set_owner(&mut self, id: ConnectionId, owner: u32) {
+        if let Some(data) = self.connections.get_mut(id.index as usize).filter(|data| data.generation == id.generation && data.connected) {
+            data.owner = owner;
         }
     }
 
@@ -219,7 +240,7 @@ impl Signals {
         let index = match self.free_connections.pop() {
             Some(index) => index,
             None => {
-                self.connections.push(ConnectionData { connected: false, callback: None, once: false, fired: false, parallel: false, signal: 0, generation: 0 });
+                self.connections.push(ConnectionData { connected: false, callback: None, once: false, fired: false, parallel: false, signal: 0, generation: 0, owner: 0 });
                 (self.connections.len() - 1) as u32
             }
         };
@@ -230,6 +251,7 @@ impl Signals {
         let data = &mut self.connections[index as usize];
         (data.connected, data.callback, data.once, data.parallel, data.signal) = (true, callback, once, parallel, signal);
         data.fired = false;
+        data.owner = 0;
         self.parallel_connections += usize::from(parallel);
         let id = ConnectionId { index, generation: data.generation };
         self.signals[signal as usize].handlers.push(Handler::Connection(id));

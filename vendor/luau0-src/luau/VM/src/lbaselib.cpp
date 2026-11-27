@@ -130,6 +130,12 @@ static void getfunc(lua_State* L, int opt)
 // keep the VM's globals
 static void pushscriptenv(lua_State* L)
 {
+    // (a thread the host gave script globals reads them, as a client's thread reads its globals)
+    if (L->sgt)
+    {
+        lua_getthreadglobals(L, L);
+        return;
+    }
     lua_Debug ar;
     for (int level = 1; lua_getinfo(L, level, "f", &ar); ++level)
     {
@@ -235,10 +241,8 @@ static int luaB_setfenv(lua_State* L)
     lua_setsafeenv(L, -1, false);
     if (lua_isnumber(L, 1) && lua_tonumber(L, 1) == 0)
     {
-        // change environment of current thread
-        lua_pushthread(L);
-        lua_insert(L, -2);
-        lua_setfenv(L, -2);
+        // change environment of current thread: its script globals (the VM's globals the host's own code reads stay)
+        lua_setthreadglobals(L, L);
         return 0;
     }
     else if (lua_iscfunction(L, -2) || lua_setfenv(L, -2) == 0)

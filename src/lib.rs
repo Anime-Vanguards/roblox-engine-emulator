@@ -46,6 +46,7 @@ pub mod record;
 pub mod reflection;
 pub mod rojo;
 pub mod scheduler;
+pub mod scripts;
 #[cfg(feature = "cli")]
 pub mod serve;
 pub mod services;
@@ -80,6 +81,8 @@ mod teams_tests;
 mod loading_tests;
 #[cfg(test)]
 mod script_env_tests;
+#[cfg(test)]
+mod script_start_tests;
 #[cfg(test)]
 mod rojo_tests;
 #[cfg(test)]
@@ -862,6 +865,8 @@ pub struct State {
     pub quiet_write: bool,
     /// Number of instances that have ever created an AncestryChanged signal (instance::event_signal)
     pub ancestry_signals: u32,
+    /// The scripts a running game starts and stops (scripts.rs)
+    pub scripts: scripts::Scripts,
 }
 
 /// Rust-side hooks (the Luau runtime's InstanceModule.Hooks that engine subsystems install).
@@ -975,6 +980,7 @@ impl Engine {
                 loopback_log: None,
                 quiet_write: false,
                 ancestry_signals: 0,
+                scripts: Default::default(),
             }),
             options,
             lua: RefCell::new(lua::LuaRefs::default()),
@@ -1075,6 +1081,7 @@ impl Engine {
         self.world.set(Some(world));
         self.state.borrow().sched.touched.borrow_mut().workspace = Some(world.workspace);
         services::players::set_world(&mut self.state.borrow_mut(), world.workspace, world.local_player);
+        scripts::set_world(&mut self.state.borrow_mut(), world.game, world.workspace, world.local_player);
     }
 
     /// Output.Add with the virtual clock.

@@ -615,14 +615,22 @@ fn leaving_descendant_events(state: &mut State, reflection: &Reflection, hooks: 
 
 /// AncestryChanged of every instance of the moved subtree, children before the instance (post-order, measured in Studio
 /// with the others above: A1, A2, A, B1, B, C, U for U(A(A1, A2), B(B1), C)).
-fn fire_ancestry_changed(state: &mut State, root: InstanceId, new_parent: Option<InstanceId>) {
-    if state.ancestry_signals == 0 {
+/// The subtree's AncestryChanged events, in its post-order; a script among them that came to run starts or one that left stops
+/// right after its own (a 0.747 client and server queue a start there: scripts.rs). `old_chain` is the old parent's chain.
+fn fire_ancestry_changed(state: &mut State, root: InstanceId, new_parent: Option<InstanceId>, old_chain: &[InstanceId]) {
+    let scripts = crate::scripts::watching_move(state, root);
+    if state.ancestry_signals == 0 && !scripts {
         return;
     }
     let parent = new_parent.map_or(Value::Nil, Value::Instance);
     for node in state.dom.subtree_post_order(root) {
-        if let Some(signal) = existing_event(state, node, K::AncestryChanged as NameId) {
+        if state.ancestry_signals > 0
+            && let Some(signal) = existing_event(state, node, K::AncestryChanged as NameId)
+        {
             fire_measured(state, signal, vec![Value::Instance(root), parent.clone()], SignalKind::AncestryChanged);
+        }
+        if scripts {
+            crate::scripts::moved(state, node, root, old_chain);
         }
     }
 }
@@ -908,7 +916,7 @@ fn reparent(
             super::services::subtree_moved(state, id, true);
         }
     }
-    fire_ancestry_changed(state, id, new_parent);
+    fire_ancestry_changed(state, id, new_parent, &old_chain);
     // (the moved instance's own Changed("Parent") and Parent property signal come last: measured with the others)
     notify_changed_events(state, reflection, hooks, id, K::Parent as NameId, None);
     if let Some((primary, models)) = released {

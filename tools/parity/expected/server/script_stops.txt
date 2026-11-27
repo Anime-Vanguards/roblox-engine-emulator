@@ -1,0 +1,212 @@
+# engine: Roblox Studio 0.747.0.7471481, the server of a headless play session (loadstring in the server's bridge, script identity 4; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-27
+== enabled
+En#1 start
+HB
+En#1 spawned
+En#1 loop
+En#1 conn
+HB
+Enabled false
+HB
+HB
+Enabled true
+En#2 start
+HB
+En#2 spawned
+En#2 loop
+En#2 conn
+HB
+Enabled false, true
+En#3 start
+HB
+En#3 spawned
+En#3 loop
+En#3 conn
+HB
+Enabled true again
+En#3 spawned
+En#3 loop
+En#3 conn
+HB
+HB
+== moves
+Mv#1 start
+HB
+Mv#1 spawned
+Mv#1 loop
+Mv#1 conn
+HB
+to a place it does not run
+HB
+HB
+back
+Mv#2 start
+HB
+Mv#2 spawned
+Mv#2 loop
+Mv#2 conn
+HB
+to the Backpack
+Mv#2 spawned
+Mv#2 loop
+Mv#2 conn
+HB
+Mv#2 spawned
+Mv#2 loop
+Mv#2 conn
+HB
+to nil and back
+Mv#3 start
+HB
+Mv#3 spawned
+Mv#3 loop
+Mv#3 conn
+HB
+into a folder there
+Mv#3 spawned
+Mv#3 loop
+Mv#3 conn
+HB
+Mv#3 spawned
+Mv#3 loop
+Mv#3 conn
+HB
+the folder to nil
+HB
+HB
+to the character
+Mv#4 start
+HB
+Mv#4 spawned
+Mv#4 loop
+Mv#4 conn
+HB
+HB
+== clones
+Cl#1 start
+HB
+a clone of it
+Cl#1 spawned
+Cl#1 loop
+ClCopy#2 start
+Cl#1 conn
+HB
+Cl#1 spawned
+Cl#1 loop
+ClCopy#2 spawned
+ClCopy#2 loop
+ClCopy#2 conn
+Cl#1 conn
+HB
+a clone of a disabled one
+Cl#1 spawned
+Cl#1 loop
+ClCopy#2 spawned
+ClCopy#2 loop
+ClCopy#2 conn
+Cl#1 conn
+HB
+enabled
+Cl#1 spawned
+Cl#1 loop
+ClCopy#2 spawned
+ClCopy#2 loop
+ClOff start
+ClCopy#2 conn
+Cl#1 conn
+HB
+Destroy
+HB
+HB
+== restarts
+Fin start
+HB
+out and back
+HB
+Fin start
+HB
+Enabled off, on
+HB
+Fin start
+HB
+Bsrc start, first source
+Btwice start
+HB
+a restart runs the Source as it is then
+Bsrc start, second source
+HB
+== what a stop takes
+S start, a fresh environment false, a global the last run set nil
+HB
+fire, then stop a frame on
+the module's own thread
+S: a thread a module's function made
+S's loop
+S's deferred loop
+S's Wait returned
+S's handler runs
+HB
+stopped
+the module's own thread
+HB
+the module's own thread
+HB
+restart
+the module's own thread
+S start, a fresh environment true, a global the last run set nil
+S's WaitForChild returned
+HB
+the module's own thread
+S: a thread a module's function made
+S's loop
+S's deferred loop
+HB
+the module's own thread
+HB
+the module's own thread
+HB
+the module's own thread
+HB
+HB
+HB
+HB
+HB
+HB
+HB
+HB
+D queued true
+D stopped
+HB
+HB
+E after disabling itself
+E's spawned thread from after
+HB
+E's deferred work from after
+E's spawned thread from after, resumed
+E resumed
+E's handler from after
+HB
+E resumed again
+HB
+== connections
+Enabled false, before: hb true, be true, main suspended, waiter suspended, sleeper suspended
+Enabled false, right after: hb true, be true, main suspended, waiter suspended, sleeper suspended
+Enabled false, right after a fire: hb true, be true, main suspended, waiter suspended, sleeper suspended
+Enabled false, deferred: hb false, be false, main suspended, waiter suspended, sleeper suspended
+Enabled false, next frame: hb false, be false, main suspended, waiter suspended, sleeper suspended
+Destroy, before: hb true, be true, main suspended, waiter suspended, sleeper suspended
+Destroy, right after: hb true, be true, main suspended, waiter suspended, sleeper suspended
+Destroy, right after a fire: hb true, be true, main suspended, waiter suspended, sleeper suspended
+Destroy, deferred: hb true, be false, main suspended, waiter suspended, sleeper suspended
+Destroy, next frame: hb false, be false, main suspended, waiter suspended, sleeper suspended
+Parent nil, before: hb true, be true, main suspended, waiter suspended, sleeper suspended
+Parent nil, right after: hb true, be true, main suspended, waiter suspended, sleeper suspended
+Parent nil, right after a fire: hb true, be true, main suspended, waiter suspended, sleeper suspended
+Parent nil, deferred: hb true, be false, main suspended, waiter suspended, sleeper suspended
+Parent nil, next frame: hb false, be false, main suspended, waiter suspended, sleeper suspended
+a move off, before: hb true, be true, main suspended, waiter suspended, sleeper suspended
+a move off, right after: hb true, be true, main suspended, waiter suspended, sleeper suspended
+a move off, right after a fire: hb true, be true, main suspended, waiter suspended, sleeper suspended
+a move off, deferred: hb true, be false, main suspended, waiter suspended, sleeper suspended
+a move off, next frame: hb false, be false, main suspended, waiter suspended, sleeper suspended

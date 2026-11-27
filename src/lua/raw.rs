@@ -1523,10 +1523,6 @@ unsafe fn newindex_fast(state: *mut ffi::lua_State) -> Out {
                 Out::Ret(0)
             }
             Write::Parent => {
-                // (a subtree entering the DataModel starts the scripts under Actors in it: the slow path runs them)
-                if super::actors::any_actor(engine) {
-                    return Out::Slow;
-                }
                 let parent = match kind {
                     ffi::LUA_TNIL => None,
                     _ => match arg_instance(state, 3) {

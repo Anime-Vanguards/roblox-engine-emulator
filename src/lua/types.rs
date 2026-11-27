@@ -721,9 +721,17 @@ fn connect_as(lua: &Lua, engine: &Rc<Engine>, args: LuaMultiValue, once: bool, p
         Some(signal) => engine.state.borrow_mut().signals.connect_with(signal, callback, once, parallel),
         None => ConnectionId::DISCONNECTED,
     };
-    // (a new thread of the connection's takes the connecting thread's memory category: lua/globals.rs handler_thread)
-    if super::globals::memory_categories_set() && connection != ConnectionId::DISCONNECTED {
-        engine.state.borrow_mut().signals.set_connector(connection, lua.current_thread());
+    // (a new thread of the connection's takes the connecting thread's memory category, and a script's thread's owner tag and
+    // globals: lua/globals.rs handler_thread; the connection keeps the tag: scripts.rs)
+    if connection != ConnectionId::DISCONNECTED {
+        let thread = lua.current_thread();
+        let scripted = crate::scripts::scripted(&thread);
+        if super::globals::memory_categories_set() || scripted {
+            engine.state.borrow_mut().signals.set_connector(connection, thread);
+        }
+        if scripted {
+            crate::scripts::connected(lua, &mut engine.state.borrow_mut(), connection);
+        }
     }
     if let Some(callback) = noted {
         crate::census::connected(lua, connection, &callback);

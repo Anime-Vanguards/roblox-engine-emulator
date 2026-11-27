@@ -1428,6 +1428,50 @@ void lua_setthreaddata(lua_State* L, void* data)
     L->userdata = data;
 }
 
+void lua_setthreadglobals(lua_State* L, lua_State* thread)
+{
+    api_checknelems(L, 1);
+    const TValue* o = L->top - 1;
+    api_check(L, ttistable(o) || ttisnil(o));
+    if (ttistable(o))
+    {
+        thread->sgt = hvalue(o);
+        luaC_objbarrier(L, thread, hvalue(o));
+    }
+    else
+        thread->sgt = NULL;
+    L->top--;
+}
+
+int lua_getthreadglobals(lua_State* L, lua_State* thread)
+{
+    if (thread->sgt)
+    {
+        sethvalue(L, L->top, thread->sgt);
+    }
+    else
+    {
+        setnilvalue(L->top);
+    }
+    api_incr_top(L);
+    return thread->sgt ? LUA_TTABLE : LUA_TNIL;
+}
+
+const void* lua_threadglobalspointer(lua_State* thread)
+{
+    return thread->sgt;
+}
+
+void lua_setthreadowner(lua_State* thread, unsigned int owner)
+{
+    thread->owner = owner;
+}
+
+unsigned int lua_getthreadowner(lua_State* thread)
+{
+    return thread->owner;
+}
+
 /*
 ** Garbage-collection function
 */

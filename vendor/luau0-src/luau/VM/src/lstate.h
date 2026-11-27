@@ -367,6 +367,11 @@ struct lua_State
     LuaTable* finalizers; // optional table of all the callbacks to run when this thread completes (see coroutine.finally)
 
     void* userdata;
+
+    // The thread's globals as a script reads them (getfenv(0), setfenv(0), the host's loadstring) and the host's tag of the
+    // script run the thread belongs to: both set by the host on a script's thread and inherited by every thread made from it
+    LuaTable* sgt;
+    unsigned int owner;
 };
 // clang-format on
 

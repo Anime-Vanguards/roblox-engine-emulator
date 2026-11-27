@@ -40,13 +40,11 @@ fn object(engine: &Engine, args: &Args) -> Result<Option<InstanceId>, Flow> {
     crate::lua::instance::object_arg(engine, args, 1)
 }
 
-/// `child.Parent = parent` as a script writes it: the Parent write's errors, events and price, and the scripts under Actors in
-/// it starting.
+/// `child.Parent = parent` as a script writes it: the Parent write's errors, events and price (the scripts it starts with them:
+/// scripts.rs).
 fn reparent(lua: &Lua, engine: &Rc<Engine>, child: InstanceId, parent: Option<InstanceId>) -> Result<(), Flow> {
+    let _ = lua;
     crate::lua::instance::set_parent(engine, child, parent)?;
-    if parent.is_some() {
-        crate::lua::actors::start_under(lua, engine, child)?;
-    }
     Ok(())
 }
 

@@ -283,6 +283,12 @@ LUA_API int lua_status(lua_State* L);
 LUA_API int lua_isyieldable(lua_State* L);
 LUA_API void* lua_getthreaddata(lua_State* L);
 LUA_API void lua_setthreaddata(lua_State* L, void* data);
+// A thread's script globals (getfenv(0)) and owner tag, inherited by the threads made from it: set pops a table (or nil, none)
+LUA_API void lua_setthreadglobals(lua_State* L, lua_State* thread);
+LUA_API int lua_getthreadglobals(lua_State* L, lua_State* thread);
+LUA_API const void* lua_threadglobalspointer(lua_State* thread);
+LUA_API void lua_setthreadowner(lua_State* thread, unsigned int owner);
+LUA_API unsigned int lua_getthreadowner(lua_State* thread);
 LUA_API int lua_costatus(lua_State* L, lua_State* co);
 LUA_API int lua_hasfinalizers(lua_State* L);
 LUA_API void lua_pushfinalizerfunction(lua_State* L, lua_State* co, int toclose);

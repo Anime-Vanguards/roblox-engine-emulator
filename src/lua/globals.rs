@@ -113,7 +113,7 @@ pub(crate) fn memory_category_from(lua: &Lua, thread: &LuaThread, source: Option
 /// the memory category of the thread that connected it at this time (measured, a 0.747 client and server, deferred events and
 /// RunService's: tools/parity/probes/engine_threads.luau). A connection made before any script set a category takes its handler's
 /// script's (ree keeps the connecting thread only once categories are in use).
-pub(crate) fn handler_thread(lua: &Lua, kept: Option<LuaThread>, connector: Option<LuaThread>, callback: LuaFunction) -> LuaResult<LuaThread> {
+pub(crate) fn handler_thread(lua: &Lua, kept: Option<LuaThread>, connector: Option<LuaThread>, maker: Option<LuaThread>, callback: LuaFunction) -> LuaResult<LuaThread> {
     if let Some(thread) = kept
         && reuse_thread(lua, &thread, &callback)
     {
@@ -123,6 +123,8 @@ pub(crate) fn handler_thread(lua: &Lua, kept: Option<LuaThread>, connector: Opti
     if connector.is_some() {
         memory_category_from(lua, &thread, connector.as_ref());
     }
+    // (its connecting thread's script globals and owner tag, as a client's handler reads its connecting script's: scripts.rs)
+    crate::scripts::adopt_if(lua, &thread, maker.as_ref());
     Ok(thread)
 }
 
@@ -778,7 +780,10 @@ fn copy_starter_gui(engine: &Rc<Engine>, gui: InstanceId, name: &[u8]) -> Option
     };
     let template = starter.and_then(|s| instance::find_first_child(engine, s, Some(name), false))?;
     let copy = instance::clone(engine, template)?;
+    // (the copy stands in for the one the player's spawn made before the run: its scripts are the harness's to start, scripts.rs)
+    let quiet = crate::scripts::Quiet::enter(&mut engine.state.borrow_mut());
     instance::set_parent(engine, copy, Some(gui)).ok();
+    quiet.leave(&mut engine.state.borrow_mut());
     Some(copy)
 }
 
@@ -831,7 +836,9 @@ fn missing_child_in(lua: &Lua, engine: &Rc<Engine>, parent: InstanceId, name: &[
         let template = scripts.and_then(|s| instance::find_first_child(engine, s, Some(name), false));
         if let Some(template) = template {
             if let Some(copy) = instance::clone(engine, template) {
+                let quiet = crate::scripts::Quiet::enter(&mut engine.state.borrow_mut());
                 instance::set_parent(engine, copy, Some(parent)).ok();
+                quiet.leave(&mut engine.state.borrow_mut());
                 return Ok(Some(copy));
             }
         }
@@ -1511,6 +1518,8 @@ pub fn call_then(lua: &Lua, engine: &Rc<Engine>, function: LuaFunction, args: Lu
     let body: LuaFunction = engine.prelude().exports.get("CallBody")?;
     let outcome = lua.create_table()?;
     let thread = lua.create_thread(body)?;
+    // (the run starts: scripts that come to run from now on start, scripts.rs)
+    crate::scripts::open(&mut engine.state.borrow_mut());
     let mut arguments = LuaMultiValue::from_iter([LuaValue::Table(outcome.clone()), LuaValue::Function(function)]);
     arguments.extend(args);
     scheduler::resume(lua, engine, &thread, arguments);

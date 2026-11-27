@@ -607,12 +607,6 @@
 			"why": "garbage collection: ree keeps a table and a signal a script dropped one collection longer than a client"
 		}
 	],
-	"loadmodule": [
-		{
-			"line": "env is-getfenv(f) true is-caller's false script true raw-script true thread-env-is-caller's true _G true shared true require true game true",
-			"why": "getfenv(0) is the running thread's globals in Roblox (the script whose thread runs, which a thread made by coroutine.create or task.spawn inherits from the thread that made it), not the calling function's environment: here the loaded module's function was called from the probe's thread"
-		}
-	],
 	"logservice": [
 		{
 			"line": "spawned-error after-spawn,error(parity-log spawned error;nil),|Hear,out(MessageError:parity-log spawned error +2 lines)",
@@ -1797,16 +1791,6 @@
 		{
 			"line": "Register",
 			"why": "a running game (the capture client and its server) refuses the providers' registration, \"Usage error: RegisterKeyframeSequence can only be called in Studio.\" and \"... can only be used in Solo mode.\" (RegisterActiveAnimationClip names RegisterActiveKeyframeSequence), before its argument; ree registers in play mode as in edit mode, because previews of unpublished animations play that way (a Studio solo test registers; not measured)"
-		}
-	],
-	"actor_message_args": [
-		{
-			"line": "A2 a module outside the Actor binds: true Connection; its GetActor nil",
-			"why": "A script stops when it leaves the DataModel or is disabled, and runs again from its first line when it is back or enabled (a client ran the worker three times, and a message sent just before its Actor left reached nothing: the stopped script's bindings went with it); ree starts an Actor's script once and keeps it running (script lifecycle not emulated)"
-		},
-		{
-			"line": "A2 ready",
-			"why": "A script stops when it leaves the DataModel or is disabled, and runs again from its first line when it is back or enabled (a client ran the worker three times, and a message sent just before its Actor left reached nothing: the stopped script's bindings went with it); ree starts an Actor's script once and keeps it running (script lifecycle not emulated)"
 		}
 	]
 }

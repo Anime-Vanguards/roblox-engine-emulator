@@ -1229,9 +1229,10 @@ fn begin_run_as(lua: &Lua, engine: &Rc<Engine>, args: &RecordArgs, park: bool, s
     // fields until Prepare has returned and the checkpoint passed, when Fill gives it them)
     let runner: LuaFunction = lua
         .load(
-            "local Require, Module, MakeContext, Fill, Arm, Side = ... \
+            "local Require, Module, MakeContext, Fill, Arm, Side, Adopt = ... \
              Arm() \
              local Harness = Require(Module) \
+             Adopt(Harness) \
              if Side ~= nil then \
              assert(type(Harness) == 'table' and (Harness.Server ~= nil or Harness.Client ~= nil), 'a loopback harness returns { Server = function(Context) or { Prepare, Run }, Client = function(Context) or { Prepare, Run } } (either may be left out)') \
              Harness = Harness[Side] \
@@ -1283,7 +1284,31 @@ fn begin_run_as(lua: &Lua, engine: &Rc<Engine>, args: &RecordArgs, park: bool, s
         Some(crate::loopback::Side::Client) => LuaValue::String(lua.create_string("Client").map_err(lua_error)?),
         None => LuaValue::Nil,
     };
-    let arguments = LuaMultiValue::from_iter([LuaValue::Function(require), module_value, LuaValue::Function(make_context), LuaValue::Function(fill), LuaValue::Function(arm), side_value]);
+    // (the harness's thread reads the harness module's environment as its globals, as a client's job reads its own: scripts.rs)
+    let adopt = crate::lua::lua_fn(lua, |lua, harness: LuaValue| {
+        let function = match &harness {
+            LuaValue::Function(function) => Some(function.clone()),
+            LuaValue::Table(table) => table.pairs::<LuaValue, LuaValue>().filter_map(Result::ok).find_map(|(_, value)| match value {
+                LuaValue::Function(function) => Some(function),
+                _ => None,
+            }),
+            _ => None,
+        };
+        if let Some(globals) = function.and_then(|function| function.environment()) {
+            crate::scripts::set_thread(lua, &lua.current_thread(), Some(&globals), 0);
+        }
+        Ok(())
+    })
+    .map_err(lua_error)?;
+    let arguments = LuaMultiValue::from_iter([
+        LuaValue::Function(require),
+        module_value,
+        LuaValue::Function(make_context),
+        LuaValue::Function(fill),
+        LuaValue::Function(arm),
+        side_value,
+        LuaValue::Function(adopt),
+    ]);
     let harness_call = call_then(lua, engine, runner, arguments, || !parked.parked.get()).map_err(lua_error)?;
     if !checkpoint.parked.get() {
         checkpoint.armed.set(false);
