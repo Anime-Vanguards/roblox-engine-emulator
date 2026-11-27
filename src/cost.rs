@@ -1604,6 +1604,26 @@ pub const RESUMED_SIGNAL_WAIT: f64 = 0.445e-6;
 /// coroutine parked in a yield through task.spawn at what a new function's thread costs (notes/macro pathprobe, rendered match-place
 /// clients: 1.10 us hot against a function's 0.95)
 pub const THREAD: f64 = 0.72e-6;
+/// task.spawn of a thread it cannot resume and leaves as it is (one that returned or was cancelled), in place of [`THREAD`]: a
+/// playing client and a server (roblox-sim, Studio 0.747, headless; os.clock around 20 calls, the median of 9 to 15 rounds, five
+/// sessions) 0.37 to 0.65 us where a suspended one costs 0.47 to 1.13 in the same session, 0.6 of it
+pub const THREAD_NOT_RESUMED: f64 = 0.43e-6;
+/// The task library's refusals beyond the error's own price ([`RAISED`]): a thread already 'deferred', 'delayed' or 'waiting', and
+/// task.spawn of one it cannot resume given arguments (lua/globals.rs charge_refused). The same sessions: `pcall(task.spawn, t, 1)`
+/// of a dead thread 4.4 to 5.1 us more than `pcall(task.spawn, t)` of a suspended one, `pcall(task.spawn, t)` and
+/// `pcall(task.defer, t)` of a thread in task.wait 4.7 to 5.4, where ree charged RAISED alone (3.4)
+pub const TASK_REFUSED: f64 = 1.9e-6;
+/// The log of a thread the task library cannot resume (scheduler.rs refused_resume: `cannot resume non-suspended coroutine` with
+/// the thread's stack), by its frames ([`not_suspended_logged`]): the same sessions, task.spawn of a thread that died on an error
+/// one frame deep 8.3 to 8.6 us more than one that returned (a server's two sessions and a quiet client's), ten frames deeper 12.5 to
+/// 13.7 us more again (1.25 to 1.37 a frame), the running thread (a deeper stack) 13 to 16; a client that read 1.6 to 1.8 times
+/// slower for every call read them as much slower
+pub const NOT_SUSPENDED_LOGGED: f64 = 7.2e-6;
+pub const NOT_SUSPENDED_FRAME: f64 = 1.3e-6;
+/// What logging [`NOT_SUSPENDED_LOGGED`] for a thread whose stack has `frames` frames of a script's code costs
+pub fn not_suspended_logged(frames: usize) -> f64 {
+    NOT_SUSPENDED_LOGGED + frames as f64 * NOT_SUSPENDED_FRAME
+}
 /// The engine's call of a render-step binding (BindToRenderStep): the time between one binding's last line and the next's first, in
 /// rendered match-place clients (notes/macro pathprobe, two sessions: 1.8 us, of which ree counts 0.26 in the resumption)
 pub const RENDER_STEP_DISPATCH: f64 = 1.55e-6;

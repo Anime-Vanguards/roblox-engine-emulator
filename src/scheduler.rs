@@ -1214,6 +1214,32 @@ fn thread_ready(scheduler: &Scheduler, thread: &LuaThread) -> bool {
     !scheduler.is_cancelled(thread) && thread.status() == LuaThreadStatus::Resumable
 }
 
+/// What a client logs for a thread the task library cannot resume ([`refused_resume`])
+pub const NOT_SUSPENDED: &str = "cannot resume non-suspended coroutine";
+
+/// What task.spawn of a thread it cannot resume raises when it is given arguments (Studio 0.747, a playing client and a server: a
+/// thread that returned, died on an error, was cancelled, or is running; tools/parity/probes/task_spawn_dead.luau)
+pub const NOT_SUSPENDED_ARGUMENTS: &str = "cannot spawn non-suspended coroutine with arguments";
+
+/// task.spawn of `thread`, which [`can_resume`] said cannot run, or a task.defer / task.delay of it coming due: a thread that
+/// returned or was cancelled is left as it is, and one that died on an error, the running one and one resuming another log
+/// [`NOT_SUSPENDED`] as an uncaught error of that thread (its stack: where it raised, or where it runs now; ScriptContext.Error
+/// with its script), task.spawn at once and the others when they come due. Measured in a 0.747 playing client and a server
+/// (tools/parity/probes/task_spawn_dead.luau); the log costs a script what a client spends on it, by the frames of its stack
+/// (cost.rs [`crate::cost::not_suspended_logged`]).
+pub(crate) fn refused_resume(lua: &Lua, engine: &Rc<Engine>, thread: &LuaThread) {
+    if engine.state.borrow().sched.is_cancelled(thread) || !matches!(thread.status(), LuaThreadStatus::Error | LuaThreadStatus::Running | LuaThreadStatus::Normal) {
+        return;
+    }
+    // SAFETY: a live thread of the running VM
+    let script = unsafe { super::lua::script_of_thread(thread.state()) };
+    let script = script.or_else(|| engine.state.borrow().sched.thread_script(thread));
+    let trace = super::lua::traceback(lua, thread);
+    let frames = trace.as_deref().map_or(0, |trace| crate::stack_frames(trace).len());
+    engine.output_error_with_script(NOT_SUSPENDED.into(), trace, script, true);
+    engine.state.borrow().sched.charge(crate::cost::not_suspended_logged(frames));
+}
+
 /// Resumes a thread [`can_resume`] has just said can run, with no Luau run in between that could have changed that.
 pub(crate) fn resume_ready(lua: &Lua, engine: &Rc<Engine>, thread: &LuaThread, args: LuaMultiValue) -> bool {
     resume_thread(lua, engine, thread, args, false)
@@ -1746,12 +1772,22 @@ fn run_job(lua: &Lua, engine: &Rc<Engine>, job: Job) -> LuaResult<()> {
             super::lua::actors::queue_handler(&mut state, connection, job.signal, job.args);
         }
         JobTarget::Thread(thread) => {
-            engine.state.borrow_mut().sched.clear_task_state(&thread);
+            let deferred = {
+                let mut state = engine.state.borrow_mut();
+                let deferred = state.sched.task_state(&thread) == Some("deferred");
+                state.sched.clear_task_state(&thread);
+                deferred
+            };
             let args = job_args(lua, engine, &job.args)?;
             let _scope = crate::microprofile::scope("Resume thread");
             // (a thread a signal's Wait parked: its resumption is booked to its wait)
             charge_dispatch_to(lua, engine, &thread, job.resume_cost, 0);
-            resume(lua, engine, &thread, args);
+            if can_resume(engine, &thread) {
+                resume_ready(lua, engine, &thread, args);
+            } else if deferred {
+                // (task.defer of a thread that died on an error: refused_resume)
+                refused_resume(lua, engine, &thread);
+            }
         }
         JobTarget::Handler { connection, kind } => {
             let census = crate::census::handler_site(engine, connection);
@@ -1932,7 +1968,14 @@ fn run_timers_in(lua: &Lua, engine: &Rc<Engine>, legacy: bool, limit: Option<f64
             }
         }
         let args = match timer.kind {
-            TimerKind::Wait => LuaMultiValue::from_iter([LuaValue::Number(elapsed)]),
+            TimerKind::Wait => {
+                // (its wait is over: task.spawn / defer / delay take it again, to_thread)
+                let mut state = engine.state.borrow_mut();
+                if state.sched.task_state(&timer.thread) == Some("waiting") {
+                    state.sched.clear_task_state(&timer.thread);
+                }
+                LuaMultiValue::from_iter([LuaValue::Number(elapsed)])
+            }
             TimerKind::LegacyWait => {
                 let clock = engine.state.borrow_mut().sched.clock();
                 LuaMultiValue::from_iter([LuaValue::Number(elapsed), LuaValue::Number(clock)])
@@ -1955,6 +1998,9 @@ fn run_timers_in(lua: &Lua, engine: &Rc<Engine>, legacy: bool, limit: Option<f64
         };
         if resumable {
             resume_ready(lua, engine, &timer.thread, args);
+        } else if !legacy && timer.kind == TimerKind::Delay {
+            // (task.delay of a thread that died on an error: refused_resume)
+            refused_resume(lua, engine, &timer.thread);
         }
         if flush == TimerFlush::EachResumption {
             flush_deferred(lua, engine)?;

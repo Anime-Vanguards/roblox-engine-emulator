@@ -229,12 +229,14 @@ fn memory_categories(lua: &Lua, engine: &Rc<Engine>, r: &LuaTable) -> LuaResult<
 /// (measured in a playing client, Studio 0.744, tools/parity/probes/task_order.luau): `invalid argument #1 to 'spawn'
 /// (function or thread expected)` (#2 for delay), at the line that called it, as a C function's argument check places it (none
 /// from `pcall(task.spawn, 5)`; measured, Studio 0.747, engine_functions.luau), and for a thread an earlier task.defer or
-/// task.delay queued that has not resumed yet, `Cannot call task.spawn on a thread that is already 'deferred' in the task
-/// library` (measured through pcall only: raised without a position).
+/// task.delay queued that has not resumed yet, or one waiting in task.wait, `Cannot call task.spawn on a thread that is already
+/// 'deferred' in the task library` ('delayed', 'waiting'; measured through pcall only: raised without a position; checked before
+/// any other: a waiting thread given arguments raises this, a client and a server alike, Studio 0.747: task_states.luau).
 fn to_thread(lua: &Lua, engine: &Engine, value: &LuaValue, index: usize, call: &str) -> Result<LuaThread, Flow> {
     match value {
         LuaValue::Thread(thread) => {
             if let Some(state) = engine.state.borrow().sched.task_state(thread) {
+                charge_refused(engine);
                 return raise_plain(format!("Cannot call task.{call} on a thread that is already '{state}' in the task library"));
             }
             Ok(thread.clone())
@@ -297,16 +299,31 @@ fn task_seconds(lua: &Lua, engine: &Engine, value: &LuaValue, call: &str) -> Res
     }
 }
 
+/// What one of the task library's refusals of a thread (already 'deferred', 'delayed' or 'waiting'; task.spawn of one it cannot
+/// resume, given arguments) costs a client beyond the error's own price (cost.rs TASK_REFUSED), charged as it raises
+fn charge_refused(engine: &Engine) {
+    let state = engine.state.borrow();
+    state.sched.charge(crate::cost::TASK_REFUSED);
+    if !state.sched.is_muted() {
+        crate::boundary::add_cost(crate::cost::TASK_REFUSED);
+    }
+}
+
 /// A function handed to task.spawn / defer / delay gets a thread of its own (cost::THREAD); a thread is used as it is.
 fn charge_thread(lua: &Lua, engine: &Engine, value: &LuaValue, call: &str) {
     // (a thread handed over costs a client what a function's new thread does: cost.rs THREAD)
     if matches!(value, LuaValue::Function(_) | LuaValue::Thread(_)) {
-        let state = engine.state.borrow();
-        state.sched.charge(crate::cost::THREAD);
-        if crate::boundary::active() && !state.sched.is_muted() {
-            crate::boundary::enter(lua.state());
-            crate::boundary::record_named(crate::boundary::Kind::Method, "task", call, crate::cost::THREAD);
-        }
+        charge_thread_at(lua, engine, call, crate::cost::THREAD);
+    }
+}
+
+/// [`charge_thread`] at the price `seconds`
+fn charge_thread_at(lua: &Lua, engine: &Engine, call: &str, seconds: f64) {
+    let state = engine.state.borrow();
+    state.sched.charge(seconds);
+    if crate::boundary::active() && !state.sched.is_muted() {
+        crate::boundary::enter(lua.state());
+        crate::boundary::record_named(crate::boundary::Kind::Method, "task", call, seconds);
     }
 }
 
@@ -432,6 +449,19 @@ fn load_prelude(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
                 let args = Args::new(args);
                 let thread = to_thread(lua, engine, args.get(0), 1, "spawn")?;
                 refs::admit(engine, Hold::Work, "task.spawn")?;
+                // A thread it cannot resume (dead, running, resuming another, cancelled): given arguments the call raises; else a
+                // thread that returned or was cancelled is left as it is and any other logs the client's error (scheduler.rs
+                // refused_resume), at a price of its own (cost.rs THREAD_NOT_RESUMED). Measured in a 0.747 playing client and a
+                // server: tools/parity/probes/task_spawn_dead.luau
+                if matches!(args.get(0), LuaValue::Thread(_)) && !scheduler::can_resume(engine, &thread) {
+                    if args.0.len() > 1 {
+                        charge_refused(engine);
+                        return raise_plain(scheduler::NOT_SUSPENDED_ARGUMENTS);
+                    }
+                    charge_thread_at(lua, engine, "spawn", crate::cost::THREAD_NOT_RESUMED);
+                    scheduler::refused_resume(lua, engine, &thread);
+                    return Ok(values([LuaValue::Thread(thread)]));
+                }
                 charge_thread(lua, engine, args.get(0), "spawn");
                 if let Some(script) = unsafe { super::script_of_thread(lua.state()) } {
                     engine.state.borrow_mut().sched.set_thread_script(&thread, script);
@@ -503,12 +533,22 @@ fn load_prelude(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
                 let args = Args::new(args);
                 let thread = lua.current_thread();
                 super::refuse_unyieldable(&thread, super::NOT_YIELDABLE)?;
+                // (a thread that task.defer'd itself raises `Cannot call task.wait on a thread that is already 'deferred' in the
+                // task library`, without a position: measured in a 0.747 playing client and a server, task_states.luau)
+                let refused = engine.state.borrow().sched.task_state(&thread);
+                if let Some(state) = refused {
+                    charge_refused(engine);
+                    return raise_plain(format!("Cannot call task.wait on a thread that is already '{state}' in the task library"));
+                }
                 let delay = match task_seconds(lua, engine, args.get(0), "wait") {
                     Err(Flow::Error(error)) => return super::raise_at_caller(error.message),
                     seconds => seconds?.unwrap_or(0.0),
                 };
                 refs::admit(engine, Hold::Wait, "task.wait")?;
-                engine.state.borrow_mut().sched.schedule_call(TimerKind::Wait, delay, thread, Vec::new());
+                let mut state = engine.state.borrow_mut();
+                // (task.spawn / defer / delay of it raise until the wait is over: to_thread)
+                state.sched.set_task_state(&thread, "waiting");
+                state.sched.schedule_call(TimerKind::Wait, delay, thread, Vec::new());
                 Err(Flow::Yield)
             })())
         })?,

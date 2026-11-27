@@ -1111,44 +1111,6 @@
 			"why": "a capture server's local MessagingService enforces no size limit (it took 16 MB of JSON); ree keeps Roblox's documented limit (1 kB)"
 		}
 	],
-	"task_spawn_dead": [
-		{
-			"line": "dead spawn-args",
-			"why": "task.spawn / defer / delay of a thread that cannot be resumed: a client raises `cannot spawn non-suspended coroutine with arguments` when arguments are given, logs `cannot resume non-suspended coroutine` for a thread that died on an error, the running thread or a normal one, raises `Cannot call task.spawn on a thread that is already 'waiting' in the task library` for a thread in task.wait; ree resumes or skips them silently"
-		},
-		{
-			"line": "errored spawn",
-			"why": "task.spawn / defer / delay of a thread that cannot be resumed: a client raises `cannot spawn non-suspended coroutine with arguments` when arguments are given, logs `cannot resume non-suspended coroutine` for a thread that died on an error, the running thread or a normal one, raises `Cannot call task.spawn on a thread that is already 'waiting' in the task library` for a thread in task.wait; ree resumes or skips them silently"
-		},
-		{
-			"line": "errored defer",
-			"why": "task.spawn / defer / delay of a thread that cannot be resumed: a client raises `cannot spawn non-suspended coroutine with arguments` when arguments are given, logs `cannot resume non-suspended coroutine` for a thread that died on an error, the running thread or a normal one, raises `Cannot call task.spawn on a thread that is already 'waiting' in the task library` for a thread in task.wait; ree resumes or skips them silently"
-		},
-		{
-			"line": "errored delay",
-			"why": "task.spawn / defer / delay of a thread that cannot be resumed: a client raises `cannot spawn non-suspended coroutine with arguments` when arguments are given, logs `cannot resume non-suspended coroutine` for a thread that died on an error, the running thread or a normal one, raises `Cannot call task.spawn on a thread that is already 'waiting' in the task library` for a thread in task.wait; ree resumes or skips them silently"
-		},
-		{
-			"line": "cancelled spawn-args",
-			"why": "task.spawn / defer / delay of a thread that cannot be resumed: a client raises `cannot spawn non-suspended coroutine with arguments` when arguments are given, logs `cannot resume non-suspended coroutine` for a thread that died on an error, the running thread or a normal one, raises `Cannot call task.spawn on a thread that is already 'waiting' in the task library` for a thread in task.wait; ree resumes or skips them silently"
-		},
-		{
-			"line": "running spawn",
-			"why": "task.spawn / defer / delay of a thread that cannot be resumed: a client raises `cannot spawn non-suspended coroutine with arguments` when arguments are given, logs `cannot resume non-suspended coroutine` for a thread that died on an error, the running thread or a normal one, raises `Cannot call task.spawn on a thread that is already 'waiting' in the task library` for a thread in task.wait; ree resumes or skips them silently"
-		},
-		{
-			"line": "normal spawn",
-			"why": "task.spawn / defer / delay of a thread that cannot be resumed: a client raises `cannot spawn non-suspended coroutine with arguments` when arguments are given, logs `cannot resume non-suspended coroutine` for a thread that died on an error, the running thread or a normal one, raises `Cannot call task.spawn on a thread that is already 'waiting' in the task library` for a thread in task.wait; ree resumes or skips them silently"
-		},
-		{
-			"line": "waiting spawn",
-			"why": "task.spawn / defer / delay of a thread that cannot be resumed: a client raises `cannot spawn non-suspended coroutine with arguments` when arguments are given, logs `cannot resume non-suspended coroutine` for a thread that died on an error, the running thread or a normal one, raises `Cannot call task.spawn on a thread that is already 'waiting' in the task library` for a thread in task.wait; ree resumes or skips them silently"
-		},
-		{
-			"line": "waiter resumed",
-			"why": "task.spawn / defer / delay of a thread that cannot be resumed: a client raises `cannot spawn non-suspended coroutine with arguments` when arguments are given, logs `cannot resume non-suspended coroutine` for a thread that died on an error, the running thread or a normal one, raises `Cannot call task.spawn on a thread that is already 'waiting' in the task library` for a thread in task.wait; ree resumes or skips them silently"
-		}
-	],
 	"yield_refused": [
 		{
 			"line": "sort-InvokeClient error",
