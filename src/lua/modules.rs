@@ -1766,6 +1766,8 @@ pub fn require_begin(lua: &Lua, engine: &Rc<Engine>, (target, caller, vm): (LuaV
             match record.status {
                 Status::Done => {
                     crate::profiler::caches::hit(crate::profiler::caches::Cache::Requires);
+                    // (a module required again: cost.rs REQUIRE_KEPT)
+                    engine.state.borrow().sched.charge(crate::cost::REQUIRE_KEPT);
                     return Ok(LuaMultiValue::from_iter([LuaValue::Integer(0), record.result.clone().unwrap_or(LuaValue::Nil)]));
                 }
                 Status::Error => {
@@ -1863,12 +1865,13 @@ pub fn require_begin(lua: &Lua, engine: &Rc<Engine>, (target, caller, vm): (LuaV
     };
 
     engine.modules.borrow_mut().records.insert((vm, module), Record::loading());
+    // (a module's first require loads its chunk: cost.rs required, by its source's bytes)
+    let loading = crate::cost::required(source_bytes.len(), engine.options.server());
     match compile_in_with(lua, engine, module, source_bytes, precompiled, vm) {
-        Ok(chunk) => Ok(LuaMultiValue::from_iter([
-            LuaValue::Integer(3),
-            LuaValue::Function(chunk),
-            instance_value(lua, engine, module)?,
-        ])),
+        Ok(chunk) => {
+            engine.state.borrow().sched.charge(loading);
+            Ok(LuaMultiValue::from_iter([LuaValue::Integer(3), LuaValue::Function(chunk), instance_value(lua, engine, module)?]))
+        }
         Err(error) => {
             // A compile error fails the module like a runtime error (pcall(Modules.Compile))
             let message = super::super::scheduler::error_message(&error);
@@ -1957,7 +1960,11 @@ fn chunk_outcome(lua: &Lua, engine: &Rc<Engine>, vm: Vm, module: InstanceId, ran
     let outcome = match ran {
         crate::scheduler::Ran::Returned(mut values) if values.len() == 1 => Ok(values.pop_front().unwrap_or(LuaValue::Nil)),
         crate::scheduler::Ran::Returned(_) | crate::scheduler::Ran::Yielded => Err(NOT_ONE_VALUE),
-        crate::scheduler::Ran::Raised(_) => Err(LOAD_FAILED),
+        crate::scheduler::Ran::Raised(_) => {
+            // (the error a client reports for the module: cost.rs REQUIRE_FAILED)
+            engine.state.borrow().sched.charge(crate::cost::REQUIRE_FAILED[usize::from(engine.options.server())]);
+            Err(LOAD_FAILED)
+        }
     };
     finish(lua, engine, vm, module, outcome.clone());
     outcome

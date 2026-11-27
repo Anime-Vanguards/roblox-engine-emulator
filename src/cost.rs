@@ -2404,6 +2404,31 @@ pub fn decompressed(output: usize) -> f64 {
     (0.44e-6 - ENCODING_COUNTED) + output.min(1024) as f64 * 1.35e-9 + output.saturating_sub(1024) as f64 * 0.3e-9
 }
 
+/// A ModuleScript's first require, which loads its chunk (lua/modules.rs require_begin), beyond the chunk's own run, in seconds: by the
+/// run context ([`REQUIRE_LOADED`]: a client, a server) and a byte of the module's source ([`REQUIRE_LOADED_BYTE`]). A playing client
+/// and a server (roblox-sim, Studio 0.747, two client sessions and one of the server, at identity 4; os.clock around single requires
+/// of new ModuleScripts, the median of 9 less the empty call, beside part writes in the same sample) whose source the engine had
+/// compiled before (another ModuleScript of the same source, or a Clone of a required one: the bytecode a client is sent for a game's
+/// modules, which it never compiles): a module of 21 bytes 3.0 to 15.7 us on the client (three sessions) and 3.7 to 7.6 on the
+/// server (two), 904 bytes (10 functions) 6.0 to 13.1 and 6.3 to 8.6, 9 KB (100 functions) 23 to 36 and 25 to 35, 94 KB (1,000) 131
+/// to 181 and 175 to 214, 17 KB (1,000 assignments) 52 to 81 and 60 to 72, of which ree's chunk counts 0.1 to 9.4; ree charged nothing
+/// more (fitted on the sessions' geometric means, within x0.83 to x1.17 past 1 KB). A source the engine had not compiled cost a client 42 to 48 us at 21 bytes and 6.9 to 8.7 ms at 94 KB (the server
+/// 20 us and 7.3 ms, about 70 ns a byte); a game script cannot write a Source, so ree does not charge a compile.
+pub const REQUIRE_LOADED: [f64; 2] = [9.0e-6, 6.0e-6];
+pub const REQUIRE_LOADED_BYTE: f64 = 1.7e-9;
+/// What a module's first require of `bytes` of source costs ([`REQUIRE_LOADED`]), on a server or not
+pub fn required(bytes: usize, server: bool) -> f64 {
+    REQUIRE_LOADED[usize::from(server)] + bytes as f64 * REQUIRE_LOADED_BYTE
+}
+/// A require of a module already loaded (its value kept), beyond the call: the same sessions, 200 requires a sample, 0.090 to 0.10 us
+/// on the client and 0.094 to 0.098 on the server, where ree charged 0.013 in all
+pub const REQUIRE_KEPT: f64 = 0.085e-6;
+/// A module whose chunk raised, which a client reports as it fails the module ("Requested module experienced an error while
+/// loading"), beyond the error ([`SCRIPT_ERROR`]) and the load ([`REQUIRE_LOADED`]), on a client and a server: the same sessions,
+/// `pcall(require, m)` of a new module whose chunk raises 1,212 to 1,333 us on the client (1,183 when its source had been compiled
+/// before) and 1,328 to 1,732 on the server, where ree charged 6 us.
+pub const REQUIRE_FAILED: [f64; 2] = [1.17e-3, 1.3e-3];
+
 /// TextService:GetTextSize (the parity bench: "Hello" and "World" at 14 in SourceSans 7.3 us on the fastest client sessions)
 pub const TEXT_MEASURED: f64 = 7.3e-6;
 

@@ -12185,3 +12185,52 @@ fn encoding_calls_cost_what_a_client_spends_on_what_they_handle() {
         ),
     );
 }
+
+/// A module's first require loads its chunk (cost.rs REQUIRE_LOADED and REQUIRE_LOADED_BYTE: a playing client 9.7 to 15.7 us for a
+/// 21-byte module, 131 to 169 for 94 KB, a server 5.4 to 7.6 at 21 bytes), a module required again costs REQUIRE_KEPT, and a module
+/// whose chunk raised costs REQUIRE_FAILED (1.2 to 1.3 ms on a client) as it fails. ree charged the chunk's own instructions alone.
+#[test]
+fn requires_cost_what_a_client_spends_loading_a_module() {
+    use crate::cost::*;
+    let (lua, engine) = start_play();
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    let small = "return 1";
+    let large = format!("return 1 --{}", "x".repeat(10_000));
+    run(
+        &lua,
+        &engine,
+        &format!(
+            r##"
+        local Folder = Instance.new("Folder")
+        Folder.Parent = game:GetService("ReplicatedStorage")
+        local function Make(Source)
+            local Module = Instance.new("ModuleScript")
+            Module.Source = Source
+            Module.Parent = Folder
+            return Module
+        end
+        local function Cost(Call)
+            local Start = os.clock()
+            Call()
+            return os.clock() - Start
+        end
+        local function Is(Name, Got, Want, Within)
+            assert(math.abs(Got - Want) < Within, `{{Name}}: {{Got}} s, not {{Want}}`)
+        end
+        local Small, Other, Large = Make("{small}"), Make("{small}"), Make("{large}")
+        local First = Cost(function() require(Small) end)
+        local Again = Cost(function() require(Small) end)
+        -- (and the chunk's own run and its thread, a fraction of a microsecond)
+        Is("a module's first require", First - Again, {loaded:e}, 0.5e-6)
+        -- (beside another first require of the small source: the frame's first require of all pays its call cold)
+        local Another = Cost(function() require(Other) end)
+        Is("a larger module's", Cost(function() require(Large) end) - Another, {bytes:e}, 1e-9)
+        local Failing = Make("error('x')")
+        Is("a module that fails", Cost(function() pcall(require, Failing) end), {failed:e}, 10e-6)
+        "##,
+            loaded = required(small.len(), false) - REQUIRE_KEPT,
+            bytes = (large.len() - small.len()) as f64 * REQUIRE_LOADED_BYTE,
+            failed = REQUIRE_FAILED[0] + required("error('x')".len(), false),
+        ),
+    );
+}
