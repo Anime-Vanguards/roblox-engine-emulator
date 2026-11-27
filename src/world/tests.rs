@@ -11900,3 +11900,65 @@ fn legacy_motors_turn_toward_their_desired_angle() {
         "#,
     );
 }
+
+/// Package J's write residuals (Studio 0.747, a headless client and a server): a Folder's Name written a number it holds, a Camera's
+/// FieldOfView and a UICorner's CornerRadius written what they hold cost a write that changes nothing (cost.rs WRITE_QUIET, as a
+/// part's unchanged CastShadow), a Parent written the parent it has cost.rs PARENT_KEPT, BulkMoveTo({}, {}) its call (BULK_CALL),
+/// and a Lune datatype's or a Vector3's missing member MEMBER_MISSED in all. Each was charged a changed write, nothing, a call the
+/// cost table does not name, or the throw alone (SCRIPT_ERROR).
+#[test]
+fn writes_that_change_nothing_kept_parents_and_datatype_misses_cost_what_a_client_spends() {
+    use crate::cost::*;
+    let (lua, engine) = start_play();
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    run(
+        &lua,
+        &engine,
+        &format!(
+            r##"
+        local F = Instance.new("Folder")
+        F.Parent = workspace
+        local P = Instance.new("Part")
+        P.Anchored = true
+        P.Parent = workspace
+        local C = Instance.new("Camera")
+        C.Parent = workspace
+        local U = Instance.new("UICorner")
+        U.Parent = F
+        local R8, A, B = UDim.new(0, 8), {{}}, {{}}
+        local CF, V3 = CFrame.new(1, 2, 3), Vector3.new(1, 2, 3)
+        F.Name = 5
+        C.FieldOfView = 70
+        U.CornerRadius = R8
+        local function Each(Call)
+            Call()
+            local Start = os.clock()
+            for _ = 1, 50 do Call() end
+            return (os.clock() - Start) / 50
+        end
+        local Empty = Each(function() end)
+        local Quiet = Each(function() P.CastShadow = true end) - Empty
+        local function Is(Name, Got, Want, Within)
+            assert(math.abs(Got - Want) < Within, `{{Name}}: {{Got}} s, not {{Want}}`)
+        end
+        -- (the number's text made at each write: a client's 0.011 us more, ree's the new string's)
+        Is("Name written the number it holds", Each(function() F.Name = 5 end) - Empty, Each(function() F.Name = "5" end) - Empty + 0.015e-6, 0.015e-6)
+        Is("FieldOfView written what it holds", Each(function() C.FieldOfView = 70 end) - Empty, Quiet, 0.02e-6)
+        Is("CornerRadius written what it holds", Each(function() U.CornerRadius = R8 end) - Empty, Quiet, 0.02e-6)
+        Is("a Parent written the parent it has", Each(function() P.Parent = workspace end) - Empty, {kept:e}, 0.01e-6)
+        Is("BulkMoveTo of two empty lists", Each(function() workspace:BulkMoveTo(A, B) end) - Empty, {bulk:e}, 0.02e-6)
+        local function Miss(Raises, Passes)
+            return Each(function() pcall(Raises) end) - Each(function() pcall(Passes) end)
+        end
+        Is("CFrame.Nope", Miss(function() return CF.Nope end, function() return CF.X end), {missed:e}, 0.2e-6)
+        Is("UDim2.Nope", Miss(function() return UDim2.new().Nope end, function() return UDim2.new().X end), {missed:e}, 0.2e-6)
+        Is("CFrame.X = 1", Miss(function() CF.X = 1 end, function() end), {missed:e}, 0.2e-6)
+        Is("CFrame:Nope()", Miss(function() CF:Nope() end, function() CF:Inverse() end), {missed:e}, 0.2e-6)
+        Is("Vector3:Nope()", Miss(function() V3:Nope() end, function() V3:Dot(V3) end), {missed:e}, 0.2e-6)
+        "##,
+            kept = PARENT_KEPT,
+            bulk = BULK_CALL + CALL,
+            missed = MEMBER_MISSED,
+        ),
+    );
+}

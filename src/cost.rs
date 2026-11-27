@@ -948,6 +948,11 @@ pub const LOWER_FIRST: f64 = 40.0e-9;
 /// A property write nothing in the engine reacts to, and a write of the value it holds (client: CFrame written
 /// to what it holds 52 ns, Bone.Transform and Motor6D.Transform 55-68 ns)
 pub const WRITE_QUIET: f64 = 0.055e-6;
+/// A script's Parent write of the parent the instance has, which changes nothing (lua/raw.rs, lua/instance.rs assign), beyond the
+/// Luau around it: a playing client and a server (roblox-sim, Studio 0.747, two sessions each; os.clock around 400 writes, the median
+/// of 15 less an empty loop, each sample beside a part's unchanged CastShadow write): a Part in the Workspace 0.038-0.039 us, a
+/// Folder in ReplicatedStorage 0.036-0.037, where ree charged nothing (0.003 to 0.004 in all).
+pub const PARENT_KEPT: f64 = 0.034e-6;
 /// A method call the table below does not name, beyond the Luau around it (the parity bench, its whole-corpus sessions: FindFirstChild's
 /// first of 20 children 58 ns, FindFirstAncestorOfClass 60; a Studio playtest client read 45 over the Luau of the older prices)
 pub const CALL: f64 = 0.058e-6;
@@ -1269,8 +1274,11 @@ pub const RAISED_AT_CALLER: f64 = 2.5e-6;
 /// us, error("x", 0) 1.71-1.73, assert(false) 2.01-2.03, arithmetic on nil 2.08-2.20, indexing nil 2.03-2.11, calling nil 1.95-2.07,
 /// math.floor("x") 2.26-2.40, Vector3:Cross("x") 2.23-2.30, CFrame * "x" 2.17-2.30, Vector3 + "x" 2.13-2.20 (ree charged 0.01-0.15);
 /// a datatype's missing member costs more, 2.70-2.82 (Vector3, CFrame, RaycastParams, RaycastResult): a proxy value's (the
-/// prelude's Members.ReadMiss / WriteMiss, raised in the engine's Luau) charges [`MEMBER_MISSED`] itself, a Lune datatype's and a
-/// Vector3's are thrown at this price (x0.76).
+/// prelude's Members.ReadMiss / WriteMiss, raised in the engine's Luau) charges [`MEMBER_MISSED`] itself, and so do a Lune datatype's
+/// read, `:` call and write of a member it lacks (vendor/lune-roblox script_error.rs MEMBER_MISSED_NANOS, its difference from this
+/// price; two sessions of a headless client and its server: CFrame.Nope 2.78-2.85, UDim2 2.79-2.91, Color3 2.69-2.86, UDim 2.75-2.83,
+/// Vector2 2.82-2.90, CFrame:Nope() 2.69-2.75, CFrame.X = 1 2.84-2.94, Vector2.X = 1 2.83-3.01, where ree charged this price alone, 2.14)
+/// and a native Vector3's `:` call of one (lua/vector_methods.rs; 2.65-2.72).
 pub const SCRIPT_ERROR: f64 = 2.1e-6;
 pub const MEMBER_MISSED: f64 = 2.75e-6;
 /// A property write a client refuses, past [`RAISED`] (lua/raw.rs write_refused_price, from the error's words): read only, an
@@ -1611,6 +1619,11 @@ pub const BULK_MOVED_ALL_EVENTS: f64 = 2.58e-6;
 /// list, wherever the bad part stands), and a nil hole 81 ns on a call that moves (its parts pay [`BULK_MOVED`])
 pub const BULK_LISTED: f64 = 0.055e-6;
 pub const BULK_HOLE: f64 = 0.081e-6;
+/// BulkMoveTo's call once its lists passed their checks, beyond the price of a call the cost table does not name ([`CALL`]) and
+/// before its parts ([`BULK_MOVED`]; a call that raises costs its error: [`RAISED`]): a playing client and a server (roblox-sim,
+/// Studio 0.747, two sessions each; BulkMoveTo({}, {}) 400 calls a sample, the median of 15 less an empty loop, beside a part's
+/// unchanged CastShadow write): the same two tables 0.28-0.30 us, new ones each call 0.34-0.36, where ree charged 0.07 and 0.105.
+pub const BULK_CALL: f64 = 0.21e-6;
 /// What a Parent write that takes a subtree out of every world spends on the active joints it takes out of their parts' lists
 /// (world/joints.rs left_every_world), beyond the write's own price ([`reparented`] and the rest), in a playing client (Studio
 /// 0.748, a Studio Play session; os.clock around single writes, each in a frame of its own, the median of 11, two runs): a part P

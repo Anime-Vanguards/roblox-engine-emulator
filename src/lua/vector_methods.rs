@@ -206,6 +206,9 @@ pub unsafe extern "C-unwind" fn vector_namecall(state: *mut ffi::lua_State) -> c
         let name = String::from_utf8_lossy(bytes).into_owned();
         let message = format!("{name} is not a valid member of Vector3");
         drop(name);
+        // (a missing member costs a client more than the throw the VM counts: cost.rs MEMBER_MISSED; `V3:Nope()` 2.65-2.72 us on a
+        // headless 0.747 client and its server, where ree charged the throw alone, 2.12)
+        lua_workhostnanos(state, ((crate::cost::MEMBER_MISSED - crate::cost::SCRIPT_ERROR) * 1e9).round() as c_int);
         raise_script(state, message, false)
     }
 }

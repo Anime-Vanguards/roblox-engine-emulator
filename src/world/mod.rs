@@ -204,7 +204,7 @@ fn bulk_moves(lua: &Lua, engine: &Engine, args: &Args, base_part: Option<crate::
         };
         moves.push((id, target));
     }
-    query::charge_query(engine, holes as f64 * crate::cost::BULK_HOLE);
+    query::charge_query(engine, crate::cost::BULK_CALL + holes as f64 * crate::cost::BULK_HOLE);
     Ok(BulkMoves { moves, mode })
 }
 

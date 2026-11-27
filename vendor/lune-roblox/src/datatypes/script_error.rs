@@ -511,6 +511,7 @@ pub unsafe extern "C-unwind" fn datatype_namecall(state: *mut ffi::lua_State) ->
         let type_ptr = ffi::lua_tolstring(state, ffi::lua_upvalueindex(2), &mut length);
         let type_name = String::from_utf8_lossy(std::slice::from_raw_parts(type_ptr.cast::<u8>(), length)).into_owned();
         let message = format!("{key_name} is not a valid member of {type_name}");
+        charge_missed_member(state);
         drop(key_name);
         drop(type_name);
         raise_script(state, message, false)
@@ -561,6 +562,7 @@ unsafe extern "C-unwind" fn assign_member(state: *mut ffi::lua_State) -> std::ff
             read
         };
         let name = upvalue_name(state);
+        charge_missed_member(state);
         let message = if property {
             format!("{key} member of {name} is read-only and cannot be assigned to")
         } else {
@@ -598,11 +600,30 @@ unsafe fn upvalue_name(state: *mut ffi::lua_State) -> String {
     }
 }
 
+unsafe extern "C-unwind" {
+    fn lua_workhostnanos(state: *mut ffi::lua_State, nanos: std::ffi::c_int);
+}
+
+/// What a playing client spends on a datatype's missing member beyond the error the VM counts for its throw (ree's cost.rs
+/// MEMBER_MISSED, 2.75 us, less SCRIPT_ERROR, 2.1), in nanoseconds: a read, a `:` call or a write of a member the type lacks
+/// (Studio 0.747, a headless client and a server, two sessions each, beside FindFirstChild(nil) in the same sample: CFrame.Nope
+/// 2.78-2.84 us, UDim2 2.80-2.91, Color3 2.69-2.86, `CFrame.X = 1` 2.84-2.94, where ree's 2.14 was the throw alone), charged to the
+/// script whose line reads it.
+const MEMBER_MISSED_NANOS: std::ffi::c_int = 650;
+
+/// Charges [`MEMBER_MISSED_NANOS`] before a missing member's error is raised.
+unsafe fn charge_missed_member(state: *mut ffi::lua_State) {
+    unsafe { lua_workhostnanos(state, MEMBER_MISSED_NANOS) }
+}
+
 /// `__index` of a type with methods' method table (the table, the key)
 unsafe extern "C-unwind" fn unknown_member(state: *mut ffi::lua_State) -> std::ffi::c_int {
     unsafe {
         let message = match member_key(state, false) {
-            Some(key) => format!("{key} is not a valid member of {}", upvalue_name(state)),
+            Some(key) => {
+                charge_missed_member(state);
+                format!("{key} is not a valid member of {}", upvalue_name(state))
+            }
             None => {
                 let message = format!("invalid argument #2 (string expected, got {})", type_name_at(state, 2));
                 raise_script(state, message, true)
@@ -616,7 +637,10 @@ unsafe extern "C-unwind" fn unknown_member(state: *mut ffi::lua_State) -> std::f
 unsafe extern "C-unwind" fn unknown_member_quoted(state: *mut ffi::lua_State) -> std::ffi::c_int {
     unsafe {
         let message = match member_key(state, true) {
-            Some(key) => format!("'{key}' is not a valid member of {}", upvalue_name(state)),
+            Some(key) => {
+                charge_missed_member(state);
+                format!("'{key}' is not a valid member of {}", upvalue_name(state))
+            }
             None => {
                 let message = format!("invalid argument #2 (string expected, got {})", type_name_at(state, 2));
                 raise_script(state, message, true)

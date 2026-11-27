@@ -1513,16 +1513,27 @@ unsafe fn newindex_fast(state: *mut ffi::lua_State) -> Out {
                     },
                 };
                 // (priced by the reparenting itself: instance.rs set_parent adds its charge to this crossing; a write of the
-                // parent it has changes nothing)
+                // parent it has changes nothing and costs cost.rs PARENT_KEPT)
                 let changed = engine.state.borrow().dom.get(id).is_none_or(|instance| instance.parent != parent);
                 api.cross(crate::boundary::Kind::Set, class, Some(K::Parent as NameId), false, id, 0.0, changed);
                 match linstance::set_parent(engine, id, parent) {
-                    Ok(()) => Out::Ret(0),
+                    Ok(()) => {
+                        if !changed {
+                            linstance::charge_parent_kept(engine);
+                        }
+                        Out::Ret(0)
+                    }
                     Err(Flow::Error(error)) => Out::Raise(error.message, error.level),
                     Err(_) => Out::Slow,
                 }
             }
             Write::Name => {
+                // (a number is written as its text, as the setter writes it, so a number written again changes nothing and costs
+                // an unchanged write: measured, Studio 0.747, a headless client and a server, a Folder's Name written 5 again and
+                // again 0.074-0.079 us against "5" 0.065, where ree charged a changed write each time, 0.33)
+                if kind == ffi::LUA_TNUMBER {
+                    ffi::lua_tolstring(state, 3, std::ptr::null_mut());
+                }
                 let Some(bytes) = arg_bytes(state, 3) else { return Out::Slow };
                 linstance::script_set_property(engine, id, K::Name as NameId, Value::String(Str::new(bytes)));
                 Out::Ret(0)

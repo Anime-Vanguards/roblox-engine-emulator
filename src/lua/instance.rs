@@ -495,17 +495,35 @@ pub fn assign(lua: &Lua, engine: &Rc<Engine>, id: InstanceId, key: &LuaValue, va
             if setter {
                 let setter = engine.behaviors.borrow().find_setter(&engine.reflection, class, name).cloned();
                 if let Some(setter) = setter {
-                    // (a part's version: a setter that stores nothing new on the part leaves it)
+                    // (a part's version: a setter that stores nothing new on the part leaves it; for any other instance the dom's
+                    // count of writes anywhere, which a setter that stores nothing new leaves; a Parent write moves or keeps its parent)
                     let part = engine.reflection.is_a(class, "BasePart");
-                    let version = part.then(|| engine.state.borrow().dom.at(id).version);
+                    let (version, written, kept) = {
+                        let state = engine.state.borrow();
+                        let target = if value.is_nil() { Some(None) } else { instance_id(value).map(Some) };
+                        let kept = name == K::Parent as NameId && target.is_some_and(|target| state.dom.get(id).is_some_and(|instance| instance.parent == target));
+                        (part.then(|| state.dom.at(id).version), state.dom.write_version, kept)
+                    };
                     setter(lua, engine, id, value.clone())?;
                     // (a behaviour's setter stores through the engine: priced as a write that changed, a part's with the WorldModels
                     // above it, unless it left the part as it was (the value it holds, a CollisionGroup of "" or of the name it has):
                     // that write changes nothing and pays nothing more, as a playing client's (Studio 0.747, a part below 0, 100 and 300
                     // WorldModels in the Workspace and in ReplicatedStorage: CollisionGroup, CollisionGroupId, Color and Position
-                    // written what they hold 0.05 to 1.2 us, where ree charged them 2, 1, 3 and 5 changes' worth, 76 to 380 us at 300))
+                    // written what they hold 0.05 to 1.2 us, where ree charged them 2, 1, 3 and 5 changes' worth, 76 to 380 us at 300).
+                    // Another instance's setter that stored nothing new is a write that changed nothing too (Studio 0.747, a headless
+                    // client and a server, two sessions: a Camera's FieldOfView written what it holds 0.050-0.052 us in the Workspace and
+                    // out of it, a UICorner's CornerRadius 0.036-0.061, where ree charged a changed write, 0.13 to 0.22), and a Parent
+                    // written the parent it has costs cost.rs PARENT_KEPT, as on the fast path (lua/raw.rs; its errors raised first)
+                    if kept {
+                        charge_parent_kept(engine);
+                        return Ok(());
+                    }
                     let state = engine.state.borrow();
-                    let changed = name == K::Parent as NameId || version.is_none_or(|version| state.dom.get(id).is_none_or(|part| part.version != version));
+                    let changed = name == K::Parent as NameId
+                        || match version {
+                            Some(version) => state.dom.get(id).is_none_or(|part| part.version != version),
+                            None => state.dom.write_version != written,
+                        };
                     let property = engine.reflection.name(name);
                     let (placed, levels) = if changed && part {
                         crate::world::placement(&state.dom, &engine.reflection, engine.world().workspace, id)
@@ -837,6 +855,12 @@ pub fn set_attribute(engine: &Engine, id: InstanceId, name: Str, value: Value) {
 
 /// SetParent on an engine handle: a part's move pays the WorldModels above it where it went, as its other changes do
 /// ([`changed_levels`]), beyond the reparenting's price.
+/// A script's Parent write of the parent the instance has (cost.rs PARENT_KEPT): it changes nothing
+pub fn charge_parent_kept(engine: &Engine) {
+    engine.state.borrow().sched.charge(crate::cost::PARENT_KEPT);
+    crate::boundary::add_cost(crate::cost::PARENT_KEPT);
+}
+
 pub fn set_parent(engine: &Engine, id: InstanceId, parent: Option<InstanceId>) -> Result<(), Flow> {
     // (a bundle's placeholder that is to hold `id`, bundles waiting in a subtree that enters a world, or ones whose instances carry
     // a tag a CollectionService signal listens for as the subtree enters or leaves the DataModel, import first)
