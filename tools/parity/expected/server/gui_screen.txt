@@ -1,0 +1,24 @@
+# engine: Roblox Studio 0.747.0.7471481, the server of a headless play session (a Script in ServerScriptService, script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-27
+resolution error The current thread cannot call 'GetScreenResolution' (lacking capability RobloxScript)
+resolution dot error The current thread cannot call 'GetScreenResolution' (lacking capability RobloxScript)
+resolution other self error The current thread cannot call 'GetScreenResolution' (lacking capability RobloxScript)
+resolution argument error The current thread cannot call 'GetScreenResolution' (lacking capability RobloxScript)
+resolution value function
+touch controls true modal false
+write false ok false | changed,prop false
+write false again ok false | 
+write true ok true | changed,prop true
+write true again ok true | 
+write zero ok true | 
+write one ok true | 
+write string ok true | 
+write empty string ok true | 
+write nil ok false | changed,prop false
+write table ok true | changed,prop true
+write true ok true | 
+one frame changed,prop true,changed,prop true,changed,prop true,changed,prop true
+modal on ok true false
+modal on events changed,prop false false
+modal off ok false true
+modal off events changed,prop true true

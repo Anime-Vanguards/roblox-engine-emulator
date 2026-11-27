@@ -92,3 +92,35 @@ fn registering_a_clip_is_refused_in_a_live_game() {
     assert_eq!(studio[0], "print: ok string", "{studio:?}");
     assert_eq!(studio[2], "print: ok string", "{studio:?}");
 }
+
+/// GetScreenResolution is a core script's: a game script gets the capability error on both sides. TouchControlsEnabled starts true;
+/// a write takes the value's truth and fires only when it changes it.
+#[test]
+fn screen_resolution_and_touch_controls_answer_as_a_client() {
+    for options in [play(), server()] {
+        let lines = run(
+            options,
+            r#"
+            local GS = game:GetService("GuiService")
+            local Ok, Problem = pcall(function() return GS:GetScreenResolution() end)
+            assert(not Ok and Problem == "The current thread cannot call 'GetScreenResolution' (lacking capability RobloxScript)", Problem)
+            assert(GS.TouchControlsEnabled == true, "starts on")
+            local Log = {}
+            GS:GetPropertyChangedSignal("TouchControlsEnabled"):Connect(function() table.insert(Log, tostring(GS.TouchControlsEnabled)) end)
+            for _, Box in { { false }, { false }, { true }, { 0 }, { "" }, { nil }, { {} }, { true } } do
+                GS.TouchControlsEnabled = Box[1]
+                task.wait()
+            end
+            assert(table.concat(Log, ",") == "false,true,false,true", table.concat(Log, ","))
+            local UIS = game:GetService("UserInputService")
+            UIS.ModalEnabled = true
+            assert(UIS.ModalEnabled == true and GS.TouchControlsEnabled == false, "modal hides the touch controls")
+            UIS.ModalEnabled = false
+            assert(GS.TouchControlsEnabled == true, "and shows them")
+            print("done")
+            "#,
+            1.0,
+        );
+        done(&lines);
+    }
+}

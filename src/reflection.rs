@@ -650,6 +650,9 @@ pub const CAPABILITY_EVENTS: &[(&str, &str, &str)] = &[
 /// (at identity 8 it returns `Enum.Platform.Windows`).
 /// The animation classes' were measured the same on a 0.747 playing client and server (`animation_members.luau`); those that
 /// lack Plugin or PluginOrOpenCloud, which a plugin has, report themselves not emulated in edit mode.
+/// `GuiService:GetScreenResolution` raises the same to a game script on a 0.747 playing client (headless, touch and rendered
+/// desktop) and its server, though the API dump gives it no permit (`gui_screen.luau`); a core script at identity 8 gets the
+/// screen below the top bar.
 /// services::install_capability_calls gives each its function.
 pub const CAPABILITY_CALLS: &[(&str, &str, &str)] = &[
     ("DataModel", "DefineFastFlag", "RobloxScript"),
@@ -660,6 +663,7 @@ pub const CAPABILITY_CALLS: &[(&str, &str, &str)] = &[
     ("DataModel", "GetFastString", "LocalUser"),
     ("DataModel", "GetEngineFeature", "LocalUser"),
     ("GuiService", "GetResolutionScale", "RobloxScript"),
+    ("GuiService", "GetScreenResolution", "RobloxScript"),
     ("UserInputService", "GetPlatform", "RobloxScript"),
     ("Camera", "Zoom", "RobloxScript"),
     ("Camera", "SetImageServerView", "RobloxScript"),

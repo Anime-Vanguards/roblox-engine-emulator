@@ -518,6 +518,13 @@ pub fn get_service(engine: &Engine, game: InstanceId, service_name: &str) -> Res
             }
         }
     }
+    for &(class_name, property, value) in SERVICE_FLAGS {
+        if class_name == service_name {
+            if let Some(name) = reflection.name_id(property) {
+                core::raw_set_silent(&mut state, reflection, service, name, Value::Bool(value));
+            }
+        }
+    }
     state.dom.attach(service, game);
     state.dom.at_mut(service).set_flag(flags::PARENT_LOCKED, true);
     // (the DataModel's ServiceAdded for a service a client or a server makes when a script first gets it, not for those it holds
@@ -560,6 +567,10 @@ const SERVICE_VALUES: &[(&str, &str, f64)] = &[
     ("UserGameSettings", "GamepadCameraSensitivity", 1.0),
     ("UserInputService", "MouseDeltaSensitivity", 1.0),
 ];
+/// [`SERVICE_VALUES`]' flags: GuiService.TouchControlsEnabled reads true on a 0.747 playing client (headless, touch and rendered
+/// desktop alike) and its server, where the dump's default is false; a write takes a value's truth (0 and "" are true, nil false)
+/// and fires Changed and its signal only when it changes it (tools/parity/probes/gui_screen.luau).
+const SERVICE_FLAGS: &[(&str, &str, bool)] = &[("GuiService", "TouchControlsEnabled", true)];
 
 /// A UserSettings object (outside the DataModel, as in Roblox): `UserSettings()` makes it on its first
 /// call and returns it from then on. None when the reflection has no UserSettings class.
@@ -1431,6 +1442,19 @@ fn install_gui_and_input(behaviors: &mut Behaviors, reflection: &Reflection, opt
                     Ok(LuaValue::Boolean(written.unwrap_or(true)))
                 }));
             }
+        }
+        // (UserInputService.ModalEnabled written sets TouchControlsEnabled to its opposite at once, with Changed and the property
+        // signal: a 0.747 playing client and its server, two sessions, tools/parity/probes/gui_screen.luau `modal`)
+        if let (Some(input), Some(modal), Some(touch)) = (class(reflection, "UserInputService"), name(reflection, "ModalEnabled"), name(reflection, "TouchControlsEnabled")) {
+            behaviors.add_setter(input, modal, Rc::new(move |lua, engine, id, value| {
+                let class = engine.state.borrow().dom.at(id).class;
+                let Some(info) = engine.reflection.class_property(class, modal).cloned() else { return Ok(()) };
+                let Value::Bool(on) = convert::coerce(lua, engine, &info, &value)? else { return Ok(()) };
+                crate::lua::instance::set_property(engine, id, modal, Value::Bool(on));
+                let gui = get_service(engine, engine.world().game, "GuiService")?;
+                crate::lua::instance::set_property(engine, gui, touch, Value::Bool(!on));
+                Ok(())
+            }));
         }
         if let (Some(flag), Some(n)) = (settings.reduced_motion, name(reflection, "ReducedMotionEnabled")) {
             behaviors.add_getter(gui, n, getter(move |_, _, _| Ok(LuaValue::Boolean(flag))));
