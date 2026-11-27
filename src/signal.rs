@@ -260,9 +260,10 @@ impl Signals {
         let Some(data) = self.connection(connection) else {
             return;
         };
-        // (a :Once() connection that fired is disconnected already; its queued handler still runs. Not measured: a
-        // Disconnect between the fire and that run)
+        // (a :Once() connection that fired left the signal's handlers already; a Disconnect before its queued handler runs drops
+        // that run, as for any connection: measured in a 0.747 playing client and a server, tools/parity/probes/signal_cut.luau)
         if data.fired {
+            self.release(connection.index);
             return;
         }
         let signal = data.signal;

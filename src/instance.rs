@@ -237,6 +237,11 @@ fn fire_costing(state: &mut State, signal: SignalId, args: Vec<Value>, queue: f6
         let (target, thread_price) = match handler {
             // a thread parked in the signal's Wait resumes at a client's measured price, whatever the signal (cost.rs RESUMED_SIGNAL_WAIT)
             Handler::Thread(thread) => {
+                // (past the re-entrancy cut it is not queued: the fire logs it, scheduler.rs refuse_waiter)
+                if !state.sched.can_defer_event() {
+                    crate::scheduler::refuse_waiter(state);
+                    continue;
+                }
                 let price = if resume > 0.0 { crate::cost::RESUMED_SIGNAL_WAIT } else { 0.0 };
                 (JobTarget::Thread(thread), price)
             }

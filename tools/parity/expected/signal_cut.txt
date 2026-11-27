@@ -1,0 +1,15 @@
+# engine: Roblox Studio 0.747.0.7471481, a headless playing client (script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-27
+connect, fire, disconnect: connected false []
+connect, fire twice, disconnect:  []
+once, fire, disconnect: connected false,connected false []
+once, fire twice: connected false,ran 1 []
+a handler disconnects an older one queued: new 1 []
+a handler disconnects itself, two fires queued: ran 1 []
+disconnect, then the same function connected again:  []
+fire, destroy: ran 1 []
+Changed, disconnect:  []
+a waiting thread, fired at step 79: fired suspended,handler 79,waiter 79,handler again,later dead []
+a waiting thread, fired at step 80: fired suspended,handler again,later suspended [Maximum re-entrancy depth (80) exceeded | Maximum re-entrancy depth (80) exceeded calling task.defer | Maximum event re-entrancy depth exceeded for BindableEvent.Event when calling anonymous function]
+a self-firing event with a thread waiting again each time: fired 80 resumed 79 [Maximum re-entrancy depth (80) exceeded | Maximum event re-entrancy depth exceeded for BindableEvent.Event when calling anonymous function]
+once past the cut: connected false,connected later false [Maximum event re-entrancy depth exceeded for BindableEvent.Event when calling anonymous function]

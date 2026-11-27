@@ -1815,6 +1815,30 @@ fn run_job(lua: &Lua, engine: &Rc<Engine>, job: Job) -> LuaResult<()> {
     Ok(())
 }
 
+/// A thread waiting on a signal (its Wait) that fires past the cut of a chain is not resumed: a client logs `Maximum re-entrancy
+/// depth (80) exceeded` as the signal fires, before the firing thread goes on (the refused handlers' errors come when their turn
+/// does: [`refuse`]), and the thread stays suspended for good (it left the signal's waiting threads: a later fire does not reach
+/// it). Measured in a 0.747 playing client and a server (separate client process): tools/parity/probes/signal_cut.luau.
+pub(crate) fn refuse_waiter(state: &mut crate::State) {
+    log_engine_error(state, format!("Maximum re-entrancy depth ({MAX_REENTRANCY}) exceeded"));
+}
+
+/// An engine error with no stack where only the State is at hand, logged as [`Engine::output`] logs one: the Output, LogService's
+/// history and, on a playing client and a server, the line MessageOut delivers later in the frame (bare text, as the engine's
+/// messages arrive)
+fn log_engine_error(state: &mut crate::State, message: String) {
+    let now = state.sched.now;
+    if state.log_history.len() == crate::LOG_HISTORY_CAP {
+        state.log_history.pop_front();
+    }
+    let timestamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs_f64();
+    state.log_history.push_back(crate::LogEntry { kind: "error", text: message.clone(), timestamp });
+    if !state.sched.edit_mode && !state.sched.delivering_log {
+        state.sched.log_queue.push(crate::LogLine { kind: "error", text: message.clone(), context: None });
+    }
+    state.output.add("error", message, None, now);
+}
+
 /// A handler past the cut of a chain does not run; Roblox logs it as an error naming the event and the handler
 /// (measured in a playing client, Studio 0.744: `Maximum event re-entrancy depth exceeded for IntValue.Changed when
 /// calling anonymous function on line 12 in ReplicatedStorage.Module`, the line where the function was defined).
