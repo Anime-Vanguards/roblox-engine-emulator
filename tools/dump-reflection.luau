@@ -133,6 +133,8 @@ for _, Class in ReflectionService:GetClasses() do
 				name = Property.Name,
 				type = TypeOf(Property.Type),
 				serialized = Property.Serialized,
+				-- (ContentType: an Enum.AssetType item's name, where the property has one)
+				content = if Property.ContentType then Property.ContentType.Name else nil,
 				permits = CopyTable(Property.Permits),
 				display = CopyTable(Property.Display),
 			})
