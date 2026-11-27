@@ -744,6 +744,9 @@ pub struct Dom {
     /// Bumped on every name change anywhere (a child looked up by name reads its parent's child list and its children's names:
     /// the boundary profiler stamps such a read with both)
     pub name_version: u32,
+    /// What sits above each instance a part's write asked about ([`Dom::ancestry`]), kept for the structure version it was worked
+    /// out in: (that version, the answers by instance)
+    ancestry: std::cell::RefCell<(u64, FxHashMap<InstanceId, Ancestry>)>,
     /// Models whose rig animation caches (animation::pose), with a version a change inside one bumps: a child
     /// attached or detached below it, or a Name / Part0 / Part1 / Scale written on it or below it
     rig_watch: FxHashMap<InstanceId, u32>,
@@ -796,6 +799,35 @@ pub struct Dom {
 pub struct Above {
     pub top: Option<InstanceId>,
     pub homes: u32,
+}
+
+/// What is above an instance ([`Dom::ancestry`]): how many ancestors it has, how many of them are Models that are no WorldModel
+/// and the sum of those Models' own depths, and whether the top of its tree is the DataModel
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
+pub struct Ancestry {
+    pub depth: u32,
+    pub models: u32,
+    pub model_depths: u64,
+    pub in_game: bool,
+}
+
+impl Ancestry {
+    /// How deep the top of the tree's first level is: the DataModel's child (the Workspace, ReplicatedStorage, ...) at 1, the
+    /// topmost instance of a tree out of the DataModel at 0
+    fn first_level(&self) -> u32 {
+        if self.in_game { 2 } else { 1 }
+    }
+
+    /// The ancestors below the top of its tree's first level: below the DataModel's child it is under, or below the topmost
+    /// instance of a tree out of the DataModel
+    pub fn levels(&self) -> u32 {
+        self.depth.saturating_sub(self.first_level())
+    }
+
+    /// The levels above each of its Models (as [`Ancestry::levels`] counts an instance's), summed
+    pub fn model_levels(&self) -> u64 {
+        self.model_depths.saturating_sub(u64::from(self.models) * u64::from(self.first_level()))
+    }
 }
 
 /// What changed in a world a spatial index of its own follows since it last took the log (world/broadphase.rs `WorldIndex`: a
@@ -902,6 +934,54 @@ fn outgrown(capacity: usize, held: usize) -> bool {
 impl Dom {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// What is above the live instance `id` ([`Ancestry`]), `kind` telling a class's (whether it is a Model that is no WorldModel,
+    /// whether it is the DataModel). Worked out once a structure version (any parent change starts again) and kept for every
+    /// instance the walk passed through, so writes to parts of a tree that did not move walk nothing, and a part next to one asked
+    /// about walks one step.
+    pub fn ancestry(&self, id: InstanceId, kind: impl Fn(ClassId) -> (bool, bool)) -> Ancestry {
+        let mut cache = self.ancestry.borrow_mut();
+        if cache.0 != self.structure_version {
+            cache.0 = self.structure_version;
+            cache.1.clear();
+        }
+        if let Some(found) = cache.1.get(&id) {
+            return *found;
+        }
+        // (up to an ancestor already known or the top, then down again: a loop, however deep the tree is)
+        let mut path = vec![id];
+        let mut above = loop {
+            let last = *path.last().expect("the path holds the instance");
+            match self.at(last).parent {
+                None => break Ancestry { depth: 0, models: 0, model_depths: 0, in_game: kind(self.at(last).class).1 },
+                Some(parent) => match cache.1.get(&parent) {
+                    Some(found) => break *found,
+                    None => path.push(parent),
+                },
+            }
+        };
+        // (the topmost instance of the path, when the walk reached the top, is the tree's top: its own answer is that)
+        let mut start = path.len();
+        if self.at(*path.last().expect("the path holds the instance")).parent.is_none() {
+            let top = path[path.len() - 1];
+            cache.1.insert(top, above);
+            start -= 1;
+        }
+        for index in (0..start).rev() {
+            let at = path[index];
+            let parent = self.at(at).parent.expect("an instance below another");
+            // (the parent's own answer is `above`: its depth is what a Model parent adds to the sum)
+            let model = kind(self.at(parent).class).0;
+            above = Ancestry {
+                depth: above.depth + 1,
+                models: above.models + u32::from(model),
+                model_depths: above.model_depths + if model { u64::from(above.depth) } else { 0 },
+                in_game: above.in_game,
+            };
+            cache.1.insert(at, above);
+        }
+        above
     }
 
     /// Reserves capacity in the slot arena before mounting a scanned tree so the arena grows once.

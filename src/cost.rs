@@ -1808,6 +1808,13 @@ pub const REPARENTED_KEPT: f64 = 6.0e-9;
 pub const REPARENTED_NESTED: [f64; 2] = [1.6e-9, 6.0e-9];
 pub const REPARENTED_LOOSE_NESTED: [f64; 2] = [1.5e-9, 6.4e-9];
 pub const MOVED_NESTED: [f64; 2] = [7.8e-9, 10.8e-9];
+/// A part a Parent change takes into or out of the Workspace, for each level it sits below the moved instance past the first, beyond
+/// the move's own prices ([`MOVED_NESTED`] and the others): the same client (three sessions, beside part writes) took a chain of N Parts
+/// (each in the one before) into the Workspace from nil in 17 to 22 us at N = 10, 226 to 267 at 100, 1,281 to 1,583 at 300, 11.2 to
+/// 14.6 ms at 1,000 and 39 to 56 at 2,000, out of it 420 to 477 at 100, 2.2 to 2.9 ms at 300, 15.8 to 20.5 at 1,000 and 67 to 73 at
+/// 2,000; a chain of N Folders each holding a Part in 376 us at 100, 1.8 ms at 300, 13.2 at 1,000 and 65.5 at 2,000 (one session),
+/// where ree charged 6.6 ms for 1,000 Parts in and out and 10.5 for the Folders' 1,000. Only moves from and to nil were measured.
+pub const PLACED_NESTED_PART: [f64; 2] = [13e-9, 22e-9];
 /// What `levels` cost at `prices` ([`REPARENTED_NESTED`] and the others): those of instances other than parts, and those of parts.
 pub fn nested(prices: [f64; 2], levels: [usize; 2]) -> f64 {
     levels[0] as f64 * prices[0] + levels[1] as f64 * prices[1]
@@ -2091,10 +2098,38 @@ pub const ANCESTOR_STEP: f64 = 1.2e-9;
 /// 300, 0.80 to 1.0 ms at 1,000, 7.8 to 8.2 ms at 3,000 (a 10,000-deep chain in the Workspace did not finish in 300 s); each
 /// WorldModel above looks again at those above it. Fitted on 142 cases of 1 to 3,000 levels and 14 write kinds, each case's
 /// extra over its changes ([`part_changes`]): x0.94 at the median, x0.65 to x1.53 from the 10th to the 90th percentile, x1.6
-/// to x2.3 out of the Workspace at 10 to 100 levels. A plain Model above a part costs it about as much (7.1 us at 100, 41 to
-/// 46 at 300: not modelled, the dom counts the WorldRoots), and a Folder 12 ns a level (not modelled either).
-pub const WORLD_LEVEL: f64 = 13e-9;
+/// to x2.3 out of the Workspace at 10 to 100 levels. Each WorldModel is also one of the part's levels ([`ancestor_levels`]), which
+/// pays [`ANCESTOR_LEVEL`]'s price in the Workspace of these 13 ns.
+pub const WORLD_LEVEL: f64 = 13e-9 - ANCESTOR_LEVEL[0];
 pub const WORLD_LEVEL_PAIR: f64 = 1.6e-9;
+/// A change to a part for what is above it, beyond its price and its WorldModels' ([`WORLD_LEVEL`]), once for each change a client
+/// makes of the part ([`part_changes`]): each level past the first below the top of its tree ([`crate::dom::Ancestry::levels`]: the
+/// ancestors below the DataModel's child it is under, or below the topmost instance of a tree out of the DataModel), at a price by
+/// where the part is (in the Workspace, elsewhere in the DataModel, out of it), each Model among them that is no WorldModel more, and
+/// each level above each of those Models ([`crate::dom::Ancestry::model_levels`]: each Model looks again at what is above it). A
+/// playing client (roblox-sim, Studio 0.747, a headless client, three sessions; os.clock around 5 to 400 writes alternating two values,
+/// the median of 15 less an empty loop, each sample beside a part's unchanged CastShadow write) changed a Part at the bottom of L
+/// instances nested one in another, the outermost in a Folder in the Workspace, and spent this much more than on the same part with
+/// none: below Folders a Transparency write 0.8 to 1.2 us at L = 100, 2.6 to 3.6 at 300 and 7.9 to 13.2 at 1,000 (10 ns a level, a
+/// CFrame write 10 to 11 a level and change; Configurations alike), in ReplicatedStorage 0.70 at 100 and 6.9 at 1,000 (7 ns), out of
+/// the DataModel 0.31 and 2.9 (3 ns); below plain Models 0.022 at 1, 0.066 at 3, 0.24 to 0.33 at 10, 0.92 to 1.20 at 30, 5.0 to 6.0
+/// at 100 and 33 to 45 at 300 (a CFrame write 5 times that), the same in ReplicatedStorage; below 100 Models each in a Folder 9.6. ree
+/// charged nothing for any of them.
+pub const ANCESTOR_LEVEL: [f64; 3] = [10e-9, 7e-9, 3e-9];
+pub const MODEL_LEVEL: f64 = 10e-9;
+pub const MODEL_LEVEL_PAIR: f64 = 0.85e-9;
+/// What `changes` changes of a part with `above` above it cost for it ([`ANCESTOR_LEVEL`]), `placed` whether it is in the Workspace
+pub fn ancestor_levels(above: &crate::dom::Ancestry, placed: bool, changes: u32) -> f64 {
+    let level = if placed { ANCESTOR_LEVEL[0] } else if above.in_game { ANCESTOR_LEVEL[1] } else { ANCESTOR_LEVEL[2] };
+    let levels = f64::from(above.levels().saturating_sub(1));
+    f64::from(changes) * (levels * level + f64::from(above.models) * MODEL_LEVEL + above.model_levels() as f64 * MODEL_LEVEL_PAIR)
+}
+/// A part's Position written what it holds, for its levels past the first ([`ancestor_levels`]' levels) and the WorldModels above
+/// it, which a client walks where any other write that changes nothing walks none: the same sessions, a Position write of the value
+/// it holds 0.076 us with no level, 1.45 ns more a Folder or a Model level (to 1,000 Folders and 300 Models) and 2.3 to 2.6 a
+/// WorldModel (100 and 300; a CastShadow write of the value it holds the same at every depth).
+pub const POSITION_KEPT_LEVEL: f64 = 1.45e-9;
+pub const POSITION_KEPT_WORLD_LEVEL: f64 = 1.0e-9;
 /// What `changes` changes of a part below `levels` WorldModels cost for them ([`WORLD_LEVEL`]): nothing below none.
 pub fn world_levels(levels: u32, changes: u32) -> f64 {
     let levels = f64::from(levels);

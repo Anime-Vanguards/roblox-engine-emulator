@@ -14117,6 +14117,7 @@ fn a_world_models_walk_up_to_the_data_model_costs_what_its_ancestors_do() {
     // (what 1,000 more ancestors cost a walk up, two walks, and the warning's 1,000 more names and 2,000 more bytes, in us)
     let step = 1000.0 * crate::cost::ANCESTOR_STEP * 1e6;
     let twice = 2.0 * step;
+    let deeper_write = step + 1000.0 * crate::cost::ANCESTOR_LEVEL[1] * f64::from(crate::cost::part_changes("CollisionGroup", false)) * 1e6;
     let named = crate::cost::full_name(1000, 2000) * 1e6;
     let (lua, engine) = start_with(Options { run_context: RunContext::Server, ..Options::default() });
     engine_lua::modules::interpret_all(&lua, &engine);
@@ -14135,7 +14136,7 @@ fn a_world_models_walk_up_to_the_data_model_costs_what_its_ancestors_do() {
                 Part.CollisionGroup = if Flip then "A" else "B"
             end
         end
-        Deeper("a part's CollisionGroup write", Write(ShallowPart), Write(DeepPart), {step:e})
+        Deeper("a part's CollisionGroup write", Write(ShallowPart), Write(DeepPart), {deeper_write:e})
         local function Toggle(World)
             return function()
                 World:RegisterCollisionGroup("A")
@@ -14212,11 +14213,25 @@ fn a_collision_group_write_below_nested_world_models_pays_for_them() {
     // (what a write below 30 WorldModels pays more, in us: a write that changes the part's id and one that keeps it, and the
     // walks up from the innermost WorldModel, to the DataModel and to the top of a chain in no parent)
     let levels = |id_changed: bool| crate::cost::world_levels(30, crate::cost::part_changes("CollisionGroup", id_changed)) * 1e6;
+    // (and the levels above the part each change pays: 29 past the first below the Workspace or ReplicatedStorage, 28 out of the
+    // DataModel, cost.rs ancestor_levels)
+    let above = |place: usize, past: f64, id_changed: bool| past * crate::cost::ANCESTOR_LEVEL[place] * f64::from(crate::cost::part_changes("CollisionGroup", id_changed)) * 1e6;
     let step = crate::cost::ANCESTOR_STEP * 1e6;
     run(
         &lua,
         &engine,
-        &format!("shared.Changed, shared.Kept, shared.Walk, shared.LooseWalk = {:e}, {:e}, {:e}, {:e}", levels(true), levels(false), 31.0 * step, 29.0 * step),
+        &format!(
+            "shared.Changed, shared.Kept, shared.Walk, shared.LooseWalk = {:e}, {:e}, {:e}, {:e} shared.Above = {{ Changed = {{ {:e}, {:e} }}, Kept = {{ {:e}, {:e}, {:e} }} }}",
+            levels(true),
+            levels(false),
+            31.0 * step,
+            29.0 * step,
+            above(0, 29.0, true),
+            above(1, 29.0, true),
+            above(0, 29.0, false),
+            above(1, 29.0, false),
+            above(2, 28.0, false),
+        ),
     );
     run(
         &lua,
@@ -14273,9 +14288,10 @@ fn a_collision_group_write_below_nested_world_models_pays_for_them() {
             Beside(`{Label}, a name with another id`, Write(Plain, "Default", "A"), Write(Below, "Default", "A"), Changed)
             Beside(`{Label}, a name with the same id`, Write(Plain, "A", "B"), Write(Below, "A", "B"), Kept)
         end
-        Both("below 30 WorldModels in the Workspace", workspace, shared.Changed, shared.Kept)
-        Both("below 30 WorldModels in ReplicatedStorage", RS, shared.Changed + shared.Walk, shared.Kept + shared.Walk)
-        Both("below 30 WorldModels in no parent", nil, shared.Kept + shared.LooseWalk, shared.Kept + shared.LooseWalk)
+        local Above = shared.Above
+        Both("below 30 WorldModels in the Workspace", workspace, shared.Changed + Above.Changed[1], shared.Kept + Above.Kept[1])
+        Both("below 30 WorldModels in ReplicatedStorage", RS, shared.Changed + shared.Walk + Above.Changed[2], shared.Kept + shared.Walk + Above.Kept[2])
+        Both("below 30 WorldModels in no parent", nil, shared.Kept + shared.LooseWalk + Above.Kept[3], shared.Kept + shared.LooseWalk + Above.Kept[3])
         "#,
     );
 }

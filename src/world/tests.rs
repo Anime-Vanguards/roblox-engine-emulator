@@ -3797,6 +3797,7 @@ fn assembly_lookups_cost_the_same_however_deep_their_parts_are() {
     );
     let use_scene = compile(&lua, &engine, "local Name = ...; shared.Use(Name)");
     let mut host = [0.0; 3];
+    run(&lua, &engine, &format!("shared.Deeper, shared.ApartLevels = {:e}, {:e}", 300.0 * 10000.0 * crate::cost::ANCESTOR_LEVEL[0], 300.0 * 4000.0 * crate::cost::ANCESTOR_LEVEL[0]));
     for _ in 0..3 {
         for (index, name) in ["Shallow", "Deep", "Apart"].into_iter().enumerate() {
             let start = std::time::Instant::now();
@@ -3813,9 +3814,12 @@ fn assembly_lookups_cost_the_same_however_deep_their_parts_are() {
         r#"
         local Work = shared.Work
         assert(Work.Shallow > 0, "the passes cost work")
-        -- (os.clock reads about 10,000 s, where its last bit is 1.8e-12 s: two passes that cost the same can read a bit apart)
-        assert(math.abs(Work.Deep - Work.Shallow) < 1e-11, `the deep scene's pass cost {Work.Deep} s of work where the shallow one's {Work.Shallow}`)
-        assert(math.abs(Work.Apart - Work.Shallow) < 1e-11, `the scene apart cost {Work.Apart} s of work where the shallow one's {Work.Shallow}`)
+        -- (os.clock reads about 10,000 s, where its last bit is 1.8e-12 s: two passes that cost the same can read a bit apart; the
+        -- leaf's 300 changes a pass (200 velocity writes, 20 Position writes of 5 changes) pay for the levels above it, 10,000 and 4,000
+        -- more than the shallow leaf's: cost.rs ancestor_levels)
+        local Deeper, Apart = shared.Deeper, shared.ApartLevels
+        assert(math.abs(Work.Deep - Work.Shallow - Deeper) < 1e-9, `the deep scene's pass cost {Work.Deep} s of work where the shallow one's {Work.Shallow}, {Deeper} more expected`)
+        assert(math.abs(Work.Apart - Work.Shallow - Apart) < 1e-9, `the scene apart cost {Work.Apart} s of work where the shallow one's {Work.Shallow}, {Apart} more expected`)
         "#,
     );
     let [shallow, deep, apart] = host;
@@ -6916,9 +6920,10 @@ fn kept_components_answer_as_fresh_walks_do() {
 }
 
 /// A write that changes a part's property is priced by whether the part is in the Workspace (cost.rs write), read from the
-/// homes the dom keeps (dom.rs Dom::is_descendant_of_home), so writes to a part 10,000 folders deep cost about as much host work
-/// as to one right in its parent, and the work clock charges the same: Transparency, Position (a view's setter), CFrame and
-/// PivotTo, to parts in the Workspace, in a WorldModel in it (which charges the same for the WorldModel above each: cost.rs
+/// homes the dom keeps (dom.rs Dom::is_descendant_of_home), and by the levels above it (cost.rs ancestor_levels, read from what
+/// dom.rs Dom::ancestry kept of the tree), so writes to a part 10,000 folders deep cost about as much host work as to one right
+/// in its parent, and the work clock charges what a client's walk up those levels costs: Transparency, Position (a view's setter),
+/// CFrame and PivotTo, to parts in the Workspace, in a WorldModel in it (which charges for the WorldModel above each too: cost.rs
 /// world_levels) and out of it. Each write used to walk up from the part to the Workspace, or to the top of the tree when it
 /// was not in it: 20 us at that depth.
 #[test]
@@ -6926,9 +6931,15 @@ fn part_writes_cost_the_same_however_deep_the_part_is() {
     let (lua, engine) = start_play();
     crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
     register_wrap(&lua, &engine);
-    // (each pass's 2,000 rounds change the part 16 times: Transparency 1, Position, CFrame and PivotTo's 5 each)
-    let world_level = 2000.0 * crate::cost::world_levels(1, 16);
-    run(&lua, &engine, &format!("shared.WorldLevel = {world_level:e}"));
+    // (each pass's 2,000 rounds change the part 16 times: Transparency 1, Position, CFrame and PivotTo's 5 each; the levels past
+    // the first below the Workspace or ReplicatedStorage each change pays for: 9,999 for the deep parts, 10,000 below the WorldModel)
+    let level = |place: usize, levels: f64| 2000.0 * 16.0 * levels * crate::cost::ANCESTOR_LEVEL[place];
+    let world_level = 2000.0 * crate::cost::world_levels(1, 16) + level(0, 1.0);
+    run(
+        &lua,
+        &engine,
+        &format!("shared.WorldLevel = {world_level:e} shared.Levels = {{ Deep = {:e}, World = {:e}, Loose = {:e} }}", level(0, 9999.0), level(0, 10000.0), level(1, 9999.0)),
+    );
     run(
         &lua,
         &engine,
@@ -6999,9 +7010,10 @@ fn part_writes_cost_the_same_however_deep_the_part_is() {
         local Work = shared.Work
         for _, Pair in { { "Deep", "Shallow" }, { "World", "WorldShallow" }, { "Loose", "LooseShallow" } } do
             local Deep, Shallow = Work[Pair[1]], Work[Pair[2]]
-            assert(Shallow > 0 and math.abs(Deep - Shallow) < 1e-9, `{Pair[1]}'s pass cost {Deep} s of work where {Pair[2]}'s {Shallow}`)
+            local Levels = shared.Levels[Pair[1]]
+            assert(Shallow > 0 and math.abs(Deep - Shallow - Levels) < 1e-7, `{Pair[1]}'s pass cost {Deep} s of work where {Pair[2]}'s {Shallow}, its levels {Levels}`)
         end
-        assert(math.abs(Work.World - Work.Deep - shared.WorldLevel) < 1e-9, `a part in a WorldModel in the Workspace pays {Work.World} s where one in the Workspace {Work.Deep}`)
+        assert(math.abs(Work.World - Work.Deep - shared.WorldLevel) < 1e-7, `a part in a WorldModel in the Workspace pays {Work.World} s where one in the Workspace {Work.Deep}`)
         assert(Work.Loose < Work.Deep - 8000 * 0.1e-6, `a part out of the Workspace pays {Work.Loose} s, one in it {Work.Deep}`)
         "#,
     );
@@ -7124,6 +7136,11 @@ fn a_parts_setter_write_that_changes_nothing_pays_nothing_more() {
     crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
     let levels = |changes: u32| crate::cost::world_levels(300, changes);
     run(&lua, &engine, &format!("shared.Levels = {{ [0] = 0, {:e}, {:e}, {:e}, {:e}, {:e} }} shared.Ignored = {:e}", levels(1), levels(2), levels(3), levels(4), levels(5), crate::cost::COLLISION_GROUP_IGNORED));
+    // (a Position written what it holds walks the levels above the part, 299 past the first, and the 300 WorldModels: cost.rs
+    // POSITION_KEPT_LEVEL; ten writes. The changed writes' levels are the same below WorldModels and below Folders.)
+    let kept = 10.0 * 299.0 * crate::cost::POSITION_KEPT_LEVEL;
+    let worlds = 10.0 * 300.0 * crate::cost::POSITION_KEPT_WORLD_LEVEL;
+    run(&lua, &engine, &format!("shared.Kept = {{ Worlds = {:e}, Folders = {:e} }}", kept + worlds, kept));
     run(
         &lua,
         &engine,
@@ -7176,8 +7193,9 @@ fn a_parts_setter_write_that_changes_nothing_pays_nothing_more() {
             for _, Row in Same do
                 local Base = Cost(Worlds, Quiet)
                 local InWorlds, InFolders = Cost(Worlds, Row[3]), Cost(Folders, Row[3])
-                assert(math.abs(InWorlds - InFolders) < 1e-9, `{Row[1]} written what it holds below 300 WorldModels ({Pair[1]}) cost {InWorlds} s where below Folders {InFolders}`)
-                assert(math.abs(InWorlds - Base - 10 * Row[2]) < 0.2e-6, `{Row[1]} written what it holds ({Pair[1]}) cost {InWorlds} s for 10 where a Transparency write that changes nothing cost {Base}: {10 * Row[2]} s more expected`)
+                local Walked = if Row[1] == "Position" then shared.Kept else { Worlds = 0, Folders = 0 }
+                assert(math.abs(InWorlds - InFolders - (Walked.Worlds - Walked.Folders)) < 1e-9, `{Row[1]} written what it holds below 300 WorldModels ({Pair[1]}) cost {InWorlds} s where below Folders {InFolders}`)
+                assert(math.abs(InWorlds - Base - 10 * Row[2] - Walked.Worlds) < 0.2e-6, `{Row[1]} written what it holds ({Pair[1]}) cost {InWorlds} s for 10 where a Transparency write that changes nothing cost {Base}: {10 * Row[2] + Walked.Worlds} s more expected`)
             end
             for _, Row in Changes do
                 if Row[4] and Pair[1] ~= "Worlds" then
@@ -11959,6 +11977,98 @@ fn writes_that_change_nothing_kept_parents_and_datatype_misses_cost_what_a_clien
             kept = PARENT_KEPT,
             bulk = BULK_CALL + CALL,
             missed = MEMBER_MISSED,
+        ),
+    );
+}
+
+/// A part's change pays for the levels above it (cost.rs ancestor_levels: 10 ns a level past the first below the Workspace, 7 in
+/// ReplicatedStorage, 3 out of the DataModel, each change), a Model among them 10 ns more and each level above each Model 0.85 ns
+/// (Studio 0.747, a headless client: Transparency and CFrame writes below 1 to 1,000 Folders and Models), worked out once a
+/// structure version (dom.rs Dom::ancestry); a Position written what it holds 1.45 ns a level. A chain of parts taken into or out of
+/// the Workspace pays 13 / 22 ns for each level a part sits below the moved one (cost.rs PLACED_NESTED_PART: a client's 1,000-part
+/// chain 11.2 to 14.6 ms in, 15.8 to 20.5 out). ree charged none of these.
+#[test]
+fn a_parts_changes_and_moves_pay_for_the_levels_above_it() {
+    use crate::cost::*;
+    let (lua, engine) = start_play();
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    let folders = |levels: u32, place: usize| f64::from(levels.saturating_sub(1)) * ANCESTOR_LEVEL[place];
+    // (Models nested L deep in the Workspace: L levels, L Models, the Models' own levels 0 + 1 + ... + L - 1)
+    let models = |l: u32| f64::from(l - 1) * ANCESTOR_LEVEL[0] + f64::from(l) * MODEL_LEVEL + f64::from(l * (l - 1) / 2) * MODEL_LEVEL_PAIR;
+    let second = |price: f64| 100.0 * (MOVED_NESTED[1] + price);
+    run(
+        &lua,
+        &engine,
+        &format!(
+            r##"
+        local RS = game:GetService("ReplicatedStorage")
+        local function Nest(Class, Levels, Top)
+            local Root = Instance.new(Class)
+            local Holder = Root
+            for _ = 2, Levels do
+                local Inner = Instance.new(Class)
+                Inner.Parent = Holder
+                Holder = Inner
+            end
+            local Part = Instance.new("Part")
+            Part.Anchored = true
+            Part.Parent = if Levels == 0 then Top else Holder
+            if Levels > 0 then Root.Parent = Top end
+            return Part
+        end
+        local function Each(Call)
+            Call(0)
+            local Start = os.clock()
+            for I = 1, 40 do Call(I) end
+            return (os.clock() - Start) / 40
+        end
+        local function Transparency(Part) return Each(function(I) Part.Transparency = I % 2 * 0.5 end) end
+        local function CFrameWrite(Part) return Each(function(I) Part.CFrame = CFrame.new(I % 2, 0, 0) end) end
+        local function Kept(Part) local At = Part.Position return Each(function() Part.Position = At end) end
+        local function Is(Name, Got, Want)
+            assert(math.abs(Got - Want) < 0.002e-6 + 1e-3 * Want, `{{Name}}: {{Got}} s more, not {{Want}}`)
+        end
+        local Base, Loose, None = Nest("Folder", 0, workspace), Nest("Folder", 0, RS), Nest("Folder", 0, nil)
+        -- (the frame's first geometry write runs cold: taken here)
+        Base.CFrame = CFrame.new(1, 0, 0)
+        Is("100 Folders, a Transparency write", Transparency(Nest("Folder", 100, workspace)) - Transparency(Base), {f100:e})
+        Is("100 Folders, a CFrame write", CFrameWrite(Nest("Folder", 100, workspace)) - CFrameWrite(Base), {f100_cf:e})
+        Is("100 Folders in ReplicatedStorage", Transparency(Nest("Folder", 100, RS)) - Transparency(Loose), {f100_rs:e})
+        Is("100 Folders out of the DataModel", Transparency(Nest("Folder", 100, nil)) - Transparency(None), {f100_nil:e})
+        Is("10 Models", Transparency(Nest("Model", 10, workspace)) - Transparency(Base), {m10:e})
+        Is("a Position written what it holds below 100 Folders", Kept(Nest("Folder", 100, workspace)) - Kept(Base), {kept:e})
+        local function Chain(N)
+            local Top = Instance.new("Part")
+            Top.Anchored = true
+            local At = Top
+            for _ = 2, N do
+                local Part = Instance.new("Part")
+                Part.Anchored = true
+                Part.Parent = At
+                At = Part
+            end
+            return Top
+        end
+        local function Move(N, To)
+            local Top = Chain(N)
+            if To == nil then Top.Parent = workspace task.wait() end
+            local Start = os.clock()
+            Top.Parent = To
+            return os.clock() - Start
+        end
+        -- (the second difference over chains of 10, 20 and 30 parts leaves the levels' prices alone: 100 levels' worth)
+        local function Second(To) return Move(30, To) - 2 * Move(20, To) + Move(10, To) end
+        Is("chains of parts into the Workspace", Second(workspace), {chain_in:e})
+        Is("chains of parts out of the Workspace", Second(nil), {chain_out:e})
+        "##,
+            f100 = folders(100, 0),
+            f100_cf = 5.0 * folders(100, 0),
+            f100_rs = folders(100, 1),
+            f100_nil = folders(99, 2),
+            m10 = models(10),
+            kept = 99.0 * POSITION_KEPT_LEVEL,
+            chain_in = second(PLACED_NESTED_PART[0]),
+            chain_out = second(PLACED_NESTED_PART[1]),
         ),
     );
 }

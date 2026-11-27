@@ -806,7 +806,9 @@ fn reparent(
     } else {
         let (count, nested) = subtree_depths(state, id);
         crate::cost::REPARENTED_LOOSE + count as f64 * crate::cost::REPARENTED_LOOSE_INSTANCE + crate::cost::nested(crate::cost::REPARENTED_LOOSE_NESTED, nested)
-    } + chains;
+    } + chains
+        // (parts taken into or out of the Workspace, for how deep they sit below the moved instance: cost.rs PLACED_NESTED_PART)
+        + if was_placed != now_placed { subtree_depths(state, id).1[1] as f64 * crate::cost::PLACED_NESTED_PART[usize::from(was_placed)] } else { 0.0 };
     state.sched.charge(work);
     crate::boundary::add_cost(work);
     if was_placed != now_placed {
