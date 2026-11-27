@@ -63,12 +63,6 @@
 			"why": "a client keeps in a part's body the motion a script's read of its Velocity or RotVelocity works out (here the reads before the split), so the piece split off reads it; ree keeps a part's body from velocity writes, simulation steps and joins alone (no hook on a property's read)"
 		}
 	],
-	"camera_cutoff": [
-		{
-			"line": "cut new, at the Heartbeat true 14.000",
-			"why": "a server runs its physics step between a task.wait resumption and that frame's Heartbeat, so the part is in the spatial index there; ree's frame (and a client's) has none between them"
-		}
-	],
 	"camera_units": [
 		{
 			"line": "PanUnits 28 5 0 nil 58.502 -4.399",

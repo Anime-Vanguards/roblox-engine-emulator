@@ -2032,7 +2032,18 @@ fn run_timers_in(lua: &Lua, engine: &Rc<Engine>, legacy: bool, limit: Option<f64
     }
     match flush {
         TimerFlush::EachResumption => Ok(()),
-        TimerFlush::OncePass => flush_deferred_once(lua, engine),
+        TimerFlush::OncePass => {
+            // A server's spatial index takes in what entered the Workspace (since its physics step) right after the task.wait /
+            // task.delay resumptions, before their deferred pass; it steps no physics there (an unanchored part made at the
+            // resumptions has not fallen by the Heartbeat). A client takes them in at its physics step only. Measured in roblox-sim
+            // (Studio 0.747, a server whose client ran in a process of its own; six sessions): GetLargestCutoffDistance, which takes
+            // nothing in, sees a part made at PostSimulation, at a task.wait or a task.delay resumption from that pass on, one made in
+            // the pass from a later physics step; tools/parity/probes/camera_cutoff.luau.
+            if engine.options.server() {
+                crate::luau_profile::engine_step("physics", || crate::world::broadphase::index_parts(engine));
+            }
+            flush_deferred_once(lua, engine)
+        }
         TimerFlush::AfterAll => flush_deferred(lua, engine),
     }
 }
