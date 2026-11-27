@@ -882,8 +882,38 @@ local FilterMethods = {
 -- Exclude, is set at the first call, once the enums exist; the two filter lists of April 2026 are nil). Any other key raises
 -- unquoted ("Nope is not a valid member of RaycastParams"), a key that is not a string too ("invalid argument #2 (string
 -- expected, got number)"): measured in a 0.747 playing client and server (tools/parity/probes/proxy_values.luau).
+-- Two of a type are equal when every member is, a list item by item (a 0.747 client and server: RaycastParams.new() == RaycastParams.new(),
+-- not after an IgnoreWater write or with another filter list; tools/parity/probes/reflection_members.luau).
+local function ParamsEqual(TypeName)
+	return function(Left, Right)
+		local Stored = ParamsData[TypeName]
+		local A, B = Stored[Left], Stored[Right]
+		if A == nil or B == nil then
+			return false
+		end
+		for _, Sides in { { A, B }, { B, A } } do
+			for Key, Value in Sides[1] do
+				local Other = Sides[2][Key]
+				if type(Value) == "table" and type(Other) == "table" then
+					if #Value ~= #Other then
+						return false
+					end
+					for Index = 1, #Value do
+						if Value[Index] ~= Other[Index] then
+							return false
+						end
+					end
+				elseif Value ~= Other then
+					return false
+				end
+			end
+		end
+		return true
+	end
+end
 local function FilterParamsType(TypeName, Fields, Meta)
 	local Known = { FilterType = true, ExcludeInstances = true, IncludeInstances = true }
+	local Equal = ParamsEqual(TypeName)
 	for Key in Fields do
 		Known[Key] = true
 	end
@@ -934,7 +964,11 @@ local function FilterParamsType(TypeName, Fields, Meta)
 				end
 				local Cast = ParamsCasts[Key]
 				Data[Key] = if Cast then Cast(Value) else Value
-			end, Meta and Meta(Data))
+			end, (function()
+				local Extra = if Meta then Meta(Data) else {}
+				Extra.__eq = Equal
+				return Extra
+			end)())
 			Stored[Object] = Data
 			return Object
 		end,

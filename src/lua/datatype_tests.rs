@@ -37,6 +37,25 @@ fn assert_script(source: &str) -> Vec<String> {
     lines
 }
 
+/// RaycastParams and OverlapParams compare by value, as a 0.747 playing client and server do: two are `==` when every member is,
+/// a filter list item by item, and a write or another list makes them differ; one of each type never is.
+#[test]
+fn filter_params_are_equal_when_every_member_is() {
+    let lines = assert_script(
+        r#"
+        local A, B = RaycastParams.new(), RaycastParams.new()
+        local Written, Filtered, Same = RaycastParams.new(), RaycastParams.new(), RaycastParams.new()
+        Written.IgnoreWater = true
+        Filtered.FilterDescendantsInstances = { workspace }
+        Same.FilterDescendantsInstances = { workspace }
+        local Overlap = OverlapParams.new()
+        Overlap.MaxParts = 3
+        print(A == B, rawequal(A, B), A == Written, A == Filtered, Filtered == Same, OverlapParams.new() == OverlapParams.new(), OverlapParams.new() == Overlap, A == OverlapParams.new())
+        "#,
+    );
+    assert_eq!(lines, ["print: true false false false true true false false"]);
+}
+
 /// runtime/tests/random.luau: golden PCG32 vectors and streams, range boundaries, per-object
 /// state, Clone, seed edges, the deterministic no-seed sequence and the locked userdata.
 #[test]
