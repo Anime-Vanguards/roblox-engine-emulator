@@ -258,36 +258,72 @@ for Name, Answer in { IsInGroup = true, IsInGroupAsync = true, GetRankInGroup = 
 		return Stubbed
 	end)
 end
-Wrap("Player", "IsFriendsWith", function(Stub, Self, UserId, ...)
-	local Friends = Field(ProfileOf(Self), "social", "friends")
-	if Friends then
+-- Friends: the stub casts the argument, checks the side and waits as a client does for the web's answer (services.luau's
+-- friends methods); the profile's friends are the answer for its player
+for _, Name in { "IsFriendsWith", "IsFriendsWithAsync" } do
+	Wrap("Player", Name, function(Stub, Self, UserId, ...)
+		local Stubbed = Stub(Self, UserId, ...)
+		if Field(ProfileOf(Self), "social", "friends") then
+			return Friend(R.FriendUser(UserId)) ~= nil
+		end
+		return Stubbed
+	end)
+end
+-- (an entry as Roblox's documentation lists it: VisitorId, UserName, DisplayName, IsOnline, and the keys a friend's
+-- `presence` gives: LastLocation, PlaceId, GameId, LocationType, LastOnline; at most maxFriends of them, and 200)
+for _, Name in { "GetFriendsOnline", "GetFriendsOnlineAsync" } do
+	Wrap("Player", Name, function(Stub, Self, MaxFriends, ...)
+		local Stubbed = Stub(Self, MaxFriends, ...)
+		local Friends = Field(ProfileOf(Self), "social", "friends")
+		if not Friends then
+			return Stubbed
+		end
+		local Most = R.FriendCount(MaxFriends)
+		local Online = {}
 		for _, Found in Friends do
-			if Found.userId == tonumber(UserId) then
-				return true
+			if Found.online and #Online < Most then
+				local Entry = { VisitorId = Found.userId, UserName = Found.name, DisplayName = Found.displayName or Found.name, IsOnline = true }
+				for Key, Value in Found.presence or {} do
+					Entry[Key] = Value
+				end
+				table.insert(Online, Entry)
 			end
 		end
-		return false
+		return Online
+	end)
+end
+-- (the Players in the server who are the player's friends, in GetPlayers' order, without the player: Roblox's documentation)
+Wrap("Player", "GetFriendsInServerAsync", function(Stub, Self, ...)
+	local Stubbed = Stub(Self, ...)
+	if not Field(ProfileOf(Self), "social", "friends") then
+		return Stubbed
 	end
-	return Stub(Self, UserId, ...)
+	local InServer = {}
+	for _, Player in game:GetService("Players"):GetPlayers() do
+		if Player ~= Self and Friend(RawGet(Player, "UserId")) then
+			table.insert(InServer, Player)
+		end
+	end
+	return InServer
 end)
--- (an entry as Roblox's documentation lists it: VisitorId, UserName, DisplayName, IsOnline, and the keys a friend's
--- `presence` gives: LastLocation, PlaceId, GameId, LocationType, LastOnline)
-Wrap("Player", "GetFriendsOnline", function(Stub, Self, MaxFriends, ...)
+-- (an entry as Roblox's documentation lists it: User, the friend's user id; PlaceId and GameId, the place and the JobId of the
+-- server it plays in, from its `presence` (left out where that has none); for each online friend whose universeId is the
+-- game's GameId)
+Wrap("Player", "GetFriendsInUniverseAsync", function(Stub, Self, ...)
+	local Stubbed = Stub(Self, ...)
 	local Friends = Field(ProfileOf(Self), "social", "friends")
 	if not Friends then
-		return Stub(Self, MaxFriends, ...)
+		return Stubbed
 	end
-	local Online = {}
+	local Universe = game.GameId
+	local InUniverse = {}
 	for _, Found in Friends do
-		if Found.online and #Online < (tonumber(MaxFriends) or 200) then
-			local Entry = { VisitorId = Found.userId, UserName = Found.name, DisplayName = Found.displayName or Found.name, IsOnline = true }
-			for Key, Value in Found.presence or {} do
-				Entry[Key] = Value
-			end
-			table.insert(Online, Entry)
+		if Found.online and Found.universeId == Universe then
+			local Presence = Found.presence or {}
+			table.insert(InUniverse, { User = Found.userId, PlaceId = Presence.PlaceId, GameId = Presence.GameId })
 		end
 	end
-	return Online
+	return InUniverse
 end)
 -- (FriendPages entries: Id, Username, DisplayName, IsOnline, Roblox's documentation)
 Wrap("Players", "GetFriendsAsync", function(Stub, Self, UserId, ...)

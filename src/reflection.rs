@@ -436,6 +436,7 @@ const BEHAVIOR_ONLY_NAMES: &[&str] = &[
     "GetRankInGroupAsync", "GetRoleInGroup", "GetRoleInGroupAsync", "HasAppearanceLoaded", "IsFriendsWith", "IsInGroup",
     "IsInGroupAsync", "IsVerified", "LoadCharacter", "LoadCharacterAsync",
     "RequestStreamAroundAsync", "Kick", "Move", "AddReplicationFocus", "RemoveReplicationFocus",
+    "IsFriendsWithAsync", "GetFriendsOnlineAsync", "GetFriendsInServerAsync", "GetFriendsInUniverseAsync",
 ];
 
 /// The methods a class has only through the engine's behaviours: a script calls them, and neither the dump nor rbx-dom

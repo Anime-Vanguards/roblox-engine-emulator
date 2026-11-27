@@ -488,7 +488,7 @@ const LOCALIZATION: [&str; 4] = ["localeId", "robloxLocaleId", "systemLocaleId",
 const OWNERSHIP: [&str; 5] = ["gamePasses", "assets", "bundles", "badges", "subscriptions"];
 const SOCIAL: [&str; 3] = ["groups", "friends", "blocked"];
 const GROUP: [&str; 5] = ["id", "rank", "role", "name", "isPrimary"];
-const FRIEND: [&str; 5] = ["userId", "name", "displayName", "online", "presence"];
+const FRIEND: [&str; 6] = ["userId", "name", "displayName", "online", "presence", "universeId"];
 const GAME: [&str; 9] = ["placeId", "gameId", "creatorId", "creatorType", "jobId", "placeVersion", "privateServerId", "privateServerOwnerId", "streamingTargetRadius"];
 const DATA: [&str; 4] = ["dataStores", "orderedDataStores", "globalDataStore", "memoryStores"];
 const MEMORY: [&str; 3] = ["hashMaps", "sortedMaps", "queues"];
@@ -679,6 +679,7 @@ impl ClientProfile {
                     }
                     string(friend, &path, "displayName")?;
                     boolean(friend, &path, "online")?;
+                    integer(friend, &path, "universeId")?;
                     if let Some(presence) = friend.get("presence") {
                         object(presence, &format!("{path}.presence"))?;
                     }

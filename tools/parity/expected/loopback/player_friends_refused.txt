@@ -1,0 +1,36 @@
+# engine: Roblox Studio 0.747.0.7471481, a headless play session of one server and one client in processes of their own (the server's half a server Script from the server's start, the client's half a job in the client; script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-27
+server: refused IsFriendsWithAsync -1 passes
+server: refused IsFriendsWithAsync 'abc' error Unable to cast string to User
+server: refused GetFriendsOnlineAsync -1 error GetFriendsOnline must be invoked on the Local Player
+server: refused GetFriendsOnlineAsync 'abc' error Unable to cast string to int
+server: refused IsFriendsWith 5 error thread is not yieldable
+server: refused IsFriendsWithAsync 5 error thread is not yieldable
+server: refused GetFriendsOnline 5 error GetFriendsOnline must be invoked on the Local Player
+server: refused GetFriendsOnlineAsync 5 error GetFriendsOnline must be invoked on the Local Player
+server: refused GetFriendsInServerAsync 5 error thread is not yieldable
+server: refused GetFriendsInUniverseAsync 5 error GetFriendsInUniverse must be invoked on the Local Player
+server: after IsFriendsWithAsync 5 passes yielded
+server: after IsFriendsWith 6 passes now
+server: later GetFriendsInServerAsync passes now
+server: later GetFriendsOnlineAsync error GetFriendsOnline must be invoked on the Local Player now
+server: later GetFriendsInUniverseAsync error GetFriendsInUniverse must be invoked on the Local Player now
+server: later refused IsFriendsWithAsync 7 passes
+server: later refused GetFriendsOnlineAsync 7 error GetFriendsOnline must be invoked on the Local Player
+client: refused IsFriendsWithAsync -1 passes
+client: refused IsFriendsWithAsync 'abc' error Unable to cast string to User
+client: refused GetFriendsOnlineAsync -1 error GetFriendsOnline maxFriends argument can not be negative
+client: refused GetFriendsOnlineAsync 'abc' error Unable to cast string to int
+client: refused IsFriendsWith 5 error thread is not yieldable
+client: refused IsFriendsWithAsync 5 error thread is not yieldable
+client: refused GetFriendsOnline 5 error thread is not yieldable
+client: refused GetFriendsOnlineAsync 5 error thread is not yieldable
+client: refused GetFriendsInServerAsync 5 error thread is not yieldable
+client: refused GetFriendsInUniverseAsync 5 error thread is not yieldable
+client: after IsFriendsWithAsync 5 passes yielded
+client: after IsFriendsWith 6 passes now
+client: later GetFriendsInServerAsync passes now
+client: later GetFriendsOnlineAsync passes now
+client: later GetFriendsInUniverseAsync passes now
+client: later refused IsFriendsWithAsync 7 passes
+client: later refused GetFriendsOnlineAsync 7 passes

@@ -199,6 +199,60 @@ fn each_field_changes_what_scripts_read() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// The friends methods answer from the profile's friends for its player: IsFriendsWithAsync as IsFriendsWith (the id cast as a
+/// client casts it), GetFriendsOnlineAsync as GetFriendsOnline (at most maxFriends entries), GetFriendsInServerAsync the
+/// friends among the server's players (not the player), GetFriendsInUniverseAsync the online friends whose universeId is the
+/// game's GameId, with their presence's PlaceId and GameId; another player's answers stay the offline ones
+#[test]
+fn friends_methods_answer_from_the_profiles_friends() {
+    let profile = r#"{
+	"identity": { "userId": 5 },
+	"social": {
+		"friends": [
+			{ "userId": 2, "name": "Bo", "online": true, "universeId": 11, "presence": { "PlaceId": 3, "GameId": "job-2", "LocationType": 4 } },
+			{ "userId": 3, "name": "Cy", "displayName": "Cyan", "online": true, "universeId": 12, "presence": { "PlaceId": 30 } },
+			{ "userId": 6, "name": "Fi", "universeId": 11 }
+		]
+	},
+	"game": { "gameId": 11 }
+}"#;
+    let harness = r#"return function()
+	local Players = game:GetService("Players")
+	local Http = game:GetService("HttpService")
+	local P = Players.LocalPlayer
+	local Friend = Instance.new("Player")
+	Friend.UserId = 2
+	Friend.Parent = Players
+	local Stranger = Instance.new("Player")
+	Stranger.UserId = 8
+	Stranger.Parent = Players
+	print("is", P:IsFriendsWithAsync(2), P:IsFriendsWithAsync(" 3 "), P:IsFriendsWithAsync(6), P:IsFriendsWithAsync(4), P:IsFriendsWith(2.9), P:IsFriendsWithAsync(-2))
+	print("online", Http:JSONEncode(P:GetFriendsOnlineAsync()))
+	print("online counts", #P:GetFriendsOnlineAsync(1), #P:GetFriendsOnline(0), #P:GetFriendsOnlineAsync(500))
+	local InServer = P:GetFriendsInServerAsync()
+	print("server", #InServer, InServer[1] == Friend)
+	print("universe", Http:JSONEncode(P:GetFriendsInUniverseAsync()))
+	print("other", Friend:IsFriendsWithAsync(5), #Friend:GetFriendsInServerAsync(), pcall(Friend.GetFriendsOnlineAsync, Friend))
+end"#;
+    let dir = scratch("friends");
+    let file = dir.join("friends.json");
+    std::fs::write(&file, profile).unwrap();
+    let summary = run_harness("friends", harness, &["--client-profile", &file.to_string_lossy()]);
+    assert_eq!(summary["status"], "ok", "{summary}");
+    assert_lines(
+        &printed(&summary),
+        &[
+            "is true true true false true false",
+            r#"online [{"VisitorId":2,"UserName":"Bo","DisplayName":"Bo","IsOnline":true,"PlaceId":3,"GameId":"job-2","LocationType":4},{"VisitorId":3,"UserName":"Cy","DisplayName":"Cyan","IsOnline":true,"PlaceId":30}]"#,
+            "online counts 1 0 2",
+            "server 1 true",
+            r#"universe [{"User":2,"PlaceId":3,"GameId":"job-2"}]"#,
+            "other false 0 false GetFriendsOnline must be invoked on the Local Player",
+        ],
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A preset changes what it says it does: the phone's inputs and screen, the console's ten-foot interface and gamepad, the
 /// locale's ids and country, the China policy, the premium owner's membership and ownership
 #[test]

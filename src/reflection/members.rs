@@ -2682,6 +2682,8 @@ mod tests {
         let player = reflection.class_id("Player").unwrap();
         let own: Vec<&str> = reflection.own_methods(player).iter().map(|method| reflection.name(method.name)).collect();
         assert!(BEHAVIOR_ONLY_NAMES.iter().all(|name| own.contains(name)), "{own:?}");
+        // (the friends methods' Async names and the two GetFriendsIn methods, which a client and a server have)
+        assert!(["IsFriendsWithAsync", "GetFriendsOnlineAsync", "GetFriendsInServerAsync", "GetFriendsInUniverseAsync"].iter().all(|name| own.contains(name)), "{own:?}");
         assert!(reflection.members(player).any(|member| reflection.name(member.name()) == "LoadCharacter"));
         let Some(ReflectedMember::Property(source)) = reflection.member_by_name("ModuleScript", "Source") else { panic!("ModuleScript.Source") };
         assert_eq!((source.origin, &*source.script_type_name, source.read_only, source.scriptable), (MemberOrigin::Engine, "string", false, true));

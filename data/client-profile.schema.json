@@ -138,7 +138,7 @@
 					}
 				},
 				"friends": {
-					"description": "Player:IsFriendsWith, GetFriendsOnline, Players:GetFriendsAsync, the name lookups, UserService:GetUserInfosByUserIdsAsync",
+					"description": "Player:IsFriendsWith, GetFriendsOnline (and their Async forms), GetFriendsInServerAsync, GetFriendsInUniverseAsync, Players:GetFriendsAsync, the name lookups, UserService:GetUserInfosByUserIdsAsync",
 					"type": "array",
 					"items": {
 						"type": "object",
@@ -149,7 +149,8 @@
 							"name": { "type": "string", "minLength": 1 },
 							"displayName": { "type": "string" },
 							"online": { "type": "boolean" },
-							"presence": { "description": "Keys added to the friend's GetFriendsOnline entry as they are (Roblox's: LastLocation, PlaceId, GameId, LocationType, LastOnline)", "type": "object" }
+							"presence": { "description": "Keys added to the friend's GetFriendsOnline entry as they are (Roblox's: LastLocation, PlaceId, GameId, LocationType, LastOnline)", "type": "object" },
+							"universeId": { "description": "The universe (game.GameId) an online friend plays in: Player:GetFriendsInUniverseAsync lists the online friends whose universeId is the game's GameId, with the PlaceId and GameId of their presence", "$ref": "#/$defs/id" }
 						}
 					}
 				},

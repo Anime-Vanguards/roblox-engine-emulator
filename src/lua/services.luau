@@ -1012,9 +1012,9 @@ for Member, Answer in { IsInGroup = false, IsInGroupAsync = false, GetRankInGrou
 		if not Data.Groups[Id] then task.wait() Data.Groups[Id] = true end return Answer
 	end)
 end
-Method("Player", "IsFriendsWith", function()
-	return false
-end)
+-- Friends: IsFriendsWith, GetFriendsOnline, their Async names, GetFriendsInServerAsync and GetFriendsInUniverseAsync are at
+-- this file's end, where they move no line (warning traces name this file's lines). The offline player has no friends:
+-- false and empty lists, after the checks and the wait a client's question of the web makes
 Method("Player", "HasAppearanceLoaded", function()
 	return true
 end)
@@ -1028,9 +1028,9 @@ end)
 Method("Player", "GetJoinData", function()
 	return {}
 end)
-Method("Player", "GetFriendsOnline", function()
-	return {}
-end)
+-- (GetFriendsOnline and GetFriendsOnlineAsync are with the friends methods at this file's end: the local player's online
+-- friends, after the count's cast, the warning past 200 friends, the local player check and the wait for the web's answer;
+-- the lines here keep their place)
 Method("Player", "IsVerified", function()
 	return false
 end)
@@ -2906,5 +2906,137 @@ Method("MemoryStoreService", "GetDistributedCounter", function(_, Name)
 	StoreText(Name, 1)
 	error("MemoryStoreDistributedCounter is not enabled.", 0)
 end)
+
+-- Player's friends (measured in a 0.747 playing client and server: tools/parity/probes/loopback/player_friends.luau and
+-- player_friends_refused.luau, captured five and three times, alike). IsFriendsWith and IsFriendsWithAsync(userId), GetFriendsOnline and
+-- GetFriendsOnlineAsync(maxFriends = 200), GetFriendsInServerAsync() and GetFriendsInUniverseAsync() (which take no argument)
+-- check self first, then cast their argument (FriendUser, FriendCount). A count over 200 warns "GetFriendsOnline only returns
+-- a maximum of 200 friends", on a server too, and no more than 200 come back (Roblox's documentation). GetFriendsOnline and
+-- GetFriendsInUniverseAsync are the local player's alone: on a server, or for another player, they raise after the cast and
+-- the warning, and only then is a negative count refused. A negative user id answers false at once. Everything else is a
+-- question the player asks the web (FriendQuestion), its friends (IsFriendsWith by either name, GetFriendsInServerAsync) or its
+-- online friends (the other three). What the web answers is the profile's (profile.luau); the offline player has no friends
+-- (false, empty lists), where the sim's client, signed in to no account, gets "HTTP 401".
+local FriendsOnlineCap = 200
+local function FriendCastName(Value)
+	return if type(Value) == "thread" then "null" else CastName(Value)
+end
+-- A "User" argument (a user id): a number cut toward zero, NaN, the infinities and numbers out of int64's range -2^63; true 1,
+-- false 0; a string only a whole decimal with an optional "-" and spaces around it (R.Int64Argument's text)
+local function FriendUser(Value)
+	local Kind = type(Value)
+	if Value == nil then
+		error("Argument 1 missing or nil", 0)
+	elseif Kind == "boolean" then
+		return if Value then 1 else 0
+	elseif Kind == "number" then
+		if Value ~= Value or Value >= 2 ^ 63 or Value < -2 ^ 63 then
+			return -2 ^ 63
+		end
+		return if Value < 0 then math.ceil(Value) else math.floor(Value)
+	elseif Kind == "string" then
+		local Id = R.Int64Argument(Value, 1)
+		if Id then
+			return tonumber(Id)
+		end
+	end
+	error(`Unable to cast {FriendCastName(Value)} to User`, 0)
+end
+-- An "int" count: nil the default, a number rounded half away from zero, NaN, the infinities and numbers out of int's range
+-- -2^31; true 1, false 0; a string only a whole decimal in int's range
+local function FriendCount(Value)
+	local Kind = type(Value)
+	if Value == nil then
+		return FriendsOnlineCap
+	elseif Kind == "boolean" then
+		return if Value then 1 else 0
+	elseif Kind == "number" then
+		local Whole = if Value < 0 then -math.floor(-Value + 0.5) else math.floor(Value + 0.5)
+		return if Whole ~= Whole or Whole < -2 ^ 31 or Whole >= 2 ^ 31 then -2 ^ 31 else Whole
+	elseif Kind == "string" then
+		local Count = tonumber((R.Int64Argument(Value, 1)))
+		if Count and Count >= -2 ^ 31 and Count < 2 ^ 31 then
+			return Count
+		end
+	end
+	error(`Unable to cast {FriendCastName(Value)} to int`, 0)
+end
+-- A question the player asks the web about its friends (Kind "friends") or its online friends ("online"). Its first one of a
+-- kind waits for the answer, here a resumption; where the thread cannot yield it raises "thread is not yieldable", the question
+-- still asked, so a question of that kind in the same frame waits and one in a later frame has its answer. Later questions
+-- answer at once: the online friends for 30 s (Roblox's documentation: GetFriendsOnlineAsync's cache), the friends for good
+-- (its documentation: "results are cached"). Each player asks its own (a client asked again for another player's friends).
+local function FriendQuestion(Self, Kind)
+	local Data = Extra(Self)
+	local Asked = Data.FriendQuestions
+	if not Asked then
+		Asked = {}
+		Data.FriendQuestions = Asked
+	end
+	local Now = time()
+	local Question = Asked[Kind]
+	if Question == nil or (Kind == "online" and Now - Question.At >= 30) then
+		Question = { At = Now, Waiting = true }
+		Asked[Kind] = Question
+	end
+	if Question.Waiting then
+		if Question.At == Now then
+			if not coroutine.isyieldable() then
+				error("thread is not yieldable", 0)
+			end
+			task.wait()
+		end
+		Question.Waiting = false
+	end
+end
+local function FriendSelf(Self, Name)
+	if typeof(Self) ~= "Instance" or not Self:IsA("Player") then
+		error(`Expected ':' not '.' calling member function {Name}`, 0)
+	end
+end
+for _, Name in { "IsFriendsWith", "IsFriendsWithAsync" } do
+	Method("Player", Name, function(Self, UserId)
+		FriendSelf(Self, Name)
+		if FriendUser(UserId) < 0 then
+			return false
+		end
+		FriendQuestion(Self, "friends")
+		return false
+	end)
+end
+for _, Name in { "GetFriendsOnline", "GetFriendsOnlineAsync" } do
+	Method("Player", Name, function(Self, MaxFriends)
+		FriendSelf(Self, Name)
+		local Count = FriendCount(MaxFriends)
+		if Count > FriendsOnlineCap then
+			R.LogLine("warn", `GetFriendsOnline only returns a maximum of {FriendsOnlineCap} friends`, nil)
+		end
+		if Self ~= R.LocalPlayer() then
+			error("GetFriendsOnline must be invoked on the Local Player", 0)
+		elseif Count < 0 then
+			error("GetFriendsOnline maxFriends argument can not be negative", 0)
+		end
+		FriendQuestion(Self, "online")
+		return {}
+	end)
+end
+Method("Player", "GetFriendsInServerAsync", function(Self)
+	FriendSelf(Self, "GetFriendsInServerAsync")
+	FriendQuestion(Self, "friends")
+	return {}
+end)
+Method("Player", "GetFriendsInUniverseAsync", function(Self)
+	FriendSelf(Self, "GetFriendsInUniverseAsync")
+	if Self ~= R.LocalPlayer() then
+		error("GetFriendsInUniverse must be invoked on the Local Player", 0)
+	end
+	FriendQuestion(Self, "online")
+	return {}
+end)
+-- (profile.luau reads the cast arguments as these do)
+R.FriendUser = FriendUser
+R.FriendCount = function(Value)
+	return math.min(FriendCount(Value), FriendsOnlineCap)
+end
 
 return true

@@ -410,3 +410,83 @@ fn stubs_cast_their_arguments_from_the_last() {
         assert!(lines.iter().any(|line| line == warning), "{context:?}: {lines:?}");
     }
 }
+
+/// Player's friends methods for the offline player, who has no friends, as a 0.747 playing client and a server give them
+/// (tools/parity/probes/loopback/player_friends.luau, player_friends_refused.luau): all six are members on both sides; self is
+/// checked first, then the argument cast (a user id cut toward zero, NaN -2^63; a count rounded half away from zero, 2^31 -2^31);
+/// a negative user id answers false at once; a count over 200 warns; GetFriendsOnline and GetFriendsInUniverseAsync are the
+/// local player's alone (a server's never), checked before a negative count; a player's first question of a kind waits a
+/// resumption, refused where the thread cannot yield while it is still asked, and later ones answer at once
+#[test]
+fn players_friends_methods_answer_as_a_client_and_a_server_do_for_the_offline_player() {
+    let source = r##"
+        local Players = game:GetService("Players")
+        local Player = Players.LocalPlayer
+        if not Player then
+            Player = Instance.new("Player")
+            Player.UserId = 1
+            Player.Parent = Players
+        end
+        local Other = Instance.new("Player")
+        Other.UserId = 2
+        Other.Parent = Players
+        local function Show(Ok, Answer)
+            if type(Answer) == "table" then
+                Answer = "list" .. #Answer
+            end
+            return tostring(Answer) .. (if Ok then "" else "!")
+        end
+        local function Call(Self, Name, ...)
+            local Ran = false
+            task.defer(function() Ran = true end)
+            local Line = Show(pcall(Player[Name], Self, ...))
+            return Line .. (if Ran then " yielded" else "")
+        end
+        local function Refused(Name, ...)
+            local Args = table.pack(...)
+            local Line
+            table.sort({ 2, 1 }, function(A, B)
+                Line = Line or Show(pcall(Player[Name], Player, table.unpack(Args, 1, Args.n)))
+                return A < B
+            end)
+            return Line
+        end
+        print(Refused("IsFriendsWithAsync", -1), Refused("IsFriendsWithAsync", "x"), Refused("GetFriendsOnlineAsync", -1), Refused("IsFriendsWithAsync", 5), Refused("GetFriendsOnlineAsync", 5), Refused("GetFriendsInServerAsync"), Refused("GetFriendsInUniverseAsync"))
+        print(Call(Player, "IsFriendsWith", 6), Call(Player, "GetFriendsInServerAsync"))
+        task.wait()
+        print(Call(Player, "GetFriendsOnlineAsync"), Call(Player, "GetFriendsInUniverseAsync"), Call(Other, "IsFriendsWithAsync", 5), Call(Other, "IsFriendsWith", 5))
+        print(Call(Player, "IsFriendsWithAsync", 0 / 0), Call(Player, "IsFriendsWithAsync", "7.5"), Call(Player, "IsFriendsWithAsync", coroutine.create(print)), Call(Player, "IsFriendsWithAsync"), Call(workspace, "IsFriendsWithAsync", "x"))
+        print(Call(Player, "GetFriendsOnline", -0.5), Call(Player, "GetFriendsOnline", -0.4), Call(Player, "GetFriendsOnline", 2 ^ 31), Call(Player, "GetFriendsOnline", "2147483648"), Call(Player, "GetFriendsOnline", 201))
+        print(Call(Other, "GetFriendsOnline", "x"), Call(Other, "GetFriendsOnline", -1), Call(Other, "GetFriendsInUniverseAsync"), Call(Other, "GetFriendsInServerAsync"))
+        "##;
+    let local = "GetFriendsOnline must be invoked on the Local Player!";
+    let universe = "GetFriendsInUniverse must be invoked on the Local Player!";
+    let negative = "GetFriendsOnline maxFriends argument can not be negative!";
+    let refused = "thread is not yieldable!";
+    let casts = "print: false Unable to cast string to User! Unable to cast null to User! Argument 1 missing or nil! Expected ':' not '.' calling member function IsFriendsWithAsync!";
+    let warning = "warn: GetFriendsOnline only returns a maximum of 200 friends";
+    assert_eq!(
+        run(RunContext::Client, source, 0.2),
+        [
+            format!("print: false Unable to cast string to User! {negative} {refused} {refused} {refused} {refused}"),
+            "print: false yielded list0".into(),
+            "print: list0 list0 false yielded false".into(),
+            casts.into(),
+            warning.into(),
+            format!("print: {negative} list0 {negative} Unable to cast string to int! list0"),
+            format!("print: Unable to cast string to int! {local} {universe} list0"),
+        ]
+    );
+    assert_eq!(
+        run(RunContext::Server, source, 0.2),
+        [
+            format!("print: false Unable to cast string to User! {local} {refused} {local} {refused} {universe}"),
+            "print: false yielded list0".into(),
+            format!("print: {local} {universe} false yielded false"),
+            casts.into(),
+            warning.into(),
+            format!("print: {local} {local} {local} Unable to cast string to int! {local}"),
+            format!("print: Unable to cast string to int! {local} {universe} list0"),
+        ]
+    );
+}

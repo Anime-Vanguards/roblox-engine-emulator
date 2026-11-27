@@ -186,5 +186,23 @@
 			"line": "client: server time now: client minus server within a second true, not behind true",
 			"why": "ree's server and client start at the same virtual time and a message arrives in the client frame stepped after the server's, at the same frame time: the client's clocks are not later than the server's, as a real client's are"
 		}
+	],
+	"player_friends": [
+		{
+			"line": "server: reflection ",
+			"why": "ReflectionService:GetMethodsOfClass is not emulated (it reports itself): ree's member metadata (reflection/members.rs) lists the six as Player's engine members"
+		},
+		{
+			"line": "server: web ",
+			"why": "the real engine's player is signed in to no account, so the web refuses each question about its friends (HTTP 401); ree answers as for a player with no friends (false, empty lists), or from the client profile's friends"
+		},
+		{
+			"line": "client: reflection ",
+			"why": "ReflectionService:GetMethodsOfClass is not emulated (it reports itself): ree's member metadata (reflection/members.rs) lists the six as Player's engine members"
+		},
+		{
+			"line": "client: web ",
+			"why": "the real engine's player is signed in to no account, so the web refuses each question about its friends (HTTP 401); ree answers as for a player with no friends (false, empty lists), or from the client profile's friends"
+		}
 	]
 }
