@@ -481,7 +481,7 @@ pub fn load(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     r.set(
         "RunOwn",
         super::lua_fn(lua, move |lua, (target, callback, finished, args): (LuaValue, LuaFunction, LuaFunction, LuaMultiValue)| {
-            super::bindable::run_own(lua, &e, target, callback, finished, args)
+            super::bindable::run_own(lua, &e, target, callback, finished, args, true, &|| true)
         })?,
     )?;
     // BindableFunction:Invoke's copies of its callback's results and of its arguments (lua/bindable.rs), whose tables
@@ -490,6 +490,20 @@ pub fn load(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     r.set("Copied", super::wrapped(lua, engine, "Copied", move |lua, values| {
         let height = values.len();
         super::bindable::copied(lua, &e, values, height)
+    })?)?;
+    // A remote call's arguments after `Height`, converted as the network takes them, their tables' copy above the call's frame of
+    // `Height` values: what cannot be sent raises (`tables cannot be cyclic`), before any other check of the call
+    // (loopback/wire.rs; tools/parity/probes/remote_call_order.luau)
+    let e = engine.clone();
+    r.set("Sendable", super::wrapped(lua, engine, "Sendable", move |lua, values| {
+        let mut values = values.into_iter();
+        let height = match values.next() {
+            Some(LuaValue::Number(height)) => height as usize,
+            Some(LuaValue::Integer(height)) => height as usize,
+            _ => 0,
+        };
+        let values: Vec<LuaValue> = values.collect();
+        crate::loopback::wire::capture_all(lua, &e, &values, height).map(|_| LuaMultiValue::new()).or_else(super::bindable::Refused::raise)
     })?)?;
     let e = engine.clone();
     r.set("CopiedArguments", super::wrapped(lua, engine, "CopiedArguments", move |lua, values| {

@@ -1,12 +1,17 @@
 //! Remotes in a loopback run: RemoteEvent, UnreliableRemoteEvent and RemoteFunction carry calls between the two sides.
 //! Measured in a play session's two sides (Studio 0.747, tools/parity/probes/loopback; docs/engine.md, Log 2026-11-19):
 //!
-//! - Each side calls only its own members: on a client `FireClient can only be called from the server` (before the
-//!   player argument is looked at), `FireAllClients ...`, `InvokeClient ...` (after it: `Argument 1 is invalid: expected
-//!   'Player' instance type`), `OnServerEvent can only be used on the server` at Connect (the member reads), `OnServerInvoke
-//!   can only be implemented on the server`; a server's are server.luau's (FireServer, InvokeServer) and `OnClientEvent can
-//!   only be used on the client`, `OnClientInvoke can only be implemented on the client`. A parentless remote refuses
-//!   nothing (and sends nothing).
+//! - A call converts its arguments first: one that cannot be sent (a table holding itself: `tables cannot be cyclic`) raises
+//!   before anything else is looked at, on either side, for a parentless remote too. Then a parentless remote refuses
+//!   nothing and sends nothing (an invoke waits for good, even on the wrong side). Each side calls only its own members: on a
+//!   client `FireClient can only be called from the server` (before the player argument is looked at), `FireAllClients ...`,
+//!   `InvokeClient ...` (after it: `Argument 1 is invalid: expected 'Player' instance type`), on a server `FireServer can only
+//!   be called from the client` and `InvokeServer ...`, a server's FireClient then checks its player (`FireClient: player
+//!   argument must be a Player object`); an invoke refuses a thread that cannot yield last (`thread is not yieldable`).
+//!   Connecting `OnServerEvent` on a client raises `OnServerEvent can only be used on the server` (the member reads), setting
+//!   `OnServerInvoke` `OnServerInvoke can only be implemented on the server`, and on a server `OnClientEvent can only be used
+//!   on the client`, `OnClientInvoke can only be implemented on the client`. Measured, Studio 0.747, a play session's server
+//!   and client and plain ones (tools/parity/probes/remote_call_order.luau, loopback/remote_call_order.luau).
 //! - An event reaches the other side's handlers at its receive point (deferred: after the legacy wait() resumptions);
 //!   OnServerEvent gets the player first. A remote the receiver lacks (a client-made one, one the server keeps in
 //!   ServerStorage) takes nothing and logs nothing. Events reaching a remote nothing listens to wait on it: the first
@@ -17,12 +22,14 @@
 //!   warning `Unreliable Event dropped as its payload is too large. Consider reducing the total size of the arguments.
 //!   Payload went over by: N bytes`; its events arrive after the frame's reliable messages. ree delivers every one, in
 //!   order (no loss is simulated).
-//! - RemoteFunction: the caller yields; the callback runs on a thread of its own when the call arrives (called, not
-//!   deferred: before the legacy wait() resumptions), or once it is set; its results go back as the arguments do, its
-//!   error as a string with its script and line (`error(x, 0)` without, a table as an empty string), and an error it raises
-//!   before it first yields is logged on its own side as well, as an uncaught error is (loopback.luau Run). A call to a remote
-//!   the other side lacks waits for good. InvokeClient of a harness's fake player waits for that player to leave, as in a
-//!   server run.
+//! - RemoteFunction: the caller yields; the callback runs when the call arrives (called, not deferred: before the legacy
+//!   wait() resumptions), or once it is set, as a BindableFunction's does (lua/bindable.rs run_own): at the bottom of a thread
+//!   of its own, the thread of its last run on that remote when that run returned, with the memory category of the thread that
+//!   set it as that thread has it now; its results go back as the arguments do, its error as a string with its script and line
+//!   (`error(x, 0)` without, a table as an empty string), and an error it raises before it first yields is logged on its own
+//!   side as well, as an uncaught error is (measured, Studio 0.747: loopback/remote_callback_errors.luau,
+//!   loopback/remote_callback_threads.luau). A call to a remote the other side lacks waits for good. InvokeClient of a
+//!   harness's fake player waits for that player to leave, as in a server run.
 
 use std::{cell::RefCell, rc::Rc};
 
@@ -62,8 +69,6 @@ pub struct Remotes {
     queued: RefCell<FxHashMap<SignalId, Queue>>,
     /// Invokes waiting for the callback to be set, by remote
     waiting: RefCell<FxHashMap<InstanceId, Vec<WaitingInvoke>>>,
-    /// loopback.luau's Run and the Done it calls
-    run: RefCell<Option<(LuaFunction, LuaFunction)>>,
 }
 
 impl Remotes {
@@ -73,7 +78,6 @@ impl Remotes {
         self.free.borrow_mut().clear();
         self.queued.borrow_mut().clear();
         self.waiting.borrow_mut().clear();
-        *self.run.borrow_mut() = None;
     }
 
     fn hold(&self, thread: LuaThread, remote: InstanceId) -> u32 {
@@ -128,34 +132,37 @@ pub fn install(lua: &Lua, engine: &Rc<Engine>, side: Side) -> LuaResult<()> {
     for &(unreliable, class) in &classes {
         if let Some(fire_server) = name("FireServer") {
             behaviors.add_method(class, fire_server, crate::services::method(move |lua, engine, id, args| {
+                let captured = captured(lua, engine, &args, 1)?;
                 if parentless(engine, id) {
                     return Ok(none());
                 }
                 if side == Side::Server {
                     return raise("FireServer can only be called from the client");
                 }
-                send_event(lua, engine, id, &args.0.iter().skip(1).cloned().collect::<Vec<_>>(), unreliable, args.0.len())
+                send_event(engine, id, captured, unreliable)
             }));
         }
         if let Some(fire_client) = name("FireClient") {
             behaviors.add_method(class, fire_client, crate::services::method(move |lua, engine, id, args| {
+                let captured = captured(lua, engine, &args, 2)?;
+                if parentless(engine, id) {
+                    return Ok(none());
+                }
                 if side == Side::Client {
-                    if parentless(engine, id) {
-                        return Ok(none());
-                    }
                     return raise("FireClient can only be called from the server");
                 }
                 let Some(player) = is_player(engine, args.get(1)) else {
                     return raise("FireClient: player argument must be a Player object");
                 };
-                if parentless(engine, id) || !is_loopback_player(engine, player) {
+                if !is_loopback_player(engine, player) {
                     return Ok(none());
                 }
-                send_event(lua, engine, id, &args.0.iter().skip(2).cloned().collect::<Vec<_>>(), unreliable, args.0.len())
+                send_event(engine, id, captured, unreliable)
             }));
         }
         if let Some(fire_all) = name("FireAllClients") {
             behaviors.add_method(class, fire_all, crate::services::method(move |lua, engine, id, args| {
+                let captured = captured(lua, engine, &args, 1)?;
                 if parentless(engine, id) {
                     return Ok(none());
                 }
@@ -166,7 +173,7 @@ pub fn install(lua: &Lua, engine: &Rc<Engine>, side: Side) -> LuaResult<()> {
                 if !joined {
                     return Ok(none());
                 }
-                send_event(lua, engine, id, &args.0.iter().skip(1).cloned().collect::<Vec<_>>(), unreliable, args.0.len())
+                send_event(engine, id, captured, unreliable)
             }));
         }
     }
@@ -178,15 +185,6 @@ pub fn install(lua: &Lua, engine: &Rc<Engine>, side: Side) -> LuaResult<()> {
     })?;
     let players = crate::services::get_service(engine, engine.world().game, "Players").map_err(|_| LuaError::runtime("no Players"))?;
     let chunk = crate::lua::modules::load_engine_luau(lua, LOOPBACK, "=rur.loopback", None)?;
-    // (a callback's error raised before it yielded, logged as a client logs it: loopback.luau Run, scheduler.rs)
-    let report = {
-        let engine = engine.clone();
-        lua.create_function(move |lua, problem: LuaValue| {
-            crate::scheduler::report_callback_error(lua, &engine, &problem);
-            Ok(())
-        })?
-    };
-    let create: LuaFunction = lua.globals().get::<LuaTable>("coroutine")?.get("create")?;
     // (a thread the chunk parked, resumed as task.spawn resumes one, with no thread price: the call that parked it is priced)
     let resume = {
         let engine = engine.clone();
@@ -195,7 +193,7 @@ pub fn install(lua: &Lua, engine: &Rc<Engine>, side: Side) -> LuaResult<()> {
             Ok(())
         })?
     };
-    let exports: LuaTable = crate::cost::engine_luau(lua, chunk)?.call((call, instance_value(lua, engine, players)?, report, create, resume))?;
+    let exports: LuaTable = crate::cost::engine_luau(lua, chunk)?.call((call, instance_value(lua, engine, players)?, resume))?;
     if let Some(function) = reflection.class_id("RemoteFunction") {
         let mut behaviors = engine.behaviors.borrow_mut();
         for member in ["InvokeServer", "InvokeClient"] {
@@ -203,13 +201,6 @@ pub fn install(lua: &Lua, engine: &Rc<Engine>, side: Side) -> LuaResult<()> {
                 behaviors.add_lua_method(function, member_name, exports.get(member)?);
             }
         }
-    }
-    let done = {
-        let engine = engine.clone();
-        lua.create_function(move |lua, (call, ok, results): (u32, bool, LuaMultiValue)| answered(lua, &engine, call, ok, results))?
-    };
-    if let Some(endpoint) = engine.loopback() {
-        *endpoint.remotes.run.borrow_mut() = Some((exports.get("Run")?, done));
     }
     engine.clear_member_cache();
     Ok(())
@@ -219,15 +210,17 @@ fn is_loopback_player(engine: &Engine, player: InstanceId) -> bool {
     engine.loopback().is_some_and(|end| end.bridge.player.get().is_some_and(|(server, _)| server == player) && end.bridge.joined.get() && !end.bridge.left.get())
 }
 
-/// FireServer / FireClient / FireAllClients: the arguments as the call left them (wire.rs), into the side's stream; an
-/// unreliable call over its ceiling is dropped with the sender's warning. `height`: the call's frame (`self`, the player,
-/// the arguments), which its tables' copy starts above (wire.rs)
-fn send_event(lua: &Lua, engine: &Rc<Engine>, remote: InstanceId, arguments: &[LuaValue], unreliable: bool, height: usize) -> Ret {
+/// A call's arguments past the first `skip` (`self`, the player) as the network takes them (wire.rs), its tables' copy starting
+/// above the call's frame (`self`, the player, the arguments); what cannot be sent raises
+fn captured(lua: &Lua, engine: &Engine, args: &Args, skip: usize) -> Result<Box<[Wire]>, Flow> {
+    let arguments: Vec<LuaValue> = args.0.iter().skip(skip).cloned().collect();
+    wire::capture_all(lua, engine, &arguments, args.0.len()).or_else(bindable::Refused::raise)
+}
+
+/// FireServer / FireClient / FireAllClients: the arguments as the call left them ([`captured`]), into the side's stream; an
+/// unreliable call over its ceiling is dropped with the sender's warning
+fn send_event(engine: &Rc<Engine>, remote: InstanceId, args: Box<[Wire]>, unreliable: bool) -> Ret {
     let Some(endpoint) = engine.loopback() else { return Ok(none()) };
-    let args = match wire::capture_all(lua, engine, arguments, height) {
-        Ok(args) => args,
-        Err(refused) => return refused.raise(),
-    };
     if unreliable {
         let size = wire::encoded_size(&args);
         if size > wire::UNRELIABLE_LIMIT {
@@ -263,9 +256,11 @@ fn send(engine: &Engine, endpoint: &Rc<Endpoint>, message: Msg) {
 }
 
 /// loopback.luau's Call(remote, toServer, player, ...): InvokeServer or InvokeClient; the call goes out and the caller yields
-/// until its answer; ("fake") for a harness's player. A thread that cannot yield raises `thread is not yieldable` after
-/// InvokeClient's player check (a nil player: "Argument 1 missing or nil") and before the side checks, and sends nothing (measured in a 0.747 playing client and server,
-/// tools/parity/probes/yield_refused.luau; its order against an argument that cannot be sent is not measured)
+/// until its answer; ("fake") for a harness's player. The arguments are converted first (what cannot be sent raises), then
+/// InvokeClient checks its player (a nil one: "Argument 1 missing or nil"), a remote in the DataModel the side, and a thread
+/// that cannot yield raises `thread is not yieldable` last; a parentless remote's call sends nothing and waits for good
+/// (measured in a 0.747 play session's client and server: tools/parity/probes/loopback/remote_call_order.luau,
+/// yield_refused.luau)
 fn invoke(lua: &Lua, engine: &Rc<Engine>, side: Side, args: Args) -> Ret {
     let Some(endpoint) = engine.loopback() else { return raise("not a loopback run") };
     let Some(remote) = crate::lua::instance_id(args.get(0)) else { return raise("Expected ':' not '.' calling member function InvokeServer") };
@@ -273,28 +268,28 @@ fn invoke(lua: &Lua, engine: &Rc<Engine>, side: Side, args: Args) -> Ret {
     // (the call's frame as Roblox's: `self` and the arguments, the player among them for InvokeClient; wire.rs)
     let skip = 3;
     let height = args.0.len().saturating_sub(skip) + if client_call { 1 } else { 2 };
+    let arguments: Vec<LuaValue> = args.0.iter().skip(skip).cloned().collect();
+    let captured = wire::capture_all(lua, engine, &arguments, height).or_else(bindable::Refused::raise)?;
     let player = if client_call { None } else { is_player(engine, args.get(2)) };
     if !client_call && player.is_none() {
         return raise(if args.get(2).is_nil() { "Argument 1 missing or nil" } else { "Argument 1 is invalid: expected 'Player' instance type" });
     }
-    crate::lua::refuse_unyieldable(&lua.current_thread(), crate::lua::NOT_YIELDABLE)?;
-    if client_call {
-        if side == Side::Server {
-            return raise("InvokeServer can only be called from the client");
-        }
-    } else if let Some(player) = player {
-        if side == Side::Client {
-            return raise("InvokeClient can only be called from the server");
-        }
-        if !is_loopback_player(engine, player) {
-            return Ok(values([LuaValue::String(lua.create_string("fake")?)]));
-        }
+    let parented = !parentless(engine, remote);
+    if parented && client_call && side == Side::Server {
+        return raise("InvokeServer can only be called from the client");
     }
-    let arguments: Vec<LuaValue> = args.0.iter().skip(skip).cloned().collect();
-    let captured = match wire::capture_all(lua, engine, &arguments, height) {
-        Ok(captured) => captured,
-        Err(refused) => return refused.raise(),
-    };
+    if parented && !client_call && side == Side::Client {
+        return raise("InvokeClient can only be called from the server");
+    }
+    crate::lua::refuse_unyieldable(&lua.current_thread(), crate::lua::NOT_YIELDABLE)?;
+    if !parented {
+        return Err(Flow::Yield);
+    }
+    if let Some(player) = player
+        && !is_loopback_player(engine, player)
+    {
+        return Ok(values([LuaValue::String(lua.create_string("fake")?)]));
+    }
     let call = endpoint.remotes.hold(lua.current_thread(), remote);
     send(engine, &endpoint, Msg::Invoke { remote, call, args: captured });
     Err(Flow::Yield)
@@ -423,16 +418,13 @@ fn callback_name(side: Side) -> &'static str {
     }
 }
 
+/// The callback of an invoke that arrived, as a client runs it (lua/bindable.rs run_own, as a resumption of its own: the receive
+/// point is no script's); its outcome goes back to the caller ([`answered`]) when it ends
 fn run_callback(lua: &Lua, engine: &Rc<Engine>, endpoint: &Rc<Endpoint>, remote: InstanceId, call: u32, args: &[Wire]) -> LuaResult<()> {
     let Some(name) = engine.reflection.name_id(callback_name(endpoint.side)) else { return Ok(()) };
     let Some(LuaValue::Function(callback)) = engine.state.borrow().dom.at(remote).callback(name).cloned() else { return Ok(()) };
-    let Some((run, done)) = endpoint.remotes.run.borrow().clone() else { return Ok(()) };
     let map = mapper(engine, endpoint);
-    let mut arguments = LuaMultiValue::with_capacity(args.len() + 4);
-    arguments.push_back(LuaValue::Function(callback));
-    arguments.push_back(LuaValue::Function(done));
-    // (a Number: Luau's numbers are doubles, and mlua pushes its Integer as one, which is 32 bits on wasm32)
-    arguments.push_back(LuaValue::Number(f64::from(call)));
+    let mut arguments = LuaMultiValue::with_capacity(args.len() + 1);
     if endpoint.side == Side::Server {
         let player = endpoint.bridge.player.get().map(|(server, _)| server);
         arguments.push_back(match player {
@@ -443,12 +435,26 @@ fn run_callback(lua: &Lua, engine: &Rc<Engine>, endpoint: &Rc<Endpoint>, remote:
     for arg in args {
         arguments.push_back(wire::rebuilt(lua, engine, arg, &map)?);
     }
-    let thread = lua.create_thread(run)?;
-    crate::scheduler::resume(lua, engine, &thread, arguments);
-    Ok(())
+    let finished = {
+        let engine = engine.clone();
+        lua.create_function(move |lua, outcome: LuaTable| {
+            let ok: bool = outcome.raw_get(1)?;
+            let count: usize = outcome.raw_get::<Option<usize>>("n")?.unwrap_or(1);
+            let results: LuaMultiValue = (2..=count).map(|index| outcome.raw_get::<LuaValue>(index)).collect::<LuaResult<_>>()?;
+            answered(lua, &engine, call, ok, results)
+        })?
+    };
+    // (a run that returns after the remote's callback was written over keeps no thread for that function: measured, the callback
+    // set back after another one, set from inside its own run, ran on a new thread)
+    let current = {
+        let engine = engine.clone();
+        let callback = callback.clone();
+        move || engine.state.borrow().dom.get(remote).and_then(|instance| instance.callback(name)).is_some_and(|value| matches!(value, LuaValue::Function(held) if *held == callback))
+    };
+    bindable::run_own(lua, engine, instance_value(lua, engine, remote)?, callback, finished, arguments, false, &current)
 }
 
-/// loopback.luau's Done: a callback's outcome goes back to its caller (results as arguments go, an error as its text)
+/// A callback's outcome goes back to its caller (results as arguments go, an error as its text)
 fn answered(lua: &Lua, engine: &Rc<Engine>, call: u32, ok: bool, mut results: LuaMultiValue) -> LuaResult<()> {
     let Some(endpoint) = engine.loopback() else { return Ok(()) };
     let result = if ok {

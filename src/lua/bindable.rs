@@ -528,8 +528,13 @@ pub(crate) fn callback_set(lua: &Lua, value: &LuaValue) -> LuaResult<()> {
 ///
 /// Its outcome, packed as `table.pack(xpcall(...))` packs one, goes to `Finished`: now when it returns or raises without
 /// yielding, else when its thread ends (scheduler.rs ThreadEnd::Invoke). A callback that coroutine.yields never ends, so its
-/// caller waits for ever, as a client's does.
-pub(crate) fn run_own(lua: &Lua, engine: &Rc<Engine>, target: LuaValue, callback: LuaFunction, finished: LuaFunction, args: LuaMultiValue) -> LuaResult<()> {
+/// caller waits for ever, as a client's does. A RemoteFunction's callback (OnServerInvoke, OnClientInvoke) runs by the same
+/// rules, its `target` the remote (measured, a 0.747 play session's server and client:
+/// tools/parity/probes/loopback/remote_callback_threads.luau); `nested`: run inside the resumption running now (an Invoke from a
+/// script), else as a resumption of its own (a remote's call at the receive point); `current`: whether `target` still holds
+/// `callback` when a run returns (a remote's run keeps its thread only then).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn run_own(lua: &Lua, engine: &Rc<Engine>, target: LuaValue, callback: LuaFunction, finished: LuaFunction, args: LuaMultiValue, nested: bool, current: &dyn Fn() -> bool) -> LuaResult<()> {
     let (setters, kept) = callback_threads(lua)?;
     let held: Option<LuaTable> = kept.raw_get(&callback)?;
     let reused = match &held {
@@ -548,15 +553,20 @@ pub(crate) fn run_own(lua: &Lua, engine: &Rc<Engine>, target: LuaValue, callback
     };
     let setter: Option<LuaThread> = setters.raw_get(&callback)?;
     super::globals::memory_category_from(lua, &thread, setter.as_ref());
-    match crate::scheduler::resume_own(lua, engine, &thread, args, crate::scheduler::Report::Callback) {
+    let ran = if nested { crate::scheduler::resume_own(lua, engine, &thread, args, crate::scheduler::Report::Callback) } else { crate::scheduler::resume_apart(lua, engine, &thread, args, crate::scheduler::Report::Callback) };
+    match ran {
         crate::scheduler::Ran::Yielded => {
             engine.state.borrow_mut().sched.await_end(&thread, crate::scheduler::ThreadEnd::Invoke(finished));
             Ok(())
         }
         outcome => {
             if let crate::scheduler::Ran::Returned(_) = outcome {
-                // (dead, its stack empty: the next run goes on it)
+                // (dead, its stack empty: it reads "dead", and the next run may go on it)
                 unsafe { mlua::ffi::lua_settop(thread.state(), 0) };
+            }
+            if let crate::scheduler::Ran::Returned(_) = outcome
+                && current()
+            {
                 let held = match held {
                     Some(held) => held,
                     None => {

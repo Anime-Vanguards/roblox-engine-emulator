@@ -35,14 +35,6 @@
 		{
 			"line": "refused GetTranslatorForLocaleAsync",
 			"why": "LocalizationService:GetTranslatorForLocaleAsync casts a non-string locale and waits for the web in a client and a server (and refuses where the thread cannot yield); ree answers a translator at once"
-		},
-		{
-			"line": "refused Invoke",
-			"why": "a remote call with a table inside itself raises `tables cannot be cyclic` before the refusal to wait, the player check and the side checks (a server's InvokeServer says it is for clients); ree checks the cycle after them or not at all"
-		},
-		{
-			"line": "Fire",
-			"why": "a remote call with a table inside itself raises `tables cannot be cyclic` before the refusal to wait, the player check and the side checks (a server's InvokeServer says it is for clients); ree checks the cycle after them or not at all"
 		}
 	],
 	"assembly_motion": [

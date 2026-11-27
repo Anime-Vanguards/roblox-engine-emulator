@@ -348,13 +348,13 @@ fn a_server_runs_remotes_to_clients_report_themselves() {
         "Server",
         r#"return function(Context)
 	local Players = game:GetService("Players")
-	local Remote = Instance.new("RemoteEvent")
+	local Remote = Instance.new("RemoteEvent") Remote.Parent = game:GetService("ReplicatedStorage") -- (a parentless one does nothing)
 	Remote:FireAllClients(1)
 	local Player = Instance.new("Player")
 	Player.Parent = Players
 	Remote:FireClient(Player, 2)
 	Remote:FireAllClients(3)
-	local Function = Instance.new("RemoteFunction")
+	local Function = Instance.new("RemoteFunction") Function.Parent = game:GetService("ReplicatedStorage")
 	task.spawn(function() print(pcall(Function.InvokeClient, Function, Player, 1)) end)
 	task.wait(0.05)
 	Player.Parent = nil
@@ -363,7 +363,7 @@ end
 "#,
         &["--run-context", "server"],
     );
-    assert_eq!(other_lines(&summary), ["print: false Player Player disconnected during remote call to RemoteFunction"], "{summary}");
+    assert_eq!(other_lines(&summary), ["print: false Player Player disconnected during remote call to ReplicatedStorage.RemoteFunction"], "{summary}");
     let at = |line: u32| format!("ReplicatedStorage.RURFixtures.Server:{line}");
     assert_eq!(
         summary["unemulated"],

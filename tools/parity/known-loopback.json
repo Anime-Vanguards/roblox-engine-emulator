@@ -181,12 +181,6 @@
 			"why": "the client's copy follows the server's stored value (a store-rule line above) or stores a received Attachment CFrame with other last bits (the client's reciprocal square root, unmodelled: lua/instance.rs attachment_rotation); every remote road, CFrameValue, pivot and attribute matches"
 		}
 	],
-	"remote_latency": [
-		{
-			"line": "client: InvokeServer round trip: 60 answered, fewest frames 1",
-			"why": "an InvokeServer from a Heartbeat:Wait() thread returns a frame later in a real session than ree's next-frame delivery gives (an event sent alongside it echoes in that frame too there); not explained by the measurements yet"
-		}
-	],
 	"server_time": [
 		{
 			"line": "client: server time now: client minus server within a second true, not behind true",

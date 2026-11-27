@@ -1433,6 +1433,12 @@ pub(crate) fn resume_own(lua: &Lua, engine: &Rc<Engine>, thread: &LuaThread, arg
     resume_core(lua, engine, thread, args, false, report, true, true).unwrap_or(Ran::Yielded)
 }
 
+/// [`resume_own`] as a resumption of the scheduler's own (its build placement, nesting depth and script timeout), for a callback
+/// the engine runs outside any script's resumption (a RemoteFunction's at the receive point: loopback/remotes.rs)
+pub(crate) fn resume_apart(lua: &Lua, engine: &Rc<Engine>, thread: &LuaThread, args: LuaMultiValue, report: Report) -> Ran {
+    resume_core(lua, engine, thread, args, false, report, true, false).unwrap_or(Ran::Yielded)
+}
+
 /// `check_ready`: look at the thread first (`resume`), or trust the caller's [`can_resume`] (`resume_ready`). A thread whose end
 /// something waits for (Scheduler::await_end) hands its outcome there once it returns or raises.
 fn resume_thread(lua: &Lua, engine: &Rc<Engine>, thread: &LuaThread, args: LuaMultiValue, check_ready: bool) -> bool {

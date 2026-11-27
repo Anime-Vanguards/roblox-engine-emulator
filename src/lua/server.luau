@@ -1347,25 +1347,25 @@ local function IsPlayer(Value)
 end
 
 for _, Class in { "RemoteEvent", "UnreliableRemoteEvent" } do
-	Method(Class, "FireClient", function(_, Player)
-		if not IsPlayer(Player) then
-			Raise("FireClient: player argument must be a Player object")
+	Method(Class, "FireClient", function(Self, Player, ...)
+		R.Sendable(select("#", ...) + 2, ...) if Self.Parent and not IsPlayer(Player) then -- (the arguments first; a parentless remote checks nothing: remote_call_order.luau)
+			error("FireClient: player argument must be a Player object", 0)
 		end
-		Missing(Class, "FireClient")
+		if Self.Parent then Missing(Class, "FireClient") end
 	end)
-	Method(Class, "FireAllClients", function() if #R.Children(Players) > 0 then Missing(Class, "FireAllClients") end end) -- (with no player, it reaches no one, as in a client)
-	Method(Class, "FireServer", function()
-		Raise("FireServer can only be called from the client")
+	Method(Class, "FireAllClients", function(Self, ...) R.Sendable(select("#", ...) + 1, ...) if Self.Parent and #R.Children(Players) > 0 then Missing(Class, "FireAllClients") end end) -- (with no player, it reaches no one, as in a client)
+	Method(Class, "FireServer", function(Self, ...)
+		R.Sendable(select("#", ...) + 1, ...) if Self.Parent then error("FireServer can only be called from the client", 0) end
 	end)
 end
-Method("RemoteFunction", "InvokeServer", function()
-	if not coroutine.isyieldable() then error("thread is not yieldable", 0) end Raise("InvokeServer can only be called from the client") -- (the refusal first: tools/parity/probes/yield_refused.luau)
+Method("RemoteFunction", "InvokeServer", function(Self, ...)
+	R.Sendable(select("#", ...) + 1, ...) if Self.Parent then error("InvokeServer can only be called from the client", 0) end if not coroutine.isyieldable() then error("thread is not yieldable", 0) end return coroutine.yield() -- (the arguments, the side, then the refusal; a parentless one waits: remote_call_order.luau)
 end)
-Method("RemoteFunction", "InvokeClient", function(Self, Player)
-	if Player == nil then error("Argument 1 missing or nil", 0) elseif not IsPlayer(Player) then -- (nil, then the refusal: tools/parity/probes/yield_refused.luau)
-		Raise("InvokeClient: player argument must be a Player object")
+Method("RemoteFunction", "InvokeClient", function(Self, Player, ...)
+	R.Sendable(select("#", ...) + 2, ...) if Player == nil then error("Argument 1 missing or nil", 0) elseif not IsPlayer(Player) then -- (the arguments, the player, then the refusal: remote_call_order.luau)
+		error("Argument 1 is invalid: expected 'Player' instance type", 0)
 	end
-	if not coroutine.isyieldable() then error("thread is not yieldable", 0) end if Player.Parent == Players then Missing("RemoteFunction", "InvokeClient")
+	if not coroutine.isyieldable() then error("thread is not yieldable", 0) end if not Self.Parent then return coroutine.yield() end if Player.Parent == Players then Missing("RemoteFunction", "InvokeClient")
 		local Thread = coroutine.running()
 		local Connection
 		Connection = Players.PlayerRemoving:Connect(function(Leaving)

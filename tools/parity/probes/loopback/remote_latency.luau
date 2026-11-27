@@ -2,8 +2,10 @@
 -- T1: how many of its own frames a side waits for an answer: a RemoteEvent echoed by the other side's handler, from
 -- either side, and a RemoteFunction's round trip, each 60 times. A side counts its own frames at PreSimulation (the two
 -- sides' frames are never compared; a count at PreSimulation is the same in any Heartbeat handler, whatever order the
--- handlers run in), and the sends go out from a Heartbeat handler, one a frame. The fewest frames are printed: a real
--- session's spread varies with the machine's load (the most frames do too), the fewest is the link's own latency.
+-- handlers run in), and the sends go out from a Heartbeat handler, one a frame. Printed: whether the fewest frames are at
+-- most one. A real session's counts follow its two processes' timing and the machine's load (an event's round trip and an
+-- invoke's alike read 0 to 2 frames, from any thread), so the fewest is no constant: loopback/remote_return_order.luau has
+-- what holds (an answer arrives with the events sent beside it).
 local Storage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local COUNT = 60
@@ -82,7 +84,7 @@ local Deadline = os.clock() + 30
 while Arrived < COUNT and os.clock() < Deadline do
 	task.wait()
 end
-print("server-origin event round trip: " .. Arrived .. " back, fewest frames " .. Fewest(Back))
+print("server-origin event round trip: " .. Arrived .. " back, fewest frames at most 1: " .. tostring(Fewest(Back) <= 1))
 P.meet("server done")
 P.meet("paired done")
 local List = {}
@@ -120,7 +122,7 @@ local Deadline = os.clock() + 30
 while Arrived < COUNT and os.clock() < Deadline do
 	task.wait()
 end
-print("client-origin event round trip: " .. Arrived .. " back, fewest frames " .. Fewest(Back))
+print("client-origin event round trip: " .. Arrived .. " back, fewest frames at most 1: " .. tostring(Fewest(Back) <= 1))
 P.meet("server done")
 -- invokes, one after another, each from a Heartbeat handler's thread
 local Frames = {}
@@ -132,7 +134,7 @@ for Call_ = 1, COUNT do
 		table.insert(Frames, Frame() - Start)
 	end
 end
-print("InvokeServer round trip: " .. #Frames .. " answered, fewest frames " .. Fewest(Frames))
+print("InvokeServer round trip: " .. #Frames .. " answered, fewest frames at most 1: " .. tostring(Fewest(Frames) <= 1))
 -- an event and an invoke sent together from one Heartbeat: the frames between the event's echo and the invoke's return
 local Paired = Storage:WaitForChild("Paired")
 local PairedCall = Storage:WaitForChild("PairedCall")

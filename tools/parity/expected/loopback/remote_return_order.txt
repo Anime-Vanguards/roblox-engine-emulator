@@ -1,0 +1,6 @@
+# engine: Roblox Studio 0.747.0.7471481, a headless play session of one server and one client in processes of their own (the server's half a server Script from the server's start, the client's half a job in the client; script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-27
+# repeated: 2 captures, the same lines
+server: host: event handler minus callback (rows 1-2): 0x60
+server: server caller event+invoke return-echo: 0x30 ; invoke+event return-echo: 0x30 ; defer-marker return-marker: 0x30 ; inside-marker return-marker: 0x30
+client: client caller event+invoke return-echo: 0x30 ; invoke+event return-echo: 0x30 ; defer-marker return-marker: 0x30 ; inside-marker return-marker: 0x30

@@ -184,14 +184,14 @@ fn calls_a_script_may_not_make_where_it_runs() {
         assert(select(2, pcall(task.desynchronize)) == "task.desynchronize() may only be called from a script that is a descendant of an Actor")
         local Ok, Message = pcall(function() return game:GetService("RunService").Heartbeat:ConnectParallel(function() end) end)
         assert(not Ok and Message == "Event.ConnectParallel: The calling script must be rooted under an Actor.", Message)
-        local Remote = Instance.new("RemoteFunction")
+        local Remote = Instance.new("RemoteFunction") Remote.Parent = workspace -- (a parentless one refuses nothing on the wrong side)
         local Player = game:GetService("Players").LocalPlayer
         assert(select(2, pcall(Remote.InvokeClient, Remote, nil)) == "Argument 1 missing or nil")
         assert(select(2, pcall(Remote.InvokeClient, Remote, workspace)) == "Argument 1 is invalid: expected 'Player' instance type")
         assert(select(2, pcall(Remote.InvokeClient, Remote, Player)) == "InvokeClient can only be called from the server")
         local Refused
         table.sort({ 2, 1 }, function(A, B)
-            Refused = Refused or select(2, pcall(Remote.InvokeClient, Remote, Player))
+            Refused = Refused or select(2, pcall(Remote.InvokeClient, Instance.new("RemoteFunction"), Player))
             return A < B
         end)
         assert(Refused == "thread is not yieldable", Refused)

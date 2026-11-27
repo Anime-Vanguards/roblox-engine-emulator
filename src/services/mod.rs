@@ -1790,11 +1790,30 @@ fn install_remotes_and_http(behaviors: &mut Behaviors, reflection: &Reflection) 
         }));
     }
 
-    // Remotes never reach a server offline (a client run's: a server run's and a loopback run's are their own), so FireServer
-    // reports itself; Bindables fire locally
+    // A client run's remote events (a server run's and a loopback run's are their own): a call converts its arguments first (a
+    // table holding itself raises `tables cannot be cyclic`), then a parentless remote does nothing, FireServer reports itself (no
+    // server answers offline) and FireClient and FireAllClients raise that they are the server's (measured, Studio 0.747, a
+    // playing client: tools/parity/probes/remote_call_order.luau); Bindables fire locally
     for remote in ["RemoteEvent", "UnreliableRemoteEvent"] {
-        if let (Some(c), Some(n)) = (class(reflection, remote), name(reflection, "FireServer")) {
-            behaviors.add_method(c, n, unemulated(remote, "FireServer"));
+        let Some(c) = class(reflection, remote) else { continue };
+        for (member, skip, refusal) in [("FireServer", 1, None), ("FireClient", 2, Some("FireClient can only be called from the server")), ("FireAllClients", 1, Some("FireAllClients can only be called from the server"))] {
+            let Some(n) = name(reflection, member) else { continue };
+            behaviors.add_method(c, n, method(move |lua, engine, id, args| {
+                let arguments: Vec<LuaValue> = args.0.iter().skip(skip).cloned().collect();
+                if let Err(refused) = crate::loopback::wire::capture_all(lua, engine, &arguments, args.0.len()) {
+                    return refused.raise();
+                }
+                if engine.state.borrow().dom.at(id).parent.is_none() {
+                    return Ok(none());
+                }
+                match refusal {
+                    Some(text) => super::lua::raise(text),
+                    None => {
+                        engine.missing(Some(lua), remote, member);
+                        Ok(none())
+                    }
+                }
+            }));
         }
     }
     if let Some(bindable) = class(reflection, "BindableEvent") {

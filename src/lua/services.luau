@@ -1315,8 +1315,8 @@ end
 -- (SoundService:PlayLocalSound is Rust: engine::world reports the play)
 
 -- Remotes never reach a server offline; invocations yield forever like a dropped connection.
-Method("RemoteFunction", "InvokeServer", function(Self)
-	if not coroutine.isyieldable() then error("thread is not yieldable", 0) end Missing("RemoteFunction", `InvokeServer ({Self:GetFullName()}) never returns offline`) -- (refused first: tools/parity/probes/yield_refused.luau)
+Method("RemoteFunction", "InvokeServer", function(Self, ...)
+	R.Sendable(select("#", ...) + 1, ...) if not coroutine.isyieldable() then error("thread is not yieldable", 0) end if Self.Parent then Missing("RemoteFunction", `InvokeServer ({Self:GetFullName()}) never returns offline`) end -- (the arguments, then the refusal: tools/parity/probes/remote_call_order.luau)
 	return coroutine.yield()
 end)
 Method("BindableFunction", "Invoke", function(Self, ...)
@@ -2051,19 +2051,19 @@ Method("HumanoidDescription", "SetEquippedEmotes", function(Self, ...)
 	R.FireEvent(Self, "EquippedEmotesChanged", EquippedList(Self))
 end)
 
--- RemoteFunction:InvokeClient in a client's run (a loopback run's is loopback.luau's, a server's server.luau's): the player is
--- checked first ("Argument 1 missing or nil", "Argument 1 is invalid: expected 'Player' instance type"), then where the thread
--- cannot yield "thread is not yieldable", then "InvokeClient can only be called from the server" (measured in a 0.747 playing
--- client: tools/parity/probes/yield_refused.luau, loopback/remote_wrong_side.luau)
-Method("RemoteFunction", "InvokeClient", function(_, Player)
-	if Player == nil then
+-- RemoteFunction:InvokeClient in a client's run (a loopback run's is loopback.luau's, a server's server.luau's): the arguments are
+-- converted first (R.Sendable), then the player checked ("Argument 1 missing or nil", "Argument 1 is invalid: expected 'Player'
+-- instance type"), then a remote in the DataModel raises "InvokeClient can only be called from the server", then a thread that cannot
+-- yield "thread is not yieldable"; a parentless one waits for good (a 0.747 playing client: tools/parity/probes/remote_call_order.luau)
+Method("RemoteFunction", "InvokeClient", function(Self, Player, ...)
+	R.Sendable(select("#", ...) + 2, ...) if Player == nil then
 		error("Argument 1 missing or nil", 0)
 	elseif typeof(Player) ~= "Instance" or not Player:IsA("Player") then
 		error("Argument 1 is invalid: expected 'Player' instance type", 0)
-	elseif not coroutine.isyieldable() then
-		error("thread is not yieldable", 0)
+	elseif Self.Parent then
+		error("InvokeClient can only be called from the server", 0)
 	end
-	error("InvokeClient can only be called from the server", 0)
+	if not coroutine.isyieldable() then error("thread is not yieldable", 0) end return coroutine.yield()
 end)
 
 -- AnalyticsService's Log methods (measured in a 0.747 playing client and a server: tools/parity/probes/arg_checks.luau): their

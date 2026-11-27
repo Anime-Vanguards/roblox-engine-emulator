@@ -461,14 +461,14 @@ fn messages_reach_subscribers_and_remotes_reach_no_client() {
         local Players = game:GetService("Players")
         local Player = Instance.new("Player")
         Player.Parent = Players
-        local Remote = Instance.new("RemoteEvent")
+        local Remote = Instance.new("RemoteEvent") Remote.Parent = game:GetService("ReplicatedStorage")
         Remote.OnServerEvent:Connect(function() end)
         Remote:FireClient(Player, 1)
         Remote:FireAllClients(2)
         Instance.new("UnreliableRemoteEvent"):FireAllClients(3)
         print("fire server", (select(2, pcall(Remote.FireServer, Remote))))
         print("fire client", (select(2, pcall(Remote.FireClient, Remote, workspace))))
-        local Function = Instance.new("RemoteFunction")
+        local Function = Instance.new("RemoteFunction") Function.Parent = game:GetService("ReplicatedStorage")
         print("invoke server", (select(2, pcall(Function.InvokeServer, Function))))
         local Answered = false
         task.spawn(function()
@@ -484,11 +484,11 @@ fn messages_reach_subscribers_and_remotes_reach_no_client() {
     );
     for wanted in [
         "print: messages 1:number",
-        "print: fire server Test:21: FireServer can only be called from the client",
-        "print: fire client Test:22: FireClient: player argument must be a Player object",
-        "print: invoke server Test:24: InvokeServer can only be called from the client",
+        "print: fire server FireServer can only be called from the client",
+        "print: fire client FireClient: player argument must be a Player object",
+        "print: invoke server InvokeServer can only be called from the client",
         "print: waiting false",
-        "print: invoke client false Player Player disconnected during remote call to RemoteFunction",
+        "print: invoke client false Player Player disconnected during remote call to ReplicatedStorage.RemoteFunction",
     ] {
         assert!(has(&lines, wanted), "{wanted}: {lines:?}");
     }

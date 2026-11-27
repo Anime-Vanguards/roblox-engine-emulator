@@ -1,0 +1,15 @@
+# engine: Roblox Studio 0.747.0.7471481, a headless play session of one server and one client in processes of their own (the server's half a server Script from the server's start, the client's half a job in the client; script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-27
+# repeated: 2 captures, the same lines
+server: server-host tags a b c wait1 d err1 e f g nest h replace i j
+server: server-host threads 1110000000000110000000000100000000000000000000100000000000000000110000000000100000000100000
+server: server-host status suspended suspended suspended suspended dead dead suspended dead suspended suspended dead dead dead dead
+server: server-host notes first yieldable=true info2=nil nil info3=nil trace=@45 /  | a cat=parity-setter | b cat=parity-setter | c cat=parity-setter2 | wait1 cat=parity-setter2 | d cat=parity-setter2 | err1 cat=parity-setter2 | e cat=parity-setter2 | f cat=parity-setter2 | g cat=parity-setter2 | nest cat=parity-setter2 | h cat=parity-setter2 | replace cat=parity-setter2 | j cat=start
+server: server-host resume-first false
+server: server drove a=a b=b c=c wait1=wait1 d=d err1=error parity-err1 e=e f=f g=g nest=nest h=h replace=replace i=second j=j
+client: client drove a=a b=b c=c wait1=wait1 d=d err1=error parity-err1 e=e f=f g=g nest=nest h=h replace=replace i=second j=j
+client: client-host tags inner a b c wait1 d err1 e f g nest h replace i j
+client: client-host threads 111100000000001110000000000110000000000100000000000000000000100000000000000000110000000000100000000100000
+client: client-host status suspended suspended suspended suspended suspended dead dead suspended dead suspended suspended dead dead dead dead
+client: client-host notes inner cat=parity-setter | first yieldable=true info2=nil nil info3=nil trace=@45 /  | a cat=parity-setter | b cat=parity-setter | c cat=parity-setter2 | wait1 cat=parity-setter2 | d cat=parity-setter2 | err1 cat=parity-setter2 | e cat=parity-setter2 | f cat=parity-setter2 | g cat=parity-setter2 | nest cat=parity-setter2 | h cat=parity-setter2 | replace cat=parity-setter2 | j cat=parity-invoker
+client: client-host resume-first false

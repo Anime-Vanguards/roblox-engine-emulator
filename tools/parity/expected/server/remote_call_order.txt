@@ -1,0 +1,71 @@
+# engine: Roblox Studio 0.747.0.7471481, the server of a headless play session (a Script in ServerScriptService, script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-27
+# repeated: 3 captures, the same lines
+refused parented FireServer-cyclic error tables cannot be cyclic
+refused parented FireServer-badkey error FireServer can only be called from the client
+refused parented FireServer-1 error FireServer can only be called from the client
+refused parented FireClient-nil-cyclic error tables cannot be cyclic
+refused parented FireClient-part-cyclic error tables cannot be cyclic
+refused parented FireClient-nil-1 error FireClient: player argument must be a Player object
+refused parented FireAllClients-cyclic error tables cannot be cyclic
+refused parented FireAllClients-1 ok
+refused parented Unreliable-FireServer-cyclic error tables cannot be cyclic
+refused parented Unreliable-FireClient-nil-cyclic error tables cannot be cyclic
+refused parented InvokeServer-cyclic error tables cannot be cyclic
+refused parented InvokeServer-badkey error InvokeServer can only be called from the client
+refused parented InvokeServer-1 error InvokeServer can only be called from the client
+refused parented InvokeClient-nil-cyclic error tables cannot be cyclic
+refused parented InvokeClient-part-cyclic error tables cannot be cyclic
+refused parented InvokeClient-nil-1 error Argument 1 missing or nil
+refused parented InvokeClient-part-1 error Argument 1 is invalid: expected 'Player' instance type
+refused parentless FireServer-cyclic error tables cannot be cyclic
+refused parentless FireServer-badkey ok
+refused parentless FireServer-1 ok
+refused parentless FireClient-nil-cyclic error tables cannot be cyclic
+refused parentless FireClient-part-cyclic error tables cannot be cyclic
+refused parentless FireClient-nil-1 ok
+refused parentless FireAllClients-cyclic error tables cannot be cyclic
+refused parentless FireAllClients-1 ok
+refused parentless Unreliable-FireServer-cyclic error tables cannot be cyclic
+refused parentless Unreliable-FireClient-nil-cyclic error tables cannot be cyclic
+refused parentless InvokeServer-cyclic error tables cannot be cyclic
+refused parentless InvokeServer-badkey error thread is not yieldable
+refused parentless InvokeServer-1 error thread is not yieldable
+refused parentless InvokeClient-nil-cyclic error tables cannot be cyclic
+refused parentless InvokeClient-part-cyclic error tables cannot be cyclic
+refused parentless InvokeClient-nil-1 error Argument 1 missing or nil
+refused parentless InvokeClient-part-1 error Argument 1 is invalid: expected 'Player' instance type
+parented FireServer-cyclic error tables cannot be cyclic
+parented FireServer-badkey error FireServer can only be called from the client
+parented FireServer-1 error FireServer can only be called from the client
+parented FireClient-nil-cyclic error tables cannot be cyclic
+parented FireClient-part-cyclic error tables cannot be cyclic
+parented FireClient-nil-1 error FireClient: player argument must be a Player object
+parented FireAllClients-cyclic error tables cannot be cyclic
+parented FireAllClients-1 ok
+parented Unreliable-FireServer-cyclic error tables cannot be cyclic
+parented Unreliable-FireClient-nil-cyclic error tables cannot be cyclic
+parented InvokeServer-cyclic error tables cannot be cyclic
+parented InvokeServer-badkey error InvokeServer can only be called from the client
+parented InvokeServer-1 error InvokeServer can only be called from the client
+parented InvokeClient-nil-cyclic error tables cannot be cyclic
+parented InvokeClient-part-cyclic error tables cannot be cyclic
+parented InvokeClient-nil-1 error Argument 1 missing or nil
+parented InvokeClient-part-1 error Argument 1 is invalid: expected 'Player' instance type
+parentless FireServer-cyclic error tables cannot be cyclic
+parentless FireServer-badkey ok
+parentless FireServer-1 ok
+parentless FireClient-nil-cyclic error tables cannot be cyclic
+parentless FireClient-part-cyclic error tables cannot be cyclic
+parentless FireClient-nil-1 ok
+parentless FireAllClients-cyclic error tables cannot be cyclic
+parentless FireAllClients-1 ok
+parentless Unreliable-FireServer-cyclic error tables cannot be cyclic
+parentless Unreliable-FireClient-nil-cyclic error tables cannot be cyclic
+parentless InvokeServer-cyclic error tables cannot be cyclic
+parentless InvokeServer-badkey pending
+parentless InvokeServer-1 pending
+parentless InvokeClient-nil-cyclic error tables cannot be cyclic
+parentless InvokeClient-part-cyclic error tables cannot be cyclic
+parentless InvokeClient-nil-1 error Argument 1 missing or nil
+parentless InvokeClient-part-1 error Argument 1 is invalid: expected 'Player' instance type
