@@ -1199,12 +1199,17 @@ fn install_run_service(engine: &Rc<Engine>, behaviors: &mut Behaviors, reflectio
         let sim_bindings = step_bindings;
         state.sched.add_hook(Phase::Simulation, Rc::new(move |lua, engine, delta| {
             let now = engine.state.borrow().sched.now;
+            // (each engine event's handlers and the flush after them share the script timeout's timer; Stepped and PreSimulation
+            // share one: measured, a 0.747 headless client and a server, tools/parity/probes/timeout_points.luau)
+            let point = super::scheduler::resumption_point(engine);
             fire_frame_event(lua, engine, K::PreAnimation as NameId, &[Value::Number(delta)])?;
             // The Animator step: AnimationTracks pose their rigs' joints (crate::animation)
             crate::luau_profile::engine_step("animation", || crate::animation::step(engine, delta));
             super::scheduler::flush_deferred(lua, engine)?;
             // (each frame event's parallel point follows the flush of its handlers' deferred work: lua/actors.rs)
             super::lua::actors::parallel_point(lua, engine)?;
+            drop(point);
+            let point = super::scheduler::resumption_point(engine);
             fire_frame_event(lua, engine, K::Stepped as NameId, &[Value::Number(now), Value::Number(delta)])?;
             fire_frame_event(lua, engine, K::PreSimulation as NameId, &[Value::Number(delta)])?;
             // The deferred handlers of what Stepped and PreSimulation handlers did (a Changed or ChildAdded handler of a write)
@@ -1213,6 +1218,7 @@ fn install_run_service(engine: &Rc<Engine>, behaviors: &mut Behaviors, reflectio
             // them writes is applied by the batch below the same frame (a deferred_phase probe)
             super::scheduler::flush_deferred(lua, engine)?;
             super::lua::actors::parallel_point(lua, engine)?;
+            drop(point);
             // (the step bindings: StepBindings)
             run_step_bindings(lua, engine, &sim_bindings, true)?;
             run_step_bindings(lua, engine, &sim_bindings, false)?;
@@ -1227,15 +1233,20 @@ fn install_run_service(engine: &Rc<Engine>, behaviors: &mut Behaviors, reflectio
             // Workspace.DistributedGameTime takes the frame's game time after the step, before PostSimulation; a server fires its
             // Changed for it every frame, a playing client none (Studio 0.747, tools/parity/probes/distributed_game_time.luau)
             set_game_time(engine, engine.world().workspace, now, engine.options.server());
+            // (the flush the hook's caller would run next, here so it shares PostSimulation's resumption point)
+            let _point = super::scheduler::resumption_point(engine);
             fire_frame_event(lua, engine, K::PostSimulation as NameId, &[Value::Number(delta)])?;
-            if super::lua::actors::parallel_waiting(engine) {
-                super::scheduler::flush_deferred(lua, engine)?;
+            let parallel = super::lua::actors::parallel_waiting(engine);
+            super::scheduler::flush_deferred(lua, engine)?;
+            if parallel {
                 super::lua::actors::parallel_point(lua, engine)?;
             }
             Ok(())
         }));
         state.sched.add_hook(Phase::Heartbeat, Rc::new(|lua, engine, delta| {
-            fire_frame_event(lua, engine, K::Heartbeat as NameId, &[Value::Number(delta)])
+            let _point = super::scheduler::resumption_point(engine);
+            fire_frame_event(lua, engine, K::Heartbeat as NameId, &[Value::Number(delta)])?;
+            super::scheduler::flush_deferred(lua, engine)
         }));
     }
 }

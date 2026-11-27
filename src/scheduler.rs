@@ -298,6 +298,9 @@ pub struct Scheduler {
     pub frozen_clock: bool,
     /// Roblox's script execution timeout for this VM's resumptions (watchdog.rs; installed by `ree run` / `ree record`)
     pub timeout: Option<crate::watchdog::ScriptTimeout>,
+    /// The Heartbeat step's resumption point of the script timeout's, open from the pass after the task.wait / task.delay
+    /// resumptions to the end of the flush after the Heartbeat handlers (run_timers_in, heartbeat_handlers)
+    heartbeat_point: Option<crate::watchdog::Point>,
     standard_offset: f64,
     server_offset: f64,
     elapsed_time_offset: f64,
@@ -445,6 +448,7 @@ impl Scheduler {
             charging: false,
             frozen_clock: std::env::var("REE_FROZEN_CLOCK").as_deref() == Ok("1"),
             timeout: None,
+            heartbeat_point: None,
             standard_offset: standard_offset_seconds(),
             server_offset: 0.0,
             elapsed_time_offset: 0.0,
@@ -1214,6 +1218,12 @@ fn thread_ready(scheduler: &Scheduler, thread: &LuaThread) -> bool {
     !scheduler.is_cancelled(thread) && thread.status() == LuaThreadStatus::Resumable
 }
 
+/// A resumption point of the script timeout's (watchdog.rs [`crate::watchdog::point`]) while this lives: a flush of the deferred
+/// queue, an engine event's handlers with the flush after them
+pub(crate) fn resumption_point(engine: &Engine) -> crate::watchdog::Point {
+    crate::watchdog::point(engine.state.borrow().sched.timeout.as_ref())
+}
+
 /// What a client logs for a thread the task library cannot resume ([`refused_resume`])
 pub const NOT_SUSPENDED: &str = "cannot resume non-suspended coroutine";
 
@@ -1895,6 +1905,8 @@ fn flush_deferred_jobs(lua: &Lua, engine: &Rc<Engine>, processed: &mut usize) ->
 }
 
 fn flush_deferred_upto(lua: &Lua, engine: &Rc<Engine>, processed: &mut usize, upto: Option<usize>) -> LuaResult<()> {
+    // (the jobs of one flush share the script timeout's timer: watchdog.rs point)
+    let _point = resumption_point(engine);
     engine.state.borrow_mut().sched.flushing += 1;
     loop {
         if upto.is_some_and(|upto| *processed >= upto) {
@@ -2042,6 +2054,12 @@ fn run_timers_in(lua: &Lua, engine: &Rc<Engine>, legacy: bool, limit: Option<f64
             if engine.options.server() {
                 crate::luau_profile::engine_step("physics", || crate::world::broadphase::index_parts(engine));
             }
+            // (the pass, the Heartbeat handlers and the flush after them share the script timeout's timer, while each task.wait /
+            // task.delay resumption before the pass has its own: measured, a 0.747 headless client and a server, a deferred thread
+            // of the pass and a Heartbeat handler of 0.25 s each under a 0.3 s limit; tools/parity/probes/timeout_points.luau.
+            // heartbeat_handlers closes it)
+            let point = resumption_point(engine);
+            engine.state.borrow_mut().sched.heartbeat_point = Some(point);
             flush_deferred_once(lua, engine)
         }
         TimerFlush::AfterAll => flush_deferred(lua, engine),
@@ -2088,6 +2106,9 @@ pub fn use_recorded_clock(engine: &Rc<Engine>, clock: Option<&Json>) -> LuaResul
 fn heartbeat_timers(lua: &Lua, engine: &Rc<Engine>, at: f64, delta: f64, limit: Option<f64>) -> LuaResult<()> {
     let edit_mode = {
         let mut state = engine.state.borrow_mut();
+        // (a Heartbeat step whose handlers did not run, a capture's: its resumption point ends here)
+        let point = state.sched.heartbeat_point.take();
+        drop(point);
         // (a running game's time() reads the last frame's until the simulation step: Scheduler::time)
         if !state.sched.edit_mode {
             state.sched.time_behind = Some(state.sched.now);
@@ -2173,6 +2194,8 @@ fn heartbeat_handlers(lua: &Lua, engine: &Rc<Engine>, delta: f64) -> LuaResult<(
     flush_deferred(lua, engine)?;
     // (Heartbeat's parallel point, before the log's delivery: lua/actors.rs)
     super::lua::actors::parallel_point(lua, engine)?;
+    let point = engine.state.borrow_mut().sched.heartbeat_point.take();
+    drop(point);
     deliver_log(lua, engine)
 }
 
@@ -2295,6 +2318,9 @@ fn render(lua: &Lua, engine: &Rc<Engine>, delta: f64) -> LuaResult<()> {
         // property's Changed handlers) first, then what the bindings and the RenderStepped and PreRender handlers deferred, in
         // the order they deferred it, all seeing the stepped values. The frame's layout point stays after the bindings.
         run_phase(lua, engine, Phase::Tween, "tweens", delta)?;
+        // (RenderStepped's and PreRender's handlers and the flush after them share the script timeout's timer, each binding has its
+        // own: measured, a 0.747 headless client, tools/parity/probes/timeout_points.luau)
+        let point = resumption_point(engine);
         run_phase(lua, engine, Phase::RenderEvents, "renderEvents", delta)?;
         step_tweens_held(lua, engine, &[Phase::TweenStep], delta)?;
         {
@@ -2307,6 +2333,7 @@ fn render(lua: &Lua, engine: &Rc<Engine>, delta: f64) -> LuaResult<()> {
         flush_deferred(lua, engine)?;
         // (PreRender's parallel point: lua/actors.rs)
         super::lua::actors::parallel_point(lua, engine)?;
+        drop(point);
     } else {
         // A server (its tweens step before its Heartbeat handlers: heartbeat_timers) and edit mode: the tween step after the
         // bindings, its events after the RenderStepped and PreRender handlers, one pass for the bindings' deferred work (edit

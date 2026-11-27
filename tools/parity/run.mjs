@@ -164,6 +164,9 @@ export function runInRee(name, ree, scratch, server = false, realAssets = false)
 	const context = server ? ["--run-context", "server", "--load-string"] : options.context === "edit" ? ["--mode", "edit", "--run-context", "edit"] : [];
 	if (options.flag === "FFlagEnableLoadModule") context.push("--load-module");
 	if (!realAssets) context.push("--animations", ANIMATIONS);
+	// ("timeout=<seconds>": the script timeout the capture set with ScriptContext:SetTimeout, which a game script may not call;
+	// the run goes on past timeouts, as a client does)
+	if (options.timeout) context.push("--script-timeout", String(options.timeout), "--max-script-timeouts", "0");
 	const result = spawnSync(ree, ["run", "--harness", harness, "--roots", empty, "--seconds", "120", ...context], {
 		encoding: "utf8", maxBuffer: 256 * 1024 * 1024, windowsHide: true,
 	});

@@ -145,6 +145,11 @@ fn probe_job(scratch: &Path, empty: &Path, name: &str, source: &str, server: boo
     if directive("flag=FFlagEnableLoadModule") {
         args.push("--load-module".into());
     }
+    // ("timeout=<seconds>": the script timeout the capture set with ScriptContext:SetTimeout: run.mjs runInRee)
+    let timeout = source.lines().filter(|line| line.starts_with("-- parity:")).flat_map(str::split_whitespace).find_map(|part| part.strip_prefix("timeout="));
+    if let Some(seconds) = timeout {
+        args.extend(["--script-timeout", seconds, "--max-script-timeouts", "0"].map(str::to_owned));
+    }
     serde_json::json!({ "id": name, "args": args })
 }
 

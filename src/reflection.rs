@@ -737,6 +737,9 @@ pub const CAPABILITY_CALLS: &[(&str, &str, &str)] = &[
     ("DigitsRigDescription", "GetTposeAdjustment", "RobloxScript"),
     ("DigitsRigDescription", "SetJoint", "PluginOrOpenCloud"),
     ("DigitsRigDescription", "SetTposeAdjustment", "RobloxScript"),
+    // (a game script cannot set its own timeout: the same error with no argument, any argument or another instance, a 0.747
+    // playing client and a server alike: tools/parity/probes/timeout_points.luau; ree sets it with --script-timeout)
+    ("ScriptContext", "SetTimeout", "Plugin"),
 ];
 
 // Callbacks the dump leaves out (it lists none for any class): every callback Roblox's API dump lets

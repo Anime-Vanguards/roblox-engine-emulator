@@ -42,11 +42,18 @@ use std::{
 
 use mlua::ffi::{lua_Callbacks, lua_State};
 
-/// The error a script gets when it runs past the timeout without yielding (Roblox's text: Roblox's documentation and the
-/// developer forum's reports of it; not measured, no Studio was open)
+/// The error a script gets when its resumption runs past the timeout without yielding (a playing client's and a server's text,
+/// roblox-sim 0.747, ScriptContext:SetTimeout: tools/parity/probes/timeout_points.luau)
 pub const TIMEOUT_MESSAGE: &str = "Script timeout: exhausted allowed execution time";
 
-/// Studio's default Script Timeout Length, in seconds (Studio settings, Roblox's documentation; not measured)
+/// The error a resumption gets when its resumption point ([`point`]) runs past the timeout while the resumption itself has not
+/// (the same sessions: the second of two deferred threads of 0.3 s each under a 0.5 s limit)
+pub const POINT_TIMEOUT_MESSAGE: &str = "Script timeout: exhausted allowed execution time for the current resumption point";
+
+/// ree's default limit, in seconds: Studio's default Script Timeout Length (Studio settings, Roblox's documentation). A playing
+/// client and a server set none (roblox-sim 0.747, which loads no Studio settings: a deferred thread busy for 12 s ran to its end on
+/// both, tools/parity/probes/timeout_points.luau notes); ree keeps this one as its guard against a script that never yields
+/// (`--script-timeout 0` turns it off)
 pub const DEFAULT_SCRIPT_TIMEOUT: f64 = 10.0;
 
 /// Host time that fires the timeout as well, in multiples of the limit: a loop the work clock prices below its host cost
@@ -118,6 +125,12 @@ pub struct Watch {
     depth: AtomicU32,
     /// The epoch of the resumption the watchdog found running long (0: none)
     due: AtomicU64,
+    /// Bumped when the first resumption of a resumption point begins and when the point closes ([`point`]): odd while one runs
+    point_epoch: AtomicU64,
+    /// Resumption points open (the VM's thread only; one opened inside another counts with the outermost)
+    point_depth: AtomicU32,
+    /// The point epoch the watchdog armed a resumption of: each later resumption of that point is armed as it begins
+    point_armed: AtomicU64,
     /// The VM's callbacks (`lua_callbacks`), null once the VM is about to go: the watchdog writes their interrupt
     callbacks: AtomicPtr<lua_Callbacks>,
     /// Serializes writes of the interrupt slot
@@ -168,6 +181,10 @@ struct Timing {
     host: Option<Instant>,
     /// The resumption has had its timeout (later raises are the same timeout's)
     raised: bool,
+    /// The work its resumption point began with, when it runs in one ([`point`])
+    point: Option<f64>,
+    /// The timeout it had is its point's ([`POINT_TIMEOUT_MESSAGE`])
+    by_point: bool,
 }
 
 /// Where the check's looks stood at the last safepoint it saw ([`look_due`]): the VM's counters it read (their address) and,
@@ -189,7 +206,7 @@ struct Looked {
 thread_local! {
     /// Safepoints the check has seen on this thread ([`HOST_LOOK_EVERY`])
     static SAFEPOINTS: Cell<u32> = const { Cell::new(0) };
-    static TIMING: Cell<Timing> = const { Cell::new(Timing { serial: 0, epoch: 0, work: 0.0, host: None, raised: false }) };
+    static TIMING: Cell<Timing> = const { Cell::new(Timing { serial: 0, epoch: 0, work: 0.0, host: None, raised: false, point: None, by_point: false }) };
     static LOOKED: Cell<Looked> = const { Cell::new(Looked { counters: 0, steps: 0, calls: 0, units: 0, engine: 0, armings: 0, work: std::ptr::null(), drained: std::ptr::null() }) };
     /// How many VMs on this thread want the check to look at every safepoint (a timeout is due, or a run stops)
     static EAGER_COUNT: Cell<u32> = const { Cell::new(0) };
@@ -224,6 +241,18 @@ struct Local {
     counters: *const crate::cost::VmCounters,
     /// The work the current outermost resumption began with
     start: Start,
+    /// The work the running resumption point began with (its first resumption's), priced at its first look
+    point: PointStart,
+}
+
+/// The work a resumption point began with: the point epoch, its first resumption's [`Start`] copied, its price once looked at,
+/// and whether a timeout of the point was counted ([`ScriptTimeout::timeouts`] counts a point once)
+struct PointStart {
+    epoch: u64,
+    engine: f64,
+    counters: Box<crate::cost::VmCounters>,
+    priced: Option<f64>,
+    counted: bool,
 }
 
 /// The work a resumption began with ([`enter`]): its epoch, the engine calls' charges so far and a copy of the VM's counters,
@@ -269,6 +298,9 @@ impl ScriptTimeout {
             epoch: AtomicU64::new(0),
             depth: AtomicU32::new(0),
             due: AtomicU64::new(0),
+            point_epoch: AtomicU64::new(0),
+            point_depth: AtomicU32::new(0),
+            point_armed: AtomicU64::new(0),
             callbacks: AtomicPtr::new(callbacks),
             slot: Mutex::new(()),
             limit,
@@ -286,11 +318,12 @@ impl ScriptTimeout {
         };
         // (all integers: zero is a valid VmCounters)
         let start = Start { epoch: 0, engine: 0.0, counters: Box::new(unsafe { std::mem::zeroed() }) };
+        let point = PointStart { epoch: 0, engine: 0.0, counters: Box::new(unsafe { std::mem::zeroed() }), priced: None, counted: false };
         LOOKED.with(|looked| looked.set(Looked { counters: 0, work: std::ptr::null(), drained: std::ptr::null(), ..looked.get() }));
         WATCHES.with(|watches| {
             let mut watches = watches.borrow_mut();
             watches.retain(|local| local.watch.strong_count() > 0);
-            watches.push(Local { callbacks: callbacks as usize, serial: watch.serial, watch: Arc::downgrade(&watch), work, drained, counters, start });
+            watches.push(Local { callbacks: callbacks as usize, serial: watch.serial, watch: Arc::downgrade(&watch), work, drained, counters, start, point });
         });
         let mut registry = REGISTRY.lock().unwrap_or_else(|poison| poison.into_inner());
         registry.watches.retain(|weak| weak.strong_count() > 0);
@@ -371,24 +404,111 @@ pub fn enter(timeout: Option<&ScriptTimeout>) -> Entered {
     let watch = &*timeout.0;
     if watch.depth.fetch_add(1, Ordering::Relaxed) == 0 {
         let epoch = watch.epoch.fetch_add(1, Ordering::Release) + 1;
-        begin(watch.serial, epoch);
+        begin(watch, epoch);
     }
     Entered(watch)
 }
 
-/// Keeps the work the outermost resumption `epoch` of the watch `serial` begins with: the engine calls' charges so far and a
-/// copy of the VM's counters (6 KB: a fraction of a resumption's own cost; pricing them is the watchdog's, for the few that
-/// run long)
-fn begin(serial: u64, epoch: u64) {
+/// Keeps the work the outermost resumption `epoch` of `watch` begins with: the engine calls' charges so far and a copy of the
+/// VM's counters (6 KB: a fraction of a resumption's own cost; pricing them is the watchdog's, for the few that run long). The
+/// first resumption of a resumption point begins the point too ([`point`]: its work is the point's start), and a later one of a
+/// point the watchdog armed is armed at once, so its first safepoint weighs the point's work.
+fn begin(watch: &Watch, epoch: u64) {
+    let mut point = 0;
+    if watch.point_depth.load(Ordering::Relaxed) > 0 {
+        point = watch.point_epoch.load(Ordering::Relaxed);
+        if point % 2 == 0 {
+            point += 1;
+            watch.point_epoch.store(point, Ordering::Release);
+        }
+    }
     WATCHES.with(|watches| {
         let Ok(mut watches) = watches.try_borrow_mut() else { return };
-        if let Some(local) = watches.iter_mut().find(|local| local.serial == serial) {
+        if let Some(local) = watches.iter_mut().find(|local| local.serial == watch.serial) {
             local.start.epoch = epoch;
             local.start.engine = local.work.get() + local.drained.get();
             // (the VM's own thread: nothing else writes its counters)
             unsafe { std::ptr::copy_nonoverlapping(local.counters, &mut *local.start.counters, 1) };
+            if point != 0 && local.point.epoch != point {
+                let Local { start, point: begun, .. } = local;
+                begun.epoch = point;
+                begun.engine = start.engine;
+                unsafe { std::ptr::copy_nonoverlapping(&*start.counters, &mut *begun.counters, 1) };
+                begun.priced = None;
+                begun.counted = false;
+            }
         }
     });
+    if point != 0 && watch.point_armed.load(Ordering::Acquire) == point && watch.due.load(Ordering::Acquire) != epoch {
+        arm(watch, epoch);
+    }
+}
+
+/// A resumption point is open while this lives ([`point`])
+pub struct Point(Option<Arc<Watch>>);
+
+/// The engine opens a resumption point (scheduler.rs: a flush of the deferred queue, an engine event's handlers with the flush
+/// after them, the Heartbeat step): the resumptions it begins share one timer, counted from the first one's start, as a client's
+/// do. Past the limit the running one raises [`POINT_TIMEOUT_MESSAGE`] (or [`TIMEOUT_MESSAGE`] when it has itself run the limit)
+/// and each later one of the point at its first safepoint. Measured in roblox-sim's 0.747 headless client and its server
+/// (ScriptContext:SetTimeout at identity 4; tools/parity/probes/timeout_points.luau): the threads of one flush of the deferred
+/// queue, deferred from anywhere and by each other, the handlers of one engine event (PreAnimation, PostSimulation, RenderStepped;
+/// Stepped and PreSimulation together, RenderStepped and PreRender together) and the deferred work they leave share one, and so do
+/// the pass after the task.wait / task.delay resumptions, the Heartbeat handlers and the flush after them (a thread the pass
+/// deferred, run after the Heartbeat handlers, shares the pass's); each task.wait, task.delay and wait() resumption and each
+/// render-step binding has its own. One opened inside another counts with the outermost; the resumptions of one opened inside a
+/// resumption count with that resumption.
+#[inline]
+pub fn point(timeout: Option<&ScriptTimeout>) -> Point {
+    let Some(timeout) = timeout else { return Point(None) };
+    timeout.0.point_depth.fetch_add(1, Ordering::Relaxed);
+    Point(Some(timeout.0.clone()))
+}
+
+impl Drop for Point {
+    #[inline]
+    fn drop(&mut self) {
+        if let Some(watch) = &self.0 {
+            if watch.point_depth.fetch_sub(1, Ordering::Relaxed) == 1 {
+                let point = watch.point_epoch.load(Ordering::Relaxed);
+                if point % 2 == 1 {
+                    watch.point_epoch.store(point + 1, Ordering::Release);
+                }
+            }
+        }
+    }
+}
+
+/// The work clock at the start of the running resumption point `point` (an odd point epoch) of the VM with these `callbacks`,
+/// priced once a point
+fn point_work(callbacks: usize, point: u64) -> Option<f64> {
+    if point % 2 == 0 {
+        return None;
+    }
+    WATCHES.with(|watches| {
+        let mut watches = watches.try_borrow_mut().ok()?;
+        let local = watches.iter_mut().find(|local| local.callbacks == callbacks)?;
+        let begun = &mut local.point;
+        if begun.epoch != point {
+            return None;
+        }
+        if begun.priced.is_none() {
+            begun.priced = Some(begun.engine + crate::cost::luau(&begun.counters));
+        }
+        begun.priced
+    })
+}
+
+/// Whether the timeout of the resumption point `point` is the point's first (its later resumptions raise it too: counted once)
+fn first_of_point(callbacks: usize, point: u64) -> bool {
+    WATCHES.with(|watches| {
+        let Ok(mut watches) = watches.try_borrow_mut() else { return true };
+        let Some(local) = watches.iter_mut().find(|local| local.callbacks == callbacks) else { return true };
+        if local.point.epoch != point {
+            return true;
+        }
+        !std::mem::replace(&mut local.point.counted, true)
+    })
 }
 
 /// The work clock at the start of the outermost resumption `epoch` of the VM with these `callbacks`, when [`begin`] kept it
@@ -457,8 +577,9 @@ fn arm(watch: &Watch, epoch: u64) {
 
 /// The watchdog thread: arms the interrupt of a VM whose resumption has run a whole tick of its own ([`tick_of`]).
 fn watchdog() {
-    // each watch's serial, the epoch it was at and when the thread first saw it there
+    // each watch's serial, the epoch it was at and when the thread first saw it there; the same for its resumption points
     let mut seen: Vec<(u64, u64, Instant)> = Vec::new();
+    let mut seen_points: Vec<(u64, u64, Instant)> = Vec::new();
     loop {
         let watches: Vec<Arc<Watch>> = {
             let mut registry = REGISTRY.lock().unwrap_or_else(|poison| poison.into_inner());
@@ -467,17 +588,30 @@ fn watchdog() {
         };
         let now = Instant::now();
         let mut next = Vec::with_capacity(watches.len());
+        let mut next_points = Vec::new();
         for watch in &watches {
             let key = watch.serial;
             let epoch = watch.epoch.load(Ordering::Acquire);
             let since = seen.iter().find(|(k, e, _)| *k == key && *e == epoch).map_or(now, |(_, _, since)| *since);
-            let ran = now.duration_since(since).as_secs_f64();
+            let mut ran = now.duration_since(since).as_secs_f64();
+            // a resumption point that ran a tick: its later resumptions are armed as they begin (begin), the running one now
+            let point = watch.point_epoch.load(Ordering::Acquire);
+            if point % 2 == 1 {
+                let point_since = seen_points.iter().find(|(k, e, _)| *k == key && *e == point).map_or(now, |(_, _, since)| *since);
+                let point_ran = now.duration_since(point_since).as_secs_f64();
+                if point_ran >= tick_of(watch.limit) {
+                    watch.point_armed.store(point, Ordering::Release);
+                }
+                ran = ran.max(point_ran);
+                next_points.push((key, point, point_since));
+            }
             if epoch % 2 == 1 && ran >= tick_of(watch.limit) && watch.due.load(Ordering::Acquire) != epoch {
                 arm(watch, epoch);
             }
             next.push((key, epoch, since));
         }
         seen = next;
+        seen_points = next_points;
         // (a new VM unparks it early, so a shorter limit's tick applies at once)
         std::thread::park_timeout(tick(watches.iter().map(|watch| watch.limit)));
     }
@@ -528,7 +662,7 @@ pub unsafe fn check(state: *mut lua_State) {
         set_eager(&watch, true);
         if !in_engine_luau(state) {
             drop(watch);
-            unsafe { raise(state) }
+            unsafe { raise(state, false) }
         }
         return;
     }
@@ -562,19 +696,24 @@ pub unsafe fn check(state: *mut lua_State) {
         // the first look at this resumption: its work counts from its start (enter), the calls before the watchdog came too,
         // and is weighed at once (a long call at its start is followed by the timeout at the first safepoint after it)
         let start = start_work(callbacks, due).unwrap_or_else(|| work(state));
-        timing = Timing { serial: watch.serial, epoch: due, work: start, host: Some(Instant::now()), raised: false };
+        let point = point_work(callbacks, watch.point_epoch.load(Ordering::Acquire));
+        timing = Timing { serial: watch.serial, epoch: due, work: start, host: Some(Instant::now()), raised: false, point, by_point: false };
         TIMING.with(|cell| cell.set(timing));
         // (an earlier resumption's timeout, due or raised, left the check looking at every safepoint)
         set_eager(&watch, false);
     }
     let mut by_host = false;
     if !timing.raised {
-        let over_work = full && work(state) - timing.work >= watch.limit;
+        // (the resumption's own work first: one that ran the limit itself gets the plain message, as a point's first one does)
+        let now = if full { Some(work(state)) } else { None };
+        let over_work = now.is_some_and(|now| now - timing.work >= watch.limit);
+        let over_point = !over_work && now.is_some_and(|now| timing.point.is_some_and(|point| now - point >= watch.limit));
         let over_host = timing.host.is_some_and(|host| host.elapsed().as_secs_f64() >= watch.limit * watch.backstop);
-        if !(over_work || over_host) {
+        if !(over_work || over_point || over_host) {
             return;
         }
-        by_host = !over_work;
+        by_host = !over_work && !over_point;
+        timing.by_point = over_point;
     }
     // due (or raised already and still running: a pcall caught it): raised at the first safepoint in a script's own code
     set_eager(&watch, true);
@@ -583,19 +722,22 @@ pub unsafe fn check(state: *mut lua_State) {
     }
     if !timing.raised {
         TIMING.with(|cell| cell.set(Timing { raised: true, ..timing }));
-        let count = watch.timeouts.fetch_add(1, Ordering::Relaxed) + 1;
-        if by_host {
-            watch.host_timeouts.fetch_add(1, Ordering::Relaxed);
-        }
-        let place = script_stack(state);
-        crate::output::diagnostic(&format!("ree: script timeout {count} at {place}"));
-        if watch.stop_after > 0 && count >= watch.stop_after {
-            *watch.last.lock().unwrap_or_else(|poison| poison.into_inner()) = place;
-            watch.stopped.store(true, Ordering::Relaxed);
+        // (a resumption point's later resumptions raise its timeout too: counted once)
+        if !timing.by_point || first_of_point(callbacks, watch.point_epoch.load(Ordering::Acquire)) {
+            let count = watch.timeouts.fetch_add(1, Ordering::Relaxed) + 1;
+            if by_host {
+                watch.host_timeouts.fetch_add(1, Ordering::Relaxed);
+            }
+            let place = script_stack(state);
+            crate::output::diagnostic(&format!("ree: script timeout {count} at {place}"));
+            if watch.stop_after > 0 && count >= watch.stop_after {
+                *watch.last.lock().unwrap_or_else(|poison| poison.into_inner()) = place;
+                watch.stopped.store(true, Ordering::Relaxed);
+            }
         }
     }
     drop(watch);
-    unsafe { raise(state) }
+    unsafe { raise(state, timing.by_point) }
 }
 
 /// Whether the check looks at this safepoint of `state`: `Some(true)` to weigh the work clock, at the first safepoint after the
@@ -703,12 +845,34 @@ fn in_engine_luau(state: *mut lua_State) -> bool {
     }
 }
 
-/// Raises the timeout's error in `state` (a plain string, as Roblox's: no position)
-unsafe fn raise(state: *mut lua_State) -> ! {
+/// Raises the timeout's error in `state` ([`POINT_TIMEOUT_MESSAGE`] for its resumption point's), after the position of the running
+/// function's caller as luaL_where(1) gives it when that caller is a script's Luau, as a playing client and a server do (roblox-sim
+/// 0.747): a busy loop in a thread's own function raises the message alone, one in a function it called names the calling line
+/// (`<chunk>:<line>: Script timeout: ...`; called from that one, its own caller's line), and so does one inside a C function a
+/// script called (a backtracking string.find); tools/parity/probes/timeout_points.luau
+unsafe fn raise(state: *mut lua_State, by_point: bool) -> ! {
+    let message = if by_point { POINT_TIMEOUT_MESSAGE } else { TIMEOUT_MESSAGE };
     unsafe {
-        mlua::ffi::lua_rawcheckstack(state, 1);
-        mlua::ffi::lua_pushlstring(state, TIMEOUT_MESSAGE.as_ptr().cast(), TIMEOUT_MESSAGE.len());
+        mlua::ffi::lua_rawcheckstack(state, 2);
+        if caller_is_script(state) {
+            mlua::ffi::luaL_where(state, 1);
+        } else {
+            mlua::ffi::lua_pushlstring(state, c"".as_ptr(), 0);
+        }
+        mlua::ffi::lua_pushlstring(state, message.as_ptr().cast(), message.len());
+        mlua::ffi::lua_concat(state, 2);
         mlua::ffi::lua_error(state)
+    }
+}
+
+/// Whether the caller of the running function (level 1) is a script's Luau with a line: not a C function, not the engine's own Luau
+fn caller_is_script(state: *mut lua_State) -> bool {
+    unsafe {
+        let mut debug: mlua::ffi::lua_Debug = std::mem::zeroed();
+        if mlua::ffi::lua_getinfo(state, 1, c"sl".as_ptr(), &mut debug) == 0 || debug.currentline <= 0 || debug.source.is_null() {
+            return false;
+        }
+        !CStr::from_ptr(debug.source).to_bytes().starts_with(b"=rur.")
     }
 }
 
