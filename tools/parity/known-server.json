@@ -9,8 +9,8 @@
 			"why": "ree's server run has no player (the capture's server has its client's); PromptSubscriptionPurchase's lines that pass the player differ for that alone"
 		},
 		{
-			"line": "refused CreateEditableMeshAsync",
-			"why": "AssetService:CreateEditableMeshAsync casts its argument before it refuses to wait (`Argument 1 missing or nil`, `Unable to cast double to Content`, `Unable to cast Array to Content`) and raises `UnpublishedPlaceNotInStudio` for an asset offline; ree's message and order differ"
+			"line": "refused CreateEditableMeshAsync-content",
+			"why": "the capture's place is not published, and a client in such a place answers an asset id's CreateEditableMeshAsync UnpublishedPlaceNotInStudio before it refuses to wait; ree, a published game's engine, refuses to wait (a thread that cannot yield) and then loads the asset"
 		},
 		{
 			"line": "refused IsInGroup",
@@ -723,10 +723,6 @@
 		{
 			"line": "readonly ImageLabel.IsLoaded",
 			"why": "read-only property: an image with no image is not loaded in a client; ree answers true"
-		},
-		{
-			"line": "readonly TriangleMeshPart.MeshSize",
-			"why": "read-only property: a MeshPart with no mesh has MeshSize 0, 0, 0 in a client; ree reads its Size"
 		},
 		{
 			"line": "readonly Tween.TweenInfo",

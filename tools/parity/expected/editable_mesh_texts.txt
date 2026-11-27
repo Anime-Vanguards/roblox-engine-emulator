@@ -1,0 +1,63 @@
+# engine: Roblox Studio 0.747.0.7471481, a headless playing client (script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-27
+get-none error BatchGetFaceAttributes: expects 2 arguments (attr, faceIds)
+get-attr-only error BatchGetFaceAttributes: expects 2 arguments (attr, faceIds)
+get-vertex ok n=1 string:{{1:1,1:2,1:3},{1:2,1:4,1:3}}
+get-normal ok n=1 string:{{2:1,2:2,2:3},{2:2,2:4,2:3}}
+get-color ok n=1 string:{{3:1,3:2,3:3},{3:2,3:4,3:3}}
+get-uv ok n=1 string:{{4:1,4:2,4:3},{4:2,4:4,4:3}}
+get-face error BatchGetFaceAttributes: Enum.MeshAttribute.Face is not supported
+get-name error Invalid value for enum 'MeshAttribute'
+get-number error Invalid value for enum 'MeshAttribute'
+get-other-enum error Invalid type 'KeyCode' for enum 'MeshAttribute'
+get-not-table error BatchGetFaceAttributes: ids must be an array
+get-empty ok n=1 string:{}
+get-zero error Invalid id
+get-gone error Invalid id
+get-vertex-id error Unexpected EditableMesh id type. Expected Face id, received Vertex id
+get-text error BatchGetFaceAttributes: id at index 2 is not a number
+get-numeric-text ok n=1 string:{{2:1,2:2,2:3}}
+get-extra error BatchGetFaceAttributes: expects 2 arguments (attr, faceIds)
+set-none error BatchSetFaceAttributes: expects 2 arguments (faceIds, attributeIdArrays)
+set-normals ok n=6 string:{2:1,2:2,2:3} string:{2:5,2:6,2:7} string:{4:1,4:2,4:3} string:{1:1,1:2,1:3} string:{3:2,3:4,3:3} string:{2:2,2:4,2:3}
+set-uvs ok n=6 string:{2:1,2:2,2:3} string:{2:1,2:2,2:3} string:{4:5,4:6,4:7} string:{1:1,1:2,1:3} string:{3:2,3:4,3:3} string:{2:2,2:4,2:3}
+set-colors ok n=6 string:{2:1,2:2,2:3} string:{2:1,2:2,2:3} string:{4:1,4:2,4:3} string:{1:1,1:2,1:3} string:{3:5,3:6,3:7} string:{2:2,2:4,2:3}
+set-vertices ok n=6 string:{2:1,2:2,2:3} string:{2:1,2:2,2:3} string:{4:1,4:2,4:3} string:{1:4,1:2,1:3} string:{3:2,3:4,3:3} string:{2:2,2:4,2:3}
+set-faces error BatchSetFaceAttributes: unsupported attribute ID type
+set-two error BatchSetFaceAttributes: inner array at index 1 has 2 elements but face has 3 corners
+set-four error BatchSetFaceAttributes: inner array at index 1 has 4 elements but face has 3 corners
+set-mixed error Unexpected EditableMesh id type. Expected Normal id, received UV id
+set-mixed-first error Unexpected EditableMesh id type. Expected Normal id, received UV id
+set-length error BatchSetFaceAttributes: faceIds and attributeIdArrays must be the same length
+set-length-more error BatchSetFaceAttributes: faceIds and attributeIdArrays must be the same length
+set-not-table error BatchSetFaceAttributes: attributeIdArrays must be an array of arrays
+set-inner-not-table error BatchSetFaceAttributes: element 1 of attributeIdArrays is not an array
+set-zero-face error Invalid id
+set-gone-face error Invalid id
+set-gone-normal error Invalid id
+set-partial error Invalid id
+set-empty ok n=6 string:{2:1,2:2,2:3} string:{2:1,2:2,2:3} string:{4:1,4:2,4:3} string:{1:1,1:2,1:3} string:{3:2,3:4,3:3} string:{2:2,2:4,2:3}
+set-fixed ok n=3 boolean:true string:nil string:{2:2,2:4,2:3}
+apply-nil error ApplyMesh requires an MeshPart object
+apply-part error ApplyMesh requires an MeshPart object
+apply-empty ok n=3 V3(0 0 0) V3(3 4 5) boolean:false
+apply-mesh ok n=3 V3(2 2 0.00100000005) V3(3 4 5) boolean:false
+apply-self ok n=3 V3(0 0 0) V3(3 4 5) boolean:false
+apply-number error Unable to cast value to Object
+apply-grown ok n=3 V3(2 2 0.00100000005) V3(3 4 5) boolean:false
+apply-destroyed-mesh ok n=3 V3(2 2 0.00100000005) V3(3 4 5) boolean:false
+meshsize-new ok n=3 V3(0 0 0) V3(0 0 0) V3(7 8 9)
+meshsize-part ok n=3 V3(2 2 0.00100000005) V3(2 2 0.00100000005) V3(7 8 9)
+meshsize-clone ok n=2 V3(2 2 0.00100000005) V3(0 0 0)
+async-none error Argument 1 missing or nil
+async-nil error Argument 1 missing or nil
+async-number error Unable to cast double to Content
+async-table error Unable to cast Array to Content
+async-dict error Unable to cast Dictionary to Content
+async-bool error Unable to cast bool to Content
+async-part error Unable to cast Instance to Content
+async-none-content error Failed to load mesh 
+async-string-empty error Failed to load mesh 
+async-options-number error Unable to cast double to Dictionary
+batch-set-partial ok n=6 string:Invalid id string:v{1:1,1:2,1:3} n{2:5,2:6,2:7} u{4:1,4:2,4:3} c{3:1,3:2,3:3} string:v{1:2,1:4,1:3} n{2:5,2:4,2:3} u{4:2,4:4,4:3} c{3:2,3:4,3:3} string:Unexpected EditableMesh id type. Expected Normal id, received UV id string:v{1:1,1:2,1:3} n{2:5,2:6,2:7} u{4:1,4:2,4:3} c{3:1,3:2,3:3} string:v{1:2,1:4,1:3} n{2:7,2:6,2:5} u{4:2,4:4,4:3} c{3:2,3:4,3:3}
+bsfa-texts ok n=9 string:BatchSetFaceAttributes: faceIds must be an array string:BatchSetFaceAttributes: faceId at index 1 is not a number string:Unexpected EditableMesh id type. Expected Face id, received Vertex id string:BatchSetFaceAttributes: attributeId at face 1 corner 2 is not a number string:BatchSetFaceAttributes: unsupported attribute ID type string:BatchSetFaceAttributes: attributeId at face 1 corner 1 is not a number string:ok string:ok string:BatchSetFaceAttributes: faceIds and attributeIdArrays must be the same length

@@ -16157,3 +16157,121 @@ fn a_heartbeat_connection_made_in_the_wait_steps_deferred_pass_runs_from_the_nex
         "print: deferred-pass connection, frame 1",
     ]);
 }
+
+/// EditableMesh quads and the methods a client answers for them (measured in a 0.747 client: tools/parity/probes/
+/// editable_mesh_quads.luau): AddFace of 3 or 4 vertices and its texts, a quad's lists of four, GetFaces quads first,
+/// SetFaceVertices growing and shrinking a face, Triangulate's shorter diagonal and ids, a quad corner's automatic normal (the
+/// face's diagonal normal) bit for bit, and ids of other kinds read as vertices.
+#[test]
+fn editable_mesh_quads_follow_a_client() {
+    assert_script(
+        r#"
+        local AssetService = game:GetService("AssetService")
+        local function fails(message, f, ...)
+            local Ok, Problem = pcall(f, ...)
+            assert(not Ok and string.find(tostring(Problem), message, 1, true), tostring(Problem))
+        end
+        local m = AssetService:CreateEditableMesh()
+        local V = {}
+        for _, p in { Vector3.new(0, 0, 0), Vector3.new(2, 0, 0), Vector3.new(2, 1, 0.5), Vector3.new(0, 1.5, 0), Vector3.new(0, 0, 1) } do
+            table.insert(V, m:AddVertex(p))
+        end
+        local T = m:AddTriangle(V[1], V[2], V[5])
+        local Q = m:AddFace(V[1], V[2], V[3], V[4])
+        assert(#m:GetFaceVertices(Q) == 4 and #m:GetFaceNormals(Q) == 4, "a quad's corners")
+        local Faces = m:GetFaces()
+        assert(Faces[1] == Q and Faces[2] == T, "quads listed first")
+        fails("AddFace called with 2 vertices, currently only supports 3 or 4 vertices", m.AddFace, m, V[1], V[2])
+        fails("AddFace takes vertex IDs as separate arguments, e.g. AddFace(v0, v1, v2).", m.AddFace, m, { V[1], V[2], V[3] })
+        fails("invalid argument #3 to 'AddFace' (int64 expected, got nil)", m.AddFace, m, V[1], nil, V[3])
+        fails("Number of attributes provided does not match face", m.SetFaceNormals, m, Q, { m:AddNormal(), m:AddNormal(), m:AddNormal() })
+        -- a quad corner's automatic normal: the diagonals' unit normal times 1 - cos^2 of its angle, normalised
+        local n = m:GetNormal(m:GetFaceNormals(Q)[3])
+        assert(string.format("%.9g %.9g %.9g", n.X, n.Y, n.Z) == "-0.145521373 -0.194028482 0.970142484", tostring(n))
+        -- a live normal's id reads as the vertex in its slot (the client does not check it names a vertex)
+        local Odd = m:AddFace(V[1], V[2], m:GetFaceNormals(T)[1])
+        assert(m:GetFaceVertices(Odd)[3] == V[1], "a normal id as a vertex")
+        m:RemoveFace(Odd)
+        m:SetFaceVertices(T, { V[1], V[2], V[5], V[4] })
+        assert(#m:GetFaceVertices(T) == 4 and m:GetFaceNormals(T)[4] == m:GetFaceNormals(Q)[4], "a fourth corner takes its vertex's")
+        m:SetFaceVertices(T, { V[1], V[2], V[5] })
+        assert(#m:GetFaceUVs(T) == 3, "a quad given three drops its fourth")
+        m:Triangulate()
+        assert(#m:GetFaces() == 3, "Triangulate")
+        for _, f in m:GetFaces() do
+            assert(#m:GetFaceVertices(f) == 3, "triangles only")
+        end
+        -- the shorter diagonal: 2 to 4 here
+        local d = AssetService:CreateEditableMesh()
+        local W = {}
+        for _, p in { Vector3.new(0, 0, 0), Vector3.new(3, 0, 0), Vector3.new(4, 1, 0), Vector3.new(0, 0.5, 0) } do
+            table.insert(W, d:AddVertex(p))
+        end
+        d:AddFace(W[1], W[2], W[3], W[4])
+        d:Triangulate()
+        local first = d:GetFaceVertices(d:GetFaces()[1])
+        assert(first[1] == W[2] and first[2] == W[3] and first[3] == W[4], "split along 2-4")
+        "#,
+    );
+}
+
+/// EditableMesh's queries, MergeVertices, IdDebugString, bone names and FACS poses as a 0.747 client answers them
+/// (tools/parity/probes/editable_mesh_queries.luau, editable_mesh_bones.luau).
+#[test]
+fn editable_mesh_queries_merges_and_bones_follow_a_client() {
+    assert_script(
+        r##"
+        local AssetService = game:GetService("AssetService")
+        local function fails(message, f, ...)
+            local Ok, Problem = pcall(f, ...)
+            assert(not Ok and string.find(tostring(Problem), message, 1, true), tostring(Problem))
+        end
+        local m = AssetService:CreateEditableMesh()
+        local V = {}
+        for _, p in { Vector3.new(0, 0, 0), Vector3.new(2, 0, 0), Vector3.new(0, 2, 0), Vector3.new(2, 2, 0) } do
+            table.insert(V, m:AddVertex(p))
+        end
+        local F1 = m:AddTriangle(V[1], V[2], V[3])
+        local F2 = m:AddTriangle(V[2], V[4], V[3])
+        local shared = m:GetFaceNormals(F1)[2]
+        local faces = m:GetFacesWithNormal(shared)
+        assert(#faces == 2 and faces[1] == F2 and faces[2] == F1, "one per corner, front first")
+        assert(#m:GetVerticesWithAttribute(shared) == 1, "each vertex once")
+        fails("Invalid attribute type index used", m.GetFacesWithAttribute, m, F1)
+        assert(m:FindClosestVertex(Vector3.new(1.9, 0.1, 0)) == V[2], "FindClosestVertex")
+        assert(#m:FindVerticesWithinSphere(Vector3.zero, 2) == 3, "within, inclusive")
+        local face, point = m:FindClosestPointOnSurface(Vector3.new(0.5, 0.5, 1))
+        assert(face == F1 and point == Vector3.new(0.5, 0.5, 0), "closest point")
+        assert(select("#", m:RaycastLocal(Vector3.new(0.5, 0.5, 5), Vector3.new(0, 0, -5))) == 0, "a ray's end touching misses")
+        assert(m:RaycastLocal(Vector3.new(0.5, 0.5, 5), Vector3.new(0, 0, -10)) == F1, "a ray hits")
+        fails("EditableMesh Error: Empty Result", AssetService:CreateEditableMesh().FindClosestPointOnSurface, AssetService:CreateEditableMesh(), Vector3.zero)
+        assert(m:IdDebugString(V[1]) == "v1" and m:IdDebugString(0) == "Invalid" and m:IdDebugString(F2) == "f2", "IdDebugString")
+        -- MergeVertices: two vertices into one are in the answer, one alone is not
+        local g = AssetService:CreateEditableMesh()
+        local W = {}
+        for _, p in { Vector3.zero, Vector3.xAxis, Vector3.yAxis, Vector3.zero, -Vector3.yAxis, Vector3.zero, -Vector3.xAxis } do
+            table.insert(W, g:AddVertex(p))
+        end
+        g:AddTriangle(W[1], W[2], W[3])
+        local B = g:AddTriangle(W[4], W[5], W[2])
+        g:AddTriangle(W[6], W[3], W[7])
+        local map = g:MergeVertices(0.01)
+        assert(map[tostring(W[4])] == W[1] and map[tostring(W[6])] == W[1], "merged into one")
+        assert(g:GetFaceVertices(B)[1] == W[1] and #g:GetVertices() == 7, "corners moved, vertices kept")
+        -- bones
+        local b = AssetService:CreateEditableMesh()
+        local Root = b:AddBone({ Name = "root", CFrame = CFrame.new(), Virtual = true })
+        fails('No bone named "nope"', b.GetBoneByName, b, "nope")
+        fails("EditableMesh Error: Bone name already exists in the mesh", b.AddBone, b, { Name = "root", CFrame = CFrame.new(), Virtual = false })
+        fails("EditableMesh Error: Bone name too long", b.SetBoneName, b, Root, string.rep("x", 101))
+        fails("Unexpected entry in table: Parent", b.AddBone, b, { Name = "x", CFrame = CFrame.new(), Virtual = true, Parent = 1 })
+        fails("EditableMesh Error: Invalid bone parent", b.SetBoneParent, b, Root, Root)
+        b:SetFacsPose(Enum.FacsActionUnit.ChinRaiser, { Root }, { CFrame.new(1, 0, 0) })
+        local ids, frames = b:GetFacsPose(Enum.FacsActionUnit.ChinRaiser)
+        assert(ids[1] == Root and frames[1].Position == Vector3.new(1, 0, 0) and #b:GetFacsPoses() == 1, "a FACS pose")
+        b:SetBoneIsVirtual(Root, false)
+        assert(#b:GetFacsPoses() == 0, "a bone made not virtual leaves the poses")
+        fails("Correctives must have 2 or 3 FACS controls", b.GetFacsCorrectivePose, b, { Enum.FacsActionUnit.ChinRaiser })
+        "##,
+    );
+}

@@ -31,11 +31,16 @@
 //! Maximum is (2048, 2048, 2048)." and makes no part; 2048 itself passes (2048.01 and 2049 raise). The box
 //! is every vertex's, a face's or not (max - min, as MeshSize), wherever it lies: 100 studs at x = 5000
 //! passes, 2112 from x = 0 raises. A mesh that grows past the limit after its part is made raises nothing
-//! and leaves the part's MeshSize and Size as they were. Not measured and not checked: ApplyMesh, and a
-//! mesh asset's own size.
+//! and leaves the part's MeshSize and Size as they were, and ApplyMesh applies it as it was (measured in a 0.747 client).
+//! Not measured and not checked: a mesh asset's own size.
+//!
+//! Quads, the queries (GetFacesWith*, GetVerticesWith*, FindClosest*, FindVerticesWithinSphere, RaycastLocal), MergeVertices,
+//! IdDebugString, bone names and FACS poses: measured in a 0.747 client (tools/parity/probes/editable_mesh_quads.luau,
+//! editable_mesh_queries.luau, editable_mesh_bones.luau, editable_mesh_texts.luau); the rules are at each method.
 
 use std::{
     cell::RefCell,
+    collections::BTreeMap,
     hash::{Hash, Hasher},
     path::PathBuf,
     rc::Rc,
@@ -213,14 +218,39 @@ impl<T> Slots<T> {
     }
 }
 
+/// A face: a triangle or a quad (measured in a 0.747 client: AddFace, BatchAdd and SetFaceVertices take 3 or 4 vertices, and a
+/// quad is one face of four corners; tools/parity/probes/editable_mesh_quads.luau).
 #[derive(Clone, Copy, Debug)]
 struct Face {
-    vertices: [u32; 3],
-    normals: [u32; 3],
-    colors: [u32; 3],
-    uvs: [u32; 3],
+    /// Its corners: 3 or 4
+    count: u8,
+    vertices: [u32; 4],
+    normals: [u32; 4],
+    colors: [u32; 4],
+    uvs: [u32; 4],
     /// Per corner, when it last came to the front of its vertex's corners (higher is newer): see [`Mesh::corners_of`]
-    stamps: [u32; 3],
+    stamps: [u32; 4],
+}
+
+impl Face {
+    fn len(&self) -> usize {
+        self.count as usize
+    }
+    /// The corner before `corner` and the one after it.
+    fn around(&self, corner: usize) -> (usize, usize) {
+        let n = self.len();
+        ((corner + n - 1) % n, (corner + 1) % n)
+    }
+    /// Its edges as vertex pairs, corner to next corner.
+    fn edges(&self) -> impl Iterator<Item = (u32, u32)> + '_ {
+        (0..self.len()).map(|corner| (self.vertices[corner], self.vertices[(corner + 1) % self.len()]))
+    }
+}
+
+/// How a quad is split along a diagonal (measured in a 0.747 client, Triangulate and a mesh's FileMesh copy: the shorter
+/// diagonal, the one from the first corner on a tie): true for the one from the second corner to the fourth.
+fn second_diagonal(p: [Vec3; 4]) -> bool {
+    (p[3] - p[1]).length_squared() < (p[2] - p[0]).length_squared()
 }
 
 #[derive(Clone, Debug)]
@@ -249,35 +279,48 @@ pub struct Mesh {
     /// date as faces are added or their corners set; None after a change that can take a vertex's front corner away (made
     /// again from the faces when next needed)
     corners: Option<FxHashMap<u32, (u32, [u32; 3])>>,
+    /// FACS poses: per FacsActionUnit value, its bones (slots) and CFrames
+    facs: BTreeMap<u32, Vec<(u32, [f32; 12])>>,
+    /// Corrective FACS poses: per sorted set of 2 or 3 action values
+    correctives: BTreeMap<Vec<u32>, Vec<(u32, [f32; 12])>>,
 }
 
 impl Mesh {
     fn face_normal(&self, face: &Face) -> Vec3 {
         let p = |i: usize| self.positions.get(face.vertices[i]).copied().unwrap_or(Vec3::ZERO);
+        if face.len() == 4 {
+            return (p(2) - p(0)).cross(p(3) - p(1));
+        }
         (p(1) - p(0)).cross(p(2) - p(0))
     }
 
-    /// What corner `corner` of `face` adds to an automatic normal it uses: the corner's unit normal times 1 - cos^2 of its
-    /// angle, with the operations in the client's order (glam's normalise multiplies by the length's reciprocal, as it does).
+    /// What corner `corner` of `face` adds to an automatic normal it uses: a unit normal times 1 - cos^2 of the corner's angle
+    /// (the cosine of its unit edges to the next corner and the one before), with the operations in the client's order
+    /// (glam's normalise multiplies by the length's reciprocal, as it does). A triangle's unit normal is the corner's own
+    /// (its edges' cross product), a quad's the face's: the cross product of its diagonals, first corner's to second's
+    /// (measured in a 0.747 client: bit for bit on 16 of 16 corners of 4 quads, tools/parity/probes/editable_mesh_quads.luau).
     fn corner_weight(&self, face: &Face, corner: usize) -> Vec3 {
-        let p = |i: usize| self.positions.get(face.vertices[i % 3]).copied().unwrap_or(Vec3::ZERO);
+        let p = |i: usize| self.positions.get(face.vertices[i]).copied().unwrap_or(Vec3::ZERO);
         let at = p(corner);
-        let (e1, e2) = (p(corner + 1) - at, p(corner + 2) - at);
+        let (before, after) = face.around(corner);
+        let (e1, e2) = (p(after) - at, p(before) - at);
         let cos = e1.normalize_or_zero().dot(e2.normalize_or_zero());
-        e1.cross(e2).normalize_or_zero() * (1.0 - cos * cos)
+        let unit = if face.len() == 4 { self.face_normal(face).normalize_or_zero() } else { e1.cross(e2).normalize_or_zero() };
+        unit * (1.0 - cos * cos)
     }
 
-    /// The live faces in listing order (the sums below add in it: the order they were made while none was removed, which
-    /// the client's sums follow bit for bit).
+    /// The live faces from the last listed back: the order an automatic normal's sum adds its corners in, each face's in
+    /// corner order (measured in a 0.747 client: bit for bit on 44 of 44 normals that triangles and quads share, where the
+    /// listing order misses 3; tools/parity/probes/editable_mesh_quads.luau).
     fn faces_in_order(&self) -> impl Iterator<Item = &Face> {
-        self.faces.live().map(|(_, face)| face)
+        self.faces.listed.iter().rev().map(|&slot| self.faces.items[slot as usize].as_ref().expect("listed slots are live"))
     }
 
     /// Every automatic normal's value: the normalised sum of its corners' weights; (0, 0, 0) when no face uses it.
     fn automatic_normals(&self) -> FxHashMap<u32, Vec3> {
         let mut sums: FxHashMap<u32, Vec3> = FxHashMap::default();
         for face in self.faces_in_order() {
-            for (corner, &n) in face.normals.iter().enumerate() {
+            for (corner, &n) in face.normals[..face.len()].iter().enumerate() {
                 if matches!(self.normals.get(n), Some(None)) {
                     *sums.entry(n).or_insert(Vec3::ZERO) += self.corner_weight(face, corner);
                 }
@@ -292,7 +335,7 @@ impl Mesh {
             None => {
                 let mut sum = Vec3::ZERO;
                 for face in self.faces_in_order() {
-                    for (corner, &n) in face.normals.iter().enumerate() {
+                    for (corner, &n) in face.normals[..face.len()].iter().enumerate() {
                         if n == index {
                             sum += self.corner_weight(face, corner);
                         }
@@ -306,13 +349,18 @@ impl Mesh {
     /// The corners over vertex `v`, front first: (face slot, corner). Measured in a 0.747 client
     /// (tools/parity/probes/editable_mesh_vertex_batch.luau): a vertex's faces and attributes list one entry per corner
     /// (a face over it twice, twice), and a corner comes to the front when its face is made (its corners in order, so a
-    /// face over a vertex twice lists its second corner first), when its face's vertices are set (all three, the same ones
-    /// too), or when its normal, uv or colour is set to another one; a removed face's corners leave the rest in order.
+    /// face over a vertex twice lists its second corner first), when its face's vertices are set (all its corners, the same
+    /// ones too), or when its normal, uv or colour is set to another one; a removed face's corners leave the rest in order.
     fn corners_of(&self, v: u32) -> Vec<(u32, usize)> {
+        self.corners_where(|face, corner| face.vertices[corner] == v)
+    }
+
+    /// The corners `uses(face, corner)` picks, front first (by their stamps, as [`Mesh::corners_of`]).
+    fn corners_where(&self, mut uses: impl FnMut(&Face, usize) -> bool) -> Vec<(u32, usize)> {
         let mut found: Vec<(u32, u32, usize)> = Vec::new();
         for (f, face) in self.faces.live() {
-            for corner in 0..3 {
-                if face.vertices[corner] == v {
+            for corner in 0..face.len() {
+                if uses(face, corner) {
                     found.push((face.stamps[corner], f, corner));
                 }
             }
@@ -325,7 +373,7 @@ impl Mesh {
     fn corners_of_all(&self, vertices: &[u32]) -> FxHashMap<u32, Vec<(u32, usize)>> {
         let mut found: FxHashMap<u32, Vec<(u32, u32, usize)>> = vertices.iter().map(|&v| (v, Vec::new())).collect();
         for (f, face) in self.faces.live() {
-            for corner in 0..3 {
+            for corner in 0..face.len() {
                 if let Some(list) = found.get_mut(&face.vertices[corner]) {
                     list.push((face.stamps[corner], f, corner));
                 }
@@ -345,7 +393,7 @@ impl Mesh {
         if self.corners.is_none() {
             let mut corners: FxHashMap<u32, (u32, [u32; 3])> = FxHashMap::default();
             for (_, face) in self.faces.live() {
-                for corner in 0..3 {
+                for corner in 0..face.len() {
                     let here = (face.stamps[corner], [face.normals[corner], face.uvs[corner], face.colors[corner]]);
                     let entry = corners.entry(face.vertices[corner]).or_insert(here);
                     if here.0 >= entry.0 {
@@ -389,13 +437,32 @@ impl Mesh {
         }
     }
 
-    /// Sets face `f`'s vertices: all three corners come to the front of their (new) vertices' corners.
-    fn set_face_vertices(&mut self, f: u32, vertices: [u32; 3]) {
-        let stamps = [self.stamp(), self.stamp(), self.stamp()];
-        if let Some(face) = self.faces.get_mut(f) {
-            face.vertices = vertices;
-            face.stamps = stamps;
+    /// Sets face `f`'s vertices (3 or 4): every corner comes to the front of its (new) vertex's corners. A corner keeps
+    /// its normal, uv and colour; a fourth corner a triangle gains takes what a new face's would (measured in a 0.747
+    /// client: the front corner's over its vertex, else new ones), and a quad given three drops its fourth.
+    fn set_face_vertices(&mut self, f: u32, vertices: &[u32]) {
+        let Some(old) = self.faces.get(f).copied() else { return };
+        let mut face = old;
+        face.count = vertices.len() as u8;
+        face.vertices[..vertices.len()].copy_from_slice(vertices);
+        if vertices.len() > old.len() {
+            let corner = old.len();
+            let v = vertices[corner];
+            let attributes = match vertices[..corner].iter().position(|&earlier| earlier == v) {
+                Some(earlier) => [face.normals[earlier], face.uvs[earlier], face.colors[earlier]],
+                None => match self.corner_of(v) {
+                    Some(found) => found,
+                    None => [self.normals.add(None), self.uvs.add([0.0; 2]), self.colors.add(([1.0; 3], 1.0))],
+                },
+            };
+            face.normals[corner] = attributes[0];
+            face.uvs[corner] = attributes[1];
+            face.colors[corner] = attributes[2];
         }
+        for corner in 0..face.len() {
+            face.stamps[corner] = self.stamp();
+        }
+        *self.faces.get_mut(f).expect("live") = face;
         self.faces_moved();
     }
 
@@ -404,12 +471,13 @@ impl Mesh {
         self.corners = None;
     }
 
-    /// A new face over `vertices`: each corner takes what the corner at the front of its vertex's corners uses (a vertex
-    /// twice in the face shares it), else a new automatic normal, a (0, 0) uv and a white opaque colour, made corner by
-    /// corner.
-    fn new_face(&mut self, vertices: [u32; 3]) -> Face {
-        let mut attributes = [[0u32; 3]; 3];
-        for corner in 0..3 {
+    /// A new face over `vertices` (3 or 4): each corner takes what the corner at the front of its vertex's corners uses (a
+    /// vertex twice in the face shares it), else a new automatic normal, a (0, 0) uv and a white opaque colour, made corner
+    /// by corner.
+    fn new_face(&mut self, vertices: &[u32]) -> Face {
+        let count = vertices.len();
+        let mut attributes = [[0u32; 3]; 4];
+        for corner in 0..count {
             let v = vertices[corner];
             attributes[corner] = match vertices[..corner].iter().position(|&earlier| earlier == v) {
                 Some(earlier) => attributes[earlier],
@@ -419,18 +487,43 @@ impl Mesh {
                 },
             };
         }
-        let stamps = [self.stamp(), self.stamp(), self.stamp()];
+        let mut stamps = [0u32; 4];
+        for stamp in &mut stamps[..count] {
+            *stamp = self.stamp();
+        }
         if let Some(corners) = self.corners.as_mut() {
-            for corner in 0..3 {
+            for corner in 0..count {
                 corners.insert(vertices[corner], (stamps[corner], attributes[corner]));
             }
         }
-        Face {
-            vertices,
-            normals: attributes.map(|a| a[0]),
-            uvs: attributes.map(|a| a[1]),
-            colors: attributes.map(|a| a[2]),
-            stamps,
+        let mut face = Face { count: count as u8, vertices: [0; 4], normals: [0; 4], uvs: [0; 4], colors: [0; 4], stamps };
+        for corner in 0..count {
+            face.vertices[corner] = vertices[corner];
+            face.normals[corner] = attributes[corner][0];
+            face.uvs[corner] = attributes[corner][1];
+            face.colors[corner] = attributes[corner][2];
+        }
+        face
+    }
+
+    /// A quad's two triangles as Triangulate and a FileMesh copy make them: along the shorter diagonal ([`second_diagonal`]),
+    /// (c0, c1, c2) and (c2, c3, c0), or (c1, c2, c3) and (c3, c0, c1) (measured in a 0.747 client); a triangle as it is.
+    fn split(&self, face: &Face) -> ([usize; 3], Option<[usize; 3]>) {
+        if face.len() == 3 {
+            return ([0, 1, 2], None);
+        }
+        let p = |i: usize| self.positions.get(face.vertices[i]).copied().unwrap_or(Vec3::ZERO);
+        if second_diagonal([p(0), p(1), p(2), p(3)]) { ([1, 2, 3], Some([3, 0, 1])) } else { ([0, 1, 2], Some([2, 3, 0])) }
+    }
+
+    /// The triangles the queries (FindClosestPointOnSurface, RaycastLocal) test of a face: a quad as a fan from the end of its
+    /// shorter diagonal, (c0, c1, c2) and (c0, c2, c3), or (c1, c2, c3) and (c1, c3, c0) (measured in a 0.747 client: the
+    /// vertex ids those answer).
+    fn query_triangles(&self, face: &Face) -> ([usize; 3], Option<[usize; 3]>) {
+        match self.split(face) {
+            ([1, 2, 3], Some(_)) => ([1, 2, 3], Some([1, 3, 0])),
+            ([0, 1, 2], Some(_)) => ([0, 1, 2], Some([0, 2, 3])),
+            other => other,
         }
     }
 
@@ -444,6 +537,125 @@ impl Mesh {
             self.faces.remove(f);
         }
         self.faces_moved();
+    }
+
+    /// Triangulate: each quad becomes the two triangles [`Mesh::split`] makes of it, which keep its corners' vertices, normals,
+    /// uvs and colours; the quads go as BatchRemove takes faces and the triangles come as BatchAdd makes a batch of faces
+    /// (measured in a 0.747 client: two quads' triangles read `5:5`, `5:4`, `13:2`, `13:3`).
+    fn triangulate(&mut self) {
+        let quads: Vec<u32> = self.faces.live().filter(|(_, face)| face.len() == 4).map(|(slot, _)| slot).collect();
+        if quads.is_empty() {
+            return;
+        }
+        let mut triangles = Vec::with_capacity(quads.len() * 2);
+        for &quad in &quads {
+            let face = *self.faces.get(quad).expect("live");
+            let (first, second) = self.split(&face);
+            for corners in std::iter::once(first).chain(second) {
+                let mut triangle = face;
+                triangle.count = 3;
+                for (at, &corner) in corners.iter().enumerate() {
+                    triangle.vertices[at] = face.vertices[corner];
+                    triangle.normals[at] = face.normals[corner];
+                    triangle.uvs[at] = face.uvs[corner];
+                    triangle.colors[at] = face.colors[corner];
+                    triangle.stamps[at] = face.stamps[corner];
+                }
+                triangles.push(triangle);
+            }
+        }
+        self.remove_faces(&quads);
+        self.faces.reserve(triangles.len());
+        let slots: Vec<u32> = triangles.iter().map(|_| self.faces.take()).collect();
+        for (triangle, slot) in triangles.into_iter().zip(slots) {
+            self.faces.put(slot, triangle);
+        }
+        self.faces_moved();
+    }
+
+    /// The corners using normal, uv or colour `slot` (of `kind`), front first.
+    fn attribute_corners(&self, kind: u64, slot: u32) -> Vec<(u32, usize)> {
+        self.corners_where(|face, corner| match kind {
+            NORMAL => face.normals[corner] == slot,
+            COLOR => face.colors[corner] == slot,
+            _ => face.uvs[corner] == slot,
+        })
+    }
+
+    /// FindClosestPointOnSurface's and RaycastLocal's answer: the face's id, the point, its barycentric weights in the triangle
+    /// `vertices` (vertex slots) and their ids.
+    fn query_answer(&self, lua: &Lua, engine: &Engine, f: u32, vertices: [u32; 3], point: Vec3) -> Ret {
+        let [a, b, c] = vertices.map(|v| self.positions.get(v).copied().unwrap_or(Vec3::ZERO));
+        let weights = barycentric(point, a, b, c);
+        Ok(LuaMultiValue::from_iter([
+            LuaValue::Number(self.faces.id(FACE, f)),
+            vector_value(lua, engine, point)?,
+            vector_value(lua, engine, weights)?,
+            LuaValue::Number(self.positions.id(VERTEX, vertices[0])),
+            LuaValue::Number(self.positions.id(VERTEX, vertices[1])),
+            LuaValue::Number(self.positions.id(VERTEX, vertices[2])),
+        ]))
+    }
+
+    /// MergeVertices: each vertex in slot order goes to the first one before it (in slot order, merged or not) whose squared
+    /// distance is at most the tolerance squared: its corners move to that vertex, each coming to the front of its corners in
+    /// the order they were listed, and keep their normals, uvs and colours; every vertex stays (RemoveUnused takes the ones no
+    /// face uses). The answer maps the ids of the vertices merged into one that took two or more, by their id's text, to that
+    /// one's id (measured in a 0.747 client, 16 meshes: a vertex that took one alone is left out of it, a chain of merges goes
+    /// one step each). Also the vertices compared, for the price.
+    fn merge_vertices(&mut self, tolerance: f32) -> (Vec<(f64, f64)>, usize) {
+        let reach = tolerance * tolerance;
+        let cell = tolerance.abs().max(1e-6);
+        let key = |p: Vec3| ((p.x / cell).floor() as i64, (p.y / cell).floor() as i64, (p.z / cell).floor() as i64);
+        let vertices: Vec<(u32, Vec3)> = self.positions.by_slot().map(|(slot, &p)| (slot, p)).collect();
+        let mut grid: FxHashMap<(i64, i64, i64), Vec<u32>> = FxHashMap::default();
+        let mut targets: Vec<(u32, u32)> = Vec::new();
+        for &(slot, p) in &vertices {
+            let (x, y, z) = key(p);
+            let mut found: Option<u32> = None;
+            for dx in -1..=1 {
+                for dy in -1..=1 {
+                    for dz in -1..=1 {
+                        for &other in grid.get(&(x + dx, y + dy, z + dz)).into_iter().flatten() {
+                            let q = *self.positions.get(other).expect("live");
+                            if (p - q).length_squared() <= reach && found.is_none_or(|first| other < first) {
+                                found = Some(other);
+                            }
+                        }
+                    }
+                }
+            }
+            if let Some(target) = found {
+                targets.push((slot, target));
+                for (f, corner) in self.corners_of(slot) {
+                    if let Some(face) = self.faces.get_mut(f) {
+                        face.vertices[corner] = target;
+                    }
+                    self.touch(f, corner);
+                }
+            }
+            grid.entry((x, y, z)).or_default().push(slot);
+        }
+        self.faces_moved();
+        let mut taken: FxHashMap<u32, usize> = FxHashMap::default();
+        for &(_, target) in &targets {
+            *taken.entry(target).or_default() += 1;
+        }
+        let map = targets
+            .into_iter()
+            .filter(|(_, target)| taken[target] >= 2)
+            .map(|(slot, target)| (self.positions.id(VERTEX, slot), self.positions.id(VERTEX, target)))
+            .collect();
+        (map, vertices.len())
+    }
+
+    /// Takes bone `slot` out of every FACS pose (it was removed or made not virtual).
+    fn drop_bone_poses(&mut self, slot: u32) {
+        for pose in self.facs.values_mut().chain(self.correctives.values_mut()) {
+            pose.retain(|(bone, _)| *bone != slot);
+        }
+        self.facs.retain(|_, pose| !pose.is_empty());
+        self.correctives.retain(|_, pose| !pose.is_empty());
     }
 
     fn bounds(&self) -> Option<(Vec3, Vec3)> {
@@ -488,10 +700,10 @@ impl Mesh {
         }
         let mut used = [FxHashSet::default(), FxHashSet::default(), FxHashSet::default(), FxHashSet::default()];
         for (_, face) in self.faces.live() {
-            used[0].extend(face.vertices);
-            used[1].extend(face.normals);
-            used[2].extend(face.colors);
-            used[3].extend(face.uvs);
+            used[0].extend(&face.vertices[..face.len()]);
+            used[1].extend(&face.normals[..face.len()]);
+            used[2].extend(&face.colors[..face.len()]);
+            used[3].extend(&face.uvs[..face.len()]);
         }
         let mut removed = Vec::new();
         for vertex in sweep(&mut self.positions, VERTEX, &used[0], &mut removed) {
@@ -519,8 +731,9 @@ impl Mesh {
         for corners in file.indices[range.start as usize..range.end as usize].chunks_exact(3) {
             let c = [corners[0], corners[1], corners[2]];
             if c.iter().all(|&i| (i as usize) < count) {
-                let stamps = [mesh.stamp(), mesh.stamp(), mesh.stamp()];
-                mesh.faces.add(Face { vertices: c, normals: c, colors: c, uvs: c, stamps });
+                let stamps = [mesh.stamp(), mesh.stamp(), mesh.stamp(), 0];
+                let c = [c[0], c[1], c[2], 0];
+                mesh.faces.add(Face { count: 3, vertices: c, normals: c, colors: c, uvs: c, stamps });
             }
         }
         if let Some(skinning) = &file.skinning {
@@ -553,7 +766,22 @@ pub fn encode(mesh: &Mesh) -> Vec<u8> {
     let bone_order: Vec<u32> = mesh.bones.by_slot().map(|(i, _)| i).collect();
     let bone_slot: FxHashMap<u32, u16> = bone_order.iter().enumerate().map(|(slot, &i)| (i, slot as u16)).collect();
     let skinned = !bone_order.is_empty();
-    let faces: Vec<Face> = mesh.faces.by_slot().map(|(_, f)| *f).collect();
+    // (a quad as the two triangles Triangulate makes of it: Mesh::split)
+    let mut faces: Vec<Face> = Vec::with_capacity(mesh.faces.count());
+    for (_, face) in mesh.faces.by_slot() {
+        let (first, second) = mesh.split(face);
+        for corners in std::iter::once(first).chain(second) {
+            let mut triangle = *face;
+            triangle.count = 3;
+            for (at, &corner) in corners.iter().enumerate() {
+                triangle.vertices[at] = face.vertices[corner];
+                triangle.normals[at] = face.normals[corner];
+                triangle.uvs[at] = face.uvs[corner];
+                triangle.colors[at] = face.colors[corner];
+            }
+            faces.push(triangle);
+        }
+    }
 
     // Subsets: faces in order, a new subset when a face's bones would pass 26
     let vertex_bones = |vertex: u32| -> Vec<u16> {
@@ -565,7 +793,7 @@ pub fn encode(mesh: &Mesh) -> Vec<u8> {
     for (index, face) in faces.iter().enumerate() {
         let mut needed: Vec<u16> = Vec::new();
         if skinned {
-            for &v in &face.vertices {
+            for &v in &face.vertices[..3] {
                 for bone in vertex_bones(v) {
                     if !needed.contains(&bone) {
                         needed.push(bone);
@@ -1202,7 +1430,7 @@ fn mesh_part(lua: &Lua, engine: &Rc<Engine>, mesh_id: InstanceId, options: &LuaV
 }
 
 /// MeshPart.MeshSize: what it was given, else the mesh's size a file stores as InitialSize (files
-/// keep no MeshSize; Roblox reads it from the mesh), else Size
+/// keep no MeshSize; Roblox reads it from the mesh), else Size when it has a mesh, else 0, 0, 0
 fn mesh_size_of(state: &State, names: &Names, id: InstanceId) -> Value {
     let vector = |value: Option<&Value>| match value {
         Some(Value::Vector3(v)) if v.x > 0.0 || v.y > 0.0 || v.z > 0.0 => Some(Value::Vector3(*v)),
@@ -1216,10 +1444,13 @@ fn mesh_size_of(state: &State, names: &Names, id: InstanceId) -> Value {
             })
         })
     };
+    // (a part with no mesh reads 0, 0, 0, whatever its Size: measured in a 0.747 client, tools/parity/probes/
+    // editable_mesh_texts.luau; one with a mesh that gave no size, its Size)
+    let meshed = matches!(state.dom.raw_get(id, names.mesh_id), Some(Value::String(uri)) if !uri.is_empty());
     vector(state.dom.raw_get(id, names.mesh_size))
         .or_else(|| vector(state.dom.raw_get(id, names.initial_size)))
         .or_else(from_file)
-        .or_else(|| state.dom.raw_get(id, names.size).cloned())
+        .or_else(|| meshed.then(|| state.dom.raw_get(id, names.size).cloned()).flatten())
         .unwrap_or(Value::Vector3(dom::Vector3::new(0.0, 0.0, 0.0)))
 }
 
@@ -1255,7 +1486,8 @@ fn attribute_slot(m: &Mesh, kind: u64, id: i64) -> Result<u32, Flow> {
 fn face_corner(m: &Mesh, v: i64, f: i64) -> Result<(u32, usize), Flow> {
     let f = m.faces.at(FACE, f)?;
     let vertex = m.positions.find(VERTEX, v);
-    let corner = m.faces.get(f).expect("live").vertices.iter().position(|&x| Some(x) == vertex);
+    let face = m.faces.get(f).expect("live");
+    let corner = face.vertices[..face.len()].iter().position(|&x| Some(x) == vertex);
     Ok((f, corner.ok_or_else(|| err("vertexId not found on requested face"))?))
 }
 
@@ -1272,9 +1504,339 @@ fn pair_corner(m: &Mesh, method: &str, index: usize, v: i64, f: i64) -> Result<(
     let v = m.positions.at(VERTEX, v)?;
     check_kind(f, FACE)?;
     let f = m.faces.at(FACE, f)?;
-    let corner = m.faces.get(f).expect("live").vertices.iter().position(|&x| x == v);
+    let face = m.faces.get(f).expect("live");
+    let corner = face.vertices[..face.len()].iter().position(|&x| x == v);
     Ok((f, corner.ok_or_else(|| err(format!("{method}: vertexId not found on requested face at index {index}")))?))
 }
+
+/// Whether the running C function was called by its name (read as a value, `Mesh.AddFace(Mesh, ...)`) rather than through
+/// `__namecall` (`Mesh:AddFace(...)`): a Luau-style argument error names the function only then (lua/services/query.rs).
+fn called_by_name(lua: &Lua, method: &str) -> bool {
+    let frame = |level: usize| lua.inspect_stack(level, |debug| (debug.names().name.map(|name| name.into_owned()), debug.source().what == "C"));
+    match frame(0) {
+        Some((Some(name), _)) if name == method => true,
+        Some((Some(name), _)) if name == "__namecall" => false,
+        _ => matches!(frame(1), Some((Some(name), true)) if name == method),
+    }
+}
+
+/// Argument `at` (1 is the first after self) of a method a client binds the Luau way (AddFace, GetFacesWith*,
+/// GetVerticesWith*): a number, rounded half away from zero to an int64, else "invalid argument #<at + 1> (int64 expected,
+/// got <typeof>)" from the calling line, " to '<method>'" after the number when the method was read as a value (measured in a
+/// 0.747 client: a numeric string is refused too).
+fn luau_int64(lua: &Lua, engine: &Engine, args: &Args, at: usize, method: &str) -> Result<i64, Flow> {
+    match args.get(at) {
+        LuaValue::Integer(n) => Ok(i64::from(*n)),
+        LuaValue::Number(n) => Ok(id_of_number(n.round())),
+        other => {
+            let to = if called_by_name(lua, method) { format!(" to '{method}'") } else { String::new() };
+            crate::lua::raise_at_caller(format!("invalid argument #{}{to} (int64 expected, got {})", at + 1, crate::lua::typeof_value(engine, other)))
+        }
+    }
+}
+
+/// A Vector3 argument as a client casts one: nil is "Argument <at> missing or nil", anything else that is no Vector3 "Unable
+/// to cast <type> to Vector3".
+fn vector3_arg(engine: &Engine, args: &Args, at: usize) -> Result<Vec3, Flow> {
+    match args.get(at) {
+        LuaValue::Nil => Err(err(format!("Argument {at} missing or nil"))),
+        value => vec3_of(value).ok_or_else(|| err(format!("Unable to cast {} to Vector3", crate::services::tween::cast_name(engine, value)))),
+    }
+}
+
+/// A float argument as a client casts one: a number, a numeric string, a boolean as 1 or 0; nil "Argument <at> missing or
+/// nil", another string "Unable to cast string to float", anything else "Unable to cast <type> to float".
+fn float_arg(lua: &Lua, engine: &Engine, args: &Args, at: usize) -> Result<f32, Flow> {
+    let value = args.get(at);
+    match value {
+        LuaValue::Nil => Err(err(format!("Argument {at} missing or nil"))),
+        LuaValue::Integer(n) => Ok(*n as f32),
+        LuaValue::Number(n) => Ok(*n as f32),
+        LuaValue::Boolean(on) => Ok(f32::from(u8::from(*on))),
+        LuaValue::String(_) => lua.coerce_number(value.clone()).ok().flatten().map(|n| n as f32).ok_or_else(|| err("Unable to cast string to float")),
+        other => Err(err(format!("Unable to cast {} to float", crate::services::tween::cast_name(engine, other)))),
+    }
+}
+
+/// A bool argument as a client casts one: a boolean, a number (not 0 is true); nil "Argument <at> missing or nil", anything
+/// else "Unable to cast <type> to bool" (measured: a string is refused).
+fn bool_arg(engine: &Engine, args: &Args, at: usize) -> Result<bool, Flow> {
+    match args.get(at) {
+        LuaValue::Nil => Err(err(format!("Argument {at} missing or nil"))),
+        LuaValue::Boolean(on) => Ok(*on),
+        LuaValue::Integer(n) => Ok(*n != 0),
+        LuaValue::Number(n) => Ok(*n != 0.0),
+        other => Err(err(format!("Unable to cast {} to bool", crate::services::tween::cast_name(engine, other)))),
+    }
+}
+
+/// A CFrame argument as a client casts one: nil "Argument <at> missing or nil", anything else that is no CFrame "Unable to
+/// cast <type> to CoordinateFrame".
+fn cframe_arg(engine: &Engine, args: &Args, at: usize) -> Result<[f32; 12], Flow> {
+    match args.get(at) {
+        LuaValue::Nil => Err(err(format!("Argument {at} missing or nil"))),
+        value => cframe_of(value).ok_or_else(|| err(format!("Unable to cast {} to CoordinateFrame", crate::services::tween::cast_name(engine, value)))),
+    }
+}
+
+/// An array argument as a client casts one: nil "Argument <at> missing or nil", anything else that is no table "Unable to cast
+/// <type> to Array".
+fn array_arg(engine: &Engine, args: &Args, at: usize) -> Result<Vec<LuaValue>, Flow> {
+    match args.get(at) {
+        LuaValue::Nil => Err(err(format!("Argument {at} missing or nil"))),
+        LuaValue::Table(table) => Ok(sequence(table)),
+        value => Err(err(format!("Unable to cast {} to Array", crate::services::tween::cast_name(engine, value)))),
+    }
+}
+
+/// An element of an id array a setter reads as the client reads one: a number truncated as [`id_of_number`], a numeric string
+/// as its number, anything else as 0 (which the checks then name as no id: measured, "x" in SetFaceVertices' ids is "Invalid
+/// id").
+fn loose_id(lua: &Lua, value: &LuaValue) -> i64 {
+    match value {
+        LuaValue::Integer(n) => i64::from(*n),
+        LuaValue::Number(n) => id_of_number(*n),
+        LuaValue::String(_) => lua.coerce_number(value.clone()).ok().flatten().map_or(0, id_of_number),
+        _ => 0,
+    }
+}
+
+/// The vertex slot a vertex id of AddTriangle and AddFace names, as a client reads one (measured in a 0.747 client): a live
+/// vertex's; a live normal's id reads as the vertex in the normal's slot (the client does not check that it names a vertex);
+/// kind 7 raises "Unexpected Attribute Type"; anything else, ids of the other kinds included, "Unable to add new triangle,
+/// vertex id <id> is invalid".
+fn triangle_vertex(m: &Mesh, id: i64) -> Result<u32, Flow> {
+    let invalid = || err(format!("Unable to add new triangle, vertex id {id} is invalid"));
+    match parts(id).0 {
+        7 => Err(err("Unexpected Attribute Type")),
+        VERTEX => m.positions.find(VERTEX, id).ok_or_else(invalid),
+        NORMAL => m.normals.find(NORMAL, id).filter(|&slot| m.positions.get(slot).is_some()).ok_or_else(invalid),
+        _ => Err(invalid()),
+    }
+}
+
+/// A bone name as a client takes one (measured in a 0.747 client): cut at its first NUL byte (a C string), "EditableMesh Error:
+/// Bone name missing" when that is empty, "EditableMesh Error: Bone name too long" past 100 bytes, "EditableMesh Error: Bone name
+/// already exists in the mesh" when another bone has it.
+fn bone_name(m: &Mesh, bytes: &[u8], bone: Option<u32>) -> Result<String, Flow> {
+    let bytes = bytes.split(|&byte| byte == 0).next().unwrap_or_default();
+    if bytes.is_empty() {
+        return Err(err("EditableMesh Error: Bone name missing"));
+    }
+    if bytes.len() > 100 {
+        return Err(err("EditableMesh Error: Bone name too long"));
+    }
+    let name = String::from_utf8_lossy(bytes).into_owned();
+    if m.bones.live().any(|(slot, other)| Some(slot) != bone && other.name == name) {
+        return Err(err("EditableMesh Error: Bone name already exists in the mesh"));
+    }
+    Ok(name)
+}
+
+/// The kind letters IdDebugString writes (measured: kind 0 "?", kind 7 nothing).
+const KIND_LETTERS: [&str; 8] = ["?", "v", "n", "c", "u", "f", "b", ""];
+
+/// EditableMesh:IdDebugString of `id` (measured in a 0.747 client): "Invalid" for 0 (and an id past the int64 range), else its
+/// kind's letter, the id's low 32 bits and, when its generation is not 0, a comma and the generation plus 1 (`f3`, `f3,2`;
+/// generations from 65,536 on read otherwise there, not followed).
+fn id_debug_string(id: i64) -> String {
+    if id == 0 || id == i64::MIN {
+        return "Invalid".into();
+    }
+    let (kind, generation, low) = parts(id);
+    let mut text = format!("{}{low}", KIND_LETTERS[kind as usize]);
+    if generation != 0 {
+        text.push_str(&format!(",{}", (generation + 1) & 0x1FFF_FFFF));
+    }
+    text
+}
+
+/// Ericson's closest point of triangle (a, b, c) to `p` (Real-Time Collision Detection 5.1.5), in single precision as a client
+/// computes it (measured: the points FindClosestPointOnSurface answers, bit for bit on 14 of 14).
+fn closest_on_triangle(p: Vec3, a: Vec3, b: Vec3, c: Vec3) -> Vec3 {
+    let (ab, ac, ap) = (b - a, c - a, p - a);
+    let (d1, d2) = (ab.dot(ap), ac.dot(ap));
+    if d1 <= 0.0 && d2 <= 0.0 {
+        return a;
+    }
+    let bp = p - b;
+    let (d3, d4) = (ab.dot(bp), ac.dot(bp));
+    if d3 >= 0.0 && d4 <= d3 {
+        return b;
+    }
+    let vc = d1 * d4 - d3 * d2;
+    if vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0 {
+        return a + ab * (d1 / (d1 - d3));
+    }
+    let cp = p - c;
+    let (d5, d6) = (ab.dot(cp), ac.dot(cp));
+    if d6 >= 0.0 && d5 <= d6 {
+        return c;
+    }
+    let vb = d5 * d2 - d1 * d6;
+    if vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0 {
+        return a + ac * (d2 / (d2 - d6));
+    }
+    let va = d3 * d6 - d5 * d4;
+    if va <= 0.0 && d4 - d3 >= 0.0 && d5 - d6 >= 0.0 {
+        return b + (c - b) * ((d4 - d3) / ((d4 - d3) + (d5 - d6)));
+    }
+    let denom = 1.0 / (va + vb + vc);
+    a + ab * (vb * denom) + ac * (vc * denom)
+}
+
+/// The barycentric weights of `p` in triangle (a, b, c), the weight of a first (Ericson 3.4). A client's own differ from these
+/// in their last bits (within 2e-7 on the measured points, not followed).
+fn barycentric(p: Vec3, a: Vec3, b: Vec3, c: Vec3) -> Vec3 {
+    let (v0, v1, v2) = (b - a, c - a, p - a);
+    let (d00, d01, d11, d20, d21) = (v0.dot(v0), v0.dot(v1), v1.dot(v1), v2.dot(v0), v2.dot(v1));
+    let denom = d00 * d11 - d01 * d01;
+    if denom == 0.0 {
+        return Vec3::new(1.0, 0.0, 0.0);
+    }
+    let v = (d11 * d20 - d01 * d21) / denom;
+    let w = (d00 * d21 - d01 * d20) / denom;
+    Vec3::new(1.0 - v - w, v, w)
+}
+
+/// Where a ray from `origin` along `direction` meets triangle (a, b, c) (Moller-Trumbore, both sides, edges included), as a
+/// fraction of `direction`: a client hits from 0 up to but not including 1 (measured: a ray whose end touches the face misses).
+fn ray_triangle(origin: Vec3, direction: Vec3, a: Vec3, b: Vec3, c: Vec3) -> Option<f32> {
+    let (e1, e2) = (b - a, c - a);
+    let p = direction.cross(e2);
+    let det = e1.dot(p);
+    if det == 0.0 || !det.is_finite() {
+        return None;
+    }
+    let inverse = 1.0 / det;
+    let s = origin - a;
+    let u = s.dot(p) * inverse;
+    if !(0.0..=1.0).contains(&u) {
+        return None;
+    }
+    let q = s.cross(e1);
+    let v = direction.dot(q) * inverse;
+    if v < 0.0 || u + v > 1.0 {
+        return None;
+    }
+    let t = e2.dot(q) * inverse;
+    (0.0..1.0).contains(&t).then_some(t)
+}
+
+/// A FacsActionUnit argument as a client casts one: an item of FacsActionUnit, an item's name or its value; nil "Argument <at>
+/// missing or nil", an item of another enum "Unable to cast <Enum> to FacsActionUnit", another string "Unable to cast string
+/// to FacsActionUnit".
+fn facs_unit(lua: &Lua, engine: &Engine, value: &LuaValue, at: usize) -> Result<u32, Flow> {
+    if value.is_nil() {
+        return Err(err(format!("Argument {at} missing or nil")));
+    }
+    let facs = engine.reflection.enum_id("FacsActionUnit").ok_or_else(|| err("FacsActionUnit is not available"))?;
+    match convert::coerce_enum_arg(lua, engine, facs, value) {
+        Some(item) => Ok(engine.reflection.enum_item_info(item).value as u32),
+        None => Err(err(format!("Unable to cast {} to FacsActionUnit", crate::services::tween::cast_name(engine, value)))),
+    }
+}
+
+/// The FacsActionUnit item of value `value`.
+fn facs_item(engine: &Engine, value: u32) -> Option<Value> {
+    let facs = engine.reflection.enum_id("FacsActionUnit")?;
+    engine.reflection.enums[facs as usize].by_value.get(&i64::from(value)).map(|&item| Value::EnumItem(item))
+}
+
+/// The actions of a corrective pose, sorted (measured: 2 or 3, "Correctives must have 2 or 3 FACS controls", no action twice,
+/// "Unable to use actions together in a corrective"; a pose is found whatever order its actions are given in).
+fn corrective_actions(lua: &Lua, engine: &Engine, args: &Args, at: usize) -> Result<Vec<u32>, Flow> {
+    let items = array_arg(engine, args, at)?;
+    let mut actions = Vec::with_capacity(items.len());
+    for item in &items {
+        actions.push(facs_unit(lua, engine, item, at)?);
+    }
+    if !(2..=3).contains(&actions.len()) {
+        return Err(err("Correctives must have 2 or 3 FACS controls"));
+    }
+    actions.sort_unstable();
+    if actions.windows(2).any(|pair| pair[0] == pair[1]) {
+        return Err(err("Unable to use actions together in a corrective"));
+    }
+    Ok(actions)
+}
+
+/// A FACS pose's bones and CFrames from SetFacsPose's / SetFacsCorrectivePose's arrays (measured in a 0.747 client: the arrays the
+/// same size, "boneIds and cframes size mismatch (<n> and <m>)"; each pair in turn: the id a number ("Variant cast failed"), a
+/// live bone (0 and gone "Invalid id", another kind named), a virtual one ('Only virtual bones can be used in Facs Poses, unable
+/// to use bone "<name>", id <id>'), then its CFrame ("Variant cast failed"); a bone given twice composes its CFrames).
+fn facs_pose(m: &Mesh, ids: &[LuaValue], frames: &[LuaValue]) -> Result<Vec<(u32, [f32; 12])>, Flow> {
+    if ids.len() != frames.len() {
+        return Err(err(format!("boneIds and cframes size mismatch ({} and {})", ids.len(), frames.len())));
+    }
+    let mut pose: Vec<(u32, [f32; 12])> = Vec::with_capacity(ids.len());
+    for (id, frame) in ids.iter().zip(frames) {
+        let id = match id {
+            LuaValue::Integer(n) => i64::from(*n),
+            LuaValue::Number(n) => id_of_number(n.round()),
+            _ => return Err(err("Variant cast failed")),
+        };
+        let bone = facs_bone(m, id)?;
+        let frame = cframe_of(frame).ok_or_else(|| err("Variant cast failed"))?;
+        match pose.iter_mut().find(|(slot, _)| *slot == bone) {
+            Some((_, held)) => *held = compose(*held, frame),
+            None => pose.push((bone, frame)),
+        }
+    }
+    Ok(pose)
+}
+
+/// A bone a FACS pose may use: a live virtual one (see [`facs_pose`]).
+fn facs_bone(m: &Mesh, id: i64) -> Result<u32, Flow> {
+    check_kind(id, BONE)?;
+    let slot = m.bones.at(BONE, id)?;
+    let bone = m.bones.get(slot).expect("live");
+    if !bone.virtual_bone {
+        return Err(err(format!("Only virtual bones can be used in Facs Poses, unable to use bone \"{}\", id {id}", bone.name)));
+    }
+    Ok(slot)
+}
+
+const IDENTITY: [f32; 12] = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];
+
+/// `a * b` of two CFrames as components (position, then the rotation row by row).
+fn compose(a: [f32; 12], b: [f32; 12]) -> [f32; 12] {
+    let r = |m: &[f32; 12], row: usize, col: usize| m[3 + row * 3 + col];
+    let mut out = [0f32; 12];
+    for row in 0..3 {
+        out[row] = a[row] + r(&a, row, 0) * b[0] + r(&a, row, 1) * b[1] + r(&a, row, 2) * b[2];
+        for col in 0..3 {
+            out[3 + row * 3 + col] = r(&a, row, 0) * r(&b, 0, col) + r(&a, row, 1) * r(&b, 1, col) + r(&a, row, 2) * r(&b, 2, col);
+        }
+    }
+    out
+}
+
+/// A pose as kept: its identity CFrames dropped (measured: a pose of identities reads as none), sorted by bone id.
+fn settle_pose(m: &Mesh, mut pose: Vec<(u32, [f32; 12])>) -> Vec<(u32, [f32; 12])> {
+    pose.retain(|(_, frame)| *frame != IDENTITY);
+    crate::sort::by_key(&mut pose, |(slot, _)| m.bones.id(BONE, *slot) as u64);
+    pose
+}
+
+fn cframe_value(c: &[f32; 12]) -> Value {
+    let cframe = dom::CFrame::new(dom::Vector3::new(c[0], c[1], c[2]), dom::Matrix3::new(dom::Vector3::new(c[3], c[4], c[5]), dom::Vector3::new(c[6], c[7], c[8]), dom::Vector3::new(c[9], c[10], c[11])));
+    Value::Dom(Rc::new(Variant::CFrame(cframe)))
+}
+
+/// A pose as GetFacsPose answers it: its bones' ids and their CFrames, two arrays.
+fn pose_values(lua: &Lua, engine: &Engine, m: &Mesh, pose: Option<&Vec<(u32, [f32; 12])>>) -> LuaResult<LuaMultiValue> {
+    let ids = lua.create_table()?;
+    let frames = lua.create_table()?;
+    for (index, (slot, frame)) in pose.into_iter().flatten().enumerate() {
+        ids.raw_set(index + 1, m.bones.id(BONE, *slot))?;
+        frames.raw_set(index + 1, convert::to_lua(lua, engine, &cframe_value(frame))?)?;
+    }
+    Ok(LuaMultiValue::from_iter([LuaValue::Table(ids), LuaValue::Table(frames)]))
+}
+
+/// A method's second argument a string parameter (services::strings)
+const SECOND: &[crate::services::StringParam] = &[crate::services::StringParam::at(2)];
 
 pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
     let reflection = engine.reflection.clone();
@@ -1336,18 +1898,34 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
 
     // AssetService
     add("AssetService", "CreateEditableMesh", method(|lua, engine, _, _| new_mesh(lua, engine, Mesh::default(), false)));
+    // CreateEditableMeshAsync(content[, options]) (measured in a 0.747 client, tools/parity/probes/editable_mesh_texts.luau and
+    // arg_checks.luau: the arguments cast last to first, before the call refuses to wait: options no table "Unable to cast
+    // <type> to Dictionary"; content nil "Argument 1 missing or nil", a string read as a Content's uri, anything else no
+    // Content "Unable to cast <type> to Content"; a Content with no uri (Content.none, "") "Failed to load mesh ")
     add("AssetService", "CreateEditableMeshAsync", method(|lua, engine, _, args| {
+        match args.get(2) {
+            LuaValue::Nil | LuaValue::Table(_) => {}
+            other => return Err(err(format!("Unable to cast {} to Dictionary", crate::services::tween::cast_name(engine, other)))),
+        }
         let fixed_size = fixed_option(args.get(2));
+        match args.get(1) {
+            LuaValue::Nil => return Err(err("Argument 1 missing or nil")),
+            LuaValue::String(_) => {}
+            other if matches!(convert::from_lua(other), Value::Content(_)) => {}
+            other => return Err(err(format!("Unable to cast {} to Content", crate::services::tween::cast_name(engine, other)))),
+        }
         if let Some(source) = content_object(engine, args.get(1)) {
             let mesh = extension(engine).meshes.borrow().get(&source).cloned().unwrap_or_default();
             engine.state.borrow().sched.charge(mesh.positions.count() as f64 * crate::cost::MESH_COPY_VERTEX);
             return new_mesh(lua, engine, mesh, fixed_size);
         }
-        let Some(uri) = content_uri(args.get(1)) else {
-            return Err(err("CreateEditableMeshAsync: expected a mesh Content"));
-        };
+        let uri = content_uri(args.get(1)).unwrap_or_default();
+        if uri.is_empty() {
+            return Err(err("Failed to load mesh "));
+        }
         // (an asset's mesh waits for its load: a thread that cannot yield raises before anything is made, by the rule
-        // measured for the engine's other yielding calls, lua/mod.rs NOT_YIELDABLE; not measured for this method)
+        // measured for the engine's other yielding calls, lua/mod.rs NOT_YIELDABLE; a client in a place that is not published
+        // raises UnpublishedPlaceNotInStudio here instead, which ree, a published game's engine, does not)
         crate::lua::refuse_unyieldable(&lua.current_thread(), crate::lua::NOT_YIELDABLE)?;
         // (measured in Studio 0.747's client, 2026-11-24: an id of no protocol it knows raises; another it cannot load
         // was refused there for the place, so it is not known what that raises)
@@ -1402,7 +1980,15 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
     // one false); Size stays
     add("MeshPart", "ApplyMesh", method(|_, engine, id, args| {
         let names = names(engine).ok_or_else(|| err("MeshPart is not available"))?;
-        let source = args.instance(1).ok_or_else(|| err("ApplyMesh: expected a MeshPart"))?;
+        // (measured in a 0.747 client: nil or an instance that is no MeshPart "ApplyMesh requires an MeshPart object", another
+        // value "Unable to cast value to Object"; a mesh grown past MeshPart's limit since is applied as it was)
+        let source = match args.get(1) {
+            LuaValue::Nil => return Err(err("ApplyMesh requires an MeshPart object")),
+            value => crate::lua::raw::instance_id(value).ok_or_else(|| err("Unable to cast value to Object"))?,
+        };
+        if engine.state.borrow().dom.get(source).map(|instance| instance.class) != Some(names.mesh_part) {
+            return Err(err("ApplyMesh requires an MeshPart object"));
+        }
         let mesh = extension(engine).bound.borrow().get(&source).copied();
         {
             let hooks = engine.hooks.borrow();
@@ -1460,34 +2046,69 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
             Ok(values([LuaValue::Number(m.colors.id(COLOR, slot))]))
         })
     }));
-    // (measured: a vertex that is gone is "Unable to add new triangle, vertex id <id> is invalid"; an id of another kind
-    // is named as BatchAdd's faces name it, by analogy)
+    // (measured: each vertex id in turn, as triangle_vertex reads it)
     add("AddTriangle", method(|lua, engine, id, args| {
         let ids = [int64_arg(lua, engine, args, 1)?, int64_arg(lua, engine, args, 2)?, int64_arg(lua, engine, args, 3)?];
         refuse_fixed(engine, id)?;
         with_mesh(engine, id, true, |m| {
             let mut v = [0u32; 3];
             for (slot, &vertex) in v.iter_mut().zip(&ids) {
-                if parts(vertex).0 != VERTEX {
-                    return Err(wrong_kind(VERTEX, vertex));
-                }
-                *slot = m.positions.find(VERTEX, vertex).ok_or_else(|| err(format!("Unable to add new triangle, vertex id {vertex} is invalid")))?;
+                *slot = triangle_vertex(m, vertex)?;
             }
-            let face = m.new_face(v);
+            let face = m.new_face(&v);
             let slot = m.faces.add(face);
             Ok(values([LuaValue::Number(m.faces.id(FACE, slot))]))
         })
     }));
-    // (measured: Name, CFrame and Virtual are each required, checked in that order; a Name of another type is "Variant cast
-    // failed", a CFrame or Virtual of another type by analogy)
-    add("AddBone", method(|_, engine, id, args| {
-        let LuaValue::Table(params) = args.get(1) else { return Err(err("AddBone: table expected")) };
+    // AddFace(v0, v1, v2[, v3]): a triangle or a quad (measured in a 0.747 client, tools/parity/probes/editable_mesh_quads.luau:
+    // refused on a fixed-size mesh first; a table first is "AddFace takes vertex IDs as separate arguments, e.g. AddFace(v0, v1,
+    // v2)."; another count "AddFace called with <n> vertices, currently only supports 3 or 4 vertices"; then each id cast the
+    // Luau way and read as AddTriangle reads it)
+    add("AddFace", method(|lua, engine, id, args| {
         refuse_fixed(engine, id)?;
-        let field = |name: &str| params.get::<LuaValue>(name).unwrap_or(LuaValue::Nil);
+        if matches!(args.get(1), LuaValue::Table(_)) {
+            return Err(err("AddFace takes vertex IDs as separate arguments, e.g. AddFace(v0, v1, v2)."));
+        }
+        let count = args.len().saturating_sub(1);
+        if !(3..=4).contains(&count) {
+            return Err(err(format!("AddFace called with {count} vertices, currently only supports 3 or 4 vertices")));
+        }
+        let mut ids = Vec::with_capacity(count);
+        for at in 1..=count {
+            ids.push(luau_int64(lua, engine, args, at, "AddFace")?);
+        }
+        with_mesh(engine, id, true, |m| {
+            let mut v = Vec::with_capacity(count);
+            for &vertex in &ids {
+                v.push(triangle_vertex(m, vertex)?);
+            }
+            let face = m.new_face(&v);
+            let slot = m.faces.add(face);
+            Ok(values([LuaValue::Number(m.faces.id(FACE, slot))]))
+        })
+    }));
+    // Triangulate: each quad becomes two triangles (Mesh::triangulate; allowed on a fixed-size mesh, measured)
+    add("Triangulate", method(|_, engine, id, _| {
+        with_mesh(engine, id, true, |m| {
+            m.triangulate();
+            Ok(none())
+        })
+    }));
+    // AddBone(properties) (measured in a 0.747 client: nil "Argument 1 missing or nil", no table "Unable to cast <type> to
+    // Dictionary"; Name, CFrame and Virtual are each required, in that order ("Missing bone CFrame value"; one of another type
+    // "Variant cast failed"); another key "Unexpected entry in table: <key>"; the name as bone_name takes it)
+    add("AddBone", method(|lua, engine, id, args| {
+        let params = match args.get(1) {
+            LuaValue::Nil => return Err(err("Argument 1 missing or nil")),
+            LuaValue::Table(params) => params.clone(),
+            other => return Err(err(format!("Unable to cast {} to Dictionary", crate::services::tween::cast_name(engine, other)))),
+        };
+        refuse_fixed(engine, id)?;
+        let field = |name: &str| params.raw_get::<LuaValue>(name).unwrap_or(LuaValue::Nil);
         let missing = |name: &str| err(format!("Missing bone {name} value"));
         let name = match field("Name") {
             LuaValue::Nil => return Err(missing("Name")),
-            LuaValue::String(text) => text.to_string_lossy(),
+            LuaValue::String(text) => text.as_bytes().to_vec(),
             _ => return Err(err("Variant cast failed")),
         };
         let cframe = match field("CFrame") {
@@ -1499,7 +2120,18 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
             LuaValue::Boolean(value) => value,
             _ => return Err(err("Variant cast failed")),
         };
+        for pair in params.pairs::<LuaValue, LuaValue>() {
+            let (key, _) = pair?;
+            let text = match &key {
+                LuaValue::String(text) => text.to_string_lossy(),
+                other => String::from_utf8_lossy(&convert::cast_text(lua, engine, other)?).into_owned(),
+            };
+            if !matches!(text.as_str(), "Name" | "CFrame" | "Virtual") {
+                return Err(err(format!("Unexpected entry in table: {text}")));
+            }
+        }
         with_mesh(engine, id, true, |m| {
+            let name = bone_name(m, &name, None)?;
             let slot = m.bones.add(Bone { name, cframe, parent: None, virtual_bone });
             Ok(values([LuaValue::Number(m.bones.id(BONE, slot))]))
         })
@@ -1514,7 +2146,11 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
                     NORMAL => m.normals.live().map(|(i, _)| m.normals.id(kind, i)).collect(),
                     COLOR => m.colors.live().map(|(i, _)| m.colors.id(kind, i)).collect(),
                     UV => m.uvs.live().map(|(i, _)| m.uvs.id(kind, i)).collect(),
-                    FACE => m.faces.live().map(|(i, _)| m.faces.id(kind, i)).collect(),
+                    // (quads first, then triangles, each in listing order: measured in a 0.747 client)
+                    FACE => {
+                        let quads = m.faces.live().filter(|(_, face)| face.len() == 4);
+                        quads.chain(m.faces.live().filter(|(_, face)| face.len() == 3)).map(|(i, _)| m.faces.id(kind, i)).collect()
+                    }
                     _ => m.bones.live().map(|(i, _)| m.bones.id(kind, i)).collect(),
                 };
                 let each = if kind == VERTEX { crate::cost::LISTED_VERTEX } else { crate::cost::LISTED };
@@ -1596,38 +2232,57 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
         })
     }));
 
-    // Faces
+    // Faces: a list per corner, 3 or 4
     for (name, kind) in [("GetFaceVertices", VERTEX), ("GetFaceNormals", NORMAL), ("GetFaceColors", COLOR), ("GetFaceUVs", UV)] {
         add(name, method(move |lua, engine, id, args| {
             let f = id_arg(lua, engine, args, 1, FACE)?;
             with_mesh(engine, id, false, |m| {
                 let face = *m.faces.get(m.faces.at(FACE, f)?).expect("live");
-                Ok(values([ids_value(lua, (0..3).map(|corner| corner_id(m, &face, corner, kind)))?]))
+                Ok(values([ids_value(lua, (0..face.len()).map(|corner| corner_id(m, &face, corner, kind)))?]))
             })
         }));
     }
-    // (a corner given another vertex, normal, uv or colour comes to the front of its vertex's corners: Mesh::corners_of)
-    for (name, kind) in [("SetFaceVertices", VERTEX), ("SetFaceNormals", NORMAL), ("SetFaceColors", COLOR), ("SetFaceUVs", UV)] {
+    // SetFaceVertices(face, ids): 3 or 4 vertices, the face's corner count following (measured in a 0.747 client: no array
+    // "SetFaceVertices: second argument should be an array", another count "SetFaceVertices: only 3 or 4 vertices supported";
+    // every id checked before any is set, a value that is no number reading as 0; see Mesh::set_face_vertices)
+    add("SetFaceVertices", method(|lua, engine, id, args| {
+        let f = id_arg(lua, engine, args, 1, FACE)?;
+        let LuaValue::Table(table) = args.get(2) else { return Err(err("SetFaceVertices: second argument should be an array")) };
+        let items = sequence(table);
+        with_mesh(engine, id, true, |m| {
+            let f = m.faces.at(FACE, f)?;
+            if !(3..=4).contains(&items.len()) {
+                return Err(err("SetFaceVertices: only 3 or 4 vertices supported"));
+            }
+            let mut slots = Vec::with_capacity(items.len());
+            for item in &items {
+                let v = loose_id(lua, item);
+                check_kind(v, VERTEX)?;
+                slots.push(m.positions.at(VERTEX, v)?);
+            }
+            m.set_face_vertices(f, &slots);
+            Ok(none())
+        })
+    }));
+    // SetFaceNormals / SetFaceColors / SetFaceUVs(face, ids): one per corner (measured in a 0.747 client: no table "EditableMesh
+    // function: second argument should be a table", another count "Number of attributes provided does not match face"; then
+    // corner by corner, so an error keeps the corners before it set; a corner given another one comes to the front of its
+    // vertex's corners)
+    for (name, kind) in [("SetFaceNormals", NORMAL), ("SetFaceColors", COLOR), ("SetFaceUVs", UV)] {
         add(name, method(move |lua, engine, id, args| {
             let f = id_arg(lua, engine, args, 1, FACE)?;
-            let ids = ids_of(args.get(2));
+            let LuaValue::Table(table) = args.get(2) else { return Err(err("EditableMesh function: second argument should be a table")) };
+            let items = sequence(table);
             with_mesh(engine, id, true, |m| {
                 let f = m.faces.at(FACE, f)?;
-                let slots = match kind {
-                    VERTEX => slots_of(&m.positions, kind, &ids),
-                    NORMAL => slots_of(&m.normals, kind, &ids),
-                    COLOR => slots_of(&m.colors, kind, &ids),
-                    _ => slots_of(&m.uvs, kind, &ids),
-                };
-                if slots.len() != 3 || ids.len() != 3 {
-                    return Err(err(format!("{name}: three ids of the right kind expected")));
+                if items.len() != m.faces.get(f).expect("live").len() {
+                    return Err(err("Number of attributes provided does not match face"));
                 }
-                if kind == VERTEX {
-                    m.set_face_vertices(f, [slots[0], slots[1], slots[2]]);
-                } else {
-                    for (corner, &slot) in slots.iter().enumerate() {
-                        m.set_corner(f, corner, (kind - 1) as u32, slot);
-                    }
+                for (corner, item) in items.iter().enumerate() {
+                    let a = loose_id(lua, item);
+                    check_kind(a, kind)?;
+                    let slot = attribute_slot(m, kind, a)?;
+                    m.set_corner(f, corner, (kind - 1) as u32, slot);
                 }
                 Ok(none())
             })
@@ -1665,21 +2320,24 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
         Ok(values([vector_value(lua, engine, center)?]))
     }));
 
-    // Bones
+    // Bones (measured in a 0.747 client; each setter is allowed on a fixed-size mesh)
     add("GetBoneName", method(|lua, engine, id, args| {
         let b = id_arg(lua, engine, args, 1, BONE)?;
         let name = with_mesh(engine, id, false, |m| Ok(m.bones.get(m.bones.at(BONE, b)?).map(|b| b.name.clone()).unwrap_or_default()))?;
         Ok(values([LuaValue::String(lua.create_string(&name)?)]))
     }));
-    add("SetBoneName", method(|lua, engine, id, args| {
+    // SetBoneName(bone, name): the name read as a client reads a string parameter (services::strings: nil "Argument 2 missing
+    // or nil", a number or another value as its text), then as bone_name takes it (a bone keeps its own name)
+    add("SetBoneName", strings(SECOND, method(|lua, engine, id, args| {
+        let name = args.string(2).map(|s| s.as_bytes().to_vec()).ok_or_else(|| err("Argument 2 missing or nil"))?;
         let b = id_arg(lua, engine, args, 1, BONE)?;
-        let name = args.string(2).map(|s| s.to_string_lossy()).unwrap_or_default();
         with_mesh(engine, id, true, |m| {
             let slot = m.bones.at(BONE, b)?;
+            let name = bone_name(m, &name, Some(slot))?;
             m.bones.get_mut(slot).expect("live").name = name;
             Ok(none())
         })
-    }));
+    })));
     add("GetBoneParent", method(|lua, engine, id, args| {
         let b = id_arg(lua, engine, args, 1, BONE)?;
         let parent = with_mesh(engine, id, false, |m| {
@@ -1688,12 +2346,27 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
         })?;
         Ok(values([LuaValue::Number(parent)]))
     }));
+    // SetBoneParent(bone, parent): 0 for none; the bone itself or one under it "EditableMesh Error: Invalid bone parent"
     add("SetBoneParent", method(|lua, engine, id, args| {
+        let parent = int64_arg(lua, engine, args, 2)?;
         let b = id_arg(lua, engine, args, 1, BONE)?;
-        let parent = args.number(2).map(id_of_number);
         with_mesh(engine, id, true, |m| {
             let slot = m.bones.at(BONE, b)?;
-            let parent = parent.and_then(|p| m.bones.find(BONE, p));
+            let parent = match parent {
+                0 => None,
+                parent => {
+                    check_kind(parent, BONE)?;
+                    let mut up = Some(m.bones.at(BONE, parent)?);
+                    let found = up;
+                    while let Some(at) = up {
+                        if at == slot {
+                            return Err(err("EditableMesh Error: Invalid bone parent"));
+                        }
+                        up = m.bones.get(at).and_then(|bone| bone.parent);
+                    }
+                    found
+                }
+            };
             m.bones.get_mut(slot).expect("live").parent = parent;
             Ok(none())
         })
@@ -1701,12 +2374,11 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
     add("GetBoneCFrame", method(|lua, engine, id, args| {
         let b = id_arg(lua, engine, args, 1, BONE)?;
         let c = with_mesh(engine, id, false, |m| Ok(m.bones.get(m.bones.at(BONE, b)?).map(|b| b.cframe).expect("live")))?;
-        let cframe = dom::CFrame::new(dom::Vector3::new(c[0], c[1], c[2]), dom::Matrix3::new(dom::Vector3::new(c[3], c[4], c[5]), dom::Vector3::new(c[6], c[7], c[8]), dom::Vector3::new(c[9], c[10], c[11])));
-        Ok(values([convert::to_lua(lua, engine, &Value::Dom(Rc::new(Variant::CFrame(cframe))))?]))
+        Ok(values([convert::to_lua(lua, engine, &cframe_value(&c))?]))
     }));
     add("SetBoneCFrame", method(|lua, engine, id, args| {
+        let c = cframe_arg(engine, args, 2)?;
         let b = id_arg(lua, engine, args, 1, BONE)?;
-        let c = cframe_of(args.get(2)).ok_or_else(|| err("SetBoneCFrame: CFrame expected"))?;
         with_mesh(engine, id, true, |m| {
             let slot = m.bones.at(BONE, b)?;
             m.bones.get_mut(slot).expect("live").cframe = c;
@@ -1717,6 +2389,19 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
         let b = id_arg(lua, engine, args, 1, BONE)?;
         let v = with_mesh(engine, id, false, |m| Ok(m.bones.get(m.bones.at(BONE, b)?).map(|b| b.virtual_bone).expect("live")))?;
         Ok(values([LuaValue::Boolean(v)]))
+    }));
+    // SetBoneIsVirtual(bone, virtual): a bone made not virtual leaves every FACS pose (measured)
+    add("SetBoneIsVirtual", method(|lua, engine, id, args| {
+        let on = bool_arg(engine, args, 2)?;
+        let b = id_arg(lua, engine, args, 1, BONE)?;
+        with_mesh(engine, id, true, |m| {
+            let slot = m.bones.at(BONE, b)?;
+            m.bones.get_mut(slot).expect("live").virtual_bone = on;
+            if !on {
+                m.drop_bone_poses(slot);
+            }
+            Ok(none())
+        })
     }));
     add("GetVertexBones", method(|lua, engine, id, args| {
         let v = id_arg(lua, engine, args, 1, VERTEX)?;
@@ -1822,11 +2507,10 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
     // BatchAdd(attribute, values[, alphas]): vertices, normals, uvs, colours (with their alphas) or faces at once, their
     // new ids in the values' order (measured in a 0.747 client: tools/parity/probes/editable_mesh_batch.luau). Vertices,
     // normals, uvs and colours are all made first, then given their values in order, so a value of the wrong type raises
-    // with the ones before it set and the rest left at their defaults; a nil normal is an automatic one. Faces are checked
-    // whole first, made in order (each corner as AddTriangle makes it) and numbered backwards: the first face gets the
-    // batch's last id (with slots free, the batch's new slots backwards, then the free ones, last freed first; measured in
-    // editable_mesh_vertex_batch.luau). A face of four vertices (a quad, which this engine's faces cannot hold) is made as
-    // two triangles, the second on a slot of its own, and reported (Output `missing`).
+    // with the ones before it set and the rest left at their defaults; a nil normal is an automatic one. Faces (3 or 4
+    // vertices: a quad is one face) are checked whole first, made in order (each corner as AddTriangle makes it) and numbered
+    // backwards: the first face gets the batch's last id (with slots free, the batch's new slots backwards, then the free ones,
+    // last freed first; measured in editable_mesh_vertex_batch.luau); the triangles' corners are made before the quads'.
     add("BatchAdd", method(|lua, engine, id, args| {
         refuse_fixed(engine, id)?;
         if args.len() < 3 {
@@ -1858,7 +2542,6 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
             }
             Ok(())
         };
-        let mut quads = 0;
         let ids: Vec<f64> = match attribute {
             0 => {
                 let items = array(2, "positions")?;
@@ -1922,7 +2605,7 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
                     return Err(err(format!("{prefix}: vertexIds must be a 2D array")));
                 };
                 let items = sequence(table);
-                let made = with_mesh(engine, id, true, |m| {
+                with_mesh(engine, id, true, |m| {
                     let mut faces: Vec<Vec<u32>> = Vec::with_capacity(items.len());
                     for (index, item) in items.iter().enumerate() {
                         let LuaValue::Table(ids) = item else {
@@ -1938,76 +2621,111 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
                     // taken last first)
                     m.faces.reserve(faces.len());
                     let slots: Vec<u32> = faces.iter().map(|_| m.faces.take()).collect();
-                    let mut quads = 0;
-                    for (vertices, &slot) in faces.iter().zip(&slots) {
-                        let face = m.new_face([vertices[0], vertices[1], vertices[2]]);
-                        m.faces.put(slot, face);
-                        if vertices.len() == 4 {
-                            let second = m.new_face([vertices[0], vertices[2], vertices[3]]);
-                            m.faces.add(second);
-                            quads += 1;
+                    // (the triangles' corners are made before the quads': measured, a quad then a triangle over a new vertex
+                    // each read the triangle's new normal first)
+                    let mut made: Vec<Option<Face>> = vec![None; faces.len()];
+                    for quads in [false, true] {
+                        for (index, vertices) in faces.iter().enumerate() {
+                            if (vertices.len() == 4) == quads {
+                                made[index] = Some(m.new_face(vertices));
+                            }
                         }
                     }
-                    Ok((slots.iter().map(|&slot| m.faces.id(FACE, slot)).collect(), quads))
-                })?;
-                quads = made.1;
-                made.0
+                    for (face, &slot) in made.into_iter().zip(&slots) {
+                        m.faces.put(slot, face.expect("made above"));
+                    }
+                    Ok(slots.iter().map(|&slot| m.faces.id(FACE, slot)).collect())
+                })?
             }
         };
-        if quads > 0 {
-            engine.missing(Some(lua), "EditableMesh", "BatchAdd of a four-vertex face");
-        }
         Ok(values([ids_value(lua, ids.into_iter())?]))
     }));
 
-    // Per-face attribute batches (Enum.MeshAttribute: Vertex 0, Normal 1, Color 2, UV 3, Face 4; an id's kind is the
-    // value plus 1)
-    fn attribute(engine: &Engine, value: &LuaValue) -> Option<u32> {
-        match convert::from_lua(value) {
-            Value::EnumItem(item) => Some(engine.reflection.enum_item_info(item).value as u32),
-            _ => None,
-        }
-    }
+    // BatchGetFaceAttributes(attribute, faceIds): per face, the vertex, normal, colour or uv ids of its corners (measured in a
+    // 0.747 client: "BatchGetFaceAttributes: expects 2 arguments (attr, faceIds)"; the attribute as mesh_attribute reads it,
+    // Face "BatchGetFaceAttributes: Enum.MeshAttribute.Face is not supported"; "BatchGetFaceAttributes: ids must be an array";
+    // each id in turn: "BatchGetFaceAttributes: id at index <i> is not a number", 0 and gone "Invalid id", another kind named)
     add("BatchGetFaceAttributes", method(|lua, engine, id, args| {
-        let which = attribute(engine, args.get(1)).ok_or_else(|| err("BatchGetFaceAttributes: MeshAttribute expected"))?;
-        let faces = ids_of(args.get(2));
-        let out = lua.create_table_with_capacity(faces.len(), 0)?;
+        const METHOD: &str = "BatchGetFaceAttributes";
+        if args.len() != 3 {
+            return Err(err(format!("{METHOD}: expects 2 arguments (attr, faceIds)")));
+        }
+        let which = mesh_attribute(engine, args.get(1))?;
+        if which == 4 {
+            return Err(err(format!("{METHOD}: Enum.MeshAttribute.Face is not supported")));
+        }
+        let LuaValue::Table(table) = args.get(2) else { return Err(err(format!("{METHOD}: ids must be an array"))) };
+        let items = sequence(table);
+        let out = lua.create_table_with_capacity(items.len(), 0)?;
         with_mesh(engine, id, false, |m| {
-            for (index, &face) in faces.iter().enumerate() {
-                let face = *m.faces.find(FACE, face).and_then(|f| m.faces.get(f)).ok_or_else(|| err("Invalid face id"))?;
-                if which > 3 {
-                    return Err(err("BatchGetFaceAttributes: not a face attribute"));
-                }
-                out.raw_set(index + 1, ids_value(lua, (0..3).map(|corner| corner_id(m, &face, corner, which as u64 + 1)))?)?;
+            for (index, item) in items.iter().enumerate() {
+                let f = element_id(lua, item, METHOD, "id", index + 1)?;
+                check_kind(f, FACE)?;
+                let face = *m.faces.get(m.faces.at(FACE, f)?).expect("live");
+                out.raw_set(index + 1, ids_value(lua, (0..face.len()).map(|corner| corner_id(m, &face, corner, which as u64 + 1)))?)?;
             }
             Ok(())
         })?;
         Ok(values([LuaValue::Table(out)]))
     }));
-    add("BatchSetFaceAttributes", method(|_, engine, id, args| {
-        let faces = ids_of(args.get(1));
-        let LuaValue::Table(arrays) = args.get(2) else { return Err(err("BatchSetFaceAttributes: table expected")) };
-        let arrays: Vec<Vec<i64>> = arrays.sequence_values::<LuaValue>().filter_map(Result::ok).map(|v| ids_of(&v)).collect();
+    // BatchSetFaceAttributes(faceIds, attributeIdArrays): each face's corners given vertices, normals, colours or uvs, all of
+    // the kind of the first array's first id (measured in a 0.747 client: "BatchSetFaceAttributes: expects 2 arguments
+    // (faceIds, attributeIdArrays)", "...: faceIds must be an array", "...: attributeIdArrays must be an array of arrays",
+    // "...: faceIds and attributeIdArrays must be the same length", "...: element <i> of attributeIdArrays is not an array",
+    // "...: attributeId at face <i> corner <c> is not a number", a first id of no kind of those "...: unsupported attribute
+    // ID type"; then face by face and corner by corner, so an error keeps what was set before it: "...: faceId at index <i> is
+    // not a number", the face checked (0 and gone "Invalid id", another kind named), "...: inner array at index <i> has <n>
+    // elements but face has <c> corners", each id checked (another kind named); allowed on a fixed-size mesh)
+    add("BatchSetFaceAttributes", method(|lua, engine, id, args| {
+        const METHOD: &str = "BatchSetFaceAttributes";
+        if args.len() != 3 {
+            return Err(err(format!("{METHOD}: expects 2 arguments (faceIds, attributeIdArrays)")));
+        }
+        let LuaValue::Table(faces) = args.get(1) else { return Err(err(format!("{METHOD}: faceIds must be an array"))) };
+        let LuaValue::Table(arrays) = args.get(2) else { return Err(err(format!("{METHOD}: attributeIdArrays must be an array of arrays"))) };
+        let (faces, arrays) = (sequence(faces), sequence(arrays));
+        if faces.len() != arrays.len() {
+            return Err(err(format!("{METHOD}: faceIds and attributeIdArrays must be the same length")));
+        }
+        let array = |index: usize| match &arrays[index] {
+            LuaValue::Table(table) => Ok(sequence(table)),
+            _ => Err(err(format!("{METHOD}: element {} of attributeIdArrays is not an array", index + 1))),
+        };
+        let attribute = |face: usize, corner: usize, value: &LuaValue| element_id(lua, value, METHOD, "attributeId", 0).map_err(|_| err(format!("{METHOD}: attributeId at face {face} corner {corner} is not a number")));
+        let Some(first) = arrays.first() else { return Ok(none()) };
+        let _ = first;
+        let kind = match array(0)?.first() {
+            Some(value) => parts(attribute(1, 1, value)?).0,
+            None => 0,
+        };
+        if !matches!(kind, VERTEX | NORMAL | COLOR | UV) {
+            return Err(err(format!("{METHOD}: unsupported attribute ID type")));
+        }
         with_mesh(engine, id, true, |m| {
-            for (&face, ids) in faces.iter().zip(&arrays) {
-                let f = m.faces.find(FACE, face).ok_or_else(|| err("Invalid face id"))?;
-                let kind = ids.first().map_or(0, |&id| parts(id).0);
-                let slots = match kind {
-                    VERTEX => slots_of(&m.positions, kind, ids),
-                    NORMAL => slots_of(&m.normals, kind, ids),
-                    COLOR => slots_of(&m.colors, kind, ids),
-                    UV => slots_of(&m.uvs, kind, ids),
-                    _ => return Err(err("BatchSetFaceAttributes: not a face attribute")),
-                };
-                if slots.len() != 3 || ids.len() != 3 {
-                    return Err(err("BatchSetFaceAttributes: three ids of one kind expected"));
+            for (index, face) in faces.iter().enumerate() {
+                let f = element_id(lua, face, METHOD, "faceId", index + 1)?;
+                check_kind(f, FACE)?;
+                let f = m.faces.at(FACE, f)?;
+                let items = array(index)?;
+                let corners = m.faces.get(f).expect("live").len();
+                if items.len() != corners {
+                    return Err(err(format!("{METHOD}: inner array at index {} has {} elements but face has {corners} corners", index + 1, items.len())));
                 }
                 if kind == VERTEX {
-                    m.set_face_vertices(f, [slots[0], slots[1], slots[2]]);
-                } else {
-                    for (corner, &slot) in slots.iter().enumerate() {
-                        m.set_corner(f, corner, (kind - 1) as u32, slot);
+                    let mut slots = Vec::with_capacity(corners);
+                    for (corner, item) in items.iter().enumerate() {
+                        let v = attribute(index + 1, corner + 1, item)?;
+                        check_kind(v, VERTEX)?;
+                        slots.push(m.positions.at(VERTEX, v)?);
                     }
+                    m.set_face_vertices(f, &slots);
+                    continue;
+                }
+                for (corner, item) in items.iter().enumerate() {
+                    let a = attribute(index + 1, corner + 1, item)?;
+                    check_kind(a, kind)?;
+                    let slot = attribute_slot(m, kind, a)?;
+                    m.set_corner(f, corner, (kind - 1) as u32, slot);
                 }
             }
             Ok(none())
@@ -2058,18 +2776,23 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
         Ok(values([LuaValue::Table(out)]))
     }));
     // GetAdjacentVertices: per corner over the vertex, front first, the corner before it, then the one after it unless some
-    // corner over the vertex has that one before it (measured on five vertices of a three-face mesh in a 0.747 client)
+    // corner over the vertex has that one before it (measured on five vertices of a three-face mesh in a 0.747 client, and on
+    // quads: the corners around a quad's corner)
     add("GetAdjacentVertices", method(|lua, engine, id, args| {
         let v = id_arg(lua, engine, args, 1, VERTEX)?;
         with_mesh(engine, id, false, |m| {
             let v = m.positions.at(VERTEX, v)?;
             let corners = m.corners_of(v);
-            let around = |f: u32, corner: usize, step: usize| m.faces.get(f).expect("live").vertices[(corner + step) % 3];
-            let before: Vec<u32> = corners.iter().map(|&(f, corner)| around(f, corner, 2)).collect();
+            let around = |f: u32, corner: usize, after: bool| {
+                let face = m.faces.get(f).expect("live");
+                let (before, next) = face.around(corner);
+                face.vertices[if after { next } else { before }]
+            };
+            let before: Vec<u32> = corners.iter().map(|&(f, corner)| around(f, corner, false)).collect();
             let mut out: Vec<f64> = Vec::new();
             for (&(f, corner), &previous) in corners.iter().zip(&before) {
                 out.push(m.positions.id(VERTEX, previous));
-                let next = around(f, corner, 1);
+                let next = around(f, corner, true);
                 if !before.contains(&next) {
                     out.push(m.positions.id(VERTEX, next));
                 }
@@ -2077,16 +2800,14 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
             Ok(values([ids_value(lua, out.into_iter())?]))
         })
     }));
+    // GetAdjacentFaces: the faces sharing an edge with it (a quad's diagonal is no edge: measured)
     add("GetAdjacentFaces", method(|lua, engine, id, args| {
         let f = id_arg(lua, engine, args, 1, FACE)?;
         with_mesh(engine, id, false, |m| {
             let f = m.faces.at(FACE, f)?;
             let face = *m.faces.get(f).expect("live");
-            let edges = [(face.vertices[0], face.vertices[1]), (face.vertices[1], face.vertices[2]), (face.vertices[2], face.vertices[0])];
-            let shares = |other: &Face| {
-                let mine = [(other.vertices[0], other.vertices[1]), (other.vertices[1], other.vertices[2]), (other.vertices[2], other.vertices[0])];
-                mine.iter().any(|&(a, b)| edges.iter().any(|&(c, d)| (a == c && b == d) || (a == d && b == c)))
-            };
+            let edges: Vec<(u32, u32)> = face.edges().collect();
+            let shares = |other: &Face| other.edges().any(|(a, b)| edges.iter().any(|&(c, d)| (a == c && b == d) || (a == d && b == c)));
             let out: Vec<f64> = m.faces.by_slot().filter(|(i, other)| *i != f && shares(other)).map(|(i, _)| m.faces.id(FACE, i)).collect();
             Ok(values([ids_value(lua, out.into_iter())?]))
         })
@@ -2214,12 +2935,195 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
         })
     }));
 
-    // (the name read as a client reads a string parameter: services::strings)
-    add("GetBoneByName", strings(FIRST, method(|_, engine, id, args| {
+    // GetFacesWithAttribute / GetVerticesWithAttribute and the per-kind lists (measured in a 0.747 client, 7 meshes with every
+    // attribute listed: tools/parity/probes/editable_mesh_queries.luau). The id is cast the Luau way. Per kind
+    // (GetFacesWithNormal / UV / Color, GetVerticesWith...): one entry per corner that uses the attribute, front first,
+    // duplicates kept; an id of another kind is named, 0 and gone "Invalid id". WithAttribute: for a vertex, its faces (each
+    // once, in its corners' order) or itself; for a face, its vertices (GetVerticesWithAttribute only); for a normal, uv or
+    // colour, the faces around the vertex of the attribute's front corner, that corner's face first, and the vertices of its
+    // corners, each once, in id order; another id "Invalid attribute type index used".
+    for (name, kind, faces) in [
+        ("GetFacesWithNormal", NORMAL, true),
+        ("GetFacesWithUV", UV, true),
+        ("GetFacesWithColor", COLOR, true),
+        ("GetVerticesWithNormal", NORMAL, false),
+        ("GetVerticesWithUV", UV, false),
+        ("GetVerticesWithColor", COLOR, false),
+    ] {
+        add(name, method(move |lua, engine, id, args| {
+            let a = luau_int64(lua, engine, args, 1, name)?;
+            check_kind(a, kind)?;
+            let ids = with_mesh(engine, id, false, |m| {
+                let slot = attribute_slot(m, kind, a)?;
+                let corners = m.attribute_corners(kind, slot);
+                Ok(corners.iter().map(|&(f, corner)| if faces { m.faces.id(FACE, f) } else { vertex_corner_id(m, f, corner, VERTEX) }).collect::<Vec<f64>>())
+            })?;
+            Ok(values([ids_value(lua, ids.into_iter())?]))
+        }));
+    }
+    for (name, faces) in [("GetFacesWithAttribute", true), ("GetVerticesWithAttribute", false)] {
+        add(name, method(move |lua, engine, id, args| {
+            let a = luau_int64(lua, engine, args, 1, name)?;
+            let kind = parts(a).0;
+            let ids = with_mesh(engine, id, false, |m| {
+                let mut out: Vec<f64> = Vec::new();
+                let mut push = |id: f64| {
+                    if !out.contains(&id) {
+                        out.push(id);
+                    }
+                };
+                match kind {
+                    VERTEX => {
+                        let v = m.positions.at(VERTEX, a)?;
+                        if faces {
+                            for (f, _) in m.corners_of(v) {
+                                push(m.faces.id(FACE, f));
+                            }
+                        } else if !m.corners_of(v).is_empty() {
+                            // (a vertex no face uses lists nothing: measured)
+                            push(m.positions.id(VERTEX, v));
+                        }
+                    }
+                    FACE if !faces => {
+                        let f = m.faces.at(FACE, a)?;
+                        let face = *m.faces.get(f).expect("live");
+                        for corner in 0..face.len() {
+                            push(m.positions.id(VERTEX, face.vertices[corner]));
+                        }
+                    }
+                    NORMAL | COLOR | UV => {
+                        let slot = attribute_slot(m, kind, a)?;
+                        let corners = m.attribute_corners(kind, slot);
+                        if faces {
+                            if let Some(&(f, corner)) = corners.first() {
+                                push(m.faces.id(FACE, f));
+                                let v = m.faces.get(f).expect("live").vertices[corner];
+                                for (f, _) in m.corners_of(v) {
+                                    push(m.faces.id(FACE, f));
+                                }
+                            }
+                        } else {
+                            let mut ids: Vec<i64> = corners.iter().map(|&(f, corner)| vertex_corner_id(m, f, corner, VERTEX) as i64).collect();
+                            ids.sort_unstable();
+                            ids.dedup();
+                            for id in ids {
+                                push(id as f64);
+                            }
+                        }
+                    }
+                    _ => return Err(err("Invalid attribute type index used")),
+                }
+                Ok(out)
+            })?;
+            Ok(values([ids_value(lua, ids.into_iter())?]))
+        }));
+    }
+
+    // FindClosestVertex(point): the vertex nearest it, used by a face or not, the first in slot order of those as near (measured
+    // in a 0.747 client); 0 for a mesh with none
+    add("FindClosestVertex", method(|_, engine, id, args| {
+        let p = vector3_arg(engine, args, 1)?;
+        let found = with_mesh(engine, id, false, |m| {
+            let mut best: Option<(f32, u32)> = None;
+            for (slot, q) in m.positions.by_slot() {
+                let distance = (p - *q).length_squared();
+                if best.is_none_or(|(nearest, _)| distance < nearest) {
+                    best = Some((distance, slot));
+                }
+            }
+            engine.state.borrow().sched.charge(m.positions.count() as f64 * crate::cost::LISTED_VERTEX);
+            Ok(best.map_or(0.0, |(_, slot)| m.positions.id(VERTEX, slot)))
+        })?;
+        Ok(values([LuaValue::Number(found)]))
+    }));
+    // FindVerticesWithinSphere(center, radius): the vertices whose squared distance is at most the radius squared (a negative
+    // radius as its size), in listing order (measured in a 0.747 client)
+    add("FindVerticesWithinSphere", method(|lua, engine, id, args| {
+        let radius = float_arg(lua, engine, args, 2)?;
+        let center = vector3_arg(engine, args, 1)?;
+        let ids = with_mesh(engine, id, false, |m| {
+            let reach = radius * radius;
+            engine.state.borrow().sched.charge(m.positions.count() as f64 * crate::cost::LISTED_VERTEX);
+            Ok(m.positions.live().filter(|(_, q)| (center - **q).length_squared() <= reach).map(|(slot, _)| m.positions.id(VERTEX, slot)).collect::<Vec<f64>>())
+        })?;
+        Ok(values([ids_value(lua, ids.into_iter())?]))
+    }));
+    // FindClosestPointOnSurface(point): the face nearest it, the nearest point on it, that point's barycentric weights in the
+    // triangle of the face it lies in (Mesh::query_triangles), and that triangle's three vertex ids (measured in a 0.747 client;
+    // a mesh without faces "EditableMesh Error: Empty Result"). Not followed: which face an exact tie names (a client's own
+    // search order) and the weights' last float bits.
+    add("FindClosestPointOnSurface", method(|lua, engine, id, args| {
+        let p = vector3_arg(engine, args, 1)?;
+        with_mesh(engine, id, false, |m| {
+            let mut best: Option<(f32, u32, [u32; 3], Vec3)> = None;
+            for (f, face) in m.faces.live() {
+                let (first, second) = m.query_triangles(face);
+                for corners in std::iter::once(first).chain(second) {
+                    let ids = corners.map(|corner| face.vertices[corner]);
+                    let [a, b, c] = ids.map(|v| m.positions.get(v).copied().unwrap_or(Vec3::ZERO));
+                    let q = closest_on_triangle(p, a, b, c);
+                    let distance = (p - q).length_squared();
+                    if best.is_none_or(|(nearest, ..)| distance < nearest) {
+                        best = Some((distance, f, ids, q));
+                    }
+                }
+            }
+            let Some((_, f, ids, q)) = best else { return Err(err("EditableMesh Error: Empty Result")) };
+            m.query_answer(lua, engine, f, ids, q)
+        })
+    }));
+    // RaycastLocal(origin, direction): the face the segment from origin to origin + direction meets first (both sides, its end
+    // excluded), as FindClosestPointOnSurface answers; nothing at all when it meets none (measured in a 0.747 client). Not
+    // followed: which face a ray through a shared edge names and the point's and weights' last float bits.
+    add("RaycastLocal", method(|lua, engine, id, args| {
+        let direction = vector3_arg(engine, args, 2)?;
+        let origin = vector3_arg(engine, args, 1)?;
+        with_mesh(engine, id, false, |m| {
+            let mut best: Option<(f32, u32, [u32; 3])> = None;
+            for (f, face) in m.faces.live() {
+                let (first, second) = m.query_triangles(face);
+                for corners in std::iter::once(first).chain(second) {
+                    let ids = corners.map(|corner| face.vertices[corner]);
+                    let [a, b, c] = ids.map(|v| m.positions.get(v).copied().unwrap_or(Vec3::ZERO));
+                    if let Some(t) = ray_triangle(origin, direction, a, b, c) {
+                        if best.is_none_or(|(nearest, ..)| t < nearest) {
+                            best = Some((t, f, ids));
+                        }
+                    }
+                }
+            }
+            match best {
+                Some((t, f, ids)) => m.query_answer(lua, engine, f, ids, origin + direction * t),
+                None => Ok(LuaMultiValue::new()),
+            }
+        })
+    }));
+    // MergeVertices(tolerance): Mesh::merge_vertices (allowed on a fixed-size mesh, measured)
+    add("MergeVertices", method(|lua, engine, id, args| {
+        let tolerance = float_arg(lua, engine, args, 1)?;
+        let map = with_mesh(engine, id, true, |m| Ok(m.merge_vertices(tolerance)))?;
+        engine.state.borrow().sched.charge(map.1 as f64 * crate::cost::REMOVE_UNUSED_VERTEX);
+        let out = lua.create_table()?;
+        for (from, to) in map.0 {
+            out.raw_set(format!("{}", from as i64), to)?;
+        }
+        Ok(values([LuaValue::Table(out)]))
+    }));
+    // IdDebugString(id): id_debug_string (the id cast as an int64 argument, a numeric string read exactly)
+    add("IdDebugString", method(|lua, engine, _, args| {
+        let id = convert::int64_argument(engine, args.get(1), 1).map_err(err)?;
+        Ok(values([LuaValue::String(lua.create_string(id_debug_string(id))?)]))
+    }));
+
+    // GetBoneByName(name): the name read as a client reads a string parameter (services::strings); one no bone has raises 'No
+    // bone named "<name>"' (measured in a 0.747 client)
+    add("GetBoneByName", strings(FIRST, method(|lua, engine, id, args| {
         let name = args.string(1).map(|s| s.to_string_lossy()).unwrap_or_default();
         let found = with_mesh(engine, id, false, |m| Ok(m.bones.live().find(|(_, b)| b.name == name).map(|(i, _)| m.bones.id(BONE, i))))?;
-        Ok(values([LuaValue::Number(found.unwrap_or(0.0))]))
+        let _ = lua;
+        Ok(values([LuaValue::Number(found.ok_or_else(|| err(format!("No bone named \"{name}\"")))?)]))
     })));
+    // RemoveBone: its children lose their parent, its vertices its weights, the FACS poses the bone
     add("RemoveBone", method(|lua, engine, id, args| {
         let b = int64_arg(lua, engine, args, 1)?;
         refuse_fixed(engine, id)?;
@@ -2240,6 +3144,7 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
                     }
                 }
             }
+            m.drop_bone_poses(b);
             Ok(none())
         })
     }));
@@ -2258,13 +3163,92 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
         })
     }));
 
+    // FACS poses of virtual bones, per action and per corrective (2 or 3 actions); measured in a 0.747 client: casts last to
+    // first; a set pose replaces the action's (facs_pose), its identity CFrames dropped; GetFacsPose answers its bones' ids
+    // and CFrames (two arrays, bones in id order), GetFacsPoses the actions with a pose in value order, GetFacsCorrectivePoses
+    // the correctives' actions; refused on a fixed-size mesh
+    add("SetFacsPose", method(|lua, engine, id, args| {
+        let frames = array_arg(engine, args, 3)?;
+        let ids = array_arg(engine, args, 2)?;
+        let action = facs_unit(lua, engine, args.get(1), 1)?;
+        refuse_fixed(engine, id)?;
+        with_mesh(engine, id, true, |m| {
+            let pose = facs_pose(m, &ids, &frames)?;
+            let pose = settle_pose(m, pose);
+            if pose.is_empty() { m.facs.remove(&action); } else { m.facs.insert(action, pose); }
+            Ok(none())
+        })
+    }));
+    add("SetFacsBonePose", method(|lua, engine, id, args| {
+        let frame = cframe_arg(engine, args, 3)?;
+        let bone = int64_arg(lua, engine, args, 2)?;
+        let action = facs_unit(lua, engine, args.get(1), 1)?;
+        refuse_fixed(engine, id)?;
+        with_mesh(engine, id, true, |m| {
+            let slot = facs_bone(m, bone)?;
+            let mut pose = m.facs.remove(&action).unwrap_or_default();
+            match pose.iter_mut().find(|(at, _)| *at == slot) {
+                Some((_, held)) => *held = frame,
+                None => pose.push((slot, frame)),
+            }
+            let pose = settle_pose(m, pose);
+            if !pose.is_empty() {
+                m.facs.insert(action, pose);
+            }
+            Ok(none())
+        })
+    }));
+    add("GetFacsPose", method(|lua, engine, id, args| {
+        let action = facs_unit(lua, engine, args.get(1), 1)?;
+        with_mesh(engine, id, false, |m| Ok(pose_values(lua, engine, m, m.facs.get(&action))?))
+    }));
+    add("GetFacsPoses", method(|lua, engine, id, _| {
+        let actions = with_mesh(engine, id, false, |m| Ok(m.facs.keys().copied().collect::<Vec<u32>>()))?;
+        let out = lua.create_table()?;
+        for (index, action) in actions.into_iter().enumerate() {
+            if let Some(item) = facs_item(engine, action) {
+                out.raw_set(index + 1, convert::to_lua(lua, engine, &item)?)?;
+            }
+        }
+        Ok(values([LuaValue::Table(out)]))
+    }));
+    add("SetFacsCorrectivePose", method(|lua, engine, id, args| {
+        let frames = array_arg(engine, args, 3)?;
+        let ids = array_arg(engine, args, 2)?;
+        let actions = corrective_actions(lua, engine, args, 1)?;
+        refuse_fixed(engine, id)?;
+        with_mesh(engine, id, true, |m| {
+            let pose = facs_pose(m, &ids, &frames)?;
+            let pose = settle_pose(m, pose);
+            if pose.is_empty() { m.correctives.remove(&actions); } else { m.correctives.insert(actions, pose); }
+            Ok(none())
+        })
+    }));
+    add("GetFacsCorrectivePose", method(|lua, engine, id, args| {
+        let actions = corrective_actions(lua, engine, args, 1)?;
+        with_mesh(engine, id, false, |m| Ok(pose_values(lua, engine, m, m.correctives.get(&actions))?))
+    }));
+    add("GetFacsCorrectivePoses", method(|lua, engine, id, _| {
+        let correctives = with_mesh(engine, id, false, |m| Ok(m.correctives.keys().cloned().collect::<Vec<Vec<u32>>>()))?;
+        let out = lua.create_table()?;
+        for (index, actions) in correctives.into_iter().enumerate() {
+            let list = lua.create_table()?;
+            for (at, action) in actions.into_iter().enumerate() {
+                if let Some(item) = facs_item(engine, action) {
+                    list.raw_set(at + 1, convert::to_lua(lua, engine, &item)?)?;
+                }
+            }
+            out.raw_set(index + 1, list)?;
+        }
+        Ok(values([LuaValue::Table(out)]))
+    }));
+
     add("Destroy", method(|_, engine, id, _| {
         let ext = extension(engine);
         ext.meshes.borrow_mut().remove(&id);
         ext.dirty.borrow_mut().remove(&id);
         Ok(none())
     }));
-
 }
 
 #[cfg(test)]
@@ -2277,7 +3261,7 @@ pub(crate) fn test_mesh_bytes(extent: f32, faces: usize) -> Vec<u8> {
     let color = mesh.colors.add(([1.0, 1.0, 1.0], 1.0));
     let uv = mesh.uvs.add([0.0, 0.0]);
     for _ in 0..faces.max(1) {
-        mesh.faces.add(Face { vertices: [a, b, c], normals: [n, n, n], colors: [color, color, color], uvs: [uv, uv, uv], stamps: [1, 2, 3] });
+        mesh.faces.add(Face { count: 3, vertices: [a, b, c, 0], normals: [n, n, n, 0], colors: [color, color, color, 0], uvs: [uv, uv, uv, 0], stamps: [1, 2, 3, 0] });
     }
     encode(&mesh)
 }

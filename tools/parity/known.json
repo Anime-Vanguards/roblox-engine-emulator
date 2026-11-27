@@ -1,8 +1,8 @@
 {
 	"arg_checks": [
 		{
-			"line": "refused CreateEditableMeshAsync",
-			"why": "AssetService:CreateEditableMeshAsync casts its argument before it refuses to wait (`Argument 1 missing or nil`, `Unable to cast double to Content`, `Unable to cast Array to Content`) and raises `UnpublishedPlaceNotInStudio` for an asset offline; ree's message and order differ"
+			"line": "refused CreateEditableMeshAsync-content",
+			"why": "the capture's place is not published, and a client in such a place answers an asset id's CreateEditableMeshAsync UnpublishedPlaceNotInStudio before it refuses to wait; ree, a published game's engine, refuses to wait (a thread that cannot yield) and then loads the asset"
 		},
 		{
 			"line": "loaders-logged ",
@@ -1161,10 +1161,6 @@
 		{
 			"line": "readonly TextLabel.TextBounds",
 			"why": "read-only property: text bounds come from a GUI layer's text measurement (a host's), which plain ree has not"
-		},
-		{
-			"line": "readonly TriangleMeshPart.MeshSize",
-			"why": "read-only property: a MeshPart with no mesh has MeshSize 0, 0, 0 in a client; ree reads its Size"
 		},
 		{
 			"line": "readonly Tween.TweenInfo",

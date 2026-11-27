@@ -1,0 +1,107 @@
+# engine: Roblox Studio 0.747.0.7471481, a headless playing client (script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-27
+add-3 ok 5:1 string:v{1:1,1:2,1:3} n{2:1,2:2,2:3} u{4:1,4:2,4:3} c{3:1,3:2,3:3} string:6v 3n 3u 3c 1f
+add-4 ok 5:1 string:v{1:1,1:2,1:3,1:4} n{2:1,2:2,2:3,2:4} u{4:1,4:2,4:3,4:4} c{3:1,3:2,3:3,3:4} string:6v 4n 4u 4c 1f
+add-0 error AddFace called with 0 vertices, currently only supports 3 or 4 vertices
+add-1 error AddFace called with 1 vertices, currently only supports 3 or 4 vertices
+add-2 error AddFace called with 2 vertices, currently only supports 3 or 4 vertices
+add-5 error AddFace called with 5 vertices, currently only supports 3 or 4 vertices
+add-6 error AddFace called with 6 vertices, currently only supports 3 or 4 vertices
+add-normal-id ok 5:1
+add-gone error Unable to add new triangle, vertex id 4294967297 is invalid
+add-zero error Unable to add new triangle, vertex id 0 is invalid
+add-nil error @93: invalid argument #3 (int64 expected, got nil)
+add-string error @97: invalid argument #2 (int64 expected, got string)
+add-text error @101: invalid argument #2 (int64 expected, got string)
+add-half ok 5:1 string:{1:2,1:2,1:3}
+add-twice ok 5:1 string:v{1:1,1:1,1:2,1:3} n{2:1,2:1,2:2,2:3} u{4:1,4:1,4:2,4:3} c{3:1,3:1,3:2,3:3} string:6v 3n 3u 3c 1f
+add-table error AddFace takes vertex IDs as separate arguments, e.g. AddFace(v0, v1, v2).
+add-fixed ok boolean:false string:EditableMesh is fixed-size, adding or removing elements is not allowed in-experience
+quad-share ok string:v{1:1,1:2,1:5} n{2:1,2:2,2:3} u{4:1,4:2,4:3} c{3:1,3:2,3:3} string:v{1:1,1:2,1:3,1:4} n{2:1,2:2,2:4,2:5} u{4:1,4:2,4:4,4:5} c{3:1,3:2,3:4,3:5} string:6v 5n 5u 5c 2f
+quad-lists ok string:v1=f{5:2,5:1}n{2:1,2:1}a{1:4,1:2,1:5,1:3} v2=f{5:2}n{2:4}a{1:1,1:3} v3=f{5:2,5:1}n{2:2,2:2}a{1:2,1:4,1:1,1:5} v4=f{5:2}n{2:5}a{1:3,1:1} v5=f{5:1}n{2:3}a{1:3,1:1} string:{} string:{}
+quad-normals ok string:V3(-0.145521387 -0.194028527 0.970142603) V3(-0.145521387 -0.194028527 0.970142603) V3(-0.145521373 -0.194028482 0.970142484) V3(-0.145521387 -0.194028497 0.970142484)
+quad-shared-normal ok string:V3(-0.0986461565 0.188027903 0.97719717) V3(-0.0986461565 0.188027903 0.97719717) V3(-0.145521373 -0.194028482 0.970142484) V3(-0.145521387 -0.194028497 0.970142484) V3(0 0.707106709 0.707106709) string:v{1:2,1:1,1:5} n{2:2,2:1,2:5} u{4:2,4:1,4:5} c{3:2,3:1,3:5}
+quad-batch-add ok {5:2,5:1} string:v{1:1,1:2,1:3,1:4} n{2:1,2:2,2:4,2:5} u{4:1,4:2,4:4,4:5} c{3:1,3:2,3:4,3:5} string:v{1:1,1:2,1:5} n{2:1,2:2,2:3} u{4:1,4:2,4:3} c{3:1,3:2,3:3} string:6v 5n 5u 5c 2f string:{5:2,5:1}
+quad-batch-get ok string:{{1:1,1:2,1:3,1:4},{1:1,1:2,1:5}} string:{{2:1,2:2,2:3,2:4}}
+quad-vertex-face ok 2:4 string:{4:4,4:3} string:{{3:4}}
+set-quad-4 ok string:v{1:2,1:3,1:4,1:5} n{2:1,2:2,2:3,2:4} u{4:1,4:2,4:3,4:4} c{3:1,3:2,3:3,3:4} string:6v 4n 4u 4c 1f
+set-quad-3 ok string:v{1:2,1:3,1:4} n{2:1,2:2,2:3} u{4:1,4:2,4:3} c{3:1,3:2,3:3} string:6v 4n 4u 4c 1f
+set-tri-4 ok string:v{1:1,1:2,1:3,1:4} n{2:1,2:2,2:3,2:4} u{4:1,4:2,4:3,4:4} c{3:1,3:2,3:3,3:4} string:6v 4n 4u 4c 1f
+set-quad-normals-4 ok string:v{1:1,1:2,1:3,1:4} n{2:5,2:6,2:7,2:8} u{4:1,4:2,4:3,4:4} c{3:1,3:2,3:3,3:4}
+set-quad-normals-3 error Number of attributes provided does not match face
+set-quad-batch ok string:v{1:1,1:2,1:3,1:4} n{2:1,2:2,2:3,2:4} u{4:5,4:6,4:7,4:8} c{3:1,3:2,3:3,3:4}
+triangulate ok 5:1 5:2 5:3 string:6v 6n 6u 6c 5f string:5:1=v{1:1,1:2,1:5} n{2:1,2:2,2:3} u{4:1,4:2,4:3} c{3:1,3:2,3:3} 5:5=v{1:1,1:2,1:3} n{2:1,2:2,2:4} u{4:1,4:2,4:4} c{3:1,3:2,3:4} 5:4=v{1:3,1:4,1:1} n{2:4,2:5,2:1} u{4:4,4:5,4:1} c{3:4,3:5,3:1} 13:2=v{1:3,1:6,1:5} n{2:4,2:6,2:3} u{4:4,4:6,4:3} c{3:4,3:6,3:3} 13:3=v{1:5,1:2,1:3} n{2:3,2:2,2:4} u{4:3,4:2,4:4} c{3:3,3:2,3:4}
+triangulate-none ok string:6v 3n 3u 3c 1f string:{5:1}
+triangulate-diagonal ok 5:1 string:{1:2,1:3,1:4} {1:4,1:1,1:2}
+triangulate-fixed ok boolean:true 2
+quad-remove ok string:6v 5n 5u 5c 1f string:{1:3,1:4,1:6,2:3,2:4,3:3,3:4,4:3,4:4} string:3v 3n 3u 3c 1f
+quad-batch-remove ok string:6v 5n 5u 5c 1f string:{5:2} 5:2
+quad-part ok V3(2 2 2) V3(2 2 2) boolean:false
+quad-size ok V3(2 2 2) V3(1 1 1)
+quad-copy ok 5:1 string:5:1={1:1,1:2,1:3,1:4}
+quad-data-model ok string:4v 4n 4u 4c 2f 5:1={1:1,1:2,1:3} 5:2={1:3,1:4,1:1}
+addface-normal ok n=2 5:1 string:{1:1,1:2,1:1}
+addface-face error Unable to add new triangle, vertex id 21474836481 is invalid
+addface-gone-kind error Unable to add new triangle, vertex id 12884901897 is invalid
+addtriangle-normal ok n=1 5:1
+addtriangle-text ok n=1 5:1
+addface-value error @418: invalid argument #3 to 'AddFace' (int64 expected, got nil)
+set-tri-4-shared ok n=3 string:v{1:4,1:5,1:6} n{2:1,2:2,2:3} u{4:1,4:2,4:3} c{3:1,3:2,3:3} string:v{1:1,1:2,1:3,1:4} n{2:4,2:5,2:6,2:1} u{4:4,4:5,4:6,4:1} c{3:4,3:5,3:6,3:1} 6
+set-quad-3-shared ok n=2 string:v{1:5,1:2,1:6} n{2:1,2:2,2:3} u{4:1,4:2,4:3} c{3:1,3:2,3:3} 4
+sfv-2 ok n=2 string:SetFaceVertices: only 3 or 4 vertices supported string:v{1:1,1:2,1:3} n{2:1,2:2,2:3} u{4:1,4:2,4:3} c{3:1,3:2,3:3}
+sfv-5 ok n=2 string:SetFaceVertices: only 3 or 4 vertices supported string:v{1:1,1:2,1:3} n{2:1,2:2,2:3} u{4:1,4:2,4:3} c{3:1,3:2,3:3}
+sfv-normal ok n=2 string:Unexpected EditableMesh id type. Expected Vertex id, received Normal id string:v{1:1,1:2,1:3} n{2:1,2:2,2:3} u{4:1,4:2,4:3} c{3:1,3:2,3:3}
+sfv-gone ok n=2 string:Invalid id string:v{1:1,1:2,1:3} n{2:1,2:2,2:3} u{4:1,4:2,4:3} c{3:1,3:2,3:3}
+sfv-text ok n=2 string:Invalid id string:v{1:1,1:2,1:3} n{2:1,2:2,2:3} u{4:1,4:2,4:3} c{3:1,3:2,3:3}
+sfv-numeric ok n=2 string:ok string:v{1:2,1:3,1:4} n{2:1,2:2,2:3} u{4:1,4:2,4:3} c{3:1,3:2,3:3}
+sfv-number ok n=2 string:SetFaceVertices: second argument should be an array string:v{1:1,1:2,1:3} n{2:1,2:2,2:3} u{4:1,4:2,4:3} c{3:1,3:2,3:3}
+sfv-zero ok n=2 string:Invalid id string:v{1:1,1:2,1:3} n{2:1,2:2,2:3} u{4:1,4:2,4:3} c{3:1,3:2,3:3}
+sfn-2 ok n=2 string:Number of attributes provided does not match face string:v{1:1,1:2,1:3} n{2:1,2:2,2:3} u{4:1,4:2,4:3} c{3:1,3:2,3:3}
+sfn-4 ok n=2 string:Number of attributes provided does not match face string:v{1:1,1:2,1:3} n{2:1,2:2,2:3} u{4:1,4:2,4:3} c{3:1,3:2,3:3}
+sfn-uv ok n=2 string:Unexpected EditableMesh id type. Expected Normal id, received UV id string:v{1:1,1:2,1:3} n{2:4,2:2,2:3} u{4:1,4:2,4:3} c{3:1,3:2,3:3}
+sfn-gone ok n=2 string:Invalid id string:v{1:1,1:2,1:3} n{2:1,2:2,2:3} u{4:1,4:2,4:3} c{3:1,3:2,3:3}
+sfn-text ok n=2 string:Invalid id string:v{1:1,1:2,1:3} n{2:4,2:2,2:3} u{4:1,4:2,4:3} c{3:1,3:2,3:3}
+sfn-number ok n=2 string:EditableMesh function: second argument should be a table string:v{1:1,1:2,1:3} n{2:1,2:2,2:3} u{4:1,4:2,4:3} c{3:1,3:2,3:3}
+sfu-2 ok n=2 string:Number of attributes provided does not match face string:v{1:1,1:2,1:3} n{2:1,2:2,2:3} u{4:1,4:2,4:3} c{3:1,3:2,3:3}
+sfc-4 ok n=2 string:Number of attributes provided does not match face string:v{1:1,1:2,1:3} n{2:1,2:2,2:3} u{4:1,4:2,4:3} c{3:1,3:2,3:3}
+quad-adjacent ok n=3 string:{5:2} string:{5:1} string:{}
+quad-vertex-face-set ok n=2 string:v{1:1,1:2,1:3,1:4} n{2:1,2:2,2:3,2:5} u{4:1,4:2,4:5,4:4} c{3:1,3:2,3:3,3:4} string:{2:5}
+auto-a ok n=1 string:V3(-0.145521387 -0.194028527 0.970142603) V3(-0.145521387 -0.194028527 0.970142603) V3(-0.145521373 -0.194028482 0.970142484) V3(-0.145521387 -0.194028497 0.970142484)
+auto-b ok n=1 string:V3(0.184928343 -0.297097951 0.936768055) V3(0.184928358 -0.297097951 0.936768055) V3(0.184928358 -0.297097951 0.936767995) V3(0.184928358 -0.297097951 0.936768055)
+auto-c ok n=1 string:V3(0.124034747 0 0.99227798) V3(0.124034747 0 0.99227798) V3(0.124034747 0 0.99227798) V3(0.124034747 0 0.99227798)
+auto-d ok n=1 string:V3(0.0166591499 -0.999548972 0.0249887258) V3(0.0166591499 -0.999548972 0.0249887258) V3(0.0166591499 -0.999548972 0.0249887258) V3(0.0166591499 -0.999548972 0.0249887258)
+auto-shared ok n=1 string:2:1=V3(0.309029639 -0.00938791223 0.951006055) 2:2=V3(-0.494884819 -0.186128542 0.848790467) 2:3=V3(-0.442171216 -0.290103376 0.848719418) 2:4=V3(0.184928358 -0.297097951 0.936768055) 2:5=V3(0.418852031 0.342394948 0.841028333) 2:6=V3(-0.859597206 -0.183931291 0.476719826)
+auto-triangulated ok n=1 string:V3(0.423174292 0.331591755 0.84319061) V3(0.119882867 -0.41995582 0.899591684) V3(-0.0259435251 -0.650750399 0.758848429) V3(0.285631984 -0.0765206516 0.955279529)
+snapshot-diagonal ok n=1 string:V3(3 0 0),V3(4 1 0),V3(0 0.5 0) V3(0 0.5 0),V3(0 0 0),V3(3 0 0)
+kind-color error Unable to add new triangle, vertex id 12884901889 is invalid
+kind-face-color error Unable to add new triangle, vertex id 12884901889 is invalid
+kind-uv error Unable to add new triangle, vertex id 17179869185 is invalid
+kind-face-uv error Unable to add new triangle, vertex id 17179869185 is invalid
+kind-bone error Unable to add new triangle, vertex id 25769803777 is invalid
+kind-face-bone error Unable to add new triangle, vertex id 25769803777 is invalid
+kind-kind0 error Unable to add new triangle, vertex id 1 is invalid
+kind-face-kind0 error Unable to add new triangle, vertex id 1 is invalid
+kind-kind7 error Unexpected Attribute Type
+kind-face-kind7 error Unexpected Attribute Type
+kind-vertex-gen1 error Unable to add new triangle, vertex id 38654705665 is invalid
+kind-face-vertex-gen1 error Unable to add new triangle, vertex id 38654705665 is invalid
+kind-normal-gen1 error Unable to add new triangle, vertex id 42949672961 is invalid
+kind-face-normal-gen1 error Unable to add new triangle, vertex id 42949672961 is invalid
+kind-face error Unable to add new triangle, vertex id 21474836481 is invalid
+kind-face-face error Unable to add new triangle, vertex id 21474836481 is invalid
+kind-normal-slot2 error Unable to add new triangle, vertex id 8589934594 is invalid
+kind-face-normal-slot2 error Unable to add new triangle, vertex id 8589934594 is invalid
+kind-color-slot9 error Unable to add new triangle, vertex id 12884901897 is invalid
+kind-face-color-slot9 error Unable to add new triangle, vertex id 12884901897 is invalid
+kind-kind0-slot0 error Unable to add new triangle, vertex id 0 is invalid
+kind-face-kind0-slot0 error Unable to add new triangle, vertex id 0 is invalid
+kind-batch ok n=1 string:Unexpected EditableMesh id type. Expected Vertex id, received Normal id
+kind-set-face-vertices ok n=2 string:Unexpected EditableMesh id type. Expected Vertex id, received Normal id string:{1:1,1:2,1:3}
+addface-count-text ok n=6 string:AddFace called with 2 vertices, currently only supports 3 or 4 vertices string:AddFace called with 2 vertices, currently only supports 3 or 4 vertices string:invalid argument #4 to 'AddFace' (int64 expected, got nil) string:invalid argument #5 to 'AddFace' (int64 expected, got nil) string:AddFace takes vertex IDs as separate arguments, e.g. AddFace(v0, v1, v2). string:invalid argument #3 to 'AddFace' (int64 expected, got table)
+addface-fixed-order ok n=1 string:EditableMesh is fixed-size, adding or removing elements is not allowed in-experience | EditableMesh is fixed-size, adding or removing elements is not allowed in-experience | EditableMesh is fixed-size, adding or removing elements is not allowed in-experience
+fan-tqt ok n=1 string:V3(0.224869311 -0.0247458946 0.974074602) V3(-0.125950143 0.355623901 0.926103771) V3(0.14218697 0.0162355229 0.989706635) V3(0.33104232 -0.248281777 0.910366416) V3(0.332174033 -0.138770387 0.932954013) V3(0.329983175 -0.0471404679 0.942809105)
+fan-qtq ok n=1 string:V3(0.26840046 -0.109727301 0.957037687) V3(0.326872826 -0.00970909372 0.945018351) V3(0.326872855 -0.00970909558 0.94501847) V3(0.174606308 -0.0782692656 0.98152262) V3(0.0831290632 -0.221736163 0.971556783) V3(0.280429631 -0.218111947 0.934765458) V3(0.280429602 -0.218111917 0.934765399)
+fan-ttqq ok n=1 string:V3(0.119199991 0.0725274459 0.990217745) V3(-0.125950143 0.355623901 0.926103771) V3(0.0995204598 0.185205325 0.977647543) V3(0.322117835 -0.122773953 0.938704789) V3(0.280429631 -0.218111947 0.934765458) V3(0.0893770158 0.0167769622 0.995856524) V3(-0.0766331479 0.211653456 0.97433579) V3(-0.0766331404 0.211653441 0.97433573)
+fan-qqtt ok n=1 string:V3(0.0907264054 -0.119273707 0.988707483) V3(0.326872826 -0.00970909372 0.945018351) V3(0.326872855 -0.00970909558 0.94501847) V3(0.256563187 -0.0488965847 0.965289891) V3(0.103799842 -0.12974982 0.986098647) V3(0.157321721 -0.23725304 0.958624482) V3(-0.104946055 -0.137255415 0.984960556) V3(-0.366508365 0.0790508315 0.927050471)
+fan-tqtqt ok n=1 string:V3(0.149350777 0.0019213442 0.988782406) V3(-0.125950143 0.355623901 0.926103771) V3(0.14218697 0.0162355229 0.989706635) V3(0.33104232 -0.248281777 0.910366416) V3(0.332174033 -0.138770387 0.932954013) V3(0.15637508 -0.0952357724 0.983095646) V3(-0.083033815 -0.15420565 0.984543622) V3(0.092564635 0.135121375 0.986495912) V3(0.201560304 0.315777779 0.927177429)
+fan-ttt ok n=1 string:V3(0.234942034 -0.0826919153 0.968485594) V3(-0.125950143 0.355623901 0.926103771) V3(0.0995204598 0.185205325 0.977647543) V3(0.343930095 -0.0417014323 0.938068867) V3(0.289180666 -0.190506473 0.938126743) V3(0.224859506 -0.374765843 0.899438024)

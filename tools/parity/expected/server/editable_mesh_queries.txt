@@ -1,0 +1,303 @@
+# engine: Roblox Studio 0.747.0.7471481, the server of a headless play session (a Script in ServerScriptService, script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-27
+faces-with ok n=7 string:{5:3,5:2,5:1} string:{5:3,5:2,5:1} string:{5:3,5:1} string:{5:3} string:{5:3,5:2,5:1} string:{5:3,5:2,5:1} string:{5:3,5:2,5:1}
+vertices-with ok n=6 string:{1:2} string:{1:3} string:{1:1} string:{1:4} string:{1:1,1:1} string:{1:6}
+with-shared ok n=3 string:{5:2,5:1,5:1,5:1} string:{1:2,1:3,1:2,1:1} string:{5:2,5:1,5:3}
+with-unused ok n=2 string:{} string:{}
+faces-with-face error Invalid attribute type index used
+faces-with-zero error Invalid attribute type index used
+faces-with-bone error Invalid attribute type index used
+faces-normal-of-uv error Unexpected EditableMesh id type. Expected Normal id, received UV id
+faces-uv-of-vertex error Unexpected EditableMesh id type. Expected UV id, received Vertex id
+faces-color-of-face error Unexpected EditableMesh id type. Expected Color id, received Face id
+faces-color-gone error Invalid id
+vertices-with-vertex ok n=1 string:{1:1}
+vertices-with-face ok n=1 string:{1:1,1:5,1:6,1:2}
+vertices-with-zero error Invalid attribute type index used
+vertices-normal-of-color error Unexpected EditableMesh id type. Expected Normal id, received Color id
+vertices-uv-gone error Invalid id
+vertices-color-nil error @152: invalid argument #2 to 'GetVerticesWithColor' (int64 expected, got nil)
+vertices-color-text error @152: invalid argument #2 to 'GetVerticesWithColor' (int64 expected, got string)
+closest-vertex ok n=1 string:1:1 1:1 1:1 1:7 1:1 1:1
+closest-vertex-unused ok n=2 1:8 1:8
+closest-vertex-empty ok n=1 0
+closest-vertex-nil error Argument 1 missing or nil
+closest-vertex-tie ok n=4 1:1 1:2 1:3 1:1
+closest-vertex-removed ok n=4 1:1 1:2 9:2 9:2
+within V3(0 0 0) 2 ok n=1 string:{1:1,1:2,1:3,1:5}
+within V3(0 0 0) 2.0001000000000002 ok n=1 string:{1:1,1:2,1:3,1:5}
+within V3(1 1 0) 1.5 ok n=1 string:{1:1,1:2,1:3,1:4}
+within V3(1 1 1) 10 ok n=1 string:{1:1,1:2,1:3,1:4,1:5,1:6,1:7}
+within V3(0 0 0) 0 ok n=1 string:{1:1}
+within V3(0 0 0) -1 ok n=1 string:{1:1}
+within V3(4 4 4) 1 ok n=1 string:{}
+within-nil error Argument 2 missing or nil
+surface V3(0.5 0.5 1) ok n=6 5:3 string:V3~(0.5000 0.0000 1.0000) string:V3~(0.5000 0.2500 0.2500) 1:1 1:5 1:6
+surface V3(0.5 0.5 -1) ok n=6 5:1 string:V3~(0.5000 0.5000 0.0000) string:V3~(0.5000 0.2500 0.2500) 1:1 1:2 1:3
+surface V3(1.5 1.5 0.25) ok n=6 5:2 string:V3~(1.5000 1.5000 0.0000) string:V3~(0.2500 0.5000 0.2500) 1:2 1:4 1:3
+surface V3(3 1 0) ok n=6 5:2 string:V3~(2.0000 1.0000 0.0000) string:V3~(0.5000 0.5000 0.0000) 1:2 1:4 1:3
+surface V3(1 -1 1) ok n=6 5:3 string:V3~(1.0000 0.0000 1.0000) string:V3~(0.5000 0.0000 0.5000) 1:1 1:5 1:6
+surface V3(1 0.300000012 1.70000005) ok n=6 5:3 string:V3~(1.0000 0.0000 1.7000) string:V3~(0.1500 0.3500 0.5000) 1:1 1:5 1:6
+surface V3(5 5 5) ok n=6 5:2 string:V3~(2.0000 2.0000 0.0000) string:V3~(0.0000 1.0000 0.0000) 1:2 1:4 1:3
+surface V3(1 1 0) ok n=6 5:1 string:V3~(1.0000 1.0000 0.0000) string:V3~(0.0000 0.5000 0.5000) 1:1 1:2 1:3
+surface-empty error EditableMesh Error: Empty Result
+surface-nil error Argument 1 missing or nil
+ray V3(0.5 0.5 5) V3(0 0 -10) ok n=6 5:1 string:V3~(0.5000 0.5000 0.0000) string:V3~(0.5000 0.2500 0.2500) 1:1 1:2 1:3
+ray V3(0.5 0.5 -5) V3(0 0 10) ok n=6 5:1 string:V3~(0.5000 0.5000 0.0000) string:V3~(0.5000 0.2500 0.2500) 1:1 1:2 1:3
+ray V3(0.5 0.5 5) V3(0 0 -2) ok n=0
+ray V3(0.5 0.5 5) V3(0 0 -5) ok n=0
+ray V3(0.5 0.5 5) V3(0 0 10) ok n=0
+ray V3(1.5 1.5 3) V3(0 0 -1) ok n=0
+ray V3(1 5 1) V3(0 -10 0) ok n=6 5:3 string:V3~(1.0000 0.0000 1.0000) string:V3~(0.5000 0.0000 0.5000) 1:1 1:5 1:6
+ray V3(1 -5 1) V3(0 10 0) ok n=6 5:3 string:V3~(1.0000 0.0000 1.0000) string:V3~(0.5000 0.0000 0.5000) 1:1 1:5 1:6
+ray V3(0.300000012 0.699999988 0) V3(0 0 1) ok n=6 5:1 string:V3~(0.3000 0.7000 0.0000) string:V3~(0.5000 0.1500 0.3500) 1:1 1:2 1:3
+ray V3(9 9 9) V3(1 0 0) ok n=0
+ray V3(2 2 5) V3(0 0 -10) ok n=6 5:2 string:V3~(2.0000 2.0000 0.0000) string:V3~(0.0000 1.0000 0.0000) 1:2 1:4 1:3
+ray V3(0.5 0.5 5) V3(0 0 0) ok n=0
+ray V3(-1 1 1) V3(10 0.100000001 -1) ok n=0
+ray-nil error Argument 2 missing or nil
+merge ok n=7 string:{1:1,1:2,1:3,1:4,1:5,1:6,1:7} string:{} string:{1:1,1:2,1:3,1:4,1:5,1:6,1:7} string:{1:1,1:2,1:3} string:{1:2,1:6,1:3} 6 6
+merge-zero ok n=3 string:{1:1,1:2,1:3} string:{} string:{1:1,1:2,1:3}
+merge-chain ok n=4 string:{1:1,1:2,1:3} string:{} string:{1:1,1:2,1:3} string:V3(0 0 0)
+merge-negative ok n=2 string:{} 2
+merge-nil error Argument 1 missing or nil
+merge-fixed ok n=2 boolean:true string:{}
+merge-attrs ok n=5 string:{2:1,2:2,2:3}{2:4,2:5,2:2} string:{1:1,1:5,1:2} string:{2:1,2:2,2:3} string:{2:4,2:5,2:2} string:{5:2,5:1}
+debug ok n=1 string:v1 v7 n1 c1 u1 f1 f3 b1
+debug-generations ok n=3 string:f1,2 string:f1,3 string:f1
+debug 0 ok n=1 string:Invalid
+debug 1 ok n=1 string:?1
+debug 30064771073 ok n=1 string:1
+debug 34359738370 ok n=1 string:?2,2
+debug -1 ok n=1 string:4294967295,0
+debug 0.5 ok n=1 string:?1
+debug x error Unable to cast string to int64
+debug 4294967297 ok n=1 string:v1
+debug-nil error Argument 1 missing or nil
+s1 2:1 F{5:1} f{5:1} V{1:1} v{1:1}
+s1 2:2 F{5:2,5:1} f{5:2,5:1} V{1:2} v{1:2,1:2}
+s1 2:3 F{5:2,5:1} f{5:2,5:1} V{1:3} v{1:3,1:3}
+s1 2:4 F{5:2} f{5:2} V{1:4} v{1:4}
+s1 2:5 F{} f{} V{} v{}
+s1 4:1 F{5:1} f{5:1} V{1:1} v{1:1}
+s1 4:2 F{5:2,5:1} f{5:2,5:1} V{1:2} v{1:2,1:2}
+s1 4:3 F{5:2,5:1} f{5:2,5:1} V{1:3} v{1:3,1:3}
+s1 4:4 F{5:2} f{5:2} V{1:4} v{1:4}
+s1 3:1 F{5:1} f{5:1} V{1:1} v{1:1}
+s1 3:2 F{5:2,5:1} f{5:2,5:1} V{1:2} v{1:2,1:2}
+s1 3:3 F{5:2,5:1} f{5:2,5:1} V{1:3} v{1:3,1:3}
+s1 3:4 F{5:2} f{5:2} V{1:4} v{1:4}
+s1 1:1 F{5:1} V{1:1}
+s1 1:2 F{5:2,5:1} V{1:2}
+s1 1:3 F{5:2,5:1} V{1:3}
+s1 1:4 F{5:2} V{1:4}
+s1 1:5 F{} V{}
+s1 1:6 F{} V{}
+s1 5:1 V{1:1,1:2,1:3}
+s1 5:2 V{1:2,1:4,1:3}
+s2 2:1 F{5:1} f{5:1} V{1:1} v{1:1}
+s2 2:2 F{5:1,5:2} f{5:1} V{1:2} v{1:2}
+s2 2:3 F{5:2,5:1} f{5:2,5:1} V{1:3} v{1:3,1:3}
+s2 2:4 F{5:2} f{5:2} V{1:4} v{1:4}
+s2 2:5 F{5:2,5:1} f{5:2} V{1:2} v{1:2}
+s2 4:1 F{5:1} f{5:1} V{1:1} v{1:1}
+s2 4:2 F{5:2,5:1} f{5:2,5:1} V{1:2} v{1:2,1:2}
+s2 4:3 F{5:2,5:1} f{5:2,5:1} V{1:3} v{1:3,1:3}
+s2 4:4 F{5:2} f{5:2} V{1:4} v{1:4}
+s2 3:1 F{5:1} f{5:1} V{1:1} v{1:1}
+s2 3:2 F{5:2,5:1} f{5:2,5:1} V{1:2} v{1:2,1:2}
+s2 3:3 F{5:2,5:1} f{5:2,5:1} V{1:3} v{1:3,1:3}
+s2 3:4 F{5:2} f{5:2} V{1:4} v{1:4}
+s2 1:1 F{5:1} V{1:1}
+s2 1:2 F{5:2,5:1} V{1:2}
+s2 1:3 F{5:2,5:1} V{1:3}
+s2 1:4 F{5:2} V{1:4}
+s2 1:5 F{} V{}
+s2 1:6 F{} V{}
+s2 5:1 V{1:1,1:2,1:3}
+s2 5:2 V{1:2,1:4,1:3}
+s3 2:1 F{} f{} V{} v{}
+s3 2:2 F{5:2,5:1} f{5:2} V{1:2} v{1:2}
+s3 2:3 F{5:2,5:1} f{5:2} V{1:3} v{1:3}
+s3 2:4 F{5:2} f{5:2} V{1:4} v{1:4}
+s3 2:5 F{5:1,5:2} f{5:1,5:1,5:1} V{1:1,1:2,1:3} v{1:3,1:2,1:1}
+s3 4:1 F{5:1} f{5:1} V{1:1} v{1:1}
+s3 4:2 F{5:1,5:2} f{5:1,5:2} V{1:2} v{1:2,1:2}
+s3 4:3 F{5:1,5:2} f{5:1,5:2} V{1:3} v{1:3,1:3}
+s3 4:4 F{5:2} f{5:2} V{1:4} v{1:4}
+s3 3:1 F{5:1} f{5:1} V{1:1} v{1:1}
+s3 3:2 F{5:1,5:2} f{5:1,5:2} V{1:2} v{1:2,1:2}
+s3 3:3 F{5:1,5:2} f{5:1,5:2} V{1:3} v{1:3,1:3}
+s3 3:4 F{5:2} f{5:2} V{1:4} v{1:4}
+s3 1:1 F{5:1} V{1:1}
+s3 1:2 F{5:1,5:2} V{1:2}
+s3 1:3 F{5:1,5:2} V{1:3}
+s3 1:4 F{5:2} V{1:4}
+s3 1:5 F{} V{}
+s3 1:6 F{} V{}
+s3 5:1 V{1:1,1:2,1:3}
+s3 5:2 V{1:2,1:4,1:3}
+s4 2:1 F{5:3,5:1} f{5:3} V{1:1} v{1:1}
+s4 2:2 F{5:3,5:2,5:1} f{5:3} V{1:2} v{1:2}
+s4 2:3 F{5:2,5:1} f{5:2} V{1:3} v{1:3}
+s4 2:4 F{5:2} f{5:2} V{1:4} v{1:4}
+s4 2:5 F{5:2,5:1,5:3} f{5:2,5:1,5:1,5:1} V{1:1,1:2,1:3} v{1:2,1:3,1:2,1:1}
+s4 2:6 F{5:3} f{5:3} V{1:5} v{1:5}
+s4 2:7 F{5:3} f{5:3} V{1:6} v{1:6}
+s4 4:1 F{5:1,5:3} f{5:1,5:3} V{1:1} v{1:1,1:1}
+s4 4:2 F{5:2,5:1,5:3} f{5:2,5:1,5:3} V{1:2} v{1:2,1:2,1:2}
+s4 4:3 F{5:1,5:2} f{5:1,5:2} V{1:3} v{1:3,1:3}
+s4 4:4 F{5:2} f{5:2} V{1:4} v{1:4}
+s4 4:5 F{5:3} f{5:3} V{1:5} v{1:5}
+s4 4:6 F{5:3} f{5:3} V{1:6} v{1:6}
+s4 3:1 F{5:1,5:3} f{5:1,5:3} V{1:1} v{1:1,1:1}
+s4 3:2 F{5:2,5:1,5:3} f{5:2,5:1,5:3} V{1:2} v{1:2,1:2,1:2}
+s4 3:3 F{5:1,5:2} f{5:1,5:2} V{1:3} v{1:3,1:3}
+s4 3:4 F{5:2} f{5:2} V{1:4} v{1:4}
+s4 3:5 F{5:3} f{5:3} V{1:5} v{1:5}
+s4 3:6 F{5:3} f{5:3} V{1:6} v{1:6}
+s4 1:1 F{5:1,5:3} V{1:1}
+s4 1:2 F{5:2,5:1,5:3} V{1:2}
+s4 1:3 F{5:1,5:2} V{1:3}
+s4 1:4 F{5:2} V{1:4}
+s4 1:5 F{5:3} V{1:5}
+s4 1:6 F{5:3} V{1:6}
+s4 5:3 V{1:1,1:5,1:6,1:2}
+s4 5:1 V{1:1,1:2,1:3}
+s4 5:2 V{1:2,1:4,1:3}
+s5 2:1 F{5:3,5:1} f{5:3} V{1:1} v{1:1}
+s5 2:2 F{5:3,5:1} f{5:3} V{1:2} v{1:2}
+s5 2:3 F{} f{} V{} v{}
+s5 2:4 F{} f{} V{} v{}
+s5 2:5 F{5:1} f{5:1,5:1,5:1} V{1:1,1:2,1:3} v{1:3,1:2,1:1}
+s5 2:6 F{5:3} f{5:3} V{1:5} v{1:5}
+s5 2:7 F{5:3} f{5:3} V{1:6} v{1:6}
+s5 4:1 F{5:1,5:3} f{5:1,5:3} V{1:1} v{1:1,1:1}
+s5 4:2 F{5:1,5:3} f{5:1,5:3} V{1:2} v{1:2,1:2}
+s5 4:3 F{5:1} f{5:1} V{1:3} v{1:3}
+s5 4:4 F{} f{} V{} v{}
+s5 4:5 F{5:3} f{5:3} V{1:5} v{1:5}
+s5 4:6 F{5:3} f{5:3} V{1:6} v{1:6}
+s5 3:1 F{5:1,5:3} f{5:1,5:3} V{1:1} v{1:1,1:1}
+s5 3:2 F{5:1,5:3} f{5:1,5:3} V{1:2} v{1:2,1:2}
+s5 3:3 F{5:1} f{5:1} V{1:3} v{1:3}
+s5 3:4 F{} f{} V{} v{}
+s5 3:5 F{5:3} f{5:3} V{1:5} v{1:5}
+s5 3:6 F{5:3} f{5:3} V{1:6} v{1:6}
+s5 1:1 F{5:1,5:3} V{1:1}
+s5 1:2 F{5:1,5:3} V{1:2}
+s5 1:3 F{5:1} V{1:3}
+s5 1:4 F{} V{}
+s5 1:5 F{5:3} V{1:5}
+s5 1:6 F{5:3} V{1:6}
+s5 5:3 V{1:1,1:5,1:6,1:2}
+s5 5:1 V{1:1,1:2,1:3}
+s6 2:1 F{} f{} V{} v{}
+s6 2:2 F{} f{} V{} v{}
+s6 2:3 F{} f{} V{} v{}
+s6 2:4 F{} f{} V{} v{}
+s6 2:5 F{5:2} f{5:2} V{1:5} v{1:5}
+s6 2:6 F{5:2} f{5:2} V{1:6} v{1:6}
+s6 2:7 F{5:2} f{5:2,5:1,5:1,5:1} V{1:1,1:2,1:3,1:4} v{1:4,1:3,1:2,1:1}
+s6 4:1 F{5:1} f{5:1} V{1:1} v{1:1}
+s6 4:2 F{5:1} f{5:1} V{1:2} v{1:2}
+s6 4:3 F{5:1} f{5:1} V{1:3} v{1:3}
+s6 4:4 F{5:2} f{5:2} V{1:4} v{1:4}
+s6 4:5 F{5:2} f{5:2} V{1:5} v{1:5}
+s6 4:6 F{5:2} f{5:2} V{1:6} v{1:6}
+s6 3:1 F{5:1} f{5:1} V{1:1} v{1:1}
+s6 3:2 F{5:1} f{5:1} V{1:2} v{1:2}
+s6 3:3 F{5:1} f{5:1} V{1:3} v{1:3}
+s6 3:4 F{5:2} f{5:2} V{1:4} v{1:4}
+s6 3:5 F{5:2} f{5:2} V{1:5} v{1:5}
+s6 3:6 F{5:2} f{5:2} V{1:6} v{1:6}
+s6 1:1 F{5:1} V{1:1}
+s6 1:2 F{5:1} V{1:2}
+s6 1:3 F{5:1} V{1:3}
+s6 1:4 F{5:2} V{1:4}
+s6 1:5 F{5:2} V{1:5}
+s6 1:6 F{5:2} V{1:6}
+s6 5:1 V{1:1,1:2,1:3}
+s6 5:2 V{1:4,1:5,1:6}
+s7 2:1 F{5:1} f{5:1} V{1:1} v{1:1}
+s7 2:2 F{5:2} f{5:2,5:1} V{1:2,1:4} v{1:4,1:2}
+s7 2:3 F{5:2} f{5:2,5:1} V{1:3,1:6} v{1:6,1:3}
+s7 2:4 F{5:2} f{5:2} V{1:5} v{1:5}
+s7 2:5 F{} f{} V{} v{}
+s7 4:1 F{5:1} f{5:1} V{1:1} v{1:1}
+s7 4:2 F{5:2} f{5:2,5:1} V{1:2,1:4} v{1:4,1:2}
+s7 4:3 F{5:2} f{5:2,5:1} V{1:3,1:6} v{1:6,1:3}
+s7 4:4 F{5:2} f{5:2} V{1:5} v{1:5}
+s7 3:1 F{5:1} f{5:1} V{1:1} v{1:1}
+s7 3:2 F{5:2} f{5:2,5:1} V{1:2,1:4} v{1:4,1:2}
+s7 3:3 F{5:2} f{5:2,5:1} V{1:3,1:6} v{1:6,1:3}
+s7 3:4 F{5:2} f{5:2} V{1:5} v{1:5}
+s7 1:1 F{5:1} V{1:1}
+s7 1:2 F{5:1} V{1:2}
+s7 1:3 F{5:1} V{1:3}
+s7 1:4 F{5:2} V{1:4}
+s7 1:5 F{5:2} V{1:5}
+s7 1:6 F{5:2} V{1:6}
+s7 5:1 V{1:1,1:2,1:3}
+s7 5:2 V{1:4,1:5,1:6}
+closest-order ok n=3 string:{1:4,1:2,1:3} 1:2 string:{1:4,1:2,1:3}
+closest-near-tie ok n=3 1:1 1:3 string:{1:3}
+closest-skew-1 ok n=6 5:1 string:V3~(0.8323 0.6302 0.4091) string:V3~(0.4364 0.2123 0.3513) 1:1 1:2 1:3
+closest-skew-2 ok n=6 5:1 string:V3~(1.3350 0.2398 0.1804) string:V3~(0.4422 0.4484 0.1095) 1:1 1:2 1:3
+closest-skew-3 ok n=6 5:1 string:V3~(0.1300 -0.2700 0.4100) string:V3~(1.0000 0.0000 0.0000) 1:1 1:2 1:3
+closest-skew-4 ok n=6 5:1 string:V3~(2.7100 0.3300 -0.1900) string:V3~(0.0000 1.0000 0.0000) 1:1 1:2 1:3
+closest-skew-5 ok n=6 5:1 string:V3~(0.5700 1.9300 0.7700) string:V3~(0.0000 0.0000 1.0000) 1:1 1:2 1:3
+closest-skew-6 ok n=6 5:1 string:V3~(1.4041 0.0263 0.1137) string:V3~(0.5062 0.4938 0.0000) 1:1 1:2 1:3
+closest-skew-7 ok n=6 5:2 string:V3~(1.7748 1.2477 0.3978) string:V3~(0.1011 0.4554 0.4435) 1:4 1:3 1:2
+closest-skew-8 ok n=6 5:1 string:V3~(0.3472 0.8162 0.5877) string:V3~(0.5063 0.0000 0.4937) 1:1 1:2 1:3
+closest-skew-9 ok n=6 5:1 string:V3~(0.9098 0.3924 0.3347) string:V3~(0.5075 0.2632 0.2293) 1:1 1:2 1:3
+closest-skew-10 ok n=6 5:2 string:V3~(2.5085 1.9514 1.0332) string:V3~(0.6804 0.2182 0.1014) 1:4 1:3 1:2
+closest-skew-11 ok n=6 5:2 string:V3~(1.2919 1.8544 1.4393) string:V3~(0.4596 0.3767 0.1637) 1:4 1:5 1:3
+closest-skew-12 ok n=6 5:2 string:V3~(-0.0862 1.5111 1.8167) string:V3~(0.1389 0.8611 0.0000) 1:4 1:5 1:3
+closest-skew-13 ok n=6 5:2 string:V3~(3.1000 2.2000 1.3000) string:V3~(1.0000 0.0000 0.0000) 1:4 1:5 1:3
+closest-skew-14 ok n=6 5:1 string:V3~(1.6825 0.8136 0.2082) string:V3~(0.1125 0.5430 0.3445) 1:1 1:2 1:3
+ray-skew-1 ok n=6 5:1 string:V3~(1.0447 0.4776 0.3152) string:V3~(0.4339 0.3111 0.2550) 1:1 1:2 1:3
+ray-skew-2 ok n=6 5:1 string:V3~(0.9441 0.5280 0.3548) string:V3~(0.4438 0.2661 0.2901) 1:1 1:2 1:3
+ray-skew-3 ok n=6 5:1 string:V3~(0.9000 0.4000 0.3391) string:V3~(0.5074 0.2585 0.2340) 1:1 1:2 1:3
+ray-skew-4 ok n=6 5:2 string:V3~(2.0000 1.5000 0.6208) string:V3~(0.2957 0.3857 0.3186) 1:4 1:3 1:2
+ray-skew-5 ok n=6 5:2 string:V3~(1.5834 1.8417 0.8310) string:V3~(0.3097 0.5829 0.1074) 1:4 1:3 1:2
+ray-skew-6 ok n=6 5:1 string:V3~(1.0360 0.5807 0.3404) string:V3~(0.3958 0.2991 0.3051) 1:1 1:2 1:3
+ray-skew-7 ok n=6 5:1 string:V3~(1.7000 0.8000 0.2002) string:V3~(0.1127 0.5512 0.3360) 1:1 1:2 1:3
+ray-skew-8 ok n=6 5:1 string:V3~(0.1300 -0.2700 0.4100) string:V3~(1.0000 0.0000 0.0000) 1:1 1:2 1:3
+ray-skew-9 ok n=6 5:1 string:V3~(1.4200 0.0300 0.1100) string:V3~(0.5000 0.5000 0.0000) 1:1 1:2 1:3
+ray-reach 4 ok n=0
+ray-reach 4.0000010000000001 ok n=6 5:1 string:V3~(0.5000 0.5000 0.0000) string:V3~(0.5000 0.2500 0.2500) 1:1 1:2 1:3
+ray-reach 3.9999989999999999 ok n=0
+ray-reach 4.5 ok n=6 5:1 string:V3~(0.5000 0.5000 0.0000) string:V3~(0.5000 0.2500 0.2500) 1:1 1:2 1:3
+ray-two ok n=7 5:2 5:1 string:V3~(0.5000 0.5000 0.0000) string:V3~(0.5000 0.2500 0.2500) 1:1 1:2 1:3
+merge-pair ok n=4 string:{} string:v{1:1,1:2,1:3} n{2:1,2:2,2:3} u{4:1,4:2,4:3} c{3:1,3:2,3:3} v{1:1,1:5,1:2} n{2:4,2:5,2:2} u{4:4,4:5,4:2} c{3:4,3:5,3:2} string:{5:2,5:1}{5:2,5:1}{5:1}{}{5:2} string:{1:4}
+merge-later-first ok n=4 string:{} string:v{1:2,1:3,1:4} n{2:1,2:2,2:3} u{4:1,4:2,4:3} c{3:1,3:2,3:3} v{1:2,1:1,1:3} n{2:4,2:5,2:2} u{4:4,4:5,4:2} c{3:4,3:5,3:2} string:{5:2}{5:1,5:2}{5:2,5:1}{5:1}{} string:{1:5}
+merge-tol-eq ok n=4 string:{} string:v{1:1,1:2,1:3} n{2:1,2:2,2:3} u{4:1,4:2,4:3} c{3:1,3:2,3:3} v{1:1,1:5,1:2} n{2:4,2:5,2:2} u{4:4,4:5,4:2} c{3:4,3:5,3:2} string:{5:2,5:1}{5:2,5:1}{5:1}{}{5:2} string:{1:4}
+merge-tol-under ok n=4 string:{} string:v{1:1,1:2,1:3} n{2:1,2:2,2:3} u{4:1,4:2,4:3} c{3:1,3:2,3:3} v{1:4,1:5,1:2} n{2:4,2:5,2:2} u{4:4,4:5,4:2} c{3:4,3:5,3:2} string:{5:1}{5:2,5:1}{5:1}{5:2}{5:2} string:{}
+merge-chain ok n=4 string:{} string:v{1:1,1:4,1:4} n{2:1,2:2,2:3} u{4:1,4:2,4:3} c{3:1,3:2,3:3} v{1:1,1:4,1:5} n{2:4,2:3,2:5} u{4:4,4:3,4:5} c{3:4,3:3,3:5} v{1:2,1:5,1:4} n{2:6,2:5,2:2} u{4:6,4:5,4:2} c{3:6,3:5,3:2} string:{5:2,5:1}{5:3}{}{5:1,5:2,5:3,5:1}{5:2,5:3}{} string:{1:3,1:6}
+merge-same-face ok n=4 string:{} string:v{1:1,1:1,1:3} n{2:1,2:2,2:3} u{4:1,4:2,4:3} c{3:1,3:2,3:3} string:{5:1,5:1}{}{5:1} string:{1:2}
+merge-quad ok n=4 string:{} string:v{1:1,1:2,1:3,1:4} n{2:1,2:2,2:3,2:4} u{4:1,4:2,4:3,4:4} c{3:1,3:2,3:3,3:4} v{1:2,1:6,1:7} n{2:5,2:6,2:7} u{4:5,4:6,4:7} c{3:5,3:6,3:7} string:{5:1}{5:2,5:1}{5:1}{5:1}{}{5:2}{5:2} string:{1:5}
+merge-none ok n=4 string:{} string:v{1:1,1:2,1:3} n{2:1,2:2,2:3} u{4:1,4:2,4:3} c{3:1,3:2,3:3} string:{5:1}{5:1}{5:1} string:{}
+merge-unused ok n=4 string:{} string:v{1:1,1:2,1:3} n{2:1,2:2,2:3} u{4:1,4:2,4:3} c{3:1,3:2,3:3} string:{5:1}{5:1}{5:1}{} string:{1:4}
+merge-three ok n=4 string:{string:4294967300=1:1,string:4294967302=1:1} string:v{1:1,1:2,1:3} n{2:1,2:2,2:3} u{4:1,4:2,4:3} c{3:1,3:2,3:3} v{1:1,1:5,1:2} n{2:4,2:5,2:2} u{4:4,4:5,4:2} c{3:4,3:5,3:2} v{1:1,1:3,1:7} n{2:6,2:3,2:7} u{4:6,4:3,4:7} c{3:6,3:3,3:7} string:{5:3,5:2,5:1}{5:2,5:1}{5:3,5:1}{}{5:2}{}{5:3} string:{1:4,1:6}
+merge-fixed ok n=3 boolean:true string:{} string:{1:1,1:2,1:3} {1:1,1:5,1:2}
+merge-text error Unable to cast string to float
+debug-gen 1 ok n=1 string:f3,2
+debug-gen 2 ok n=1 string:f3,3
+debug-gen 254 ok n=1 string:f3,255
+debug-gen 255 ok n=1 string:f3,256
+debug-gen 256 ok n=1 string:f3,257
+debug-gen 257 ok n=1 string:f3,258
+debug-gen 65535 ok n=1 string:f3,65536
+debug-kinds ok n=1 string:?12 v12 n12 c12 u12 f12 b12 12
+debug-slot-zero ok n=2 string:v0 string:f0
+merge-four ok n=2 string:{string:4294967300=1:1,string:4294967302=1:1,string:4294967304=1:1} string:{1:1,1:2,1:3} {1:1,1:5,1:2} {1:1,1:3,1:7} {1:1,1:9,1:2}
+merge-two-threes ok n=2 string:{string:4294967300=1:1,string:4294967302=1:1,string:4294967305=1:8,string:4294967306=1:8} string:{1:1,1:2,1:3} {1:1,1:5,1:2} {1:1,1:3,1:7} {1:8,1:11,1:2} {1:8,1:11,1:3} {1:8,1:11,1:1}
+merge-three-one-unused ok n=2 string:{string:4294967300=1:1,string:4294967302=1:1} string:{1:1,1:2,1:3} {1:1,1:5,1:2}
+merge-three-one-face ok n=2 string:{string:4294967299=1:1,string:4294967300=1:1} string:{1:1,1:2,1:1} {1:1,1:2,1:1}
+merge-target ok n=2 string:{string:4294967298=1:1,string:4294967299=1:1} string:{1:1,1:4,1:4} {1:1,1:4,1:5} {1:1,1:5,1:4}
+merge-target-far-first ok n=2 string:{string:4294967298=1:1,string:4294967299=1:1} string:{1:1,1:4,1:4} {1:1,1:4,1:5} {1:1,1:5,1:4}
+merge-pair-again ok n=2 string:{} string:{1:1,1:2,1:3} {1:1,1:5,1:2}
+merge-pairs-two ok n=2 string:{} string:{1:1,1:2,1:3} {1:1,1:5,1:2} {1:6,1:8,1:1} {1:6,1:8,1:2}
+merge-after ok n=3 string:{string:4294967300=1:1,string:4294967302=1:1} string:{string:4294967300=1:1,string:4294967302=1:1} string:{1:1,1:2,1:3,1:4,1:5,1:6,1:7}
+sorted-generations ok n=6 9:1 string:{1:2,1:3,9:1} string:{1:3,1:2,9:1} 9:1 string:{1:4,1:2,1:3,9:1} string:{1:4,1:2,1:3,9:1}

@@ -1,0 +1,118 @@
+# engine: Roblox Studio 0.747.0.7471481, a headless playing client (script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-27
+slots ok n=5 string:6:3=b3 14:2=c 14:1=d 14:4=e 6:5=f 14:2 14:1 14:4 6:5
+slots-again ok n=3 6:1 14:1 22:1
+removed-id error Invalid id
+remove-twice error Invalid id
+remove-parent ok n=2 0 0
+remove-weights ok n=2 string:{6:1,6:3} string:{0.25098040699958801,0.25098040699958801}
+by-name ok n=2 6:2 6:2
+by-name-missing error No bone named "nope"
+by-name-empty-mesh error No bone named "b1"
+by-name-twice error EditableMesh Error: Bone name already exists in the mesh
+by-name-renamed error EditableMesh Error: Bone name already exists in the mesh
+by-name-removed error EditableMesh Error: Bone name already exists in the mesh
+by-name-nil error Argument 1 missing or nil
+by-name-number ok n=1 6:1
+by-name-table error No bone named "{}"
+by-name-case error No bone named "B1"
+by-name-empty error EditableMesh Error: Bone name missing
+name-nil error Argument 2 missing or nil
+name-number ok n=2 1 string:5
+name-table ok n=2 2 string:{}
+name-bool ok n=2 4 string:true
+name-empty error EditableMesh Error: Bone name missing
+name-long error EditableMesh Error: Bone name too long
+name-nul ok n=2 1 string:a
+name-zero error Invalid id
+name-wrong-kind error Unexpected EditableMesh id type. Expected Bone id, received Vertex id
+name-gone error Invalid id
+name-fixed ok n=4 boolean:true string:nil string:x boolean:true
+virtual-true ok n=2 boolean:true boolean:false
+virtual-nil error Argument 2 missing or nil
+virtual-number ok n=2 boolean:true boolean:false
+virtual-text error Unable to cast string to bool
+virtual-gone error Invalid id
+virtual-fixed ok n=3 boolean:true string:nil boolean:true
+parent-zero ok n=2 0 0
+parent-self error EditableMesh Error: Invalid bone parent
+parent-other ok n=2 6:2 0
+parent-nil error Argument 2 missing or nil
+parent-vertex error Unexpected EditableMesh id type. Expected Bone id, received Vertex id
+parent-gone error Invalid id
+parent-cycle error EditableMesh Error: Invalid bone parent
+parent-clear ok n=1 0
+cframe-nil error Argument 2 missing or nil
+cframe-vector error Unable to cast Vector3 to CoordinateFrame
+cframe-number error Unable to cast double to CoordinateFrame
+cframe-round ok n=1 CF(1.25 2.5 -3 0.346929431 -0.681633055 -0.64421767 0.76504761 0.603004396 -0.226026341 0.5425331 -0.414442062 0.730681717)
+add-cframe-vector error Variant cast failed
+add-virtual-number error Variant cast failed
+add-name-number error Variant cast failed
+add-nothing error Missing bone Name value
+add-extra error Unexpected entry in table: Parent
+add-empty-name error EditableMesh Error: Bone name missing
+add-nil error Argument 1 missing or nil
+add-string error Unable to cast string to Dictionary
+facs-empty ok n=4 string:{} string:{} {} {}
+facs-set error Only virtual bones can be used in Facs Poses, unable to use bone "b1", id 25769803777
+facs-set-again error Only virtual bones can be used in Facs Poses, unable to use bone "b1", id 25769803777
+facs-bone-pose error Only virtual bones can be used in Facs Poses, unable to use bone "b2", id 25769803778
+facs-clear error Only virtual bones can be used in Facs Poses, unable to use bone "b1", id 25769803777
+facs-mismatch error boneIds and cframes size mismatch (1 and 2)
+facs-bad-bone error Unexpected EditableMesh id type. Expected Bone id, received Vertex id
+facs-gone-bone error Invalid id
+facs-bad-frame error Only virtual bones can be used in Facs Poses, unable to use bone "b1", id 25769803777
+facs-unit-name error Only virtual bones can be used in Facs Poses, unable to use bone "b1", id 25769803777
+facs-unit-number error Only virtual bones can be used in Facs Poses, unable to use bone "b1", id 25769803777
+facs-unit-other error Unable to cast KeyCode to FacsActionUnit
+facs-corrective error Only virtual bones can be used in Facs Poses, unable to use bone "b2", id 25769803778
+corrective-one error Correctives must have 2 or 3 FACS controls
+corrective-four error Correctives must have 2 or 3 FACS controls
+corrective-same error Unable to use actions together in a corrective
+corrective-empty error Correctives must have 2 or 3 FACS controls
+facs-copy error Only virtual bones can be used in Facs Poses, unable to use bone "b1", id 25769803777
+facs-remove-bone error Only virtual bones can be used in Facs Poses, unable to use bone "b1", id 25769803777
+facs-fixed ok n=3 boolean:false string:EditableMesh is fixed-size, adding or removing elements is not allowed in-experience string:({},{})
+facs-units ok n=4 50 string:Enum.FacsActionUnit.ChinRaiserUpperLip string:Enum.FacsActionUnit.ChinRaiser string:Enum.FacsActionUnit.TongueUp
+facs-set ok n=3 string:{Enum.FacsActionUnit.ChinRaiserUpperLip,Enum.FacsActionUnit.ChinRaiser} string:({6:1,6:3},{CF(1 0 0 1 0 0 0 1 0 0 0 1),CF(0 0 0 0.87758255 0 0.47942555 0 1 0 -0.47942555 0 0.87758255)}) string:({},{})
+facs-set-again ok n=2 string:({6:2},{CF(3 0 0 1 0 0 0 1 0 0 0 1)}) string:{Enum.FacsActionUnit.ChinRaiser}
+facs-bone-pose ok n=2 string:({6:1,6:2},{CF(0 0 5 1 0 0 0 1 0 0 0 1),CF(0 0 6 1 0 0 0 1 0 0 0 1)}) string:{Enum.FacsActionUnit.Funneler}
+facs-bone-pose-errors ok n=5 string:Only virtual bones can be used in Facs Poses, unable to use bone "b3", id 25769803779 string:Argument 3 missing or nil string:Invalid id string:Argument 1 missing or nil string:Unable to cast Vector3 to CoordinateFrame
+facs-clear ok n=2 string:({},{}) string:{}
+facs-identity ok n=2 string:({},{}) string:{}
+facs-bad-frame ok n=2 string:Variant cast failed string:({},{})
+facs-unit-name ok n=2 string:ok string:({6:1},{CF(1 0 0 1 0 0 0 1 0 0 0 1)})
+facs-unit-number ok n=2 string:ok string:({6:1},{CF(1 0 0 1 0 0 0 1 0 0 0 1)})
+facs-unit-nil ok n=2 string:Argument 1 missing or nil string:({},{})
+facs-twice ok n=2 string:ok string:({6:1},{CF(3 0 0 1 0 0 0 1 0 0 0 1)})
+facs-ids-not-table ok n=2 string:Unable to cast double to Array string:({},{})
+facs-frames-not-table ok n=2 string:Unable to cast double to Array string:({},{})
+facs-id-text ok n=2 string:Variant cast failed string:({},{})
+facs-get-errors ok n=5 string:Argument 1 missing or nil string:Unable to cast string to FacsActionUnit string:Correctives must have 2 or 3 FACS controls string:Unable to use actions together in a corrective string:Argument 1 missing or nil
+facs-corrective ok n=5 string:{{Enum.FacsActionUnit.ChinRaiserUpperLip,Enum.FacsActionUnit.FlatPucker},{Enum.FacsActionUnit.ChinRaiser,Enum.FacsActionUnit.Funneler,Enum.FacsActionUnit.LowerLipSuck}} string:({6:2},{CF(0 1 0 1 0 0 0 1 0 0 0 1)}) string:({6:2},{CF(0 1 0 1 0 0 0 1 0 0 0 1)}) string:({6:1,6:3},{CF(1 0 0 1 0 0 0 1 0 0 0 1),CF(3 0 0 1 0 0 0 1 0 0 0 1)}) string:({},{})
+corrective-pair-1 ok n=1 string:{{Enum.FacsActionUnit.ChinRaiserUpperLip,Enum.FacsActionUnit.ChinRaiser}}
+corrective-pair-2 ok n=1 string:{{Enum.FacsActionUnit.ChinRaiserUpperLip,Enum.FacsActionUnit.LeftBrowLowerer}}
+corrective-pair-3 ok n=1 string:{{Enum.FacsActionUnit.LipsTogether,Enum.FacsActionUnit.MouthLeft}}
+corrective-pair-4 ok n=1 string:{{Enum.FacsActionUnit.RightDimpler,Enum.FacsActionUnit.RightLipCornerDown}}
+corrective-pair-5 ok n=1 string:{{Enum.FacsActionUnit.EyesLookUp,Enum.FacsActionUnit.EyesLookRight}}
+corrective-pair-6 ok n=1 string:{{Enum.FacsActionUnit.ChinRaiserUpperLip,Enum.FacsActionUnit.ChinRaiser,Enum.FacsActionUnit.FlatPucker}}
+facs-copy ok n=1 string:{Enum.FacsActionUnit.ChinRaiser} ({6:1},{CF(1 0 0 1 0 0 0 1 0 0 0 1)}) {{Enum.FacsActionUnit.ChinRaiserUpperLip,Enum.FacsActionUnit.ChinRaiser}}
+facs-remove-bone ok n=1 string:({6:2},{CF(2 0 0 1 0 0 0 1 0 0 0 1)})
+facs-unvirtual ok n=1 string:({},{})
+bone-name-len 99 ok n=2 boolean:true string:added
+bone-name-len 100 ok n=2 boolean:true string:added
+bone-name-len 127 ok n=2 boolean:false string:EditableMesh Error: Bone name too long
+bone-name-len 128 ok n=2 boolean:false string:EditableMesh Error: Bone name too long
+bone-name-len 255 ok n=2 boolean:false string:EditableMesh Error: Bone name too long
+bone-name-len 256 ok n=2 boolean:false string:EditableMesh Error: Bone name too long
+bone-name-own ok n=1 string:b1
+bone-name-removed ok n=1 14:1
+bone-name-unicode ok n=2 string:héllo 6:1
+bone-len-ascii-101 ok n=2 boolean:false string:EditableMesh Error: Bone name too long
+bone-len-ascii-110 ok n=2 boolean:false string:EditableMesh Error: Bone name too long
+bone-len-ascii-126 ok n=2 boolean:false string:EditableMesh Error: Bone name too long
+bone-len-e-50 ok n=2 boolean:true string:added
+bone-len-e-51 ok n=2 boolean:false string:EditableMesh Error: Bone name too long
+bone-set-len ok n=2 string:ok string:EditableMesh Error: Bone name too long
+bone-by-name-table error No bone named "true"
