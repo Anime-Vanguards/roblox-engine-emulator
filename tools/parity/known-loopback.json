@@ -189,16 +189,8 @@
 	],
 	"player_friends": [
 		{
-			"line": "server: reflection ",
-			"why": "ReflectionService:GetMethodsOfClass is not emulated (it reports itself): ree's member metadata (reflection/members.rs) lists the six as Player's engine members"
-		},
-		{
 			"line": "server: web ",
 			"why": "the real engine's player is signed in to no account, so the web refuses each question about its friends (HTTP 401); ree answers as for a player with no friends (false, empty lists), or from the client profile's friends"
-		},
-		{
-			"line": "client: reflection ",
-			"why": "ReflectionService:GetMethodsOfClass is not emulated (it reports itself): ree's member metadata (reflection/members.rs) lists the six as Player's engine members"
 		},
 		{
 			"line": "client: web ",

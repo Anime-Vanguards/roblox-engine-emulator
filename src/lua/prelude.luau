@@ -1615,6 +1615,54 @@ local function ProxyFromFields(Kind, Fields)
 	return nil
 end
 
+-- ReflectionService's permits and filters (services/reflection_service.rs): a set as a mask of CapabilityOrder's ranks (rank n
+-- its bit n - 1; nil for a value that is no SecurityCapabilities), and a new SecurityCapabilities value of a mask's set (a
+-- client's permits are new values each call, equal to each other)
+local MaskSets = {}
+local function CapabilityMask(Value)
+	local Set = if type(Value) == "userdata" then CapabilitySets[Value] else nil
+	if Set == nil then
+		return nil
+	end
+	local Mask = 0
+	for Rank in Set do
+		Mask += 2 ^ (Rank - 1)
+	end
+	return Mask
+end
+local function CapabilitiesOfMask(Mask)
+	local Set = MaskSets[Mask]
+	if Set == nil then
+		Set = {}
+		local Rank, Rest = 1, Mask
+		while Rest > 0 do
+			if Rest % 2 == 1 then
+				Set[Rank] = true
+			end
+			Rest = (Rest - Rest % 2) / 2
+			Rank += 1
+		end
+		MaskSets[Mask] = Set
+	end
+	return Capabilities(Set)
+end
+-- A DefaultValue of a type ree has no values of (SocialService:CanSendGameInviteAsync's recipientId, a User), as a 0.747 client
+-- gives it: typeof the type, tostring the text, a new value each call that equals another of the same text, and any member read
+-- raises "<key> is not a valid member of <type>" (tools/parity/probes/reflection_members.luau)
+local OpaqueTexts = setmetatable({}, { __mode = "k" })
+local function OpaqueEqual(Left, Right)
+	return OpaqueTexts[Left] ~= nil and OpaqueTexts[Left] == OpaqueTexts[Right]
+end
+local function OpaqueValue(TypeName, Text)
+	local Object = Proxy(TypeName, function(_, Key)
+		error(`{tostring(Key)} is not a valid member of {TypeName}`, 0)
+	end, nil, { __tostring = function()
+		return Text
+	end, __eq = OpaqueEqual })
+	OpaqueTexts[Object] = TypeName .. "\0" .. Text
+	return Object
+end
+
 return {
 	ProxyFields = ProxyFields,
 	ProxyFromFields = ProxyFromFields,
@@ -1663,4 +1711,8 @@ return {
 	Require = Require,
 	--
 	CallBody = CallBody,
+	CapabilityOrder = CapabilityOrder,
+	CapabilityMask = CapabilityMask,
+	CapabilitiesOfMask = CapabilitiesOfMask,
+	OpaqueValue = OpaqueValue,
 }

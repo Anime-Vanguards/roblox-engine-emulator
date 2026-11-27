@@ -20,6 +20,7 @@ pub mod localization;
 pub mod physics;
 pub(crate) mod players;
 pub mod query;
+pub(crate) mod reflection_data;
 pub mod reflection_service;
 pub mod settings;
 pub mod teams;

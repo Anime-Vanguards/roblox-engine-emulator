@@ -1,0 +1,83 @@
+# engine: Roblox Studio 0.747.0.7471481, a headless playing client (script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-27
+props Instance 11 Archivable@Instance,Capabilities@Instance,IsInSandbox@Instance,Name@Instance,Parent@Instance,PredictionMode@Instance,Sandboxed@Instance,archivable@Instance,numExpectedDirectChildren@Instance,ClassName@Object,className@Object
+events Instance 10 AncestryChanged@Instance,AttributeChanged@Instance,ChildAdded@Instance,ChildRemoved@Instance,DescendantAdded@Instance,DescendantRemoving@Instance,Destroying@Instance,StyledPropertiesChanged@Instance,childAdded@Instance,Changed@Object
+props Folder 13 ExplorerIconContent@Folder,IconTint@Folder,Archivable@Instance,Capabilities@Instance,IsInSandbox@Instance,Name@Instance,Parent@Instance,PredictionMode@Instance,Sandboxed@Instance,archivable@Instance,numExpectedDirectChildren@Instance,ClassName@Object,className@Object
+props Part own 2 Shape@Part,shape@Part
+events BoolValue 11 Changed@BoolValue,changed@BoolValue,AncestryChanged@Instance,AttributeChanged@Instance,ChildAdded@Instance,ChildRemoved@Instance,DescendantAdded@Instance,DescendantRemoving@Instance,Destroying@Instance,StyledPropertiesChanged@Instance,childAdded@Instance
+methods Workspace 119 Workspace Model ApplyRecommendedStreamingSettings isA
+count Part 94 77 16
+count Model 26 65 10
+count Workspace 75 119 13
+count Humanoid 66 86 39
+count Player 56 133 48
+count Players 21 78 28
+count Sound 41 52 22
+count Decal 33 42 10
+count Frame 60 48 29
+count TextLabel 85 49 29
+count UserGameSettings 24 53 13
+count GlobalSettings 11 51 14
+count UserSettings 11 49 14
+count NetworkClient 11 44 12
+count NetworkServer 11 45 10
+count Object 2 3 1
+count LuaSettings 11 42 10
+prop Part.Size F{Display=F{Category="Transform"},Name="Size",Owner="BasePart",Permits=F{Read=SC<>,Write=SC<>},Serialized=boolean:false,Type=F{EngineType="Vector3",ScriptType="Vector3"}}
+prop Part.Shape F{Display=F{Category="Part"},Name="Shape",Owner="Part",Permits=F{Read=SC<Basic>,Write=SC<>},Serialized=boolean:false,Type=F{EngineType="Enum",EnumType="PartType",ScriptType="EnumItem"}}
+prop Part.shape F{Display=F{Category="Part"},Name="shape",Owner="Part",Permits=F{},Serialized=boolean:true,Type=F{EngineType="Enum",EnumType="PartType",ScriptType="EnumItem"}}
+prop Part.brickColor F{Display=F{Category="Appearance",DeprecationMessage="Use `BrickColor` instead."},Name="brickColor",Owner="BasePart",Permits=F{Read=SC<>,Write=SC<>},Serialized=boolean:false,Type=F{EngineType="BrickColor",ScriptType="BrickColor"}}
+prop Part.Parent F{Display=F{Category="Data"},Name="Parent",Owner="Instance",Permits=F{Read=SC<>,Write=SC<>},Serialized=boolean:false,Type=F{EngineType="RefType",InstanceType="Instance",ScriptType="Instance"}}
+prop Decal.Texture F{ContentType=EnumItem:Enum.AssetType.Image,Display=F{Category="Appearance"},Name="Texture",Owner="Decal",Permits=F{Read=SC<Basic>,Write=SC<>},Serialized=boolean:false,Type=F{EngineType="ContentId",ScriptType="string"}}
+prop MeshPart.MeshId F{ContentType=EnumItem:Enum.AssetType.Mesh,Display=F{Category="Appearance"},Name="MeshId",Owner="MeshPart",Permits=F{Read=SC<Basic>},Serialized=boolean:false,Type=F{EngineType="ContentId",ScriptType="string"}}
+prop Model.PrimaryPart F{Display=F{Category="Pivot"},Name="PrimaryPart",Owner="Model",Permits=F{Read=SC<>,Write=SC<>},Serialized=boolean:true,Type=F{EngineType="RefType",InstanceType="BasePart",ScriptType="Instance"}}
+prop Workspace.Gravity F{Display=F{Category="Behavior"},Name="Gravity",Owner="Workspace",Permits=F{Read=SC<Basic>,Write=SC<Basic | Physics>},Serialized=boolean:true,Type=F{EngineType="float",ScriptType="number"}}
+prop Debris.MaxItems F{Display=F{Category="Data"},Name="MaxItems",Owner="Debris",Permits=F{Read=SC<Basic>,Write=SC<Unassigned>},Serialized=boolean:true,Type=F{EngineType="int",ScriptType="number"}}
+prop Player.UserId F{Display=F{Category="Data"},Name="UserId",Owner="Player",Permits=F{Read=SC<Players>,Write=SC<>},Serialized=boolean:false,Type=F{EngineType="int64",ScriptType="number"}}
+prop HttpService.HttpEnabled F{Display=F{Category="Data"},Name="HttpEnabled",Owner="HttpService",Permits=F{Read=SC<Network>},Serialized=boolean:true,Type=F{EngineType="bool",ScriptType="boolean"}}
+method Part:FindFirstChild F{Display=F{},Name="FindFirstChild",Owner="Instance",Parameters=F{F{Name="name",Type=F{EngineType="string",ScriptType="string"}},F{DefaultValue=boolean:false,Name="recursive",Type=F{EngineType="bool",ScriptType="boolean"}}},Permits=F{Call=SC<>,CallParallel=SC<>},ReturnType=F{EngineType="Instance",InstanceType="Instance",ScriptType="Instance"}}
+method Part:WaitForChild F{Display=F{},Name="WaitForChild",Owner="Instance",Parameters=F{F{Name="childName",Type=F{EngineType="string",ScriptType="string"}},F{Name="timeOut",Type=F{EngineType="double",ScriptType="number"}}},Permits=F{Call=SC<>},ReturnType=F{EngineType="Instance",InstanceType="Instance",ScriptType="Instance"}}
+method Part:Destroy F{Display=F{},Name="Destroy",Owner="Instance",Parameters=F{},Permits=F{Call=SC<>},ReturnType=F{EngineType="Void"}}
+method Humanoid:LoadAnimation F{Display=F{DeprecationMessage="Use `LoadAnimation` instead."},Name="LoadAnimation",Owner="Humanoid",Parameters=F{F{Name="animation",Type=F{EngineType="Instance",InstanceType="Animation",ScriptType="Instance"}}},Permits=F{Call=SC<Animation>},ReturnType=F{EngineType="Instance",InstanceType="AnimationTrack",ScriptType="Instance"}}
+method Player:Kick F{Display=F{},Name="Kick",Owner="Player",Parameters=F{F{DefaultValue="",Name="message",Type=F{EngineType="string",ScriptType="string"}}},Permits=F{Call=SC<Players | Consequences>},ReturnType=F{EngineType="Void"}}
+method Selection:Get F{Display=F{},Name="Get",Owner="Selection",Parameters=F{},Permits=F{},ReturnType=F{EngineType="Instances",InstanceType="Instance",ScriptType="Instances"}}
+method HttpService:JSONEncode F{Display=F{},Name="JSONEncode",Owner="HttpService",Parameters=F{F{Name="input",Type=F{EngineType="Variant"}}},Permits=F{Call=SC<>,CallParallel=SC<>},ReturnType=F{EngineType="string",ScriptType="string"}}
+method Workspace:GetPartBoundsInBox F{Display=F{},Name="GetPartBoundsInBox",Owner="WorldRoot",Parameters=F{F{Name="cframe",Type=F{EngineType="CoordinateFrame",ScriptType="CFrame"}},F{Name="size",Type=F{EngineType="Vector3",ScriptType="Vector3"}},F{DefaultValue=OverlapParams:OverlapParams{MaxParts=0, Tolerance=0, BruteForceAllSlow=false, RespectCanCollide=false, CollisionGroup=Default, FilterDescendantsInstances={}},Name="overlapParams",Type=F{EngineType="OverlapParams",ScriptType="OverlapParams"}}},Permits=F{Call=SC<>,CallParallel=SC<>},ReturnType=F{EngineType="Instances",InstanceType="BasePart",ScriptType="Instances"}}
+event Part.Touched F{Display=F{},Name="Touched",Owner="BasePart",Parameters=F{F{Name="otherPart",Type=F{EngineType="Instance",InstanceType="BasePart",ScriptType="Instance"}}},Permits=F{Listen=SC<>}}
+event Part.Changed F{Display=F{},Name="Changed",Owner="Object",Parameters=F{F{Name="property",Type=F{EngineType="Property",ScriptType="Property"}}},Permits=F{Listen=SC<>}}
+event Part.childAdded F{Display=F{DeprecationMessage="Use `ChildAdded` instead."},Name="childAdded",Owner="Instance",Parameters=F{F{Name="child",Type=F{EngineType="Instance",InstanceType="Instance",ScriptType="Instance"}}},Permits=F{Listen=SC<>}}
+event Humanoid.Died F{Display=F{},Name="Died",Owner="Humanoid",Parameters=F{},Permits=F{Listen=SC<AvatarBehavior>}}
+event Players.PlayerAdded F{Display=F{},Name="PlayerAdded",Owner="Players",Parameters=F{F{Name="player",Type=F{EngineType="Instance",InstanceType="Player",ScriptType="Instance"}}},Permits=F{Listen=SC<Players>}}
+nodisplay F{ContentType=EnumItem:Enum.AssetType.Image,Name="Texture",Owner="Decal",Permits=F{Read=SC<Basic>,Write=SC<>},Serialized=boolean:false,Type=F{EngineType="ContentId",ScriptType="string"}} F{F{Name="Changed",Owner="Object",Parameters=F{F{Name="property",Type=F{EngineType="Property",ScriptType="Property"}}},Permits=F{Listen=SC<>}}}
+default params RaycastParams false true RaycastParams{IgnoreWater=false, Margin=0, SizeGradient=0, BruteForceAllSlow=false, RespectCanCollide=false, CollisionGroup=Default, FilterDescendantsInstances={}} Enum.RaycastFilterType.Exclude OverlapParams OverlapParams{MaxParts=0, Tolerance=0, BruteForceAllSlow=false, RespectCanCollide=false, CollisionGroup=Default, FilterDescendantsInstances={}}
+params equal true false false true true false false
+default table table false true nil
+default user User userdata U1.AQAAAAAAAAAAAAAAAAAAAAA false true error Name is not a valid member of User
+default values 0, 0, 0 Vector2 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1 true false 1 true nil
+frozen true true true true true true true true true true nil nil
+new true true true false true SecurityCapabilities 0 true
+err error @144: attempt to modify a readonly table error @146: attempt to modify a readonly table
+arg error Argument 2 missing or nil error Argument 2 missing or nil ok nil ok #11 ok nil ok nil
+arg error Unable to cast double to Dictionary error Unable to cast Array to Dictionary error Unable to cast string to Dictionary error Unable to cast bool to Dictionary error Unable to cast Array to Dictionary
+arg error Argument 2 missing or nil error Unable to cast double to Dictionary ok nil error ReflectionMemberFilter's ExcludeDisplay field is expected to be type bool error ReflectionMemberFilter's ExcludeDisplay field is expected to be type bool
+field error ReflectionMemberFilter's ExcludeInherited field is expected to be type bool error ReflectionMemberFilter's ExcludeDisplay field is expected to be type bool error ReflectionMemberFilter's Security field is expected to be type SecurityCapabilities error ReflectionMemberFilter's Security field is expected to be type SecurityCapabilities
+field error ReflectionMemberFilter's Security field is expected to be type SecurityCapabilities error ReflectionMemberFilter's ExcludeInherited field is expected to be type bool ok #94 ok #94
+self error Expected ':' not '.' calling member function GetPropertiesOfClass error Expected ':' not '.' calling member function GetPropertiesOfClass error Expected ':' not '.' calling member function GetMethodsOfClass
+class filter error ReflectionClassFilter's Security field is expected to be type SecurityCapabilities error ReflectionClassFilter's IsA field is expected to be type string ok nil error Unable to cast double to Dictionary error ReflectionClassFilter's IsA field is expected to be type string error ReflectionClassFilter's IsA field is expected to be type string error ReflectionClassFilter's IsA field is expected to be type string
+warnings 2 argument #1 expects a string, but boolean was passed | argument #1 expects a string, but table was passed
+security none 157 Part:-nil/ok nil Workspace:c53/ok #119 Player:-nil/ok nil CoreGui:-nil/ok nil Studio:-nil/ok nil UserGameSettings:-13/ok #53 NetworkClient:-nil/ok nil
+security basic 249 Part:c92/ok #77 Workspace:c64/ok #119 Player:-nil/ok nil CoreGui:-nil/ok nil Studio:-nil/ok nil UserGameSettings:-13/ok #53 NetworkClient:-nil/ok nil
+security current 660 Part:c94/ok #77 Workspace:c75/ok #119 Player:-56/ok #133 CoreGui:-nil/ok nil Studio:-nil/ok nil UserGameSettings:-24/ok #53 NetworkClient:-11/ok #44
+security current-Basic 538 Part:-nil/ok nil Workspace:c64/ok #119 Player:-56/ok #133 CoreGui:-nil/ok nil Studio:-nil/ok nil UserGameSettings:-24/ok #53 NetworkClient:-11/ok #44
+security current+Plugin 693 Part:c95/ok #77 Workspace:c76/ok #119 Player:-57/ok #133 CoreGui:c13/ok #47 Studio:-128/ok #43 UserGameSettings:-25/ok #53 NetworkClient:c12/ok #44
+security current+WritePlayer 661 Part:c94/ok #77 Workspace:c75/ok #119 Player:c56/ok #133 CoreGui:-nil/ok nil Studio:-nil/ok nil UserGameSettings:-24/ok #53 NetworkClient:-11/ok #44
+security current+RobloxScript 844 Part:c97/ok #77 Workspace:c80/ok #119 Player:-72/ok #133 CoreGui:-nil/ok nil Studio:-nil/ok nil UserGameSettings:-85/ok #53 NetworkClient:-13/ok #44
+security unassigned 157 Part:-nil/ok nil Workspace:c53/ok #119 Player:-nil/ok nil CoreGui:-nil/ok nil Studio:-nil/ok nil UserGameSettings:-13/ok #53 NetworkClient:-nil/ok nil
+security all 941 Part:c110/ok #77 Workspace:c120/ok #119 Player:c96/ok #133 CoreGui:c25/ok #47 Studio:-229/ok #43 UserGameSettings:-99/ok #53 NetworkClient:c23/ok #44
+permits New=WritePlayer | Players | GetService=Plugin | Network | Call=Plugin | Basic |  | Read=;Write=PluginOrOpenCloud
+hidden F{Display=F{Category="Data"},Name="RobloxLocked",Owner="Instance",Permits=F{Read=SC<Plugin>,Write=SC<Plugin>},Serialized=boolean:false,Type=F{EngineType="bool",ScriptType="boolean"}} F{Display=F{Category="Data"},Name="Attributes",Owner="Instance",Permits=F{},Serialized=boolean:false,Type=F{EngineType="string",ScriptType="string"}}
+all classes 941 F{Display=F{Category="General"},Name="CoreGui",Permits=F{GetService=SC<Plugin | UI>},Superclass="BasePlayerGui"} F{Name="Player",Permits=F{New=SC<WritePlayer | Players>},Superclass="Instance"}
+permits held Basic  SecurityCapabilities nil
+subclasses HSRDataContentProvider,MeshContentProvider,SlimContentProvider,SolidModelContentProvider,WrapContentProvider 614 32 true true
+view default classes 660 1510b30b properties 671 d0f5770c methods 671 8dc18a50 events 671 c1671a7d
+view all classes 941 f92740aa properties 954 cd75f847 methods 954 20737742 events 954 082d05a0

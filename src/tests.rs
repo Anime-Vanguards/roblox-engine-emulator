@@ -11231,8 +11231,8 @@ fn a_full_reference_stack_is_the_resumed_threads_error() {
 /// ReflectionService:GetClasses and GetClass as a game script gets them (measured in a playing client and a server game
 /// script, Studio 0.744): the dump's classes in name order, each call new frozen entries (Name, Superclass, Serialized only when
 /// true, Subclasses only when there are some, those a script cannot get included, Display, Permits); the classes only rbx-dom
-/// describes are nil; the filter's IsA and ExcludeDisplay, and its measured errors. Permits holds no SecurityCapabilities in ree:
-/// reading it reports itself as not emulated.
+/// describes are nil; the filter's IsA and ExcludeDisplay, and its measured errors. Permits holds a new SecurityCapabilities value
+/// for each action (Part's New: Basic; Workspace's GetService: none).
 #[test]
 fn reflection_service_lists_the_dumps_classes_as_a_game_script_gets_them() {
     let (lua, engine) = start();
@@ -11272,10 +11272,10 @@ fn reflection_service_lists_the_dumps_classes_as_a_game_script_gets_them() {
         print("errors", select(2, pcall(RS.GetClass, RS, "Part", true)))
         print("errors", (string.gsub(select(2, pcall(function() List[1] = 1 end)), "^Test:%d+: ", "")))
         print("errors", select(2, pcall(RS.GetClasses)))
-        for _ in Part.Permits do
-            print("never")
+        for Action, Capabilities in Part.Permits do
+            print("permit", Action, typeof(Capabilities), Capabilities)
         end
-        print("Permits", typeof(Part.Permits), Part.Permits.New, next(Part.Permits))
+        print("Permits", typeof(Part.Permits), Part.Permits.New == RS:GetClass("Part").Permits.New, rawequal(Part.Permits.New, RS:GetClass("Part").Permits.New), tostring(RS:GetClass("Workspace").Permits.GetService), RS:GetClass("Workspace").Permits.New)
         "#,
     );
     let expected = [
@@ -11300,16 +11300,120 @@ fn reflection_service_lists_the_dumps_classes_as_a_game_script_gets_them() {
         "print: errors Unable to cast bool to Dictionary",
         "print: errors attempt to modify a readonly table",
         "print: errors Expected ':' not '.' calling member function GetClasses",
-        // (the first use of an unemulated member writes its line, before the print it is an argument of)
-        "missing: ReflectedClass.Permits is not emulated",
-        "print: Permits table nil nil",
+        "print: permit New SecurityCapabilities Basic",
+        "print: Permits table true false  nil",
     ];
     assert_eq!(output, expected);
     let missing = engine.state.borrow().output.missing.clone();
-    assert_eq!(missing, vec![("ReflectedClass.Permits".to_string(), 2)], "{missing:?}");
+    assert!(missing.is_empty(), "{missing:?}");
     // the dump's classes and no others; IsA counts a class and its subclasses
     let reflected = engine.reflection.classes.iter().filter(|class| class.reflected).count();
     assert_eq!(reflected, 660);
+}
+
+/// ReflectionService's member queries as a game script gets them (measured in roblox-sim's 0.747 playing client and server,
+/// tools/parity/probes/reflection_members.luau): each class's members and then each superclass's, a name declared again listed
+/// once (Workspace:BreakJoints is Workspace's); every field of a property, method and event entry, DefaultValues of each kind
+/// made new each call; classes the data/reflection.json dump does not list (Player, UserGameSettings) answering; the filter's
+/// fields and their errors; a Security set's lists and permits; and the work clock's price of an answer.
+#[test]
+fn reflection_service_member_queries_answer_as_a_game_script_gets_them() {
+    let (lua, engine) = start_with(Options { mode: "play".into(), ..Options::default() });
+    let output = run(
+        &lua,
+        &engine,
+        r#"
+        local RS = game:GetService("ReflectionService")
+        local function Names(List)
+            local Out = {}
+            for _, Entry in List do
+                table.insert(Out, Entry.Name .. "@" .. Entry.Owner)
+            end
+            return table.concat(Out, ",")
+        end
+        local function Find(List, Name)
+            for _, Entry in List or {} do
+                if Entry.Name == Name then
+                    return Entry
+                end
+            end
+        end
+        print("Instance", Names(RS:GetPropertiesOfClass("Instance")))
+        print("counts", #RS:GetPropertiesOfClass("Part"), #RS:GetMethodsOfClass("Part"), #RS:GetEventsOfClass("Part"), #RS:GetPropertiesOfClass("Player"), #RS:GetMethodsOfClass("Player"), #RS:GetEventsOfClass("Player"), #RS:GetPropertiesOfClass("UserGameSettings"))
+        local Workspace = RS:GetMethodsOfClass("Workspace")
+        print("redeclared", Find(Workspace, "BreakJoints").Owner, Find(Workspace, "breakJoints").Owner, #RS:GetEventsOfClass("BoolValue"))
+        local Texture = Find(RS:GetPropertiesOfClass("Decal"), "Texture")
+        print("property", Texture.Owner, Texture.Type.EngineType, Texture.Type.ScriptType, Texture.Serialized, Texture.ContentType, Texture.Display.Category, tostring(Texture.Permits.Read), tostring(Texture.Permits.Write), table.isfrozen(Texture), table.isfrozen(Texture.Permits))
+        local FindFirstChild = Find(RS:GetMethodsOfClass("Part"), "FindFirstChild")
+        print("method", FindFirstChild.Owner, #FindFirstChild.Parameters, FindFirstChild.Parameters[2].Name, FindFirstChild.Parameters[2].DefaultValue, FindFirstChild.ReturnType.InstanceType, next(FindFirstChild.Display), tostring(FindFirstChild.Permits.CallParallel))
+        local Touched = Find(RS:GetEventsOfClass("Part"), "Touched")
+        print("event", Touched.Owner, Touched.Parameters[1].Name, Touched.Parameters[1].Type.InstanceType, tostring(Touched.Permits.Listen))
+        local function DefaultOf(Class, Name, Parameter)
+            for _, Entry in Find(RS:GetMethodsOfClass(Class), Name).Parameters do
+                if Entry.Name == Parameter then
+                    return Entry.DefaultValue
+                end
+            end
+        end
+        local Ray = DefaultOf("Workspace", "Raycast", "raycastParams")
+        local User = DefaultOf("SocialService", "CanSendGameInviteAsync", "recipientId")
+        print("defaults", typeof(Ray), Ray == DefaultOf("Workspace", "Raycast", "raycastParams"), rawequal(Ray, DefaultOf("Workspace", "Raycast", "raycastParams")), table.isfrozen(DefaultOf("AnalyticsService", "LogCustomEvent", "customFields")), typeof(User), tostring(User), User == DefaultOf("SocialService", "CanSendGameInviteAsync", "recipientId"), select(2, pcall(function() return User.Name end)))
+        print("nil", RS:GetPropertiesOfClass("Nope"), RS:GetPropertiesOfClass("CoreGui"), RS:GetMethodsOfClass("RomarkRbxAnalyticsService"), RS:GetPropertiesOfClass(5))
+        print("errors", select(2, pcall(RS.GetPropertiesOfClass, RS)), "|", select(2, pcall(RS.GetPropertiesOfClass, RS, "Nope", 5)), "|", pcall(RS.GetPropertiesOfClass, RS, "Nope", { ExcludeDisplay = 1 }), "|", select(2, pcall(RS.GetPropertiesOfClass, RS, "RomarkRbxAnalyticsService", { ExcludeDisplay = 1 })))
+        print("errors", select(2, pcall(RS.GetPropertiesOfClass, RS, "Part", { ExcludeInherited = 1, ExcludeDisplay = 1, Security = 1 })), "|", select(2, pcall(RS.GetEventsOfClass, RS, "Part", { ExcludeInherited = 1, ExcludeDisplay = 1 })), "|", select(2, pcall(RS.GetClass, RS, "UserGameSettings", { IsA = 1 })))
+        local All = SecurityCapabilities.new(table.unpack(Enum.SecurityCapability:GetEnumItems()))
+        local Current = SecurityCapabilities.fromCurrent()
+        print("security", #RS:GetClasses({ Security = SecurityCapabilities.new() }), #RS:GetClasses({ Security = All }), RS:GetClass("Player"), tostring(RS:GetClass("Player", { Security = Current:Add(Enum.SecurityCapability.WritePlayer) }).Permits.New), RS:GetPropertiesOfClass("Part", { Security = SecurityCapabilities.new() }), #RS:GetPropertiesOfClass("Part", { Security = All }), #RS:GetPropertiesOfClass("CoreGui", { Security = Current:Add(Enum.SecurityCapability.Plugin) }))
+        print("permits", tostring(Find(RS:GetMethodsOfClass("Selection", { Security = All }), "Get").Permits.Call), next(Find(RS:GetMethodsOfClass("Selection"), "Get").Permits), tostring(Find(RS:GetPropertiesOfClass("Debris", { Security = SecurityCapabilities.new(Enum.SecurityCapability.Basic) }), "MaxItems").Permits.Write))
+        print("subclasses", table.concat(RS:GetClass("CacheableContentProvider").Subclasses, ","), table.find(RS:GetClass("Instance").Subclasses, "UserGameSettings") ~= nil)
+        "#,
+    );
+    let expected = [
+        "print: Instance Archivable@Instance,Capabilities@Instance,IsInSandbox@Instance,Name@Instance,Parent@Instance,PredictionMode@Instance,Sandboxed@Instance,archivable@Instance,numExpectedDirectChildren@Instance,ClassName@Object,className@Object",
+        "print: counts 94 77 16 56 133 48 24",
+        "print: redeclared Workspace Model 11",
+        "print: property Decal ContentId string false Enum.AssetType.Image Appearance Basic  true true",
+        "print: method Instance 2 recursive false Instance nil ",
+        "print: event BasePart otherPart BasePart ",
+        "print: defaults RaycastParams true false true User U1.AQAAAAAAAAAAAAAAAAAAAAA true Name is not a valid member of User",
+        "print: nil nil nil nil nil",
+        "print: errors Argument 2 missing or nil | Unable to cast double to Dictionary | true | ReflectionMemberFilter's ExcludeDisplay field is expected to be type bool",
+        "print: errors ReflectionMemberFilter's Security field is expected to be type SecurityCapabilities | ReflectionMemberFilter's ExcludeInherited field is expected to be type bool | ReflectionClassFilter's IsA field is expected to be type string",
+        "print: security 157 941 nil WritePlayer | Players nil 110 13",
+        "print: permits Plugin | Basic nil Unassigned",
+        "print: subclasses HSRDataContentProvider,MeshContentProvider,SlimContentProvider,SolidModelContentProvider,WrapContentProvider true",
+    ];
+    assert_eq!(output, expected);
+    let missing = engine.state.borrow().output.missing.clone();
+    assert!(missing.is_empty(), "{missing:?}");
+    // the work clock: Part's properties near the client's 209 us, a name no class has near nothing
+    let work = |source: &str| {
+        let before = engine.state.borrow().sched.work_total();
+        run(&lua, &engine, source);
+        engine.state.borrow().sched.work_total() - before
+    };
+    let empty = work("local RS = game:GetService(\"ReflectionService\")");
+    let properties = work("local RS = game:GetService(\"ReflectionService\") RS:GetPropertiesOfClass(\"Part\")") - empty;
+    let nothing = work("local RS = game:GetService(\"ReflectionService\") RS:GetPropertiesOfClass(\"Nope\")") - empty;
+    assert!(properties > 190e-6 && properties < 230e-6, "{properties}");
+    assert!(nothing < 1e-6, "{nothing}");
+}
+
+/// The capabilities ReflectionService's data counts by (services/reflection_data.rs CAPABILITY_ORDER) are SecurityCapabilities'
+/// (prelude.luau CapabilityOrder), and a game script's set is fromCurrent's.
+#[test]
+fn reflection_service_capability_bits_follow_the_prelude() {
+    let (lua, engine) = start();
+    let exports = &engine.prelude().exports;
+    let order: Vec<String> = exports.get::<LuaTable>("CapabilityOrder").unwrap().sequence_values::<String>().map(Result::unwrap).collect();
+    assert_eq!(order, crate::services::reflection_data::CAPABILITY_ORDER);
+    let library: LuaTable = exports.get("SecurityCapabilities").unwrap();
+    let current: LuaValue = library.get::<LuaFunction>("fromCurrent").unwrap().call(()).unwrap();
+    let mask: f64 = exports.get::<LuaFunction>("CapabilityMask").unwrap().call(current).unwrap();
+    assert_eq!(mask as u64, crate::services::reflection_data::SCRIPT_CAPS);
+    let made: LuaValue = exports.get::<LuaFunction>("CapabilitiesOfMask").unwrap().call(mask).unwrap();
+    let text: String = lua.globals().get::<LuaFunction>("tostring").unwrap().call(made).unwrap();
+    assert!(text.starts_with("RunClientScript | RunServerScript") && text.ends_with("Material | AvatarBehavior"), "{text}");
 }
 
 /// A vide-like module that builds its element names from ReflectionService:GetClasses() when it is required (stock vide's

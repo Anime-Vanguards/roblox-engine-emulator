@@ -997,6 +997,22 @@ pub const JOINT_LISTED: f64 = 0.069e-6;
 pub const REFLECTED_CLASS: f64 = 1.55e-6;
 pub const REFLECTED_CLASS_DISPLAY: f64 = 0.56e-6;
 pub const REFLECTED_CLASS_TESTED: f64 = 0.006e-6;
+/// ReflectionService's member queries (GetPropertiesOfClass, GetMethodsOfClass, GetEventsOfClass): an answer's list, each entry of
+/// each kind, each parameter, permit value and Display table in it, and a property the filter's capabilities leave out; a class
+/// they may not query ([`REFLECTED_MEMBERS_REFUSED`]). Fitted on a playing 0.747 client (roblox-sim, headless; os.clock around
+/// single calls, the median of 15 samples less an empty call's, the faster of two sessions; 44 calls from 1 to 133 entries, every
+/// one within 15 % of the fit): GetPropertiesOfClass("Part") 209 us (94 entries), with ExcludeDisplay 173, Workspace's
+/// GetMethodsOfClass 402 us (119 entries, 144 parameters), Part's GetEventsOfClass 36 us (16); a name no class has 0.06 us in all
+/// (the method's [`method`] price), a class the set may not query 0.24 (`GetPropertiesOfClass("CoreGui")`).
+pub const REFLECTED_MEMBER_LIST: f64 = 0.65e-6;
+pub const REFLECTED_PROPERTY: f64 = 1.61e-6;
+pub const REFLECTED_METHOD: f64 = 1.58e-6;
+pub const REFLECTED_EVENT: f64 = 0.93e-6;
+pub const REFLECTED_PARAMETER: f64 = 0.97e-6;
+pub const REFLECTED_PERMIT: f64 = 0.185e-6;
+pub const REFLECTED_MEMBER_DISPLAY: f64 = 0.23e-6;
+pub const REFLECTED_PROPERTY_HIDDEN: f64 = 0.435e-6;
+pub const REFLECTED_MEMBERS_REFUSED: f64 = 0.18e-6;
 /// A LogService logging call (Output, Info, Warn, Error, Log), whole: the same client, `LogService:Info("L {a}", { a = 1 })` 1.10 us
 /// with the Luau around it (20 calls a sample, the median of 15 samples), the table constructor about 0.1 of that.
 pub const LOG_CALL: f64 = 1.0e-6;
@@ -2765,6 +2781,9 @@ pub fn method(name: &str) -> f64 {
         "GetValue" => 0.027,
         // ReflectionService:GetClass's lookup; the entry it makes is [`REFLECTED_CLASS`]'s
         "GetClass" => 0.28,
+        // (the member queries' lookup: a name no class has, 0.06 us whole on a client and 0.01 of Luau here; what an answer makes is
+        // [`REFLECTED_MEMBER_LIST`]'s and after)
+        "GetPropertiesOfClass" | "GetMethodsOfClass" | "GetEventsOfClass" => 0.05,
         // (EncodingService:GetDecompressedBufferSize, 0.045-0.05 us in all on a headless 0.747 client, three sessions; its other members
         // add what they handle: [`hash_algorithm_prices`] and after)
         "GetDecompressedBufferSize" => 0.035,
