@@ -3,7 +3,9 @@
 //! known difference. A fix that makes a known line match passes too; `node tools/parity/run.mjs` says which entries
 //! to remove. The server's set (expected/server, known-server.json) runs the same way with `--run-context server`, and the
 //! paired set (probes/loopback: a server and its client in one play session; expected/loopback, known-loopback.json) with
-//! `--run-context loopback`, each probe's two sides as its harness's Server and Client.
+//! `--run-context loopback`, each probe's two sides as its harness's Server and Client. The animation ids probes load play
+//! the stand-in clips in tools/parity/animations (`--animations`), so no run needs asset access; where this machine fetches
+//! the real assets, the probes that load them are also checked on those.
 
 use std::{
     collections::HashSet,
@@ -58,6 +60,23 @@ fn parity_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tools").join("parity")
 }
 
+/// The clips the probes' animation ids load in a parity run (`--animations`, tools/parity/README.md "Animation assets"):
+/// made for the tests with what the probes read of the real assets, so a run with no asset access (a CI runner) prints
+/// what the real engine printed.
+fn animations_dir() -> PathBuf {
+    parity_dir().join("animations")
+}
+
+/// The asset ids tools/parity/animations stands in for (its `<id>.rbxmx` files)
+fn stand_in_ids() -> Vec<String> {
+    let mut ids: Vec<String> = std::fs::read_dir(animations_dir())
+        .unwrap()
+        .filter_map(|entry| entry.ok()?.file_name().to_str()?.strip_suffix(".rbxmx").map(str::to_owned))
+        .collect();
+    ids.sort();
+    ids
+}
+
 /// The text both engines run (tools/parity/run.mjs `body`).
 fn body(prelude: &str, probe: &str) -> String {
     format!(
@@ -99,7 +118,7 @@ fn missing(expected: &[String], actual: &[String]) -> Vec<String> {
 const HARNESS_PRINT: &str = "local __ParityLines, __ParityRealPrint = {}, print\nlocal function print(...)\n\tlocal Parts = table.pack(...)\n\tfor Index = 1, Parts.n do\n\t\tParts[Index] = tostring(Parts[Index])\n\tend\n\ttable.insert(__ParityLines, table.concat(Parts, \" \", 1, Parts.n))\nend";
 const HARNESS_FLUSH: &str = "for _, Line in __ParityLines do\n\t__ParityRealPrint(Line)\nend\n__ParityRealPrint(\"@done\")";
 
-fn probe_job(scratch: &Path, empty: &Path, name: &str, source: &str, server: bool) -> serde_json::Value {
+fn probe_job(scratch: &Path, empty: &Path, name: &str, source: &str, server: bool, stand_ins: bool) -> serde_json::Value {
     let harness = scratch.join(format!("{name}.luau"));
     std::fs::write(&harness, format!("return function(Context)\n{HARNESS_PRINT}\n{source}\n{HARNESS_FLUSH}\nend\n")).unwrap();
     // (the server capture's place has ServerScriptService.LoadStringEnabled on; a probe's "flag=" names an engine flag it needs on;
@@ -115,6 +134,9 @@ fn probe_job(scratch: &Path, empty: &Path, name: &str, source: &str, server: boo
         "--max-wall-seconds".into(),
         "60".into(),
     ];
+    if stand_ins {
+        args.extend(["--animations".into(), animations_dir().to_string_lossy().into_owned()]);
+    }
     if server {
         args.extend(["--run-context", "server", "--load-string"].map(str::to_owned));
     } else if directive("context=edit") {
@@ -165,6 +187,7 @@ fn loopback_probe_job(scratch: &Path, empty: &Path, name: &str, server: &str, cl
             "--seconds", "120",
             "--max-wall-seconds", "60",
             "--run-context", "loopback",
+            "--animations", animations_dir().to_string_lossy().into_owned(),
         ]
     })
 }
@@ -253,16 +276,28 @@ fn the_paired_comparison_catches_a_swap_a_leak_and_a_lost_echo() {
 
 #[test]
 fn probes_print_what_the_real_engine_printed() {
-    check(false);
+    check(false, false);
 }
 
 /// The probes run as a server's script (a Studio 0.744 play session's server: capture_sim.py), ree with --run-context server
 #[test]
 fn probes_print_on_a_server_what_a_real_server_printed() {
-    check(true);
+    check(true, false);
 }
 
-fn check(server: bool) {
+/// The probes that load an asset tools/parity/animations stands in for, run on the real asset instead (no `--animations`),
+/// on a client and on a server, where this machine fetches it (the download worker wrote it into the run's cache): what
+/// keeps each stand-in true to its asset. Where it is not fetched (no worker or no network, as on a CI runner) such a probe
+/// is not compared, and the test says so on stderr.
+#[test]
+fn probes_print_with_the_real_animation_assets_what_they_print_with_the_stand_ins() {
+    check(false, true);
+    check(true, true);
+}
+
+/// Runs the probes with a captured output and fails on any expected line ree does not print that the known list does not
+/// allow: with the stand-in animation clips, or (`real_assets`) only the probes that name a stand-in's id, without them.
+fn check(server: bool, real_assets: bool) {
     let dir = parity_dir();
     let prelude = std::fs::read_to_string(dir.join("prelude.luau")).unwrap();
     let known_file = if server { "known-server.json" } else { "known.json" };
@@ -277,24 +312,36 @@ fn check(server: bool) {
         .filter_map(|entry| entry.ok()?.file_name().to_str()?.strip_suffix(".luau").map(str::to_owned))
         .collect();
     names.sort();
-    let mut queued: Vec<(&str, Vec<String>)> = Vec::new();
+    let stand_ins = stand_in_ids();
+    let mut queued: Vec<(&str, Vec<String>, Vec<&str>)> = Vec::new();
     let mut jobs = Vec::new();
     for name in &names {
         let Ok(expected) = std::fs::read_to_string(expected_dir.join(format!("{name}.txt"))) else { continue };
         let expected = expected_lines(&expected);
         let probe = std::fs::read_to_string(dir.join("probes").join(format!("{name}.luau"))).unwrap();
-        jobs.push(probe_job(&scratch, &empty, name, &body(&prelude, &probe), server));
-        queued.push((name.as_str(), expected));
+        let assets: Vec<&str> = stand_ins.iter().map(String::as_str).filter(|id| probe.contains(id)).collect();
+        if real_assets && assets.is_empty() {
+            continue;
+        }
+        jobs.push(probe_job(&scratch, &empty, name, &body(&prelude, &probe), server, !real_assets));
+        queued.push((name.as_str(), expected, assets));
     }
     let results = run_batch(&scratch, &jobs);
     assert_eq!(results.len(), queued.len());
     let mut failures = Vec::new();
+    let mut unfetched = Vec::new();
     let checked = queued.len();
-    for ((name, expected), result) in queued.into_iter().zip(results.iter()) {
+    // (the download cache of the batch's state dir: animation/source.rs)
+    let fetched = |id: &str| scratch.join("state").join("animations").join(format!("{id}.rbxm")).is_file();
+    for ((name, expected, assets), result) in queued.into_iter().zip(results.iter()) {
         assert_eq!(result["id"].as_str(), Some(name));
         assert_ne!(result["code"].as_i64(), Some(124), "{name}: probe hit its wall-clock cap: {result}");
         let summary = &result["summary"];
         assert_eq!(summary["done"], true, "{name}: the probe did not finish: {result}");
+        if real_assets && !assets.iter().all(|id| fetched(id)) {
+            unfetched.push(format!("{name} ({})", assets.join(", ")));
+            continue;
+        }
         let actual = printed_lines(summary);
         let allowed: HashSet<&str> =
             known[name].as_array().map(|list| list.iter().filter_map(|entry| entry["line"].as_str()).collect()).unwrap_or_default();
@@ -305,7 +352,15 @@ fn check(server: bool) {
         }
     }
     let _ = std::fs::remove_dir_all(&scratch);
-    assert!(checked > 0, "no probe has an expected output");
-    let command = if server { "node tools/parity/run.mjs --server --diff" } else { "node tools/parity/run.mjs --diff" };
+    if !unfetched.is_empty() {
+        eprintln!("{side}: not compared on the real animation assets, which this machine did not fetch (they ran on the stand-ins in tools/parity/animations): {}", unfetched.join(", "));
+    }
+    assert!(checked > 0, "{}", if real_assets { "no probe with an expected output loads an asset tools/parity/animations stands in for" } else { "no probe has an expected output" });
+    let command = match (server, real_assets) {
+        (false, false) => "node tools/parity/run.mjs --diff",
+        (true, false) => "node tools/parity/run.mjs --server --diff",
+        (false, true) => "on the real animation assets: node tools/parity/run.mjs --real-assets --diff",
+        (true, true) => "on the real animation assets: node tools/parity/run.mjs --real-assets --server --diff",
+    };
     assert!(failures.is_empty(), "{} new differences from the real engine ({command}):\n{}", failures.len(), failures.join("\n"));
 }

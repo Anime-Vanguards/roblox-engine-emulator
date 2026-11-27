@@ -30,6 +30,13 @@ Each `probes/loopback/<name>.luau` file contains shared code at the top, followe
 - At completion, the server forwards its collected lines to the client, which outputs `server: <line>` followed by `client: <line>`.
 - Always capture loopback probes 3 times and keep only lines identical across all 3 runs—cross-process frame phase jitter makes single-send frame counts noisy.
 
+## Animation assets
+
+A probe that plays an animation names a real asset, which the real engine fetches. A parity run (`run.mjs`, `cargo test --test parity`) serves each such id from `animations/<id>.rbxmx` instead, through ree's `--animations`, so it needs no asset access: a clip made for the tests with what the probes read of the asset. `animations/507766666.rbxmx` stands in for Roblox's R15 idle (`http://www.roblox.com/asset/?id=507766666`, the form a server fetches too): a looped KeyframeSequence of 4.3 s that moves the `LowerTorso` joint.
+
+- **On the real asset:** `cargo test --test parity` also runs these probes without the stand-ins where the machine fetches the asset (the download worker writes it into the run's cache), and says on stderr which it could not compare; `node tools/parity/run.mjs --real-assets [--server]` does the same by hand.
+- **A new asset:** a probe on an asset that has no stand-in yet gets one in the same commit, with the Length, Looped and posed joints its lines depend on.
+
 ## Authoring a probe
 
 - **`prelude.luau` helpers:** `P.num` / `P.f32` (portable number formatting), `P.err` (strips chunk names and normalizes line numbers to `@12:`), `P.try` (prints call outcome), `P.rng` (isolated RNG so `Random` / `math.random` can be tested), `P.sync` (aligns to a scheduler resumption point). `print` escapes invalid UTF-8 and control bytes.

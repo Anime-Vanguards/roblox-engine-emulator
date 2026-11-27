@@ -1,0 +1,77 @@
+<roblox version="4">
+	<Item class="KeyframeSequence" referent="RBX0">
+		<Properties>
+			<string name="Name">ParityIdle</string>
+			<bool name="Loop">true</bool>
+			<token name="Priority">0</token>
+		</Properties>
+		<Item class="Keyframe" referent="RBX1">
+			<Properties>
+				<string name="Name">Keyframe</string>
+				<float name="Time">0</float>
+			</Properties>
+			<Item class="Pose" referent="RBX2">
+				<Properties>
+					<string name="Name">HumanoidRootPart</string>
+					<CoordinateFrame name="CFrame">
+						<X>0</X><Y>0</Y><Z>0</Z>
+						<R00>1</R00><R01>0</R01><R02>0</R02>
+						<R10>0</R10><R11>1</R11><R12>0</R12>
+						<R20>0</R20><R21>0</R21><R22>1</R22>
+					</CoordinateFrame>
+					<float name="Weight">0</float>
+					<token name="EasingStyle">0</token>
+					<token name="EasingDirection">0</token>
+				</Properties>
+				<Item class="Pose" referent="RBX3">
+					<Properties>
+						<string name="Name">LowerTorso</string>
+						<CoordinateFrame name="CFrame">
+							<X>0</X><Y>0.25</Y><Z>0</Z>
+							<R00>1</R00><R01>0</R01><R02>0</R02>
+							<R10>0</R10><R11>1</R11><R12>0</R12>
+							<R20>0</R20><R21>0</R21><R22>1</R22>
+						</CoordinateFrame>
+						<float name="Weight">1</float>
+						<token name="EasingStyle">0</token>
+						<token name="EasingDirection">0</token>
+					</Properties>
+				</Item>
+			</Item>
+		</Item>
+		<Item class="Keyframe" referent="RBX4">
+			<Properties>
+				<string name="Name">Keyframe</string>
+				<float name="Time">4.3</float>
+			</Properties>
+			<Item class="Pose" referent="RBX5">
+				<Properties>
+					<string name="Name">HumanoidRootPart</string>
+					<CoordinateFrame name="CFrame">
+						<X>0</X><Y>0</Y><Z>0</Z>
+						<R00>1</R00><R01>0</R01><R02>0</R02>
+						<R10>0</R10><R11>1</R11><R12>0</R12>
+						<R20>0</R20><R21>0</R21><R22>1</R22>
+					</CoordinateFrame>
+					<float name="Weight">0</float>
+					<token name="EasingStyle">0</token>
+					<token name="EasingDirection">0</token>
+				</Properties>
+				<Item class="Pose" referent="RBX6">
+					<Properties>
+						<string name="Name">LowerTorso</string>
+						<CoordinateFrame name="CFrame">
+							<X>0</X><Y>0.5</Y><Z>0</Z>
+							<R00>1</R00><R01>0</R01><R02>0</R02>
+							<R10>0</R10><R11>1</R11><R12>0</R12>
+							<R20>0</R20><R21>0</R21><R22>1</R22>
+						</CoordinateFrame>
+						<float name="Weight">1</float>
+						<token name="EasingStyle">0</token>
+						<token name="EasingDirection">0</token>
+					</Properties>
+				</Item>
+			</Item>
+		</Item>
+	</Item>
+</roblox>

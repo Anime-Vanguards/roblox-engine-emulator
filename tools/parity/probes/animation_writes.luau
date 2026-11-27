@@ -1,6 +1,6 @@
 -- A track's Parent, GetTimeOfKeyframe before the clip arrived and after, TimePosition written (looped or not, playing or
 -- not, before the clip arrived) as it reads back at once, and whether a Transform a track or a script writes fires Changed
--- (a Motor6D's, a Bone's). The asset is Roblox's R15 idle by URL, which a server fetches too.
+-- (a Motor6D's, a Bone's). The asset is Roblox's R15 idle by URL, which a server fetches too; parity runs play its stand-in (tools/parity/animations).
 P.sync()
 local Id = "http://www.roblox.com/asset/?id=507766666"
 local Model = Instance.new("Model")

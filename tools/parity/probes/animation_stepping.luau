@@ -1,6 +1,6 @@
 -- Which Animators a frame steps: a rig with joints and one without, in the Workspace, under a Folder, in a WorldModel, in
 -- ReplicatedStorage and outside the DataModel, each playing a track of an asset (the URL form, which a server fetches too).
--- Printed: whether its time moved, IsPlaying and WeightCurrent, and whether GetTrackByAnimationId finds it after Stop(0).
+-- Printed: whether its time moved, IsPlaying and WeightCurrent, and whether GetTrackByAnimationId finds it after Stop(0). Parity runs play the asset's stand-in (tools/parity/animations).
 P.sync()
 local Rigs = {}
 local function Rig(Label, Parent, Jointed)

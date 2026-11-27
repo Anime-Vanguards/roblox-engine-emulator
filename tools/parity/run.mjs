@@ -11,6 +11,9 @@
 //   node tools/parity/run.mjs --loopback [...]               # the paired probes (probes/loopback): a server and its client
 //                                                            # in one play session, expected/loopback and known-loopback.json,
 //                                                            # ree with --run-context loopback
+//   node tools/parity/run.mjs --real-assets [--server] [...] # the probes that load an animation tools/parity/animations
+//                                                            # stands in for, on the real asset (where this machine
+//                                                            # fetches it) instead of the stand-in
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -30,6 +33,15 @@ const KNOWN_SERVER = path.join(HERE, "known-server.json");
 const PROBES_LOOPBACK = path.join(PROBES, "loopback");
 const EXPECTED_LOOPBACK = path.join(EXPECTED, "loopback");
 const KNOWN_LOOPBACK = path.join(HERE, "known-loopback.json");
+// The clips the probes' animation ids load (ree's --animations): made for the tests with what the probes read of the real
+// assets, so a run with no asset access (a CI runner) prints what the real engine printed (README.md "Animation assets").
+// tests/parity.rs passes the same folder.
+const ANIMATIONS = path.join(HERE, "animations");
+
+// The asset ids tools/parity/animations stands in for (its `<id>.rbxmx` files)
+export function standInIds() {
+	return fs.readdirSync(ANIMATIONS).filter(name => name.endsWith(".rbxmx")).map(name => name.slice(0, -6)).sort();
+}
 
 export function probeNames() {
 	return fs.readdirSync(PROBES).filter(name => name.endsWith(".luau")).map(name => name.slice(0, -5)).sort();
@@ -140,7 +152,7 @@ __ParityRealPrint("@done")`;
 
 // One probe through `ree run`: its printed lines (the run's own `@done` dropped), the errors and warnings scripts and the
 // engine reported (output, not failures: a real engine reports them too), and why the run failed if it did.
-export function runInRee(name, ree, scratch, server = false) {
+export function runInRee(name, ree, scratch, server = false, realAssets = false) {
 	const harness = path.join(scratch, `${name}.luau`);
 	fs.writeFileSync(harness, `return function(Context)\n${HARNESS_PRINT}\n${body(name)}\n${HARNESS_FLUSH}\nend\n`);
 	const empty = path.join(scratch, "empty");
@@ -151,6 +163,7 @@ export function runInRee(name, ree, scratch, server = false) {
 	const options = probeOptions(name);
 	const context = server ? ["--run-context", "server", "--load-string"] : options.context === "edit" ? ["--mode", "edit", "--run-context", "edit"] : [];
 	if (options.flag === "FFlagEnableLoadModule") context.push("--load-module");
+	if (!realAssets) context.push("--animations", ANIMATIONS);
 	const result = spawnSync(ree, ["run", "--harness", harness, "--roots", empty, "--seconds", "120", ...context], {
 		encoding: "utf8", maxBuffer: 256 * 1024 * 1024, windowsHide: true,
 	});
@@ -183,7 +196,7 @@ export function runInReeLoopback(name, ree, scratch) {
 	fs.writeFileSync(harness, `return {\n\tServer = function(Context)\n${loopbackText(name, "server")}\nend,\n\tClient = function(Context)\n${loopbackText(name, "client")}\n__LoopbackRealPrint("@done")\nend,\n}\n`);
 	const empty = path.join(scratch, "empty");
 	fs.mkdirSync(empty, { recursive: true });
-	const result = spawnSync(ree, ["run", "--harness", harness, "--roots", empty, "--seconds", "120", "--run-context", "loopback"], {
+	const result = spawnSync(ree, ["run", "--harness", harness, "--roots", empty, "--seconds", "120", "--run-context", "loopback", "--animations", ANIMATIONS], {
 		encoding: "utf8", maxBuffer: 256 * 1024 * 1024, windowsHide: true,
 	});
 	return readRun(result);
@@ -299,7 +312,7 @@ function capture(names, server = false, loopback = false) {
 
 function main() {
 	const args = process.argv.slice(2);
-	const options = { ree: defaultRee(), rur: null, diff: false, json: null, capture: false, writeKnown: false, server: false, loopback: false, names: [] };
+	const options = { ree: defaultRee(), rur: null, diff: false, json: null, capture: false, writeKnown: false, server: false, loopback: false, realAssets: false, names: [] };
 	for (let index = 0; index < args.length; index++) {
 		const arg = args[index];
 		if (arg === "--ree") options.ree = args[++index];
@@ -310,11 +323,16 @@ function main() {
 		else if (arg === "--write-known") options.writeKnown = true;
 		else if (arg === "--server") options.server = true;
 		else if (arg === "--loopback") options.loopback = true;
+		else if (arg === "--real-assets") options.realAssets = true;
 		else if (arg.startsWith("-")) throw new Error(`unknown option ${arg}`);
 		else options.names.push(arg);
 	}
 	if (options.server && options.loopback) throw new Error("--loopback runs both sides; leave out --server");
-	const names = options.names.length ? options.names : options.loopback ? loopbackProbeNames() : probeNames().filter(name => !options.server || serverProbe(name));
+	if (options.realAssets && (options.loopback || options.rur || options.capture || options.writeKnown)) throw new Error("--real-assets runs ree's client or server probes, and writes nothing");
+	// (--real-assets: the probes that name an id a stand-in is for)
+	const ids = standInIds();
+	const loadsStandIn = name => ids.some(id => fs.readFileSync(path.join(PROBES, `${name}.luau`), "utf8").includes(id));
+	const names = options.names.length ? options.names : options.loopback ? loopbackProbeNames() : probeNames().filter(name => (!options.server || serverProbe(name)) && (!options.realAssets || loadsStandIn(name)));
 	if (options.capture) return capture(names, options.server, options.loopback);
 	if (!options.ree && !options.rur) throw new Error("no ree: build it (cargo build --release) or pass --ree <exe>");
 	if (options.rur && options.writeKnown) throw new Error("--write-known records ree's differences, not rur's");
@@ -328,7 +346,7 @@ function main() {
 	let failed = 0;
 	for (const name of names) {
 		const expected = readExpected(name, options.server, options.loopback);
-		const ran = options.rur ? runInRur(name, options.rur, scratch) : options.loopback ? runInReeLoopback(name, options.ree, scratch) : runInRee(name, options.ree, scratch, options.server);
+		const ran = options.rur ? runInRur(name, options.rur, scratch) : options.loopback ? runInReeLoopback(name, options.ree, scratch) : runInRee(name, options.ree, scratch, options.server, options.realAssets);
 		if (!expected) {
 			rows.push({ name, status: "no expected output", ran });
 			continue;
@@ -345,6 +363,8 @@ function main() {
 		console.log(`${pad(row.name, 22)} ${pad(row.status, 8)} ${pad(r ? r.total : "-", 6)} ${pad(r ? r.same : "-", 6)} ${pad(r ? r.known.length : "-", 6)} ${pad(r ? r.unknown.length : "-", 6)}`);
 		for (const error of row.ran.errors) console.log(`    error: ${error}`);
 		if (r && r.stale.length) console.log(`    known.json entries that now match (remove them): ${r.stale.join(" | ")}`);
+		// (on the real asset: a load that failed here, which is why its lines differ)
+		if (options.realAssets) for (const message of row.ran.messages.filter(text => text.includes("Failed to load animation"))) console.log(`    ${message}`);
 	}
 	const totals = rows.reduce((sum, row) => {
 		if (row.result) {
