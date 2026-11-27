@@ -191,7 +191,7 @@ pub struct LuaRefs {
     pub shared: Option<LuaTable>,
     /// Rust halves of a script's `require` closure (stored for fast Rust-side environment creation)
     pub require_begin: Option<LuaFunction>,
-    pub require_finish: Option<LuaFunction>,
+    pub require_run: Option<LuaFunction>,
     /// Signal / connection member functions
     pub signal_members: Option<LuaTable>,
     pub connection_members: Option<LuaTable>,

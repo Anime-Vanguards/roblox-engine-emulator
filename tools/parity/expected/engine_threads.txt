@@ -1,0 +1,91 @@
+# engine: Roblox Studio 0.747.0.7471481, a headless playing client (script identity 4; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-27
+chunk got=probe same=false requirer=normal own=running yieldable=true after=suspended
+chunk cat=Probe requirer-cat-after=parity-req
+chunk resume-after=false status=dead
+chunk info2=nil nil nil trace=ReplicatedStorage.ParityThreads.Probe:12 / 
+chunk threads-shared=false
+slow-wait req=suspended chunk=suspended same=false
+slow-wait req-trace=@119 / 
+slow-wait chunk-trace=ReplicatedStorage.ParityThreads.Slow:4 / 
+slow-done got=slow req=dead chunk=suspended cat=Slow req-in-chunk=suspended
+nested-trace ReplicatedStorage.ParityThreads.Inner:1 / 
+nested-wait req=@132 /  | chunk=ReplicatedStorage.ParityThreads.Outer2:1 /  | suspended
+nested-wait done=s2
+self error Requested module experienced an error while loading
+self-log MessageError:Requested module was required recursively /     Stack Begin /     Script 'ReplicatedStorage.ParityThreads.Self', Line 1 /     Stack End
+self-errors Requested module was required recursively <ReplicatedStorage.ParityThreads.Self, line 1 / > ReplicatedStorage.ParityThreads.Self
+cycle error Requested module experienced an error while loading
+cycle-log MessageError:Requested module was required recursively /     Stack Begin /     Script 'ReplicatedStorage.ParityThreads.CycB', Line 1 /     Stack End | MessageError:Requested module experienced an error while loading /     Stack Begin /     Script 'ReplicatedStorage.ParityThreads.CycA', Line 1 /     Stack End
+cycle-errors Requested module was required recursively <ReplicatedStorage.ParityThreads.CycB, line 1 / > ReplicatedStorage.ParityThreads.CycB | Requested module experienced an error while loading <ReplicatedStorage.ParityThreads.CycA, line 1 / > ReplicatedStorage.ParityThreads.CycA
+cycle3 error Requested module experienced an error while loading
+cycle3-log MessageError:Requested module was required recursively /     Stack Begin /     Script 'ReplicatedStorage.ParityThreads.C3C', Line 1 /     Stack End | MessageError:Requested module experienced an error while loading /     Stack Begin /     Script 'ReplicatedStorage.ParityThreads.C3B', Line 1 /     Stack End | MessageError:Requested module experienced an error while loading /     Stack Begin /     Script 'ReplicatedStorage.ParityThreads.C3A', Line 1 /     Stack End
+cycle3-errors Requested module was required recursively <ReplicatedStorage.ParityThreads.C3C, line 1 / > ReplicatedStorage.ParityThreads.C3C | Requested module experienced an error while loading <ReplicatedStorage.ParityThreads.C3B, line 1 / > ReplicatedStorage.ParityThreads.C3B | Requested module experienced an error while loading <ReplicatedStorage.ParityThreads.C3A, line 1 / > ReplicatedStorage.ParityThreads.C3A
+cycle-yield nil suspended | first nil suspended
+cross nil nil suspended suspended
+cycle-yield-log 
+cycle-yield-errors 
+spawn-in-chunk got=ok sp early=false Requested module was required recursively
+wrap-in-chunk got=ok wr wr=false Requested module was required recursively
+in-chunk-log 
+in-chunk-errors 
+waiting-from-chunk ok ho true nil suspended
+loader-resumes ok res true nil
+loader-resumes-log 
+loader-resumes-errors 
+err-plain error Requested module experienced an error while loading
+err-plain-log MessageError:ReplicatedStorage.ParityThreads.Plain:2: parity-plain /     Stack Begin /     Script 'ReplicatedStorage.ParityThreads.Plain', Line 2 /     Stack End
+err-plain-errors ReplicatedStorage.ParityThreads.Plain:2: parity-plain <ReplicatedStorage.ParityThreads.Plain, line 2 / > ReplicatedStorage.ParityThreads.Plain
+err-late error Requested module experienced an error while loading
+err-late-log MessageError:ReplicatedStorage.ParityThreads.Late:2: parity-late /     Stack Begin /     Script 'ReplicatedStorage.ParityThreads.Late', Line 2 /     Stack End
+err-late-errors ReplicatedStorage.ParityThreads.Late:2: parity-late <ReplicatedStorage.ParityThreads.Late, line 2 / > ReplicatedStorage.ParityThreads.Late
+err-level2 error Requested module experienced an error while loading
+err-level2-log MessageError:parity-level2 /     Stack Begin /     Script 'ReplicatedStorage.ParityThreads.Level2', Line 1 /     Stack End
+err-level2-errors parity-level2 <ReplicatedStorage.ParityThreads.Level2, line 1 / > ReplicatedStorage.ParityThreads.Level2
+err-deep error Requested module experienced an error while loading
+err-deep-log MessageError:ReplicatedStorage.ParityThreads.Deep:2: parity-deep /     Stack Begin /     Script 'ReplicatedStorage.ParityThreads.Deep', Line 2 /     Stack End
+err-deep-errors ReplicatedStorage.ParityThreads.Deep:2: parity-deep <ReplicatedStorage.ParityThreads.Deep, line 2 / > ReplicatedStorage.ParityThreads.Deep
+err-table error Requested module experienced an error while loading
+err-table-log MessageError:Error occurred, no output from Luau. /     Stack Begin /     Script 'ReplicatedStorage.ParityThreads.Tab', Line 1 /     Stack End
+err-table-errors Error occurred, no output from Luau. <ReplicatedStorage.ParityThreads.Tab, line 1 / > ReplicatedStorage.ParityThreads.Tab
+err-unprotected-log MessageError:ReplicatedStorage.ParityThreads.Unprot:1: parity-unprot /     Stack Begin /     Script 'ReplicatedStorage.ParityThreads.Unprot', Line 1 /     Stack End | MessageError:Requested module experienced an error while loading /     Stack Begin /     Script '<probe>', Line @247 /     Stack End
+err-unprotected-errors ReplicatedStorage.ParityThreads.Unprot:1: parity-unprot <ReplicatedStorage.ParityThreads.Unprot, line 1 / > ReplicatedStorage.ParityThreads.Unprot | Requested module experienced an error while loading <<probe>, line @247 / > outside
+nothing-late error Module code did not return exactly one value | error Module code did not return exactly one value | later error Module code did not return exactly one value
+err-late-waiters error Requested module experienced an error while loading | error Requested module experienced an error while loading | later error Requested module experienced an error while loading
+err-late-waiters-log MessageError:ReplicatedStorage.ParityThreads.ErrLate:2: parity-late2 /     Stack Begin /     Script 'ReplicatedStorage.ParityThreads.ErrLate', Line 2 /     Stack End
+err-late-waiters-errors ReplicatedStorage.ParityThreads.ErrLate:2: parity-late2 <ReplicatedStorage.ParityThreads.ErrLate, line 2 / > ReplicatedStorage.ParityThreads.ErrLate
+cancel same=false ok 
+cancel req=suspended got=nil done=nil | again suspended nil
+coroutine-yield nil suspended suspended
+coroutine-yield resumed true dead
+coroutine-yield after nil suspended
+invoke same=false status=normal yieldable=true info2=nil nil info3=nil
+invoke cat a=parity-inv b=parity-inv2 invoker-after=parity-inv2
+invoke trace=@309 / 
+invoke reuse=true status=dead resume=false
+invoke-wait parity-inv-wait/parity-inv-wait parity-inv-wait/parity-inv-wait reuse=false status=suspended
+invoke-yield suspended nil
+invoke-err error @343: parity-inv-err
+invoke-err-log MessageError:@343: parity-inv-err /     Stack Begin /     Script '<probe>', Line @343 /     Stack End
+invoke-err-errors @343: parity-inv-err <<probe>, line @343 / > outside
+invoke-late error @349: parity-inv-late
+invoke-late-log 
+invoke-late-errors 
+invoke-level2 error parity-inv-level2
+invoke-level2-log MessageError:parity-inv-level2 /     Stack Begin /     Script '<probe>', Line @354 /     Stack End
+invoke-level2-errors parity-inv-level2 <<probe>, line @354 / > outside
+invoke-threads 010000
+invoke-nested 010
+invoke-setter parity-setter parity-setter parity-setter2 after parity-invoker
+event a:parity-wait:false b:parity-h-a:true
+event-two second-c:parity-afterC c:parity-h-b:true
+event-once-wait wait:parity-waiter once-d:parity-afterD second-d:parity-afterC d:parity-h-c:true
+connector m1:parity-connector
+connector-heartbeat heartbeat:parity-hb-connector
+connector-changed changed:parity-root3
+handler-threads two-connections 010010
+handler-threads after-wait-and-error 110000100000000100001
+wrap parity-wrapmaker create parity-wrapmaker
+defer defer:parity-defer
+wake-module outer-deferred chunk-ends chunk-spawned first-requirer second-requirer chunk-deferred
+wake-invoke callback-ends callback-deferred invoker

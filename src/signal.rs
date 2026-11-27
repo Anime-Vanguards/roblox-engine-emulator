@@ -85,14 +85,49 @@ pub struct Signals {
     /// must be collectable, as in Roblox. (Kept, a UI a story removed stayed alive through the
     /// handlers it had disconnected.)
     handlers: Option<mlua::Table>,
+    /// By connection slot + 1, the thread of a connection's last run when that run returned (its next run goes on it, as a
+    /// client's does), and by -(slot + 1) the thread that connected it while memory categories are in use (a new thread of the
+    /// connection's takes its category then): one Luau table, as the handlers are ([`Signals::take_threads`])
+    threads: Option<mlua::Table>,
     /// How many connected connections are ConnectParallel ones
     parallel_connections: usize,
 }
 
 impl Signals {
     /// Keeps handlers in `table` from now on (the engine's Luau state gives one at start).
-    pub fn hold_in(&mut self, table: mlua::Table) {
+    pub fn hold_in(&mut self, table: mlua::Table, threads: mlua::Table) {
         self.handlers = Some(table);
+        self.threads = Some(threads);
+    }
+
+    /// The thread that connected `id` (Connect, Once), kept while memory categories are in use (lua/globals.rs)
+    pub fn set_connector(&mut self, id: ConnectionId, thread: mlua::Thread) {
+        if let (Some(threads), Some(_)) = (&self.threads, self.connection(id)) {
+            let _ = threads.raw_set(-(id.index as i64 + 1), thread);
+        }
+    }
+
+    /// For a handler of `id` about to run (before [`Self::begin_handler`]): the thread its last run returned on, taken (its next
+    /// run goes on it), and the thread that connected it, if kept
+    pub fn take_threads(&mut self, id: ConnectionId) -> (Option<mlua::Thread>, Option<mlua::Thread>) {
+        let Some(threads) = &self.threads else { return (None, None) };
+        if self.connection(id).is_none() {
+            return (None, None);
+        }
+        let key = id.index as i64 + 1;
+        let kept = threads.raw_get::<Option<mlua::Thread>>(key).ok().flatten();
+        if kept.is_some() {
+            let _ = threads.raw_set(key, mlua::Value::Nil);
+        }
+        let connector = if crate::lua::globals::memory_categories_set() { threads.raw_get::<Option<mlua::Thread>>(-key).ok().flatten() } else { None };
+        (kept, connector)
+    }
+
+    /// A handler of `id` returned on `thread` without yielding: its next run goes on it, while `id` stays connected
+    pub fn keep_thread(&mut self, id: ConnectionId, thread: &mlua::Thread) {
+        if let (Some(threads), Some(_)) = (&self.threads, self.connection(id)) {
+            let _ = threads.raw_set(id.index as i64 + 1, thread);
+        }
     }
 
     pub fn create(&mut self, name: Str) -> SignalId {
@@ -207,6 +242,10 @@ impl Signals {
             if let Some(table) = &self.handlers {
                 let _ = table.raw_set(index as i64 + 1, mlua::Value::Nil);
             }
+        }
+        if let Some(threads) = &self.threads {
+            let _ = threads.raw_set(index as i64 + 1, mlua::Value::Nil);
+            let _ = threads.raw_set(-(index as i64 + 1), mlua::Value::Nil);
         }
         self.free_connections.push(index);
         crate::census::released(index);

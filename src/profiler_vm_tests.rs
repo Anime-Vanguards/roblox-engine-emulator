@@ -1268,7 +1268,9 @@ fn timeline_instances_and_threads_follow_the_program() {
     // (the destroyed parts wait for the collector, which takes them a step at a time: that column follows it)
     assert!(destroyed.iter().any(|n| *n >= 200), "destroyed parts until the collector takes them: {destroyed:?}");
     let made = values("threads_made");
-    assert!(made.iter().all(|n| *n == made[0]) && made[0] >= 3, "as many threads made each frame: {made:?}");
+    // (the Heartbeat handler's thread is made at its first run and kept for the later ones, as a client keeps a handler's thread
+    // whose run returned: lua/globals.rs handler_thread; then the three task.spawn threads a frame)
+    assert!(made[1..].iter().all(|n| *n == made[1]) && made[1] >= 3 && made[0] == made[1] + 1, "as many threads made each frame: {made:?}");
     assert!(!summary.contains("over the run"), "{summary}");
     assert!(summary.contains("threads reachable at the heap snapshots"), "{summary}");
     // (a heap snapshot needs no host time: the heap kind slows the run, so the frame's host time is not taken)

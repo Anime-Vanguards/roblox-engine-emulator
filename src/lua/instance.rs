@@ -485,6 +485,10 @@ pub fn assign(lua: &Lua, engine: &Rc<Engine>, id: InstanceId, key: &LuaValue, va
             if engine.loopback.borrow().is_some() && matches!(value, LuaValue::Function(_)) {
                 crate::loopback::remotes::callback_set(lua, engine, id)?;
             }
+            // (its thread takes the setting thread's memory category at every run, once categories are in use: lua/bindable.rs)
+            if super::globals::memory_categories_set() {
+                super::bindable::callback_set(lua, value)?;
+            }
             return Ok(());
         }
         Member::Property { property, setter, .. } => {
@@ -873,6 +877,7 @@ pub fn fire_immediate_costing(lua: &Lua, engine: &Rc<Engine>, signal: SignalId, 
             Handler::Connection(connection) => {
                 let census = crate::census::handler_site(engine, connection);
                 let is_parallel = engine.state.borrow().signals.is_parallel(connection);
+                let (kept, connector) = if is_parallel { (None, None) } else { engine.state.borrow_mut().signals.take_threads(connection) };
                 let callback = engine.state.borrow_mut().signals.begin_handler(connection);
                 if let Some((callback, signal)) = callback {
                     if is_parallel {
@@ -882,7 +887,7 @@ pub fn fire_immediate_costing(lua: &Lua, engine: &Rc<Engine>, signal: SignalId, 
                     let sample = scheduler::sample_handler(engine, signal, &callback);
                     let _scope = crate::microprofile::enabled()
                         .then(|| crate::microprofile::scope(scheduler::handler_label(engine, signal, &callback)));
-                    let thread = lua.create_thread(callback)?;
+                    let thread = super::globals::handler_thread(lua, kept, connector, callback)?;
                     if let Some(site) = census {
                         crate::census::handler_ran(site, &thread);
                     }
@@ -890,6 +895,7 @@ pub fn fire_immediate_costing(lua: &Lua, engine: &Rc<Engine>, signal: SignalId, 
                     dispatched = true;
                     let dispatch = scheduler::DispatchPrice { seconds: dispatch_price, kind: scheduler::DispatchKind::Client };
                     scheduler::run_handler(lua, engine, connection, signal, &thread, values, dispatch);
+                    super::globals::handler_ran(engine, connection, &thread);
                     scheduler::end_handler_sample(sample, &thread);
                 }
             }

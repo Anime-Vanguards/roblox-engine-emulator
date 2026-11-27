@@ -245,26 +245,6 @@
 			"why": "ree answers a service a plugin or the command bar may use (identity 4 gets it in the same capture), since edit-mode code that Studio runs as a plugin parents its previews to CoreGui; a game script (identity 2) gets nil"
 		}
 	],
-	"engine_functions": [
-		{
-			"line": "levels invoke @ 401 ",
-			"why": "a client runs a BindableFunction's OnInvoke on a thread of its own (no level above the handler); ree calls it from Invoke's engine Luau on the invoking thread"
-		}
-	],
-	"engine_functions_require": [
-		{
-			"line": "module-level2 nil nil nil",
-			"why": "a client runs a module's chunk on a thread of its own, so debug.info(2) in the chunk is nil and a traceback in it lists the module alone; ree runs it on the requiring thread, under [C] require"
-		},
-		{
-			"line": "module-trace ReplicatedStorage.ParityRequire.Trace:1",
-			"why": "a client runs a module's chunk on a thread of its own, so debug.info(2) in the chunk is nil and a traceback in it lists the module alone; ree runs it on the requiring thread, under [C] require"
-		},
-		{
-			"line": "waiting first suspended | @37 function Req",
-			"why": "a client runs a module's chunk on a thread of its own, so the thread that began loading a module that waits shows only its require line; ree runs the chunk on the requiring thread"
-		}
-	],
 	"errors": [
 		{
 			"line": "xpcall-traceback @119: deep error / @123 / @119 function Deep / @121 / @117 / @0 / @-192 function __run / @253 / @253",

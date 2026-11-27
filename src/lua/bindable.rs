@@ -478,6 +478,95 @@ pub fn copied(lua: &Lua, engine: &Engine, values: LuaMultiValue, height: usize) 
     Ok(out)
 }
 
+/// The threads of BindableFunction callbacks (app data, made at the first callback set or run): by callback, the thread that set
+/// it ([`callback_set`]) and, by the BindableFunction it is set on, the thread of its last run when that run returned
+struct CallbackThreads {
+    /// callback -> the thread that set it (weak keys)
+    setters: LuaTable,
+    /// callback -> { [BindableFunction] = thread } (weak keys)
+    kept: LuaTable,
+}
+
+fn callback_threads(lua: &Lua) -> LuaResult<(LuaTable, LuaTable)> {
+    if let Some(threads) = lua.app_data_ref::<CallbackThreads>() {
+        return Ok((threads.setters.clone(), threads.kept.clone()));
+    }
+    let weak = lua.create_table()?;
+    weak.raw_set("__mode", "k")?;
+    let setters = lua.create_table()?;
+    setters.set_metatable(Some(weak.clone()))?;
+    let kept = lua.create_table()?;
+    kept.set_metatable(Some(weak))?;
+    lua.set_app_data(CallbackThreads { setters: setters.clone(), kept: kept.clone() });
+    Ok((setters, kept))
+}
+
+/// A callback member (OnInvoke) set to `value` by the running thread: the callback's thread takes that thread's memory category at
+/// every run ([`run_own`])
+pub(crate) fn callback_set(lua: &Lua, value: &LuaValue) -> LuaResult<()> {
+    if let LuaValue::Function(callback) = value {
+        let (setters, _) = callback_threads(lua)?;
+        setters.raw_set(callback, lua.current_thread())?;
+    }
+    Ok(())
+}
+
+/// R.RunOwn(Self, Callback, Finished, ...): a BindableFunction's callback run as a client runs it (measured, a 0.747 client and
+/// server: tools/parity/probes/engine_threads.luau):
+/// - on a thread of its own whose bottom it is, so `debug.info(2)` in it is nil, a traceback in it lists its own frames, and the
+///   invoking thread is "normal" while it runs;
+/// - on the thread its last run on this BindableFunction returned on, when that run returned without yielding or raising (a
+///   reused thread, rawequal to the one before), else a new one;
+/// - with the memory category of the thread that set the callback, as that thread has it now, at every run;
+/// - an error it raises before it first yields is logged as an uncaught error is, with its own frames as the stack (scheduler.rs
+///   report_callback_error, charged), and one raised after a yield is not.
+///
+/// Its outcome, packed as `table.pack(xpcall(...))` packs one, goes to `Finished`: now when it returns or raises without
+/// yielding, else when its thread ends (scheduler.rs ThreadEnd::Invoke). A callback that coroutine.yields never ends, so its
+/// caller waits for ever, as a client's does.
+pub(crate) fn run_own(lua: &Lua, engine: &Rc<Engine>, target: LuaValue, callback: LuaFunction, finished: LuaFunction, args: LuaMultiValue) -> LuaResult<()> {
+    let (setters, kept) = callback_threads(lua)?;
+    let held: Option<LuaTable> = kept.raw_get(&callback)?;
+    let reused = match &held {
+        Some(held) => match held.raw_get::<Option<LuaThread>>(&target)? {
+            Some(thread) => {
+                held.raw_set(&target, LuaValue::Nil)?;
+                super::globals::reuse_thread(lua, &thread, &callback).then_some(thread)
+            }
+            None => None,
+        },
+        None => None,
+    };
+    let thread = match reused {
+        Some(thread) => thread,
+        None => lua.create_thread(callback.clone())?,
+    };
+    let setter: Option<LuaThread> = setters.raw_get(&callback)?;
+    super::globals::memory_category_from(lua, &thread, setter.as_ref());
+    match crate::scheduler::resume_own(lua, engine, &thread, args, crate::scheduler::Report::Callback) {
+        crate::scheduler::Ran::Yielded => {
+            engine.state.borrow_mut().sched.await_end(&thread, crate::scheduler::ThreadEnd::Invoke(finished));
+            Ok(())
+        }
+        outcome => {
+            if let crate::scheduler::Ran::Returned(_) = outcome {
+                // (dead, its stack empty: the next run goes on it)
+                unsafe { mlua::ffi::lua_settop(thread.state(), 0) };
+                let held = match held {
+                    Some(held) => held,
+                    None => {
+                        let held = lua.create_table()?;
+                        kept.raw_set(&callback, &held)?;
+                        held
+                    }
+                };
+                held.raw_set(&target, &thread)?;
+            }
+            finished.call(crate::scheduler::pack_outcome(lua, outcome)?)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{COPY_BYTES, COPY_VALUES, Tally, too_large};

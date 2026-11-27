@@ -640,14 +640,14 @@ local function Warn(...)
 	Output("warn", Stringify(...))
 end
 
--- require (modules.luau Require): the Rust side keeps the module records; the chunk runs here so
--- a module may yield while it loads. RequireBegin answers
+-- require (modules.luau Require): the Rust side keeps the module records and runs a module's chunk on a thread of its own
+-- (modules.rs require_run), as a client does; a module may yield while it loads. RequireBegin answers
 --   0, value            the module's (cached) result
 --   1, message, level   an error (level 1: the requiring script's line, 0: none)
---   2                   loading on another thread: wait (resumed when it finishes), then retry
---   3, chunk, key       run the chunk, then report through RequireFinish
+--   2                   loading on another thread: wait (resumed when it ends), then retry
+--   3, chunk, key       run the chunk through RequireRun: 0 and its value, 1 and its message, or 2 when it yielded (wait)
 local RequireBegin = R.RequireBegin
-local RequireFinish = R.RequireFinish
+local RequireRun = R.RequireRun
 local pcall = pcall
 local function Require(Target, Caller, Vm)
 	while true do
@@ -663,14 +663,14 @@ local function Require(Target, Caller, Vm)
 		elseif Status == 2 then
 			yield()
 		else
-			local Finished, Message, Level = RequireFinish(B, table.pack(pcall(A)), Vm)
-			if Finished then
-				return Message
+			local Ran, Value = RequireRun(A, B, Vm)
+			if Ran == 0 then
+				return Value
 			end
-			if Level == 0 then
-				error(Message, 0)
+			if Ran == 1 then
+				error(Value, 0)
 			end
-			error(Message, 3)
+			yield()
 		end
 	end
 end
@@ -692,7 +692,7 @@ local VmGlobals = {} -- an Actor's _G, by its key (modules.rs vm_key): its VM's 
 local function Environment(Shared, Script, Vm)
 	local Env = {
 		script = Script,
-		-- (a C function of the script's own: lua/builtins.rs require_function, over RequireBegin and RequireFinish as Require is)
+		-- (a C function of the script's own: lua/builtins.rs require_function, over RequireBegin and RequireRun as Require is)
 		require = R.MakeRequire(Script, Vm),
 		--
 	}
@@ -1517,38 +1517,6 @@ local ValueCurveKeyLibrary = table.freeze({
 	end,
 })
 
--- require of a module that must load, from a thread that cannot yield (modules.rs require_begin): the module loads on a
--- thread of its own, as in a client. RequireBegin answers with its outcome (0, value or 1, message, level) when it loads
--- without yielding; when it yields, with `thread is not yieldable` while it goes on loading, and a later require gets its
--- result (measured in a 0.747 playing client and server: tools/parity/probes/yield_refused_require.luau). (Below the
--- traced functions: rur's golden traces record prelude line numbers.)
-local function RequireApart(Target, Caller, Vm)
-	local Outcome
-	local Loader = coroutine.create(function()
-		while true do
-			local Status, A, B = RequireBegin(Target, Caller, Vm)
-			if Status == 2 then
-				yield()
-			elseif Status == 3 then
-				local Finished, Message, Level = RequireFinish(B, table.pack(pcall(A)), Vm)
-				Outcome = if Finished then { 0, Message } else { 1, Message, Level }
-				return
-			else
-				Outcome = { Status, A, B }
-				return
-			end
-		end
-	end)
-	local Resumed, Problem = coroutine.resume(Loader)
-	if not Resumed then
-		error(Problem, 0)
-	end
-	if Outcome then
-		return Outcome[1], Outcome[2], Outcome[3]
-	end
-	return 1, "thread is not yieldable", 0
-end
-
 -- A proxy value a SharedTable stores or hands out: a new one with the same fields (Faces, Axes, Path2DControlPoint,
 -- SecurityCapabilities; measured, each read back not rawequal to what was written, and a Path2DControlPoint changed after it
 -- was stored not changed in the SharedTable), any other as it is
@@ -1657,7 +1625,6 @@ return {
 	Warn = Warn,
 	Stringify = Stringify,
 	Require = Require,
-	RequireApart = RequireApart,
 	Environment = Environment,
 	CallBody = CallBody,
 }

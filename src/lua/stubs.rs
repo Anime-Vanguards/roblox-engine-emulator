@@ -462,26 +462,24 @@ pub fn load(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
             Ok(e.state.borrow().dom.at(id).callback(name).cloned().unwrap_or(LuaValue::Nil))
         })?,
     )?;
-    // The VM's own coroutine.create, for a callback's thread the engine Luau makes (the scripts' charges a thread's price: lua/
-    // globals.rs; the call that runs the callback is priced whole)
-    r.set("CreateThread", lua.globals().get::<LuaTable>("coroutine")?.get::<LuaFunction>("create")?)?;
-    // A thread the engine Luau parked (a BindableFunction's caller waiting for its callback) resumed as task.spawn resumes one,
-    // without task.spawn's thread price: the call that parked it is priced whole
+    // A thread the engine Luau parked (a BindableFunction's caller waiting for its callback that yielded) resumed at the next
+    // deferred point, after deferred work the callback queued (measured, a 0.747 client and server: tools/parity/probes/
+    // engine_threads.luau), without task.defer's price: the call that parked it is priced whole
     let e = engine.clone();
     r.set(
-        "Resume",
-        super::lua_fn(lua, move |lua, thread: LuaThread| {
-            crate::scheduler::resume(lua, &e, &thread, LuaMultiValue::new());
+        "Defer",
+        super::lua_fn(lua, move |_, thread: LuaThread| {
+            super::instance::defer_thread(&e, thread, Vec::new());
             Ok(())
         })?,
     )?;
-    // A BindableFunction's callback's error raised before it yielded, logged as a client logs it (scheduler.rs)
+    // A BindableFunction's callback run on a thread of its own, its outcome handed to Finished (lua/bindable.rs run_own; no thread
+    // price: the call that runs the callback is priced whole)
     let e = engine.clone();
     r.set(
-        "ReportError",
-        super::lua_fn(lua, move |lua, problem: LuaValue| {
-            crate::scheduler::report_callback_error(lua, &e, &problem);
-            Ok(())
+        "RunOwn",
+        super::lua_fn(lua, move |lua, (target, callback, finished, args): (LuaValue, LuaFunction, LuaFunction, LuaMultiValue)| {
+            super::bindable::run_own(lua, &e, target, callback, finished, args)
         })?,
     )?;
     // BindableFunction:Invoke's copies of its callback's results and of its arguments (lua/bindable.rs), whose tables

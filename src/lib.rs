@@ -69,6 +69,8 @@ mod server_tests;
 #[cfg(test)]
 mod engine_function_tests;
 #[cfg(test)]
+mod engine_thread_tests;
+#[cfg(test)]
 mod client_profile_script_tests;
 #[cfg(test)]
 mod loopback_tests;

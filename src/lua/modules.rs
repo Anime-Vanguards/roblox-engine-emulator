@@ -8,7 +8,7 @@ use std::rc::Rc;
 use mlua::{chunk::Compiler, prelude::*};
 use rustc_hash::FxHashMap;
 
-use super::{instance::defer_thread, instance::materialize, instance_value, raw::instance_of_ud};
+use super::{instance::materialize, instance_value, raw::instance_of_ud};
 use crate::{Engine, InstanceId, K, NameId, dom::flags, value::Value};
 
 #[path = "module_store.rs"]
@@ -26,8 +26,25 @@ enum Status {
 struct Record {
     status: Status,
     result: Option<LuaValue>,
+    /// What a require of a module that failed raises (Status::Error)
+    failure: &'static str,
     waiting: Vec<LuaThread>,
+    /// The thread its chunk runs on (Status::Loading)
     owner: Option<LuaThread>,
+}
+
+/// What a require of a module whose chunk raised raises (measured: tools/parity/probes/require_errors.luau)
+const LOAD_FAILED: &str = "Requested module experienced an error while loading";
+/// What a require of a module whose chunk returned anything but one value raises, every later require too (measured, a 0.747
+/// client and server: tools/parity/probes/engine_threads.luau)
+const NOT_ONE_VALUE: &str = "Module code did not return exactly one value";
+/// What a require of a module that is loading in the chain of loads now running raises
+const RECURSIVE: &str = "Requested module was required recursively";
+
+impl Record {
+    fn loading() -> Self {
+        Record { status: Status::Loading, result: None, failure: LOAD_FAILED, waiting: Vec::new(), owner: None }
+    }
 }
 
 /// The VM a script runs in: None for the main VM, else the key of its Actor ([`vm_key`]). An Actor runs its scripts in a VM of its own in
@@ -42,6 +59,9 @@ pub fn vm_key(actor: InstanceId) -> u64 {
 #[derive(Default)]
 pub struct ModuleRecords {
     records: FxHashMap<(Vm, InstanceId), Record>,
+    /// The modules whose chunk a require is running now, outermost first: each was required from the chunk (or a thread that
+    /// chunk runs) of the one before, without a yield between ([`require_run`])
+    loading_now: Vec<(Vm, InstanceId)>,
     /// The scripts under Actors that started (actors.rs)
     started: rustc_hash::FxHashSet<InstanceId>,
     /// The parallel phases running (actors.rs)
@@ -955,13 +975,13 @@ fn clone_with_env(lua: &Lua, template: &LuaFunction, env: &LuaTable) -> LuaResul
 pub fn environment_in(lua: &Lua, engine: &Rc<Engine>, script: InstanceId, vm: Vm) -> LuaResult<LuaTable> {
     let safe = engine.options.native || engine.modules.borrow().interpreted || cfg!(not(feature = "jit"));
     if vm.is_none() {
-        let (shared, req_begin, req_finish) = {
+        let (shared, req_begin, req_run) = {
             let refs = engine.lua.borrow();
-            (refs.shared.clone().expect("shared globals"), refs.require_begin.clone(), refs.require_finish.clone())
+            (refs.shared.clone().expect("shared globals"), refs.require_begin.clone(), refs.require_run.clone())
         };
-        if let (Some(req_begin), Some(req_finish)) = (req_begin, req_finish) {
+        if let (Some(req_begin), Some(req_run)) = (req_begin, req_run) {
             let script_val = instance_value(lua, engine, script)?;
-            let require_fn = super::builtins::require_function(lua, script_val.clone(), LuaValue::Nil, req_begin, req_finish)?;
+            let require_fn = super::builtins::require_function(lua, script_val.clone(), LuaValue::Nil, req_begin, req_run)?;
             // prelude.luau Environment's shape: each environment has its own fresh writable metatable
             // `{ __index = shared }`, built alongside `env` and optional `lua_setsafeenv` in one C call.
             return unsafe {
@@ -1741,6 +1761,7 @@ pub fn require_begin(lua: &Lua, engine: &Rc<Engine>, (target, caller, vm): (LuaV
     let current = lua.current_thread();
     {
         let mut refs = engine.modules.borrow_mut();
+        let loading_now = refs.loading_now.contains(&(vm, module));
         if let Some(record) = refs.records.get_mut(&(vm, module)) {
             match record.status {
                 Status::Done => {
@@ -1748,11 +1769,15 @@ pub fn require_begin(lua: &Lua, engine: &Rc<Engine>, (target, caller, vm): (LuaV
                     return Ok(LuaMultiValue::from_iter([LuaValue::Integer(0), record.result.clone().unwrap_or(LuaValue::Nil)]));
                 }
                 Status::Error => {
-                    return error_result(lua, "Requested module experienced an error while loading".into(), 0);
+                    return error_result(lua, record.failure.into(), 0);
                 }
                 Status::Loading => {
-                    if record.owner.as_ref().map(thread_key) == Some(thread_key(&current)) {
-                        return error_result(lua, "Requested module was required recursively".into(), 0);
+                    // (recursive: the module's chunk is running in the chain of loads this require is part of, the chunk itself or a
+                    // thread it runs without a yield between, however deep (a cycle of modules raises in its last module). A thread
+                    // the chunk's thread resumes after it yielded, or any other thread, waits; so a cycle with a yield in it waits
+                    // for ever, as on a client: measured, a 0.747 client and server, tools/parity/probes/engine_threads.luau)
+                    if loading_now || record.owner.as_ref().map(thread_key) == Some(thread_key(&current)) {
+                        return error_result(lua, RECURSIVE.into(), 0);
                     }
                     // (a thread that cannot yield does not wait for it: lua/mod.rs NOT_YIELDABLE; measured in a 0.747
                     // playing client and server, tools/parity/probes/yield_refused_require.luau)
@@ -1765,16 +1790,6 @@ pub fn require_begin(lua: &Lua, engine: &Rc<Engine>, (target, caller, vm): (LuaV
             }
         }
     }
-    // A module that must load, required from a thread that cannot yield (a metamethod, a sort comparator), loads on a thread
-    // of its own (prelude.luau RequireApart): its answer when it loads without yielding, else `thread is not yieldable` while
-    // it goes on loading, and a later require gets its result (measured in a 0.747 playing client and server,
-    // tools/parity/probes/yield_refused_require.luau). The loading thread owns the module, so a require of it from its own
-    // chunk is recursive.
-    if !super::yieldable(&current) {
-        let apart: LuaFunction = engine.prelude().exports.get("RequireApart")?;
-        return apart.call((target, caller, vm));
-    }
-
     crate::profiler::caches::miss(crate::profiler::caches::Cache::Requires);
     // JSON modules (Rojo `.json`) evaluate to the decoded value
     let (json, path, studio_only) = {
@@ -1790,11 +1805,11 @@ pub fn require_begin(lua: &Lua, engine: &Rc<Engine>, (target, caller, vm): (LuaV
         let mut refs = engine.modules.borrow_mut();
         return match decoded {
             Ok(value) => {
-                refs.records.insert((vm, module), Record { status: Status::Done, result: Some(value.clone()), waiting: Vec::new(), owner: None });
+                refs.records.insert((vm, module), Record { status: Status::Done, result: Some(value.clone()), ..Record::loading() });
                 Ok(LuaMultiValue::from_iter([LuaValue::Integer(0), value]))
             }
             Err(message) => {
-                refs.records.insert((vm, module), Record { status: Status::Error, result: None, waiting: Vec::new(), owner: None });
+                refs.records.insert((vm, module), Record { status: Status::Error, ..Record::loading() });
                 drop(refs);
                 let name = engine.state.borrow().dom.full_name(&engine.reflection, module);
                 error_result(lua, format!("{name}: invalid JSON module ({message})"), 0)
@@ -1847,10 +1862,7 @@ pub fn require_begin(lua: &Lua, engine: &Rc<Engine>, (target, caller, vm): (LuaV
         (None, None) => unreachable!(),
     };
 
-    engine.modules.borrow_mut().records.insert(
-        (vm, module),
-        Record { status: Status::Loading, result: None, waiting: Vec::new(), owner: Some(current) },
-    );
+    engine.modules.borrow_mut().records.insert((vm, module), Record::loading());
     match compile_in_with(lua, engine, module, source_bytes, precompiled, vm) {
         Ok(chunk) => Ok(LuaMultiValue::from_iter([
             LuaValue::Integer(3),
@@ -1860,13 +1872,15 @@ pub fn require_begin(lua: &Lua, engine: &Rc<Engine>, (target, caller, vm): (LuaV
         Err(error) => {
             // A compile error fails the module like a runtime error (pcall(Modules.Compile))
             let message = super::super::scheduler::error_message(&error);
-            finish(engine, vm, module, Err(()));
+            finish(lua, engine, vm, module, Err(LOAD_FAILED));
             Ok(LuaMultiValue::from_iter([LuaValue::Integer(1), LuaValue::String(lua.create_string(message)?), LuaValue::Integer(0)]))
         }
     }
 }
 
-fn finish(engine: &Rc<Engine>, vm: Vm, module: InstanceId, result: Result<LuaValue, ()>) {
+/// Records a module's outcome and wakes the threads waiting for it at once, in the order they began to wait (the first requirer
+/// first), before deferred work its chunk queued (measured, a 0.747 client and server: tools/parity/probes/engine_threads.luau)
+fn finish(lua: &Lua, engine: &Rc<Engine>, vm: Vm, module: InstanceId, result: Result<LuaValue, &'static str>) {
     let waiting = {
         let mut refs = engine.modules.borrow_mut();
         let Some(record) = refs.records.get_mut(&(vm, module)) else { return };
@@ -1875,52 +1889,78 @@ fn finish(engine: &Rc<Engine>, vm: Vm, module: InstanceId, result: Result<LuaVal
                 record.status = Status::Done;
                 record.result = Some(value);
             }
-            Err(()) => record.status = Status::Error,
+            Err(failure) => {
+                record.status = Status::Error;
+                record.failure = failure;
+            }
         }
         record.owner = None;
         std::mem::take(&mut record.waiting)
     };
     for thread in waiting {
-        defer_thread(engine, thread, Vec::new());
+        crate::scheduler::resume(lua, engine, &thread, LuaMultiValue::new());
     }
 }
 
-/// RequireFinish(Module, pcall results): records the outcome and wakes waiting requirers.
-pub fn require_finish(lua: &Lua, engine: &Rc<Engine>, (module, results, vm): (LuaValue, LuaTable, Vm)) -> LuaResult<LuaMultiValue> {
-    let LuaValue::UserData(ud) = module else { return Err(LuaError::runtime("RequireFinish: module expected")) };
-    let module = instance_of_ud(&ud).ok_or_else(|| LuaError::runtime("RequireFinish: module expected"))?;
-    let count: i64 = results.get("n")?;
-    let ok: bool = results.get(1)?;
-    if !ok {
-        let failure: LuaValue = results.get(2)?;
-        finish(engine, vm, module, Err(()));
-        // Roblox logs the module's own string/number error once and raises the wrapper error to the caller
-        // (Studio 0.747, tools/parity/probes/require_errors.luau; table/non-string errors log nothing)
-        let logged = match &failure {
-            LuaValue::String(text) => Some(text.to_string_lossy()),
-            LuaValue::Number(_) | LuaValue::Integer(_) => lua.coerce_string(failure)?.map(|s| s.to_string_lossy()),
-            _ => None,
-        };
-        if let Some(message) = logged {
-            engine.output("error", message, None);
+/// RequireRun(Chunk, Module): runs the module's chunk RequireBegin answered with (status 3) on a thread of its own, as a client
+/// does (measured, a 0.747 client and server: tools/parity/probes/engine_threads.luau): the chunk is that thread's bottom, so
+/// `debug.info(2)` in it is nil and a traceback in it lists the module alone; the requiring thread is "normal" while it runs; the
+/// thread starts with the module's memory category (its script's Name), and an error it raises is logged as that thread's uncaught
+/// error (its own stack, ScriptContext.Error naming the module), before or after a yield alike. Answers as RequireBegin does: 0 and
+/// the module's value, 1 with the message every require of it raises (level 0), or 2 when the chunk yielded: the requiring thread
+/// waits for it (resumed when it ends, then asks again), or raises `thread is not yieldable` where it cannot yield while the chunk
+/// goes on (measured: tools/parity/probes/yield_refused_require.luau). The chunk's thread is the module's owner, and the module is
+/// in the chain of loads running now ([`ModuleRecords::loading_now`]) until it returns or first yields.
+pub fn require_run(lua: &Lua, engine: &Rc<Engine>, (chunk, module, vm): (LuaFunction, LuaValue, Vm)) -> LuaResult<LuaMultiValue> {
+    let LuaValue::UserData(ud) = module else { return Err(LuaError::runtime("RequireRun: module expected")) };
+    let module = instance_of_ud(&ud).ok_or_else(|| LuaError::runtime("RequireRun: module expected"))?;
+    let thread = lua.create_thread(chunk)?;
+    {
+        let mut refs = engine.modules.borrow_mut();
+        if let Some(record) = refs.records.get_mut(&(vm, module)) {
+            record.owner = Some(thread.clone());
         }
-        return Ok(LuaMultiValue::from_iter([
-            LuaValue::Boolean(false),
-            LuaValue::String(lua.create_string("Requested module experienced an error while loading")?),
-            LuaValue::Integer(0),
-        ]));
+        refs.loading_now.push((vm, module));
     }
-    if count - 1 != 1 {
-        finish(engine, vm, module, Err(()));
-        return Ok(LuaMultiValue::from_iter([
-            LuaValue::Boolean(false),
-            LuaValue::String(lua.create_string("Module code did not return exactly one value")?),
-            LuaValue::Integer(0),
-        ]));
+    let ran = crate::scheduler::resume_own(lua, engine, &thread, LuaMultiValue::new(), crate::scheduler::Report::Uncaught);
+    {
+        let mut refs = engine.modules.borrow_mut();
+        if let Some(index) = refs.loading_now.iter().rposition(|&entry| entry == (vm, module)) {
+            refs.loading_now.remove(index);
+        }
     }
-    let value: LuaValue = results.get(2)?;
-    finish(engine, vm, module, Ok(value.clone()));
-    Ok(LuaMultiValue::from_iter([LuaValue::Boolean(true), value]))
+    if let crate::scheduler::Ran::Yielded = ran {
+        engine.state.borrow_mut().sched.await_end(&thread, crate::scheduler::ThreadEnd::Module { vm, module });
+        let current = lua.current_thread();
+        if !super::yieldable(&current) {
+            return error_result(lua, super::NOT_YIELDABLE.into(), 0);
+        }
+        if let Some(record) = engine.modules.borrow_mut().records.get_mut(&(vm, module)) {
+            record.waiting.push(current);
+        }
+        return Ok(LuaMultiValue::from_iter([LuaValue::Integer(2)]));
+    }
+    match chunk_outcome(lua, engine, vm, module, ran) {
+        Ok(value) => Ok(LuaMultiValue::from_iter([LuaValue::Integer(0), value])),
+        Err(failure) => error_result(lua, failure.into(), 0),
+    }
+}
+
+/// A module's chunk ended after it yielded (scheduler.rs ThreadEnd::Module): its outcome finishes the module
+pub(crate) fn chunk_ended(lua: &Lua, engine: &Rc<Engine>, vm: Vm, module: InstanceId, ran: crate::scheduler::Ran) {
+    let _ = chunk_outcome(lua, engine, vm, module, ran);
+}
+
+/// What a module's chunk ended with makes the module's value, or its failure (one value returned, or [`NOT_ONE_VALUE`]; an error
+/// it raised was logged as its thread's: [`LOAD_FAILED`]), and wakes the threads waiting for it
+fn chunk_outcome(lua: &Lua, engine: &Rc<Engine>, vm: Vm, module: InstanceId, ran: crate::scheduler::Ran) -> Result<LuaValue, &'static str> {
+    let outcome = match ran {
+        crate::scheduler::Ran::Returned(mut values) if values.len() == 1 => Ok(values.pop_front().unwrap_or(LuaValue::Nil)),
+        crate::scheduler::Ran::Returned(_) | crate::scheduler::Ran::Yielded => Err(NOT_ONE_VALUE),
+        crate::scheduler::Ran::Raised(_) => Err(LOAD_FAILED),
+    };
+    finish(lua, engine, vm, module, outcome.clone());
+    outcome
 }
 
 /// Modules.Require from the engine (no calling script): runs on the current thread.

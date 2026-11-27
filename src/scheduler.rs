@@ -316,6 +316,9 @@ pub struct Scheduler {
     task_states: FxHashMap<usize, &'static str>,
     /// Originating script `Instance` recorded when a script spawns/defers/delays a C-function thread (`task.spawn(error, ...)`)
     thread_scripts: FxHashMap<usize, InstanceId>,
+    /// Threads whose end something waits for, by address, with where their outcome goes ([`ThreadEnd`]): [`resume`] hands it over
+    /// when the thread returns or raises. A thread task.cancel closes leaves the list (what waited for it waits on, as on a client)
+    thread_ends: FxHashMap<usize, (LuaThread, ThreadEnd)>,
     pattern_cache: Vec<(f64, Vec<Vec<f64>>)>,
     hooks: Vec<(Phase, PhaseHook)>,
 
@@ -454,6 +457,7 @@ impl Scheduler {
             cancelled: FxHashMap::default(),
             task_states: FxHashMap::default(),
             thread_scripts: FxHashMap::default(),
+            thread_ends: FxHashMap::default(),
             pattern_cache: Vec::new(),
             hooks: Vec::new(),
             main_thread: None,
@@ -962,6 +966,9 @@ impl Scheduler {
     /// is dead, so the list holds only live threads (keyed by a bare address that was never released, a new
     /// thread allocated where a collected cancelled one had been was never resumed, and its task.defer was lost).
     pub fn cancel(&mut self, thread: &LuaThread) {
+        if !self.thread_ends.is_empty() {
+            self.thread_ends.remove(&(thread.to_pointer() as usize));
+        }
         self.cancelled.retain(|_, listed| matches!(listed.status(), LuaThreadStatus::Resumable | LuaThreadStatus::Running));
         if matches!(thread.status(), LuaThreadStatus::Resumable | LuaThreadStatus::Running) {
             self.cancelled.insert(thread.to_pointer() as usize, thread.clone());
@@ -1002,6 +1009,11 @@ impl Scheduler {
         if !self.thread_scripts.is_empty() {
             self.thread_scripts.remove(&(thread.to_pointer() as usize));
         }
+    }
+
+    /// `thread` (suspended) ends later: hand its outcome to `end` when [`resume`] sees it return or raise
+    pub(crate) fn await_end(&mut self, thread: &LuaThread, end: ThreadEnd) {
+        self.thread_ends.insert(thread.to_pointer() as usize, (thread.clone(), end));
     }
 
     pub fn is_cancelled(&self, thread: &LuaThread) -> bool {
@@ -1204,18 +1216,20 @@ enum ResumeError {
     /// An error raised before any frame ran on the thread (a legacy spawn's value that is no function)
     Frameless(String),
     LogError(String, Option<InstanceId>),
-    NonString,
+    /// A value that is no string (a table, nil, a datatype), raised in the script's frames
+    NonString(Option<InstanceId>),
     Exhaustion,
     Other(LuaError),
 }
 
 /// Resumes `thread` with `args`, leaving an error's stack intact long enough to inspect both its value type
-/// (string/number vs LogService error table vs non-string throw) and its innermost script frame.
-fn resume_raw(lua: &Lua, thread: &LuaThread, args: LuaMultiValue, log_errors: u64) -> Result<(), ResumeError> {
+/// (string/number vs LogService error table vs non-string throw) and its innermost script frame. Answers whether the thread
+/// returned (else it yielded); `keep` leaves what it returned on its stack.
+fn resume_raw(lua: &Lua, thread: &LuaThread, args: LuaMultiValue, log_errors: u64, keep: bool) -> Result<bool, ResumeError> {
     use mlua::ffi;
     let nargs = args.len() as std::ffi::c_int;
     let thread_state = thread.state();
-    let mut out: Result<(), ResumeError> = Ok(());
+    let mut out: Result<bool, ResumeError> = Ok(false);
     let exec = unsafe {
         lua.exec_raw::<()>(args, |state| {
             if nargs > 0 {
@@ -1228,7 +1242,10 @@ fn resume_raw(lua: &Lua, thread: &LuaThread, args: LuaMultiValue, log_errors: u6
             let status = ffi::lua_resume_(thread_state, state, nargs);
             match status {
                 ffi::LUA_OK | ffi::LUA_YIELD => {
-                    ffi::lua_settop(thread_state, 0);
+                    if !(keep && status == ffi::LUA_OK) {
+                        ffi::lua_settop(thread_state, 0);
+                    }
+                    out = Ok(status == ffi::LUA_OK);
                 }
                 ffi::LUA_ERRMEM => {
                     ffi::lua_settop(thread_state, 0);
@@ -1280,7 +1297,7 @@ fn resume_raw(lua: &Lua, thread: &LuaThread, args: LuaMultiValue, log_errors: u6
                             }
                             match log_text {
                                 Some(text) => ResumeError::LogError(text, script),
-                                None => ResumeError::NonString,
+                                None => ResumeError::NonString(script),
                             }
                         }
                         ffi::LUA_TUSERDATA => {
@@ -1303,7 +1320,7 @@ fn resume_raw(lua: &Lua, thread: &LuaThread, args: LuaMultiValue, log_errors: u6
                                 false
                             };
                             if !is_mlua_error {
-                                ResumeError::NonString
+                                ResumeError::NonString(script)
                             } else {
                                 ffi::lua_pushvalue(thread_state, -1);
                                 ffi::lua_xmove(thread_state, state, 1);
@@ -1327,7 +1344,7 @@ fn resume_raw(lua: &Lua, thread: &LuaThread, args: LuaMultiValue, log_errors: u6
                                 }
                             }
                         }
-                        _ => ResumeError::NonString,
+                        _ => ResumeError::NonString(script),
                     };
                     out = Err(outcome);
                 }
@@ -1343,17 +1360,24 @@ fn resume_raw(lua: &Lua, thread: &LuaThread, args: LuaMultiValue, log_errors: u6
 /// What an uncaught error that is no string (a table, nil, a datatype) logs
 pub const NO_OUTPUT: &str = "Error occurred, no output from Luau.";
 
-/// A RemoteFunction's or a BindableFunction's callback raised `problem` before it first yielded (loopback.luau `Run`,
-/// services.luau `RunOwn`: their error handler calls this where the error was raised, the callback's frames still on its
-/// thread). A client logs it as it logs an uncaught error, with the callback's own frames as its stack, and fires
-/// ScriptContext.Error, a value that is no string as [`NO_OUTPUT`]; the caller gets the error as well. Measured in a 0.747
-/// play session's server and client, OnServerInvoke, OnClientInvoke and OnInvoke alike:
-/// tools/parity/probes/loopback/remote_callback_errors.luau. The work clock is charged what logging it cost a client
-/// (cost.rs [`crate::cost::CALLBACK_ERROR_REPORTED`]).
+/// A RemoteFunction's or a BindableFunction's callback raised `problem` before it first yielded (loopback.luau `Run`: its error
+/// handler calls this where the error was raised, the callback's frames still on its thread; a BindableFunction's callback is the
+/// bottom of a thread of its own, reported by [`resume_own`] once that thread stopped). A client logs it as it logs an uncaught
+/// error, with the callback's own frames as its stack, and fires ScriptContext.Error, a value that is no string as [`NO_OUTPUT`];
+/// the caller gets the error as well. Measured in a 0.747 play session's server and client, OnServerInvoke, OnClientInvoke and
+/// OnInvoke alike: tools/parity/probes/loopback/remote_callback_errors.luau. The work clock is charged what logging it cost a
+/// client (cost.rs [`crate::cost::CALLBACK_ERROR_REPORTED`]).
 pub fn report_callback_error(lua: &Lua, engine: &Engine, problem: &LuaValue) {
-    let trace = super::lua::script_traceback(lua);
     // SAFETY: the running thread's state, valid while the error handler runs
-    let script = unsafe { super::lua::script_of_thread(lua.state()) };
+    unsafe { report_callback_error_on(lua.state(), engine, problem) }
+}
+
+/// [`report_callback_error`] of an error raised on the thread `state`, its frames still on it
+///
+/// # Safety
+/// `state` must be a live thread of the running VM.
+unsafe fn report_callback_error_on(state: *mut mlua::ffi::lua_State, engine: &Engine, problem: &LuaValue) {
+    let (trace, script) = unsafe { (super::lua::script_traceback_on(state), super::lua::script_of_thread(state)) };
     let message = match problem {
         LuaValue::String(text) => text.to_string_lossy(),
         _ => NO_OUTPUT.into(),
@@ -1362,13 +1386,114 @@ pub fn report_callback_error(lua: &Lua, engine: &Engine, problem: &LuaValue) {
     engine.state.borrow().sched.charge(crate::cost::CALLBACK_ERROR_REPORTED);
 }
 
-/// `check_ready`: look at the thread first (`resume`), or trust the caller's [`can_resume`] (`resume_ready`)
+/// How a thread [`resume_own`] resumed stopped
+pub(crate) enum Ran {
+    /// It returned these values (left on its stack as well: a thread whose end a client waited for reads "suspended" after)
+    Returned(LuaMultiValue),
+    /// It raised this value, reported as the resumption said
+    Raised(LuaValue),
+    /// It yielded
+    Yielded,
+}
+
+/// How an error a resumed thread raises is reported
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Report {
+    /// As an uncaught error: the Output with the thread's stack, ScriptContext.Error
+    Uncaught,
+    /// As a callback's error before it first yielded ([`report_callback_error`])
+    Callback,
+    /// Not at all
+    Quiet,
+}
+
+/// What a thread's end goes to (Scheduler::await_end)
+pub(crate) enum ThreadEnd {
+    /// A module's chunk (lua/modules.rs require_run): its outcome finishes the module and wakes its requirers; an error is reported
+    /// as an uncaught one
+    Module { vm: super::lua::modules::Vm, module: InstanceId },
+    /// A BindableFunction's callback that yielded (lua/bindable.rs run_own): its outcome, packed as `table.pack(xpcall(...))` packs
+    /// one, goes to the function; an error is not reported (measured, a 0.747 client and server: tools/parity/probes/
+    /// engine_threads.luau)
+    Invoke(LuaFunction),
+}
+
+/// Resumes `thread`, a thread of its own whose bottom is a module's chunk or a callback, from the running thread (as a client's
+/// require and BindableFunction:Invoke do: the running thread is "normal" meanwhile), and answers how it stopped; an error is
+/// reported as `report` says.
+pub(crate) fn resume_own(lua: &Lua, engine: &Rc<Engine>, thread: &LuaThread, args: LuaMultiValue, report: Report) -> Ran {
+    resume_core(lua, engine, thread, args, false, report, true, true).unwrap_or(Ran::Yielded)
+}
+
+/// `check_ready`: look at the thread first (`resume`), or trust the caller's [`can_resume`] (`resume_ready`). A thread whose end
+/// something waits for (Scheduler::await_end) hands its outcome there once it returns or raises.
 fn resume_thread(lua: &Lua, engine: &Rc<Engine>, thread: &LuaThread, args: LuaMultiValue, check_ready: bool) -> bool {
-    let (top_level, _entered) = {
+    let key = thread.to_pointer() as usize;
+    let report = {
+        let state = engine.state.borrow();
+        let ends = &state.sched.thread_ends;
+        match if ends.is_empty() { None } else { ends.get(&key) } {
+            None => None,
+            Some((_, ThreadEnd::Invoke(_))) => Some(Report::Quiet),
+            Some((_, ThreadEnd::Module { .. })) => Some(Report::Uncaught),
+        }
+    };
+    let Some(report) = report else {
+        return matches!(resume_core(lua, engine, thread, args, check_ready, Report::Uncaught, false, false), Some(Ran::Returned(_) | Ran::Yielded));
+    };
+    let ran = resume_core(lua, engine, thread, args, check_ready, report, true, false);
+    let ok = matches!(ran, Some(Ran::Returned(_) | Ran::Yielded));
+    if let Some(outcome @ (Ran::Returned(_) | Ran::Raised(_))) = ran {
+        let end = engine.state.borrow_mut().sched.thread_ends.remove(&key);
+        if let Some((_, end)) = end {
+            thread_ended(lua, engine, end, outcome);
+        }
+    }
+    ok
+}
+
+/// Hands a waited-for thread's outcome to what waited for it
+fn thread_ended(lua: &Lua, engine: &Rc<Engine>, end: ThreadEnd, outcome: Ran) {
+    match end {
+        ThreadEnd::Module { vm, module } => super::lua::modules::chunk_ended(lua, engine, vm, module, outcome),
+        ThreadEnd::Invoke(finished) => {
+            let packed = pack_outcome(lua, outcome).and_then(|packed| finished.call::<()>(packed));
+            if let Err(error) = packed {
+                engine.output("error", error_message(&error), None);
+            }
+        }
+    }
+}
+
+/// An outcome packed as `table.pack(xpcall(...))` packs one: `{ true, ... }` or `{ false, error }`, with `n`
+pub(crate) fn pack_outcome(lua: &Lua, outcome: Ran) -> LuaResult<LuaTable> {
+    let (ok, values) = match outcome {
+        Ran::Returned(values) => (true, values),
+        Ran::Raised(value) => (false, LuaMultiValue::from_iter([value])),
+        Ran::Yielded => (true, LuaMultiValue::new()),
+    };
+    let packed = lua.create_table_with_capacity(values.len() + 1, 1)?;
+    packed.raw_set(1, ok)?;
+    let count = values.len();
+    for (index, value) in values.into_iter().enumerate() {
+        packed.raw_set(index + 2, value)?;
+    }
+    packed.raw_set("n", count + 1)?;
+    Ok(packed)
+}
+
+/// The resumption itself: None when `check_ready` finds the thread can't run. `keep` collects what it returns or raises (left on
+/// its stack when it returned). A `nested` one is part of the resumption running now, as a script's coroutine.resume is: it is
+/// no resumption of the scheduler's (no build placement, frozen-clock count, nesting depth or script timeout of its own).
+#[allow(clippy::too_many_arguments)]
+fn resume_core(lua: &Lua, engine: &Rc<Engine>, thread: &LuaThread, args: LuaMultiValue, check_ready: bool, report: Report, keep: bool, nested: bool) -> Option<Ran> {
+    let (top_level, _entered) = if nested {
+        (false, None)
+    } else {
         let mut state = engine.state.borrow_mut();
         let sched = &mut state.sched;
         if check_ready && !thread_ready(sched, thread) {
-            return false;
+            return None;
         }
         // Build-time placement: a top-level resumption before the first Heartbeat is (part of) the
         // story build
@@ -1385,56 +1510,37 @@ fn resume_thread(lua: &Lua, engine: &Rc<Engine>, thread: &LuaThread, args: LuaMu
         }
         sched.resume_depth += 1;
         // (the script timeout times the outermost resumption of a nest: watchdog.rs)
-        (top_level, crate::watchdog::enter(sched.timeout.as_ref()))
+        (top_level, Some(crate::watchdog::enter(sched.timeout.as_ref())))
     };
     let log_errors = super::lua::stubs::log_error_texts();
     let resumed = {
         let _resuming = super::lua::refs::Resuming::enter();
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| resume_raw(lua, thread, args, log_errors)))
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| resume_raw(lua, thread, args, log_errors, keep)))
     };
-    engine.state.borrow_mut().sched.resume_depth -= 1;
-    let ok = match resumed {
-        Ok(Ok(())) => true,
+    if !nested {
+        engine.state.borrow_mut().sched.resume_depth -= 1;
+    }
+    let ran = match resumed {
+        Ok(Ok(true)) if keep => Ran::Returned(thread_values(lua, thread, false)),
+        Ok(Ok(true)) => Ran::Returned(LuaMultiValue::new()),
+        Ok(Ok(false)) => Ran::Yielded,
         Ok(Err(err)) => {
-            let trace = super::lua::traceback(lua, thread);
-            // Clear the errored thread's stack now that traceback has been captured
-            unsafe { mlua::ffi::lua_settop(thread.state(), 0) };
-            let fallback_script = engine.state.borrow().sched.thread_script(thread);
-            match err {
-                ResumeError::LogError(message, script) => {
-                    engine.uncaught_log_error(&message, trace, script.or(fallback_script));
-                }
-                ResumeError::String(message, script) => {
-                    if super::lua::refs::is_stack_error_text(&message) && super::lua::refs::at_capacity(engine) {
-                        engine.output("error", super::lua::refs::message(), trace);
-                    } else {
-                        engine.output_error_with_script(message, trace, script.or(fallback_script), true);
-                    }
-                }
-                ResumeError::Frameless(message) => {
-                    engine.output_error_frameless(message, fallback_script);
-                }
-                ResumeError::NonString => {
-                    // Non-string uncaught error (table, nil, etc.): logs NO_OUTPUT with its stack and fires
-                    // ScriptContext.Error with that text (Studio 0.747, a playing client and server, a spawned thread's
-                    // `error({})`: tools/parity/probes/loopback/remote_callback_errors.luau; logservice.luau).
-                    engine.output_error_with_script(NO_OUTPUT.into(), trace, fallback_script, true);
-                }
-                ResumeError::Exhaustion => {
-                    engine.output("error", super::lua::refs::message(), trace);
-                }
-                ResumeError::Other(error) => {
-                    let message = error_message(&error);
-                    engine.output_error_with_script(message, trace, fallback_script, true);
-                }
+            let raised = if keep || report == Report::Callback { thread_values(lua, thread, true).pop_front().unwrap_or(LuaValue::Nil) } else { LuaValue::Nil };
+            match report {
+                Report::Uncaught => report_uncaught(lua, engine, thread, err),
+                // SAFETY: the errored thread's state, its frames still on it
+                Report::Callback => unsafe { report_callback_error_on(thread.state(), engine, &raised) },
+                Report::Quiet => {}
             }
-            false
+            // Clear the errored thread's stack now that its traceback has been taken
+            unsafe { mlua::ffi::lua_settop(thread.state(), 0) };
+            Ran::Raised(raised)
         }
         // mlua's reference stack ran full under this thread (lua/refs.rs): its error, and the run goes on
         Err(panic) if super::lua::refs::is_exhaustion(&*panic) => {
             let trace = super::lua::traceback(lua, thread);
             engine.output("error", super::lua::refs::message(), trace);
-            false
+            Ran::Raised(LuaValue::Nil)
         }
         Err(panic) => std::panic::resume_unwind(panic),
     };
@@ -1445,7 +1551,64 @@ fn resume_thread(lua: &Lua, engine: &Rc<Engine>, thread: &LuaThread, args: LuaMu
         let mut state = engine.state.borrow_mut();
         state.sched.build_work_end = Some(state.sched.build_work);
     }
-    ok
+    Some(ran)
+}
+
+/// The values on a stopped thread's stack (what it returned, or its error on top: `top` takes that one alone), copied to the
+/// running thread and left where they are
+fn thread_values(lua: &Lua, thread: &LuaThread, top: bool) -> LuaMultiValue {
+    use mlua::ffi;
+    let thread_state = thread.state();
+    // SAFETY: the stopped thread's values are copied onto its own stack and moved to the running thread's
+    unsafe {
+        lua.exec_raw::<LuaMultiValue>((), |state| {
+            let count = ffi::lua_gettop(thread_state);
+            let (first, count) = if top { (count.max(1), count.min(1)) } else { (1, count) };
+            if count == 0 || ffi::lua_checkstack(thread_state, count) == 0 || ffi::lua_checkstack(state, count) == 0 {
+                return;
+            }
+            for index in first..first + count {
+                ffi::lua_pushvalue(thread_state, index);
+            }
+            ffi::lua_xmove(thread_state, state, count);
+        })
+        .unwrap_or_default()
+    }
+}
+
+/// An uncaught error of `thread` (still on its stack), to the Output with the thread's stack and to ScriptContext.Error
+fn report_uncaught(lua: &Lua, engine: &Rc<Engine>, thread: &LuaThread, err: ResumeError) {
+    let trace = super::lua::traceback(lua, thread);
+    let fallback_script = engine.state.borrow().sched.thread_script(thread);
+    match err {
+        ResumeError::LogError(message, script) => {
+            engine.uncaught_log_error(&message, trace, script.or(fallback_script));
+        }
+        ResumeError::String(message, script) => {
+            if super::lua::refs::is_stack_error_text(&message) && super::lua::refs::at_capacity(engine) {
+                engine.output("error", super::lua::refs::message(), trace);
+            } else {
+                engine.output_error_with_script(message, trace, script.or(fallback_script), true);
+            }
+        }
+        ResumeError::Frameless(message) => {
+            engine.output_error_frameless(message, fallback_script);
+        }
+        ResumeError::NonString(script) => {
+            // Non-string uncaught error (table, nil, etc.): logs NO_OUTPUT with its stack and fires
+            // ScriptContext.Error with that text and its script (Studio 0.747, a playing client and server, a spawned thread's
+            // `error({})`: tools/parity/probes/loopback/remote_callback_errors.luau; logservice.luau; a module's chunk's:
+            // engine_threads.luau).
+            engine.output_error_with_script(NO_OUTPUT.into(), trace, script.or(fallback_script), true);
+        }
+        ResumeError::Exhaustion => {
+            engine.output("error", super::lua::refs::message(), trace);
+        }
+        ResumeError::Other(error) => {
+            let message = error_message(&error);
+            engine.output_error_with_script(message, trace, fallback_script, true);
+        }
+    }
 }
 
 fn job_args(lua: &Lua, engine: &Rc<Engine>, args: &[Value]) -> LuaResult<LuaMultiValue> {
@@ -1566,18 +1729,20 @@ fn run_job(lua: &Lua, engine: &Rc<Engine>, job: Job) -> LuaResult<()> {
         }
         JobTarget::Handler { connection, kind } => {
             let census = crate::census::handler_site(engine, connection);
+            let (kept, connector) = engine.state.borrow_mut().signals.take_threads(connection);
             let callback = engine.state.borrow_mut().signals.begin_handler(connection);
             if let Some((callback, signal)) = callback {
                 let args = job_args(lua, engine, &job.args)?;
                 let sample = sample_handler(engine, signal, &callback);
                 let _scope = crate::microprofile::enabled()
                     .then(|| crate::microprofile::scope(handler_label(engine, signal, &callback)));
-                let thread = lua.create_thread(callback)?;
+                let thread = super::lua::globals::handler_thread(lua, kept, connector, callback)?;
                 if let Some(site) = census {
                     crate::census::handler_ran(site, &thread);
                 }
                 let dispatch = DispatchPrice { seconds: job.resume_cost, kind };
                 run_handler(lua, engine, connection, signal, &thread, args, dispatch);
+                super::lua::globals::handler_ran(engine, connection, &thread);
                 end_handler_sample(sample, &thread);
             }
         }

@@ -94,15 +94,76 @@ pub(crate) fn inherit_memory_category(lua: &Lua, thread: &LuaThread) {
     }
 }
 
+/// The memory category `thread` runs with: `source`'s (none set: its script's, lazily), as a BindableFunction's callback takes the
+/// category of the thread that set the callback at every run (lua/bindable.rs run_own)
+pub(crate) fn memory_category_from(lua: &Lua, thread: &LuaThread, source: Option<&LuaThread>) {
+    if !MEMORY_CATEGORIES_SET.load(std::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
+    let Some(categories) = lua.app_data_ref::<MemoryCategories>() else { return };
+    let name = match source {
+        Some(source) => categories.0.raw_get::<LuaValue>(source).unwrap_or(LuaValue::Nil),
+        None => LuaValue::Nil,
+    };
+    let _ = categories.0.raw_set(thread.clone(), name);
+}
+
+/// The thread a handler of `connection` runs `callback` on, as a client's: the thread its last run returned on, when it did
+/// (signal.rs take_threads, kept by [`handler_ran`]: a client reuses it, its memory category with it), else a new one, which takes
+/// the memory category of the thread that connected it at this time (measured, a 0.747 client and server, deferred events and
+/// RunService's: tools/parity/probes/engine_threads.luau). A connection made before any script set a category takes its handler's
+/// script's (ree keeps the connecting thread only once categories are in use).
+pub(crate) fn handler_thread(lua: &Lua, kept: Option<LuaThread>, connector: Option<LuaThread>, callback: LuaFunction) -> LuaResult<LuaThread> {
+    if let Some(thread) = kept
+        && reuse_thread(lua, &thread, &callback)
+    {
+        return Ok(thread);
+    }
+    let thread = lua.create_thread(callback)?;
+    if connector.is_some() {
+        memory_category_from(lua, &thread, connector.as_ref());
+    }
+    Ok(thread)
+}
+
+/// After a handler of `connection` ran on `thread`: the thread is kept for the connection's next run when the handler returned
+/// (not when it yielded or raised: measured, tools/parity/probes/engine_threads.luau)
+pub(crate) fn handler_ran(engine: &Engine, connection: crate::signal::ConnectionId, thread: &LuaThread) {
+    if thread.status() == LuaThreadStatus::Finished {
+        engine.state.borrow_mut().signals.keep_thread(connection, thread);
+    }
+}
+
+/// Puts `function` at the bottom of `thread`, a thread that returned (dead, its stack empty), so a resumption calls it as a new
+/// thread's: false when the thread is not in that state
+pub(crate) fn reuse_thread(lua: &Lua, thread: &LuaThread, function: &LuaFunction) -> bool {
+    if thread.status() != LuaThreadStatus::Finished {
+        return false;
+    }
+    let thread_state = thread.state();
+    // SAFETY: the dead thread's stack is empty; the function is copied onto it from the running thread's
+    unsafe {
+        lua.exec_raw::<()>(function, |state| {
+            if mlua::ffi::lua_gettop(thread_state) == 0 && mlua::ffi::lua_checkstack(thread_state, 1) != 0 {
+                mlua::ffi::lua_xmove(state, thread_state, 1);
+            }
+        })
+        .is_ok()
+            && thread.status() == LuaThreadStatus::Resumable
+    }
+}
+
 /// debug.setmemorycategory, resetmemorycategory and getmemorycategory, measured in a 0.747 playing client and a server
 /// (tools/parity/probes/memory_category.luau): a category is a thread's own. setmemorycategory takes a string or a number (its
 /// text; "" and 300 characters too) and answers the category it replaces; anything else raises `invalid argument #1 to
 /// 'setmemorycategory' (string expected, got <type>)`, nothing `missing argument #1 ...`, at the calling line as a C function's
 /// argument check. A thread starts with its script's Name (a server Script's `ParityProbe`; where no script runs, a client's job,
 /// `=` and its chunk name), and resetmemorycategory goes back to it (where no script runs it changes nothing) and answers nothing.
-/// A thread task.spawn makes starts with its maker's category, and its own set does not reach back. Not followed: the client
-/// gave the threads of event handlers, a BindableFunction's callback and coroutine.wrap the category of the thread that fired,
-/// invoked or wrapped (and reused a handler's thread for the next run, its category with it); here they start with the script's.
+/// A thread task.spawn makes starts with its maker's category, and its own set does not reach back; so does one coroutine.create
+/// or wrap makes. A connection's new handler thread takes the category its connecting thread has then and a reused one keeps its
+/// own ([`handler_thread`]); a BindableFunction's callback runs with its setting thread's at every run (lua/bindable.rs run_own);
+/// a module's chunk runs on a thread of its own, which starts with the module's Name (measured, a 0.747 client and server:
+/// tools/parity/probes/engine_threads.luau).
 fn memory_categories(lua: &Lua, engine: &Rc<Engine>, r: &LuaTable) -> LuaResult<()> {
     let table = lua.create_table()?;
     let weak = lua.create_table()?;
@@ -510,24 +571,24 @@ fn load_prelude(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
             })?,
         )?;
     }
-    let require_finish = primitive(lua, engine, |lua, engine, args| {
+    let require_run = primitive(lua, engine, |lua, engine, args| {
         let args = Args::new(args);
-        let LuaValue::Table(results) = args.get(1).clone() else {
-            return Err(LuaError::runtime("RequireFinish: results expected"));
+        let LuaValue::Function(chunk) = args.get(0).clone() else {
+            return Err(LuaError::runtime("RequireRun: chunk expected"));
         };
-        modules::require_finish(lua, engine, (args.get(0).clone(), results, vm_of(args.get(2))))
+        modules::require_run(lua, engine, (chunk, args.get(1).clone(), vm_of(args.get(2))))
     })?;
-    r.set("RequireFinish", require_finish.clone())?;
+    r.set("RequireRun", require_run.clone())?;
     {
         let mut refs = engine.lua.borrow_mut();
         refs.require_begin = Some(require_begin.clone());
-        refs.require_finish = Some(require_finish.clone());
+        refs.require_run = Some(require_run.clone());
     }
     // a script's require (prelude.luau Environment): `MakeRequire(Script, Vm)`, a C function of its own (lua/builtins.rs)
     r.set(
         "MakeRequire",
         super::create_boxed_val2(lua, Box::new(move |lua, script, vm| {
-            super::builtins::require_function(lua, script, vm, require_begin.clone(), require_finish.clone()).map(LuaValue::Function)
+            super::builtins::require_function(lua, script, vm, require_begin.clone(), require_run.clone()).map(LuaValue::Function)
         }))?,
     )?;
 
@@ -806,8 +867,8 @@ pub fn start(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     }
     // Instances are raw tagged userdata with C metamethods (lua/raw.rs)
     super::raw::install(lua, engine)?;
-    // Connection handlers live in one Luau table (signal.rs)
-    engine.state.borrow_mut().signals.hold_in(lua.create_table()?);
+    // Connection handlers live in one Luau table, and their threads in another (signal.rs)
+    engine.state.borrow_mut().signals.hold_in(lua.create_table()?, lua.create_table()?);
     // What the VM holds for scripts has a ceiling: past it a script errors, as for an exhausted resource (refs.rs)
     engine.lua.borrow_mut().gauge = refs::Gauge::find(lua);
     refs::quiet_panics();
@@ -1044,15 +1105,14 @@ fn build_shared(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<LuaTable> {
     let coroutine: LuaTable = exports.get("Coroutine")?;
     let native_coroutine: LuaTable = globals.get("coroutine")?;
     let charge = charge_fn(lua, engine)?;
-    // (coroutine.create's thread takes its maker's memory category: inherit_memory_category)
+    // (coroutine.create's and wrap's thread takes its maker's memory category: inherit_memory_category)
     let inherit = super::lua_fn(lua, |lua, thread: LuaThread| {
         inherit_memory_category(lua, &thread);
         Ok(())
     })?;
     for name in ["create", "wrap"] {
         let native: LuaFunction = native_coroutine.get(name)?;
-        let inherit = (name == "create").then(|| inherit.clone());
-        coroutine.raw_set(name, super::builtins::coroutine_function(lua, name, native, charge.clone(), crate::cost::THREAD, inherit)?)?;
+        coroutine.raw_set(name, super::builtins::coroutine_function(lua, name, native, charge.clone(), crate::cost::THREAD, Some(inherit.clone()))?)?;
     }
     shared.raw_set("coroutine", coroutine)?;
     shared.raw_set("utf8", exports.get::<LuaValue>("Utf8")?)?;
