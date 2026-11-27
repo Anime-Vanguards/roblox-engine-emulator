@@ -445,6 +445,8 @@ pub fn load(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
             None => Ok(LuaValue::Nil),
         })?,
     )?;
+    // the prelude's typeof registry (a proxy's type name: services.luau's Logger is an "Object")
+    r.set("Register", engine.prelude().register.clone())?;
     let e = engine.clone();
     r.set(
         "NewSignal",

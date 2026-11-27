@@ -1068,8 +1068,8 @@ end)
 Getter("ContentProvider", "RequestQueueSize", function()
 	return 0
 end)
-Method("ContentProvider", "GetAssetFetchStatus", function(_, ContentId)
-	return ContentIdArg(ContentId) and EnumItem("AssetFetchStatus", "Success")
+Method("ContentProvider", "GetAssetFetchStatus", function(_, ContentId) -- (ree fetches no asset: every id reads None, as one a client never fetched does)
+	return ContentIdArg(ContentId) and EnumItem("AssetFetchStatus", "None")
 end)
 
 -- KeyframeSequenceProvider:GetKeyframeSequenceAsync: after a yield, a new copy of the KeyframeSequence
@@ -1612,10 +1612,10 @@ ContentIdArg = function(Value, Index)
 	error(`Unable to cast {Kind} to ContentId`, 0)
 end
 
--- (no fetch is followed here: the signal reports itself once its id is read)
+-- (one signal for each id, never fired: R.FetchStatusSignal at the end of this file)
 Method("ContentProvider", "GetAssetFetchStatusChangedSignal", function(_, ContentId)
 	ContentIdArg(ContentId)
-	Missing("ContentProvider", "GetAssetFetchStatusChangedSignal")
+	return R.FetchStatusSignal(ContentId)
 end)
 -- InsertService:CreateMeshPartAsync loads a mesh asset (not emulated) once its id is read
 Method("InsertService", "CreateMeshPartAsync", function(_, MeshId)
@@ -2156,6 +2156,605 @@ end
 Method("AnimationClipProvider", "GetClipEvaluatorAsync", function(_, AssetId)
 	ContentIdArg(AssetId)
 	error("AnimationClipProvider:GetClipEvaluatorAsync is not currently enabled", 0)
+end)
+
+-- Engine data methods (parity package U, measured in a 0.747 playing client and a server, each probe twice:
+-- tools/parity/probes/engine_data_methods.luau). The casts are a client's, from the last argument to the first (CastAll).
+function Cast.bool(Value, Index, Default)
+	if Value == nil then
+		if Default ~= nil then
+			return Default
+		end
+		error(`Argument {Index} missing or nil`, 0)
+	elseif type(Value) ~= "boolean" then
+		error(`Unable to cast {CastName(Value)} to bool`, 0)
+	end
+	return Value
+end
+function Cast.Function(Value, Index)
+	if Value == nil then
+		error(`Argument {Index} missing or nil`, 0)
+	elseif type(Value) ~= "function" then
+		error(`Unable to cast {CastName(Value)} to Function`, 0)
+	end
+	return Value
+end
+function Cast.Vector3(Value, Index)
+	if Value == nil then
+		error(`Argument {Index} missing or nil`, 0)
+	elseif typeof(Value) ~= "Vector3" then
+		error(`Unable to cast {CastName(Value)} to Vector3`, 0)
+	end
+	return Value
+end
+-- (an Object a method needs: nil is "Argument n missing or nil")
+function Cast.Instance(Value, Index)
+	if Value == nil then
+		error(`Argument {Index} missing or nil`, 0)
+	end
+	return Cast.Object(Value)
+end
+local function OnServer()
+	return not game:GetService("RunService"):IsClient()
+end
+local function Float32(Value)
+	return (string.unpack("f", string.pack("f", Value)))
+end
+
+-- ContentProvider's encryption keys and encrypted assets: taken and forgotten (ListEncryptedAssets lists none, even after a
+-- register); ids are ContentIds, keys strings. Preload (deprecated) fetches nothing here.
+Method("ContentProvider", "ListEncryptedAssets", function()
+	return {}
+end)
+for _, Name in { "RegisterDefaultEncryptionKey", "RegisterDefaultSessionKey" } do
+	Method("ContentProvider", Name, function(_, ...)
+		CastAll({ { "string" } }, ...)
+	end)
+end
+Method("ContentProvider", "UnregisterDefaultEncryptionKey", function() end)
+Method("ContentProvider", "UnregisterEncryptedAsset", function(_, Id)
+	ContentIdArg(Id)
+end)
+Method("ContentProvider", "Preload", function(_, Id)
+	ContentIdArg(Id)
+end)
+for _, Name in { "RegisterEncryptedAsset", "RegisterSessionEncryptedAsset" } do
+	Method("ContentProvider", Name, function(_, Id, Key)
+		Cast.string(Key, 2)
+		ContentIdArg(Id)
+	end)
+end
+-- GetAssetFetchStatusChangedSignal: one signal for each id, named "<id>AssetFetchStatusChanged" with rbxassetid:// left off
+-- (an rbxthumb:// id gains "&filters=" as a client writes it); an http(s) URL is no content id. ree fetches no asset, so the
+-- status of every id stays None and the signal never fires (a client fires it when a fetch it makes ends).
+local FetchSignals = {}
+R.FetchStatusSignal = function(Id)
+	local Key = string.gsub(Id, "^rbxassetid://", "")
+	if string.find(Id, "^https?://") then
+		error(`ContentProvider:GetAssetFetchStatusChangedSignal: {Id} is not a valid content id`, 0)
+	elseif string.find(Key, "^rbxthumb://") and not string.find(Key, "filters=", 1, true) then
+		Key ..= "&filters="
+	end
+	local Signal = FetchSignals[Key]
+	if not Signal then
+		Signal = R.NewSignal(Key .. "AssetFetchStatusChanged")
+		FetchSignals[Key] = Signal
+	end
+	return Signal
+end
+
+-- CollectionService: GetCollection (deprecated for GetTagged) answers an empty list, and GetCollections an instance's
+-- collections, none while CreateCollection is not emulated.
+Method("CollectionService", "GetCollection", function(_, ...)
+	CastAll({ { "string" } }, ...)
+	return {}
+end)
+Method("CollectionService", "GetCollections", function(_, ...)
+	CastAll({ { "Instance" } }, ...)
+	return {}
+end)
+
+-- ContextActionService: no tool, so no tool icon; BindActivate binds input, the host's input layer's (it reports itself after its
+-- casts); a server refuses BindActivate, UnbindActivate and BindActionToInputTypes (BindAction's message), which a client
+-- treats as BindAction.
+Method("ContextActionService", "GetCurrentLocalToolIcon", function()
+	return ""
+end)
+for _, Name in { "BindActivate", "UnbindActivate" } do
+	Method("ContextActionService", Name, function(_, ...)
+		CastAll({ { "UserInputType" } }, ...)
+		if OnServer() then
+			error(`ContextActionService:{Name} can only be called from a local script`, 0)
+		elseif Name == "BindActivate" then
+			Missing("ContextActionService", "BindActivate")
+		end
+	end)
+end
+Method("ContextActionService", "BindActionToInputTypes", function(Self, Name, Function, Touch, ...)
+	CastAll({ { "string" }, { "Function" }, { "bool" } }, Name, Function, Touch)
+	if OnServer() then
+		error("ContextActionService:BindAction can only be called from a local script", 0)
+	end
+	return Self:BindAction(Name, Function, Touch, ...)
+end)
+
+-- LogService: ClearOutput clears a developer console ree has none of; GetLogHistoryAsync asks the web for a user's log (after its
+-- casts it reports itself); GetLogger(name) answers one Logger for each name (typeof "Object", tostring "Logger"), whose Info,
+-- Warn and Error log their message as MessageInfo, MessageWarning and MessageError (Error raises nothing), Log(messageType,
+-- message) as that type, a number message as its text, further arguments ignored; its methods count the logger as their first
+-- argument and cast from the first ("Argument 2 missing or nil", "Unable to cast string to MessageType").
+Method("LogService", "ClearOutput", function() end)
+Method("LogService", "GetLogHistoryAsync", function(_, User)
+	UserArg(User)
+	Missing("LogService", "GetLogHistoryAsync")
+	return {}
+end)
+local Loggers = {}
+local LoggerKinds = { Info = "info", Warn = "warn", Error = "error" }
+local LoggerTypes = { [Enum.MessageType.MessageOutput] = "print", [Enum.MessageType.MessageInfo] = "info", [Enum.MessageType.MessageWarning] = "warn", [Enum.MessageType.MessageError] = "error" }
+Method("LogService", "GetLogger", function(_, Name)
+	if type(Name) ~= "string" and type(Name) ~= "number" then
+		error("missing argument #2 to 'GetLogger' (string expected)", ScriptLevel(2))
+	end
+	Name = tostring(Name)
+	local Found = Loggers[Name]
+	if Found then
+		return Found
+	end
+	local Logger = newproxy(true)
+	local Meta = getmetatable(Logger)
+	local Members = { Name = Name }
+	for Member, Kind in LoggerKinds do
+		Members[Member] = function(_, Message)
+			R.LogLine(Kind, StringParam.Read(Message, 2), nil)
+			Charge(Cost.LogCall)
+		end
+	end
+	Members.Log = function(_, Type, Message)
+		Type = CastEnum("MessageType", Type, 2)
+		R.LogLine(LoggerTypes[Type] or "print", StringParam.Read(Message, 3), nil)
+		Charge(Cost.LogCall)
+	end
+	Meta.__index = function(_, Key)
+		local Value = Members[Key]
+		if Value == nil then
+			error(`{Key} is not a valid member of Logger`, 0)
+		end
+		return Value
+	end
+	R.Register(Logger, "Object")
+	Meta.__tostring = function()
+		return "Logger"
+	end
+	Meta.__metatable = "The metatable is locked"
+	Loggers[Name] = Logger
+	return Logger
+end)
+
+-- Stats: every developer memory tag reads 0 on a playing client and a server; the total is the process's own figure, which ree
+-- does not model (it reports itself and answers 0).
+Method("Stats", "GetMemoryUsageMbForTag", function(_, ...)
+	CastAll({ { "DeveloperMemoryTag" } }, ...)
+	return 0
+end)
+Method("Stats", "GetTotalMemoryUsageMb", function()
+	Missing("Stats", "GetTotalMemoryUsageMb")
+	return 0
+end)
+
+-- Teams:RebalanceTeams moves no player of a client (not measured on a server with players); ReplicatedFirst's default
+-- loading screen is a client's GUI, its removal nothing to see here (a server answers too); Lighting:GetMoonPhase reads 0.75
+-- at every time of day and latitude.
+Method("Teams", "RebalanceTeams", function()
+	if OnServer() and #game:GetService("Players"):GetPlayers() > 0 then
+		Missing("Teams", "RebalanceTeams")
+	end
+end)
+Method("ReplicatedFirst", "RemoveDefaultLoadingScreen", function() end)
+Method("Lighting", "GetMoonPhase", function()
+	return 0.75
+end)
+
+-- SoundService's listener: Camera until set; SetListener(type, value) takes a CFrame for CFrame, a BasePart or Model for the
+-- Object types ("SoundService:SetListener called with an incorrect argument." without one, "SoundService:SetListener value
+-- given is not a valid CFrame when given Enum.ListenerType.CFrame" for anything else there), and GetListener answers it. (The
+-- mixer's clock, GetMixerTime, is the audio device's: not emulated.)
+Method("SoundService", "GetListener", function(Self)
+	local Listener = Extra(Self).Listener
+	if not Listener then
+		return Enum.ListenerType.Camera, nil
+	end
+	return Listener[1], Listener[2]
+end)
+Method("SoundService", "SetListener", function(Self, Type, ...)
+	Type = CastAll({ { "ListenerType" } }, Type)
+	local Value = ...
+	if Type ~= Enum.ListenerType.Camera then
+		if Value == nil then
+			error("SoundService:SetListener called with an incorrect argument.", 0)
+		elseif Type == Enum.ListenerType.CFrame and typeof(Value) ~= "CFrame" then
+			error("SoundService:SetListener value given is not a valid CFrame when given Enum.ListenerType.CFrame", 0)
+		end
+	else
+		Value = nil
+	end
+	Extra(Self).Listener = { Type, Value }
+end)
+
+-- MaterialService: a material's base override is the material's name until SetBaseMaterialOverride names another (any text,
+-- "" too); Neon, Glass, ForceField, Air and Water refuse ("GetBaseMaterialOverride failed: Material 'Neon' is not supported.").
+-- GetMaterialVariant(material, name) finds a MaterialVariant of that name and base material anywhere under MaterialService, the
+-- last one there of two (not under the Workspace); the material is an item, its name or its value. What an override draws is the
+-- renderer's.
+local UnsupportedMaterials = { Neon = true, Glass = true, ForceField = true, Air = true, Water = true }
+local function OverrideMaterial(Name, ...)
+	local Material = CastAll({ { "Material" } }, ...)
+	if UnsupportedMaterials[Material.Name] then
+		error(`{Name} failed: Material '{Material.Name}' is not supported.`, 0)
+	end
+	return Material
+end
+Method("MaterialService", "GetBaseMaterialOverride", function(Self, ...)
+	local Material = OverrideMaterial("GetBaseMaterialOverride", ...)
+	local Overrides = Extra(Self).Overrides
+	return Overrides and Overrides[Material] or Material.Name
+end)
+Method("MaterialService", "SetBaseMaterialOverride", function(Self, Material, Name)
+	Name = Cast.string(Name, 2)
+	Material = OverrideMaterial("SetBaseMaterialOverride", Material)
+	local Found = Extra(Self)
+	Found.Overrides = Found.Overrides or {}
+	Found.Overrides[Material] = Name
+end)
+Method("MaterialService", "GetMaterialVariant", function(Self, ...)
+	local Material, Name = CastAll({ { "Material" }, { "string" } }, ...)
+	local Found = nil
+	for _, Descendant in Self:GetDescendants() do
+		if Descendant:IsA("MaterialVariant") and Descendant.Name == Name and Descendant.BaseMaterial == Material then
+			Found = Descendant
+		end
+	end
+	return Found
+end)
+
+-- A Tool's Activate and Deactivate fire Activated and Deactivated when it is equipped (in a player's character) and enabled
+-- (ManualActivationOnly does not stop them; a disabled tool's Activate fires nothing, its Deactivate taken alike, not measured);
+-- unequipped, in the Workspace or in a model with a Humanoid that is no player's character, nothing.
+local function Equipped(Tool)
+	local Parent = Tool.Parent
+	return Parent ~= nil and game:GetService("Players"):GetPlayerFromCharacter(Parent) ~= nil and RawGet(Tool, "Enabled") ~= false
+end
+Method("Tool", "Activate", function(Self)
+	if Equipped(Self) then
+		R.FireEvent(Self, "Activated")
+	end
+end)
+Method("Tool", "Deactivate", function(Self)
+	if Equipped(Self) then
+		R.FireEvent(Self, "Deactivated")
+	end
+end)
+
+-- TeleportOptions' teleport data: any value but nil, copied as BindableEvent:Fire copies it, at the write and for each read.
+Method("TeleportOptions", "SetTeleportData", function(Self, Data)
+	if Data == nil then
+		error("Argument 1 missing or nil", 0)
+	end
+	Extra(Self).TeleportData = table.pack(R.Copied(Data))
+end)
+Method("TeleportOptions", "GetTeleportData", function(Self)
+	local Data = Extra(Self).TeleportData
+	if not Data then
+		return nil
+	end
+	return R.Copied(Data[1])
+end)
+
+-- A playing client's DataStore options: metadata a dictionary, copied at the write and each read ({} until set; a server's are
+-- server.luau's, loaded after this file, with the stores' own limits); the experimental features a dictionary, taken.
+for _, Class in { "DataStoreSetOptions", "DataStoreIncrementOptions" } do
+	Method(Class, "SetMetadata", function(Self, ...)
+		local Attributes = CastAll({ { "Dictionary" } }, ...)
+		Extra(Self).Metadata = R.Copied(Attributes)
+	end)
+	Method(Class, "GetMetadata", function(Self)
+		return R.Copied(Extra(Self).Metadata or {})
+	end)
+end
+Method("DataStoreOptions", "SetExperimentalFeatures", function(_, ...)
+	CastAll({ { "Dictionary" } }, ...)
+end)
+
+-- WireframeHandleAdornment's lines, paths and texts are drawn, not read back: the calls cast their arguments (a list's points
+-- Vector3s, else "Variant cast failed") and draw nothing here.
+local function Points(Value)
+	Cast.Array(Value, 1)
+	for _, Point in Value do
+		if typeof(Point) ~= "Vector3" then
+			error("Variant cast failed", 0)
+		end
+	end
+end
+Method("WireframeHandleAdornment", "AddLine", function(_, ...)
+	CastAll({ { "Vector3" }, { "Vector3" } }, ...)
+end)
+Method("WireframeHandleAdornment", "AddLines", function(_, Value)
+	Points(Value)
+end)
+Method("WireframeHandleAdornment", "AddPath", function(_, Value, Loop)
+	CastAll({ { "Array" }, { "bool" } }, Value, Loop)
+	Points(Value)
+end)
+Method("WireframeHandleAdornment", "AddText", function(_, ...)
+	CastAll({ { "Vector3" }, { "string" }, { "float", 12 } }, ...)
+end)
+Method("WireframeHandleAdornment", "Clear", function() end)
+-- (a Beam's texture offset is drawn too)
+Method("Beam", "SetTextureOffset", function(_, ...)
+	CastAll({ { "float", 0 } }, ...)
+end)
+-- (a GeneratedFolder has no PrimaryPart to read)
+Method("GeneratedFolder", "SetPrimaryPart", function(_, ...)
+	CastAll({ { "Instance" } }, ...)
+end)
+-- (a Dialog's players are those talking with it: the Dialog GUI's, so none)
+Method("Dialog", "GetCurrentPlayers", function()
+	return {}
+end)
+
+-- CustomEvent / CustomEventReceiver: SetValue keeps a value between 0 and 1 (a float32; a boolean is 1 or 0, a numeric string its
+-- number, NaN kept); a receiver reads its source's value (0 with none), and its SourceValueChanged fires with the value it reads
+-- when that changes, by a SetValue or a new Source (attached to an event whose value is still 0, nothing; detached, 0). (A
+-- SetValue to the same value fires nothing: not measured.)
+local function EventValue(Event)
+	return if Event then Extra(Event).Value or 0 else 0
+end
+local function Receivers(Event)
+	local Found = Extra(Event)
+	Found.Receivers = Found.Receivers or setmetatable({}, { __mode = "k" })
+	return Found.Receivers
+end
+local AttachOrder = 0
+ContentSetter("CustomEventReceiver", "Source", function(Self, Value)
+	local Previous = RawGet(Self, "Source")
+	if Previous then
+		Receivers(Previous)[Self] = nil
+	end
+	if typeof(Value) == "Instance" and Value:IsA("CustomEvent") then
+		AttachOrder += 1
+		Receivers(Value)[Self] = AttachOrder
+	end
+	local Before = EventValue(if Previous and Previous:IsA("CustomEvent") then Previous else nil)
+	local After = EventValue(if typeof(Value) == "Instance" and Value:IsA("CustomEvent") then Value else nil)
+	if After ~= Before then
+		R.FireEvent(Self, "SourceValueChanged", After)
+	end
+	return Value
+end)
+Method("CustomEvent", "SetValue", function(Self, Value)
+	if Value == nil then
+		error("Argument 1 missing or nil", 0)
+	elseif type(Value) == "boolean" then
+		Value = if Value then 1 else 0
+	else
+		Value = Cast.float(Value, 1)
+	end
+	if Value == Value then
+		Value = math.clamp(Value, 0, 1)
+	end
+	Value = Float32(Value)
+	local Before = Extra(Self).Value or 0
+	Extra(Self).Value = Value
+	if Value ~= Before then
+		for Receiver in Receivers(Self) do
+			R.FireEvent(Receiver, "SourceValueChanged", Value)
+		end
+	end
+end)
+Method("CustomEvent", "GetAttachedReceivers", function(Self)
+	local List = {}
+	for Receiver, Order in Receivers(Self) do
+		table.insert(List, { Receiver, Order })
+	end
+	table.sort(List, function(A, B)
+		return A[2] < B[2]
+	end)
+	for Index, Entry in List do
+		List[Index] = Entry[1]
+	end
+	return List
+end)
+Method("CustomEventReceiver", "GetCurrentValue", function(Self)
+	local Source = RawGet(Self, "Source")
+	return EventValue(if Source and Source:IsA("CustomEvent") then Source else nil)
+end)
+
+-- AccessoryDescription / MakeupDescription:GetAppliedInstance: the instance a HumanoidDescription applied to a Humanoid made for
+-- it. Not under a description: "AccessoryDescription is not parented to a HumanoidDescription. Did you call ApplyDescription()?";
+-- under one that is not under a Humanoid: "HumanoidDescription is not parented to a Humanoid. ..." (a MakeupDescription names
+-- itself there); applied, it reports itself (applying a description is not emulated).
+for _, Class in { "AccessoryDescription", "MakeupDescription" } do
+	Method(Class, "GetAppliedInstance", function(Self)
+		local Description = Self.Parent
+		if not Description or not Description:IsA("HumanoidDescription") then
+			error(`{Class} is not parented to a HumanoidDescription. Did you call ApplyDescription()?`, 0)
+		elseif not Description.Parent or not Description.Parent:IsA("Humanoid") then
+			error(`{if Class == "MakeupDescription" then Class else "HumanoidDescription"} is not parented to a Humanoid. Did you call ApplyDescription()?`, 0)
+		end
+		Missing(Class, "GetAppliedInstance")
+		return nil
+	end)
+end
+-- GetStyledPropertyChangedSignal(property) is the property's changed signal, as GetPropertyChangedSignal gives it ("Signal
+-- AssetIdChanged"; "Nope is not a valid property name."): a style sheet's changes are the GUI layer's
+Method("Instance", "GetStyledPropertyChangedSignal", function(Self, Property)
+	if Property == nil then
+		error("Argument 1 missing or nil", 0)
+	end
+	return Self:GetPropertyChangedSignal(Property)
+end)
+
+-- HumanoidDescription:GetAccessories / SetAccessories (measured likewise): the description keeps one ordered list of
+-- accessories. A rigid one comes from its type's property (HatAccessory, HairAccessory, FaceAccessory, NeckAccessory,
+-- ShouldersAccessory, FrontAccessory, BackAccessory, WaistAccessory: ids separated by commas, spaces around them dropped, what
+-- is no number skipped), and a write of that property takes its type's accessories out and puts the ones it names at the end;
+-- a layered one is kept apart from the properties. GetAccessories(includeRigid) answers new tables, the list in order (the
+-- layered ones alone without includeRigid): AccessoryType, AssetId, IsLayered, Position (0, 0, 0), Rotation (0, 0, 0),
+-- Scale (1, 1, 1) unless given, and a layered one's Order and Puffiness (1 unless given). SetAccessories(list, includeRigid)
+-- puts the list's accessories in its order: with includeRigid every accessory (each rigid type's property written with its
+-- ids, the others ""), else the layered ones alone, after the rigid ones kept. An entry is dropped unless it is a table with an
+-- AccessoryType item (not Unknown; a rigid one of the eight rigid types) and a number AssetId (rounded half away from zero). An
+-- entry with a number Order is layered (IsLayered may be left out), one without is rigid, and an IsLayered that says otherwise
+-- drops it. A description's list is built from its properties, in the properties' order, when it is first used.
+local RigidOrder = { "Hat", "Hair", "Face", "Neck", "Shoulder", "Front", "Back", "Waist" }
+local RigidField = { Hat = "HatAccessory", Hair = "HairAccessory", Face = "FaceAccessory", Neck = "NeckAccessory", Shoulder = "ShouldersAccessory", Front = "FrontAccessory", Back = "BackAccessory", Waist = "WaistAccessory" }
+local function AccessoryIds(Text)
+	local Ids = {}
+	for Part in string.gmatch(tostring(Text or ""), "[^,]+") do
+		local Id = tonumber((string.gsub(Part, "^%s*(.-)%s*$", "%1")))
+		if Id then
+			table.insert(Ids, Id)
+		end
+	end
+	return Ids
+end
+local function TakeRigid(Found, Type, Text)
+	local Kept = {}
+	for _, Entry in Found.Accessories do
+		if Entry.Layered or Entry.Type ~= Type then
+			table.insert(Kept, Entry)
+		end
+	end
+	for _, Id in AccessoryIds(Text) do
+		table.insert(Kept, { Type = Type, AssetId = Id })
+	end
+	Found.Accessories = Kept
+	Found.Texts[RigidField[Type]] = Text
+end
+local function Accessories(Self)
+	local Found = Extra(Self)
+	if not Found.Accessories then
+		Found.Accessories, Found.Texts = {}, {}
+		for _, Type in RigidOrder do
+			TakeRigid(Found, Type, RawGet(Self, RigidField[Type]))
+		end
+	end
+	-- (a property changed by no script write since, by a clone or the engine: its type's accessories read again)
+	for _, Type in RigidOrder do
+		local Text = RawGet(Self, RigidField[Type])
+		if Text ~= Found.Texts[RigidField[Type]] then
+			TakeRigid(Found, Type, Text)
+		end
+	end
+	return Found
+end
+for _, Type in RigidOrder do
+	ContentSetter("HumanoidDescription", RigidField[Type], function(Self, Value)
+		TakeRigid(Accessories(Self), Type, if type(Value) == "number" then tostring(Value) else Value)
+		return Value
+	end)
+end
+local function IncludeRigid(Value, Index)
+	if Value == nil then
+		error(`Argument {Index} missing or nil`, 0)
+	elseif type(Value) == "number" then
+		return Value ~= 0
+	elseif type(Value) ~= "boolean" then
+		error(`Unable to cast {CastName(Value)} to bool`, 0)
+	end
+	return Value
+end
+local function AccessoryTable(Entry)
+	local Item = if Entry.Layered then Entry.AccessoryType else Enum.AccessoryType[Entry.Type]
+	local Out = {
+		AccessoryType = Item,
+		AssetId = Entry.AssetId,
+		IsLayered = Entry.Layered == true,
+		Position = Entry.Position or Vector3.zero,
+		Rotation = Entry.Rotation or Vector3.zero,
+		Scale = Entry.Scale or Vector3.one,
+	}
+	if Entry.Layered then
+		Out.Order = Entry.Order
+		Out.Puffiness = Entry.Puffiness or 1
+	end
+	return Out
+end
+Method("HumanoidDescription", "GetAccessories", function(Self, Include)
+	Include = IncludeRigid(Include, 1)
+	local List = {}
+	for _, Entry in Accessories(Self).Accessories do
+		if Include or Entry.Layered then
+			table.insert(List, AccessoryTable(Entry))
+		end
+	end
+	return List
+end)
+local RigidType = {}
+for _, Type in RigidOrder do
+	RigidType[Enum.AccessoryType[Type]] = Type
+end
+local function AccessoryEntry(Given)
+	if type(Given) ~= "table" then
+		return nil
+	end
+	local Item, Id = rawget(Given, "AccessoryType"), rawget(Given, "AssetId")
+	if typeof(Item) ~= "EnumItem" or Item.EnumType ~= Enum.AccessoryType or Item == Enum.AccessoryType.Unknown or type(Id) ~= "number" or Id ~= Id then
+		return nil
+	end
+	local function Vector(Key)
+		local Value = rawget(Given, Key)
+		return if typeof(Value) == "Vector3" then Value else nil
+	end
+	local Entry = { AssetId = Round(Id), Position = Vector("Position"), Rotation = Vector("Rotation"), Scale = Vector("Scale") }
+	local Order, Layered = rawget(Given, "Order"), rawget(Given, "IsLayered")
+	if Layered ~= nil and Layered ~= (type(Order) == "number") then
+		return nil
+	end
+	if type(Order) == "number" then
+		Entry.Layered, Entry.AccessoryType, Entry.Order = true, Item, Order
+		local Puffiness = rawget(Given, "Puffiness")
+		Entry.Puffiness = if type(Puffiness) == "number" then Puffiness else nil
+	else
+		if not RigidType[Item] then
+			return nil
+		end
+		Entry.Type = RigidType[Item]
+	end
+	return Entry
+end
+Method("HumanoidDescription", "SetAccessories", function(Self, List, Include)
+	Include = IncludeRigid(Include, 2)
+	Cast.Array(List, 1)
+	local Found = Accessories(Self)
+	local Kept = {}
+	if not Include then
+		for _, Entry in Found.Accessories do
+			if not Entry.Layered then
+				table.insert(Kept, Entry)
+			end
+		end
+	end
+	for Index = 1, rawlen(List) do
+		local Entry = AccessoryEntry(rawget(List, Index))
+		if Entry and (Include or Entry.Layered) then
+			table.insert(Kept, Entry)
+		end
+	end
+	Found.Accessories = Kept
+	if Include then
+		for _, Type in RigidOrder do
+			local Ids = {}
+			for _, Entry in Kept do
+				if not Entry.Layered and Entry.Type == Type then
+					table.insert(Ids, tostring(Entry.AssetId))
+				end
+			end
+			local Text = table.concat(Ids, ",")
+			Found.Texts[RigidField[Type]] = Text
+			RawSet(Self, RigidField[Type], Text)
+		end
+	end
 end)
 
 return true

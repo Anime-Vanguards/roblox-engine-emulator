@@ -638,6 +638,54 @@ struct RenderStep {
     sequence: u64,
 }
 
+/// A RunService:BindToSimulation or BindToAnimation binding: its connection (Disconnect ends it), the steps between its calls
+/// (StepFrequency: Hz60 every simulation step, Hz30 every second, ... Hz1 every sixtieth), its priority and when it was bound.
+struct StepBinding {
+    connection: crate::signal::ConnectionId,
+    callback: LuaFunction,
+    every: u32,
+    priority: f64,
+    sequence: u64,
+}
+
+/// The step bindings of a frame's simulation step (measured in a 0.747 playing client: tools/parity/probes/engine_data_methods.luau
+/// and two exploratory sessions): after PreSimulation's handlers and the deferred work they left, the animation bindings due this
+/// step, the deferred work they left, then the simulation bindings due, ascending priority and of one priority in bind order (a
+/// priority 1 before the default 2000, 3000 after), and their deferred work; each called with its frequency's step time (1/60 s
+/// a step: 0.0167, 0.0333, 0.0667 printed) and nothing more. Which steps a Hz30 binding takes is a client's own (it varied by
+/// session); ree takes the steps whose count since the run began is a multiple of the frequency's. Not measured: where the event's
+/// parallel point falls against them (ree: before).
+#[derive(Default)]
+struct StepBindings {
+    animation: Vec<StepBinding>,
+    simulation: Vec<StepBinding>,
+    sequence: u64,
+    steps: u64,
+}
+
+fn run_step_bindings(lua: &Lua, engine: &Rc<Engine>, bindings: &Rc<RefCell<StepBindings>>, animation: bool) -> LuaResult<()> {
+    let due: Vec<(LuaFunction, f64)> = {
+        let mut all = bindings.borrow_mut();
+        let state = engine.state.borrow();
+        let steps = all.steps;
+        let list = if animation { &mut all.animation } else { &mut all.simulation };
+        list.retain(|binding| state.signals.is_connected(binding.connection));
+        list.iter()
+            .filter(|binding| steps % u64::from(binding.every) == 0)
+            .map(|binding| (binding.callback.clone(), f64::from(binding.every) / 60.0))
+            .collect()
+    };
+    if due.is_empty() {
+        return Ok(());
+    }
+    for (callback, delta) in due {
+        let thread = lua.create_thread(callback)?;
+        super::scheduler::charge_dispatch_to(lua, engine, &thread, crate::cost::RENDER_STEP_DISPATCH, 0);
+        super::scheduler::resume(lua, engine, &thread, LuaMultiValue::from_iter([LuaValue::Number(delta)]));
+    }
+    super::scheduler::flush_deferred(lua, engine)
+}
+
 /// The methods only Roblox's own scripts may call (reflection.rs CAPABILITY_CALLS): each is a function that raises the
 /// client's error whatever it is called with, in every run context (but for the Plugin ones in edit mode, below). Plain
 /// functions, not instance methods, because the error comes before the instance is checked (`game.DefineFastInt("x", 1)`
@@ -1033,6 +1081,75 @@ fn install_run_service(engine: &Rc<Engine>, behaviors: &mut Behaviors, reflectio
             crate::sort::by(&mut list, |a, b| a.priority.partial_cmp(&b.priority).unwrap_or(std::cmp::Ordering::Equal).then(a.sequence.cmp(&b.sequence)));
             Ok(none())
         }));
+        // BindToSimulation / BindToAnimation(callback, frequency = Hz30, priority = 2000): a connection; the arguments cast from the
+        // last ("Unable to cast string to StepFrequency", "Unable to cast double to Function", "Argument 1 missing or nil"); the
+        // Parallel ones refuse outside an Actor as ConnectParallel does, in its words ("Function RunService:BindToSimulationParallel
+        // can only be used inside scripts" where no script calls; inside an Actor not emulated)
+        let step_bindings: Rc<RefCell<StepBindings>> = Rc::default();
+        for (member, animation) in [("BindToSimulation", false), ("BindToAnimation", true)] {
+            let Some(n) = name(reflection, member) else { continue };
+            let bindings = step_bindings.clone();
+            behaviors.add_method(run_service, n, method(move |lua, engine, _, args| {
+                let priority = match args.get(3) {
+                    LuaValue::Nil => 2000.0,
+                    value => match lua.coerce_number(value.clone())? {
+                        Some(number) => number,
+                        None => return raise(format!("Unable to cast {} to double", cast_name(engine, value))),
+                    },
+                };
+                let every = match args.get(2) {
+                    LuaValue::Nil => 2,
+                    value => {
+                        let Some(item) = engine.reflection.enum_id("StepFrequency").and_then(|id| convert::coerce_enum_arg(lua, engine, id, value)) else {
+                            return raise(format!("Unable to cast {} to StepFrequency", cast_name(engine, value)));
+                        };
+                        match engine.reflection.enum_item_info(item).name.as_ref() {
+                            "Hz60" => 1,
+                            "Hz30" => 2,
+                            "Hz15" => 4,
+                            "Hz10" => 6,
+                            "Hz5" => 12,
+                            _ => 60,
+                        }
+                    }
+                };
+                let callback = match args.get(1) {
+                    LuaValue::Function(callback) => callback.clone(),
+                    LuaValue::Nil => return raise("Argument 1 missing or nil"),
+                    value => return raise(format!("Unable to cast {} to Function", cast_name(engine, value))),
+                };
+                let signal = crate::lua::types::new_signal(engine, member);
+                let connection = engine.state.borrow_mut().signals.connect_with(signal, callback.clone(), false, false);
+                let mut all = bindings.borrow_mut();
+                all.sequence += 1;
+                let binding = StepBinding { connection, callback, every, priority, sequence: all.sequence };
+                let list = if animation { &mut all.animation } else { &mut all.simulation };
+                list.push(binding);
+                crate::sort::by(list, |a, b| a.priority.partial_cmp(&b.priority).unwrap_or(std::cmp::Ordering::Equal).then(a.sequence.cmp(&b.sequence)));
+                drop(all);
+                let userdata = lua.create_any_userdata(crate::lua::types::LConnection(connection))?;
+                Ok(values([LuaValue::UserData(userdata)]))
+            }));
+        }
+        for member in ["BindToSimulationParallel", "BindToAnimationParallel"] {
+            let Some(n) = name(reflection, member) else { continue };
+            behaviors.add_method(run_service, n, method(move |lua, engine, _, _| {
+                if !crate::lua::actors::caller_in_actor(lua) {
+                    // SAFETY: the running thread's state, valid while the callback runs
+                    return raise(if unsafe { crate::lua::script_of_thread(lua.state()) }.is_some() {
+                        format!("RunService:{member}: The calling script must be rooted under an Actor.")
+                    } else {
+                        format!("Function RunService:{member} can only be used inside scripts")
+                    });
+                }
+                engine.missing(Some(lua), "RunService", member);
+                Ok(none())
+            }));
+        }
+        // (no prediction resimulates here: measured false on a playing client)
+        if let Some(n) = name(reflection, "IsResimulating") {
+            behaviors.add_method(run_service, n, constant(|_| Ok(LuaValue::Boolean(false))));
+        }
         let unbind_steps = steps.clone();
         // (every binding of the name goes; when it took more than one, a client and a server warn "RunService:UnbindFromRenderStep
         // removed different functions with same reference name <name> <n> times.", without a stack: measured, 0.747,
@@ -1079,7 +1196,8 @@ fn install_run_service(engine: &Rc<Engine>, behaviors: &mut Behaviors, reflectio
             fire_frame_event(lua, engine, K::PreRender as NameId, &[Value::Number(delta)])
         }));
         state.sched.add_hook(Phase::Simulation, Rc::new(|lua, engine, _| crate::lua::actors::start_scripts(lua, engine)));
-        state.sched.add_hook(Phase::Simulation, Rc::new(|lua, engine, delta| {
+        let sim_bindings = step_bindings;
+        state.sched.add_hook(Phase::Simulation, Rc::new(move |lua, engine, delta| {
             let now = engine.state.borrow().sched.now;
             fire_frame_event(lua, engine, K::PreAnimation as NameId, &[Value::Number(delta)])?;
             // The Animator step: AnimationTracks pose their rigs' joints (crate::animation)
@@ -1095,6 +1213,10 @@ fn install_run_service(engine: &Rc<Engine>, behaviors: &mut Behaviors, reflectio
             // them writes is applied by the batch below the same frame (a deferred_phase probe)
             super::scheduler::flush_deferred(lua, engine)?;
             super::lua::actors::parallel_point(lua, engine)?;
+            // (the step bindings: StepBindings)
+            run_step_bindings(lua, engine, &sim_bindings, true)?;
+            run_step_bindings(lua, engine, &sim_bindings, false)?;
+            sim_bindings.borrow_mut().steps += 1;
             // Motor6D.Transform: applied in a batch after PreSimulation (Roblox's Motor6D docs)
             crate::luau_profile::engine_step("joints", || crate::world::joints::step_transforms(engine));
             // (the legacy motors turn toward their DesiredAngle: world/joints.rs step_motors)
@@ -1278,6 +1400,19 @@ fn install_gui_and_input(behaviors: &mut Behaviors, reflection: &Reflection, opt
         if let Some(n) = name(reflection, "PreferredTransparency") {
             let value = settings.preferred_transparency.unwrap_or(1.0);
             behaviors.add_getter(gui, n, getter(move |_, _, _| Ok(LuaValue::Number(value))));
+        }
+        // (true until a script writes them: a 0.747 playing client, on keyboard-and-mouse and gamepad devices, and its server read
+        // both true, where the dump's defaults are false; measured, tools/parity/probes/engine_data_methods.luau)
+        for member in ["GuiNavigationEnabled", "AutoSelectGuiEnabled"] {
+            if let Some(n) = name(reflection, member) {
+                behaviors.add_getter(gui, n, getter(move |_, engine, id| {
+                    let written = match engine.state.borrow().dom.at(id).stored(n) {
+                        Some(Value::Bool(flag)) => Some(*flag),
+                        _ => None,
+                    };
+                    Ok(LuaValue::Boolean(written.unwrap_or(true)))
+                }));
+            }
         }
         if let (Some(flag), Some(n)) = (settings.reduced_motion, name(reflection, "ReducedMotionEnabled")) {
             behaviors.add_getter(gui, n, getter(move |_, _, _| Ok(LuaValue::Boolean(flag))));

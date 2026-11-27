@@ -1535,14 +1535,6 @@
 	],
 	"service_answers": [
 		{
-			"line": "GetAssetFetchStatus string ok Enum.AssetFetchStatus.None ",
-			"why": "a client answers None for an asset it never fetched; ree loads no asset and answers Success"
-		},
-		{
-			"line": "GetAssetFetchStatus empty ok Enum.AssetFetchStatus.None ",
-			"why": "a client answers None for an asset it never fetched; ree loads no asset and answers Success"
-		},
-		{
 			"line": "GetCore ChatActive error GetCore: ChatActive has not been registered by the CoreScripts ",
 			"why": "the sim's clients run no core scripts, so every GetCore raises \"has not been registered by the CoreScripts\" there; ree answers the names Roblox's StarterGui documentation lists as a client with its core scripts does (services/mod.rs GET_CORE)"
 		},

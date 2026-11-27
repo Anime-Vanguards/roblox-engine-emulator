@@ -12821,6 +12821,80 @@ fn user_input_service_get_platform_raises_roblox_script_capability_error() {
     }
 }
 
+/// A Model lets go of its PrimaryPart once the part stops being under it, moved out or destroyed (a part moved deeper, or the
+/// whole model moved, keeps it), as a 0.747 playing client does (tools/parity/probes/engine_data_methods.luau); GuiService's
+/// navigation reads true until written; RunService's step bindings run after PreSimulation's handlers and their deferred work,
+/// the animation ones first, then the simulation ones by priority.
+#[test]
+fn primary_parts_go_with_their_part_and_step_bindings_run_in_the_simulation_step() {
+    let (lua, engine) = start_with(Options { mode: "play".into(), ..Options::default() });
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    let call = start_script(
+        &lua,
+        &engine,
+        r#"
+        local Model = Instance.new("Model")
+        local A = Instance.new("Part")
+        A.Parent = Model
+        Model.PrimaryPart = A
+        Model.Parent = workspace
+        local Inner = Instance.new("Folder")
+        Inner.Parent = Model
+        A.Parent = Inner
+        assert(Model.PrimaryPart == A, "moved deeper")
+        Model.Parent = nil
+        Model.Parent = workspace
+        assert(Model.PrimaryPart == A, "the model moved")
+        Inner.Parent = workspace
+        assert(Model.PrimaryPart == nil, "its folder left")
+        A.Parent = Model
+        Model.PrimaryPart = A
+        A:Destroy()
+        assert(Model.PrimaryPart == nil, "destroyed")
+        local Outside = Instance.new("Part")
+        Model.PrimaryPart = Outside
+        assert(Model.PrimaryPart == Outside, "a part outside stays")
+        local GuiService = game:GetService("GuiService")
+        assert(GuiService.GuiNavigationEnabled == true and GuiService.AutoSelectGuiEnabled == true, "navigation defaults")
+        GuiService.GuiNavigationEnabled = false
+        assert(GuiService.GuiNavigationEnabled == false, "navigation written")
+        local RunService = game:GetService("RunService")
+        local Steps = {}
+        local Watch = false
+        RunService.PreSimulation:Connect(function()
+            if Watch then
+                table.insert(Steps, "PreSimulation")
+                task.defer(function() table.insert(Steps, "defer") end)
+            end
+        end)
+        local function Bind(Method, Label, Frequency, Priority)
+            return RunService[Method](RunService, function(Delta)
+                if Watch then table.insert(Steps, Label .. " " .. string.format("%.4f", Delta)) end
+            end, Frequency, Priority)
+        end
+        Bind("BindToSimulation", "simulation", Enum.StepFrequency.Hz60)
+        Bind("BindToSimulation", "first", Enum.StepFrequency.Hz60, 1)
+        Bind("BindToAnimation", "animation", Enum.StepFrequency.Hz60)
+        local Gone = Bind("BindToSimulation", "gone", Enum.StepFrequency.Hz60)
+        Gone:Disconnect()
+        task.wait()
+        Watch = true
+        task.wait()
+        Watch = false
+        assert(table.concat(Steps, "|") == "PreSimulation|defer|animation 0.0167|first 0.0167|simulation 0.0167", table.concat(Steps, "|"))
+        assert(select(2, pcall(RunService.BindToSimulation, RunService, 5)) == "Unable to cast double to Function")
+        print("ok")
+        "#,
+    );
+    for _ in 0..4 {
+        crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    }
+    if let Err(message) = call.finish(&lua, &engine) {
+        panic!("test script failed: {message}");
+    }
+    assert!(lines(&engine).contains(&"print: ok".to_string()), "{:?}", lines(&engine));
+}
+
 /// What Studio 0.747's dump adds and ree does not emulate reports itself (an Output line of kind `missing` at its first use)
 /// and answers nil; what the dump drops is no member any more.
 #[test]
@@ -12830,8 +12904,8 @@ fn methods_new_in_0_747_report_themselves_as_not_emulated() {
         &lua,
         &engine,
         r#"
-        print(game:GetService("CollectionService"):GetCollections(Instance.new("Part")))
-        print(game:GetService("RunService"):BindToSimulationParallel(function() end, Enum.StepFrequency.Hz60, 1))
+        print(game:GetService("CollectionService"):CreateCollection(".Tag", workspace))
+        print(game:GetService("RunService"):GetPredictionStatus(workspace))
         local Emitter = Instance.new("ParticleEmitter2D")
         print(Emitter:Emit(3), Emitter:Clear())
         print(Instance.new("Sound"):GetPlaybackState(), Instance.new("TextDocument"):ReadAsync())
@@ -12842,9 +12916,9 @@ fn methods_new_in_0_747_report_themselves_as_not_emulated() {
     assert_eq!(
         output,
         [
-            "missing: CollectionService.GetCollections is not emulated",
+            "missing: CollectionService.CreateCollection is not emulated",
             "print: ",
-            "missing: RunService.BindToSimulationParallel is not emulated",
+            "missing: RunService.GetPredictionStatus is not emulated",
             "print: ",
             "missing: ParticleEmitter2D.Emit is not emulated",
             "missing: ParticleEmitter2D.Clear is not emulated",
@@ -12859,7 +12933,7 @@ fn methods_new_in_0_747_report_themselves_as_not_emulated() {
     let missing: Vec<String> = engine.state.borrow().output.missing.iter().map(|(name, _)| name.clone()).collect();
     assert_eq!(
         missing,
-        ["CollectionService.GetCollections", "RunService.BindToSimulationParallel", "ParticleEmitter2D.Emit", "ParticleEmitter2D.Clear", "Sound.GetPlaybackState", "TextDocument.ReadAsync"]
+        ["CollectionService.CreateCollection", "RunService.GetPredictionStatus", "ParticleEmitter2D.Emit", "ParticleEmitter2D.Clear", "Sound.GetPlaybackState", "TextDocument.ReadAsync"]
     );
 }
 

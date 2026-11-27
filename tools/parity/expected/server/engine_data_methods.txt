@@ -1,0 +1,199 @@
+# engine: Roblox Studio 0.747.0.7471481, the server of a headless play session (a Script in ServerScriptService, script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-27
+ListEncryptedAssets: ok {}
+UnregisterDefaultEncryptionKey: ok 
+Preload(): error Argument 1 missing or nil
+Preload(id): ok 
+Preload(5): error Unable to cast double to ContentId
+RegisterDefaultEncryptionKey(): error Argument 1 missing or nil
+RegisterDefaultEncryptionKey(id): ok 
+RegisterDefaultEncryptionKey(5): ok 
+RegisterDefaultSessionKey(): error Argument 1 missing or nil
+RegisterDefaultSessionKey(id): ok 
+RegisterDefaultSessionKey(5): ok 
+UnregisterEncryptedAsset(): error Argument 1 missing or nil
+UnregisterEncryptedAsset(id): ok 
+UnregisterEncryptedAsset(5): error Unable to cast double to ContentId
+RegisterEncryptedAsset(): error Argument 2 missing or nil
+RegisterEncryptedAsset(id, key): ok 
+RegisterSessionEncryptedAsset(): error Argument 2 missing or nil
+RegisterSessionEncryptedAsset(id, key): ok 
+ListEncryptedAssets after registering: ok {}
+GetAssetFetchStatus(rbxassetid://123456): ok EnumItem(Enum.AssetFetchStatus.None)
+GetAssetFetchStatus(): ok EnumItem(Enum.AssetFetchStatus.None)
+GetAssetFetchStatus(rbxasset://textures/face.png): ok EnumItem(Enum.AssetFetchStatus.None)
+GetAssetFetchStatusChangedSignal(rbxassetid://123456): ok "RBXScriptSignal" | "Signal 123456AssetFetchStatusChanged" | boolean(true)
+GetAssetFetchStatusChangedSignal(rbxassetid://5): ok "RBXScriptSignal" | "Signal 5AssetFetchStatusChanged" | boolean(true)
+GetAssetFetchStatusChangedSignal(rbxasset://textures/face.png): ok "RBXScriptSignal" | "Signal rbxasset://textures/face.pngAssetFetchStatusChanged" | boolean(true)
+GetAssetFetchStatusChangedSignal(https://example.com/x.png): error ContentProvider:GetAssetFetchStatusChangedSignal: https://example.com/x.png is not a valid content id
+GetAssetFetchStatusChangedSignal(): ok "RBXScriptSignal" | "Signal AssetFetchStatusChanged" | boolean(true)
+GetAssetFetchStatusChangedSignal(abc): ok "RBXScriptSignal" | "Signal abcAssetFetchStatusChanged" | boolean(true)
+GetAssetFetchStatusChangedSignal(rbxthumb://type=Asset&id=1&w=150&h=150): ok "RBXScriptSignal" | "Signal rbxthumb://type=Asset&id=1&w=150&h=150&filters=AssetFetchStatusChanged" | boolean(true)
+GetCollection(): error Argument 1 missing or nil
+GetCollection(Part): ok {}
+GetCollection(tag): ok {}
+GetCollections(): error Argument 1 missing or nil
+GetCollections(part): ok {}
+GetCollections(5): error Unable to cast value to Object
+GetCurrentLocalToolIcon: ok ""
+BindActivate(): error Argument 1 missing or nil
+BindActivate(5): error Unable to cast double to UserInputType
+BindActionToInputTypes(): error Argument 3 missing or nil
+BindActionToInputTypes(name, 5, false): error Unable to cast double to Function
+BindActivate(Gamepad1) on a server: error ContextActionService:BindActivate can only be called from a local script
+UnbindActivate(Gamepad1) on a server: error ContextActionService:UnbindActivate can only be called from a local script
+BindActionToInputTypes on a server: error ContextActionService:BindAction can only be called from a local script
+ClearOutput: ok 
+GetLogger(): error @53: missing argument #2 to 'GetLogger' (string expected)
+GetLogHistoryAsync(): error Argument 1 missing or nil
+logger: ok "Object" | "Logger" | "ParityLogger" | boolean(true) | "function"
+logger missing member: error Debug is not a valid member of Logger
+Logger:Info: ok 
+Logger:Warn: ok 
+Logger:Error: ok 
+Logger:Log(): error Argument 2 missing or nil
+Logger:Log(text): error Unable to cast string to MessageType
+Logger:Log(warning, text): ok 
+Logger:Info(): error Argument 2 missing or nil
+Logger:Info(a, b): ok 
+memory tags Internal=0 HttpCache=0 Instances=0 Signals=0 LuaHeap=0 Script=0 PhysicsCollision=0 BaseParts=0 GraphicsSolidModels=0 GraphicsMeshParts=0 GraphicsParticles=0 GraphicsParts=0 GraphicsSpatialHash=0 GraphicsTerrain=0 GraphicsTexture=0 GraphicsTextureCharacter=0 Sounds=0 StreamingSounds=0 TerrainVoxels=0 Gui=0 Animation=0 Navigation=0 GeometryCSG=0 GraphicsSlimModels=0
+GetMemoryUsageMbForTag(): error Argument 1 missing or nil
+GetMemoryUsageMbForTag(0): ok 0
+GetMemoryUsageMbForTag(x): error Unable to cast string to DeveloperMemoryTag
+GetTotalMemoryUsageMb: ok "number"
+RebalanceTeams: ok 
+RemoveDefaultLoadingScreen: ok 
+GetMoonPhase at 0: ok 0.75
+GetMoonPhase at 12: ok 0.75
+GetListener: ok EnumItem(Enum.ListenerType.Camera) | nil(nil)
+SetListener(): error Argument 1 missing or nil
+SetListener(x): error Unable to cast string to ListenerType
+SetListener(CFrame): ok 
+GetListener after CFrame: ok EnumItem(Enum.ListenerType.CFrame) | CFrame(1, 2, 3, 1, 0, 0, 0, 1, 0, 0, 0, 1)
+SetListener(ObjectPosition, part): ok 
+GetListener after ObjectPosition: ok EnumItem(Enum.ListenerType.ObjectPosition) | Part(Part)
+SetListener(CFrame, nil): error SoundService:SetListener called with an incorrect argument.
+SetListener(CFrame, part): error SoundService:SetListener value given is not a valid CFrame when given Enum.ListenerType.CFrame
+SetListener(Camera): ok 
+GetListener after Camera: ok EnumItem(Enum.ListenerType.Camera) | nil(nil)
+GetMaterialVariant(Plastic, ParityShiny): ok MaterialVariant(ParityShiny) | boolean(false) | boolean(true)
+GetMaterialVariant(Wood, ParityShiny): ok nil(nil)
+GetMaterialVariant(Plastic, ParityFar): ok nil(nil)
+GetMaterialVariant(Plastic): error Argument 2 missing or nil
+GetMaterialVariant(x, name): error Unable to cast string to Material
+GetMaterialVariant(256, name): ok MaterialVariant(ParityShiny)
+GetBaseMaterialOverride(): error Argument 1 missing or nil
+SetBaseMaterialOverride(Plastic, ParityShiny): ok 
+SetBaseMaterialOverride(Plastic): error Argument 2 missing or nil
+SetBaseMaterialOverride(Wood, 5): ok 
+SetBaseMaterialOverride(Air, x): error SetBaseMaterialOverride failed: Material 'Air' is not supported.
+overrides Plastic=ParityShiny SmoothPlastic=SmoothPlastic Neon=GetBaseMaterialOverride failed: Material 'Neon' is not supported. Wood=5 WoodPlanks=WoodPlanks Marble=Marble Basalt=Basalt Slate=Slate CrackedLava=CrackedLava Concrete=Concrete Limestone=Limestone Granite=Granite Pavement=Pavement Brick=Brick Pebble=Pebble Cobblestone=Cobblestone Rock=Rock Sandstone=Sandstone CorrodedMetal=CorrodedMetal DiamondPlate=DiamondPlate Foil=Foil Metal=Metal Grass=Grass LeafyGrass=LeafyGrass Sand=Sand Fabric=Fabric Snow=Snow Mud=Mud Ground=Ground Asphalt=Asphalt Salt=Salt Ice=Ice Glacier=Glacier Glass=GetBaseMaterialOverride failed: Material 'Glass' is not supported. ForceField=GetBaseMaterialOverride failed: Material 'ForceField' is not supported. Air=GetBaseMaterialOverride failed: Material 'Air' is not supported. Water=GetBaseMaterialOverride failed: Material 'Water' is not supported. Cardboard=Cardboard Carpet=Carpet CeramicTiles=CeramicTiles ClayRoofTiles=ClayRoofTiles RoofShingles=RoofShingles Leather=Leather Plaster=Plaster Rubber=Rubber
+tool unparented: 
+tool in the Workspace: 
+tool in a model with a Humanoid: 
+tool disabled there: 
+GetTeleportData unset: ok nil(nil)
+SetTeleportData(table): ok 
+GetTeleportData table: ok {A=1, B={1=2}} | boolean(false)
+SetTeleportData(nil): error Argument 1 missing or nil
+SetTeleportData(mixed): ok 
+GetTeleportData mixed: ok {1=1, 2=2}
+SetTeleportData(5): ok 
+GetTeleportData 5: ok 5
+SetTeleportData(function): ok 
+GetTeleportData function: ok function
+SetTeleportData(cycle): error tables cannot be cyclic
+DataStoreIncrementOptions GetMetadata unset: ok {}
+DataStoreIncrementOptions SetMetadata(t): ok 
+DataStoreIncrementOptions GetMetadata: ok {A=1, B="x"}
+DataStoreIncrementOptions SetMetadata(5): error Unable to cast double to Dictionary
+DataStoreIncrementOptions SetMetadata(): error Argument 1 missing or nil
+DataStoreIncrementOptions SetMetadata(array): error Unable to cast Array to Dictionary
+DataStoreSetOptions GetMetadata unset: ok {}
+DataStoreSetOptions SetMetadata(t): ok 
+DataStoreSetOptions GetMetadata: ok {A=1, B="x"}
+DataStoreSetOptions SetMetadata(5): error Unable to cast double to Dictionary
+DataStoreSetOptions SetMetadata(): error Argument 1 missing or nil
+DataStoreSetOptions SetMetadata(array): error Unable to cast Array to Dictionary
+SetExperimentalFeatures({}): ok 
+SetExperimentalFeatures(t): ok 
+SetExperimentalFeatures(5): error Unable to cast double to Dictionary
+AddLine(): error Argument 2 missing or nil
+AddLine(a, b): ok 
+AddLine(a, 5): error Unable to cast double to Vector3
+AddLines({a, b, c}): ok 
+AddLines({5}): error Variant cast failed
+AddLines(5): error Unable to cast double to Array
+AddPath({a, b}, true): ok 
+AddPath({a, b}): error Argument 2 missing or nil
+AddText(a, t, 20): ok 
+AddText(a): error Argument 2 missing or nil
+AddText(a, 5): ok 
+Clear: ok 
+SetTextureOffset(): ok 
+SetTextureOffset(0.5): ok 
+SetTextureOffset(x): error Unable to cast string to float
+GeneratedFolder: ok "GeneratedFolder" | "Folder"
+SetPrimaryPart(): error Argument 1 missing or nil
+SetPrimaryPart(part): ok 
+GetCurrentPlayers: ok {}
+receiver value unattached: ok 0
+receivers none: ok {}
+receivers one: ok {1=CustomEventReceiver(CustomEventReceiver)}
+SetValue(0.25): ok 0.25
+SetValue(-1): ok 0
+SetValue(2): ok 1
+SetValue(nan): ok nan
+SetValue("0.75"): ok 0.75
+SetValue(boolean(true)): ok 1
+SetValue(0.29999999999999999): ok 0.30000001192092896
+SetValue(): error Argument 1 missing or nil
+SetValue(x): error Unable to cast string to float
+a receiver attached later: ok 0.30000001192092896
+detached: ok 0
+source value changes 0.25 0 1 nan 0.75 1 0.30000001192092896 0
+AccessoryDescription GetAppliedInstance unparented: error AccessoryDescription is not parented to a HumanoidDescription. Did you call ApplyDescription()?
+MakeupDescription GetAppliedInstance unparented: error MakeupDescription is not parented to a HumanoidDescription. Did you call ApplyDescription()?
+AccessoryDescription GetAppliedInstance under a description: error HumanoidDescription is not parented to a Humanoid. Did you call ApplyDescription()?
+MakeupDescription GetAppliedInstance under a description: error MakeupDescription is not parented to a Humanoid. Did you call ApplyDescription()?
+GetStyledPropertyChangedSignal(AssetId): ok "RBXScriptSignal" | "Signal AssetIdChanged"
+GetStyledPropertyChangedSignal(): error Argument 1 missing or nil
+GetStyledPropertyChangedSignal(Nope): error Nope is not a valid property name.
+GetAccessories(false) empty: ok {}
+GetAccessories(): error Argument 1 missing or nil
+GetAccessories(true) all rigid: ok {1={AccessoryType=EnumItem(Enum.AccessoryType.Hair), AssetId=102, IsLayered=boolean(false), Position=Vector3(0, 0, 0), Rotation=Vector3(0, 0, 0), Scale=Vector3(1, 1, 1)}, 2={AccessoryType=EnumItem(Enum.AccessoryType.Face), AssetId=103, IsLayered=boolean(false), Position=Vector3(0, 0, 0), Rotation=Vector3(0, 0, 0), Scale=Vector3(1, 1, 1)}, 3={AccessoryType=EnumItem(Enum.AccessoryType.Neck), AssetId=104, IsLayered=boolean(false), Position=Vector3(0, 0, 0), Rotation=Vector3(0, 0, 0), Scale=Vector3(1, 1, 1)}, 4={AccessoryType=EnumItem(Enum.AccessoryType.Shoulder), AssetId=105, IsLayered=boolean(false), Position=Vector3(0, 0, 0), Rotation=Vector3(0, 0, 0), Scale=Vector3(1, 1, 1)}, 5={AccessoryType=EnumItem(Enum.AccessoryType.Front), AssetId=106, IsLayered=boolean(false), Position=Vector3(0, 0, 0), Rotation=Vector3(0, 0, 0), Scale=Vector3(1, 1, 1)}, 6={AccessoryType=EnumItem(Enum.AccessoryType.Back), AssetId=107, IsLayered=boolean(false), Position=Vector3(0, 0, 0), Rotation=Vector3(0, 0, 0), Scale=Vector3(1, 1, 1)}, 7={AccessoryType=EnumItem(Enum.AccessoryType.Waist), AssetId=108, IsLayered=boolean(false), Position=Vector3(0, 0, 0), Rotation=Vector3(0, 0, 0), Scale=Vector3(1, 1, 1)}, 8={AccessoryType=EnumItem(Enum.AccessoryType.Hat), AssetId=1, IsLayered=boolean(false), Position=Vector3(0, 0, 0), Rotation=Vector3(0, 0, 0), Scale=Vector3(1, 1, 1)}, 9={AccessoryType=EnumItem(Enum.AccessoryType.Hat), AssetId=2, IsLayered=boolean(false), Position=Vector3(0, 0, 0), Rotation=Vector3(0, 0, 0), Scale=Vector3(1, 1, 1)}, 10={AccessoryType=EnumItem(Enum.AccessoryType.Hat), AssetId=3, IsLayered=boolean(false), Position=Vector3(0, 0, 0), Rotation=Vector3(0, 0, 0), Scale=Vector3(1, 1, 1)}}
+GetAccessories(false) all rigid: ok {}
+SetAccessories(list, true): ok 
+fields after: ok "11,12|13||22|||17|"
+GetAccessories(true) after: ok {1={AccessoryType=EnumItem(Enum.AccessoryType.Hat), AssetId=11, IsLayered=boolean(false), Position=Vector3(0, 0, 0), Rotation=Vector3(0, 0, 0), Scale=Vector3(1, 1, 1)}, 2={AccessoryType=EnumItem(Enum.AccessoryType.Shirt), AssetId=14, IsLayered=boolean(true), Order=3, Position=Vector3(0, 0, 0), Puffiness=0.5, Rotation=Vector3(0, 0, 0), Scale=Vector3(1, 1, 1)}, 3={AccessoryType=EnumItem(Enum.AccessoryType.Hair), AssetId=13, IsLayered=boolean(false), Position=Vector3(0, 0, 0), Rotation=Vector3(0, 0, 0), Scale=Vector3(1, 1, 1)}, 4={AccessoryType=EnumItem(Enum.AccessoryType.Hat), AssetId=12, IsLayered=boolean(false), Position=Vector3(0, 0, 0), Rotation=Vector3(0, 0, 0), Scale=Vector3(1, 1, 1)}, 5={AccessoryType=EnumItem(Enum.AccessoryType.Jacket), AssetId=15, IsLayered=boolean(true), Order=1, Position=Vector3(0, 0, 0), Puffiness=1, Rotation=Vector3(0, 0, 0), Scale=Vector3(1, 1, 1)}, 6={AccessoryType=EnumItem(Enum.AccessoryType.Back), AssetId=17, IsLayered=boolean(false), Position=Vector3(1, 2, 3), Rotation=Vector3(0, 90, 0), Scale=Vector3(2, 2, 2)}, 7={AccessoryType=EnumItem(Enum.AccessoryType.Neck), AssetId=22, IsLayered=boolean(false), Position=Vector3(0, 0, 0), Rotation=Vector3(0, 0, 0), Scale=Vector3(1, 1, 1)}}
+GetAccessories(false) after: ok {1={AccessoryType=EnumItem(Enum.AccessoryType.Shirt), AssetId=14, IsLayered=boolean(true), Order=3, Position=Vector3(0, 0, 0), Puffiness=0.5, Rotation=Vector3(0, 0, 0), Scale=Vector3(1, 1, 1)}, 2={AccessoryType=EnumItem(Enum.AccessoryType.Jacket), AssetId=15, IsLayered=boolean(true), Order=1, Position=Vector3(0, 0, 0), Puffiness=1, Rotation=Vector3(0, 0, 0), Scale=Vector3(1, 1, 1)}}
+GetAccessories(true) after a Hair write: ok {1={AccessoryType=EnumItem(Enum.AccessoryType.Hat), AssetId=11, IsLayered=boolean(false), Position=Vector3(0, 0, 0), Rotation=Vector3(0, 0, 0), Scale=Vector3(1, 1, 1)}, 2={AccessoryType=EnumItem(Enum.AccessoryType.Shirt), AssetId=14, IsLayered=boolean(true), Order=3, Position=Vector3(0, 0, 0), Puffiness=0.5, Rotation=Vector3(0, 0, 0), Scale=Vector3(1, 1, 1)}, 3={AccessoryType=EnumItem(Enum.AccessoryType.Hat), AssetId=12, IsLayered=boolean(false), Position=Vector3(0, 0, 0), Rotation=Vector3(0, 0, 0), Scale=Vector3(1, 1, 1)}, 4={AccessoryType=EnumItem(Enum.AccessoryType.Jacket), AssetId=15, IsLayered=boolean(true), Order=1, Position=Vector3(0, 0, 0), Puffiness=1, Rotation=Vector3(0, 0, 0), Scale=Vector3(1, 1, 1)}, 5={AccessoryType=EnumItem(Enum.AccessoryType.Back), AssetId=17, IsLayered=boolean(false), Position=Vector3(1, 2, 3), Rotation=Vector3(0, 90, 0), Scale=Vector3(2, 2, 2)}, 6={AccessoryType=EnumItem(Enum.AccessoryType.Neck), AssetId=22, IsLayered=boolean(false), Position=Vector3(0, 0, 0), Rotation=Vector3(0, 0, 0), Scale=Vector3(1, 1, 1)}, 7={AccessoryType=EnumItem(Enum.AccessoryType.Hair), AssetId=31, IsLayered=boolean(false), Position=Vector3(0, 0, 0), Rotation=Vector3(0, 0, 0), Scale=Vector3(1, 1, 1)}, 8={AccessoryType=EnumItem(Enum.AccessoryType.Hair), AssetId=32, IsLayered=boolean(false), Position=Vector3(0, 0, 0), Rotation=Vector3(0, 0, 0), Scale=Vector3(1, 1, 1)}}
+SetAccessories(layered, false): ok 
+GetAccessories(true) after layered: ok {1={AccessoryType=EnumItem(Enum.AccessoryType.Hat), AssetId=11, IsLayered=boolean(false), Position=Vector3(0, 0, 0), Rotation=Vector3(0, 0, 0), Scale=Vector3(1, 1, 1)}, 2={AccessoryType=EnumItem(Enum.AccessoryType.Hat), AssetId=12, IsLayered=boolean(false), Position=Vector3(0, 0, 0), Rotation=Vector3(0, 0, 0), Scale=Vector3(1, 1, 1)}, 3={AccessoryType=EnumItem(Enum.AccessoryType.Back), AssetId=17, IsLayered=boolean(false), Position=Vector3(1, 2, 3), Rotation=Vector3(0, 90, 0), Scale=Vector3(2, 2, 2)}, 4={AccessoryType=EnumItem(Enum.AccessoryType.Neck), AssetId=22, IsLayered=boolean(false), Position=Vector3(0, 0, 0), Rotation=Vector3(0, 0, 0), Scale=Vector3(1, 1, 1)}, 5={AccessoryType=EnumItem(Enum.AccessoryType.Hair), AssetId=31, IsLayered=boolean(false), Position=Vector3(0, 0, 0), Rotation=Vector3(0, 0, 0), Scale=Vector3(1, 1, 1)}, 6={AccessoryType=EnumItem(Enum.AccessoryType.Hair), AssetId=32, IsLayered=boolean(false), Position=Vector3(0, 0, 0), Rotation=Vector3(0, 0, 0), Scale=Vector3(1, 1, 1)}, 7={AccessoryType=EnumItem(Enum.AccessoryType.Pants), AssetId=41, IsLayered=boolean(true), Order=2, Position=Vector3(0, 0, 0), Puffiness=1, Rotation=Vector3(0, 0, 0), Scale=Vector3(1, 1, 1)}}
+SetAccessories(rigid with an Order): ok 
+GetAccessories(true) rigid with an Order: ok {1={AccessoryType=EnumItem(Enum.AccessoryType.Hat), AssetId=51, IsLayered=boolean(true), Order=9, Position=Vector3(0, 0, 0), Puffiness=1, Rotation=Vector3(0, 0, 0), Scale=Vector3(1, 1, 1)}}
+SetAccessories(layered and rigid hat): ok 
+GetAccessories(true) layered and rigid hat: ok {1={AccessoryType=EnumItem(Enum.AccessoryType.Hat), AssetId=52, IsLayered=boolean(true), Order=1, Position=Vector3(0, 0, 0), Puffiness=1, Rotation=Vector3(0, 0, 0), Scale=Vector3(1, 1, 1)}, 2={AccessoryType=EnumItem(Enum.AccessoryType.Hat), AssetId=53, IsLayered=boolean(false), Position=Vector3(0, 0, 0), Rotation=Vector3(0, 0, 0), Scale=Vector3(1, 1, 1)}}
+SetAccessories(nil, true): error Argument 1 missing or nil
+SetAccessories(5, true): error Unable to cast double to Array
+SetAccessories({}): error Argument 2 missing or nil
+SetAccessories(dictionary, true): error Unable to cast Dictionary to Array
+GetAccessories(5): ok 2
+PrimaryPart moved deeper: ok Part(Part)
+PrimaryPart after its folder left: ok nil(nil)
+PrimaryPart after the folder came back: ok nil(nil)
+PrimaryPart after Destroy: ok nil(nil)
+PrimaryPart after the model left and came back: ok Part(Part)
+PrimaryParts after the part left the inner model for the outer: ok Part(Part) | nil(nil)
+PrimaryPart set to a part outside: ok Part(Part)
+PrimaryPart after that part joined and left: ok nil(nil)
+PrimaryPart changes 7
+navigation defaults: ok boolean(true) | boolean(true)
+navigation after a write: ok boolean(false) | boolean(true)
+BindToSimulation(): error Argument 1 missing or nil
+BindToSimulation(5): error Unable to cast double to Function
+BindToSimulation(f, x): error Unable to cast string to StepFrequency
+BindToAnimation(): error Argument 1 missing or nil
+IsResimulating: ok boolean(false)
+step bindings PreSimulation | PreSimulation's defer | animation 0.0167 0 | animation's defer | simulation first 0.0167 0 | simulation 0.0167 0 | simulation last 0.0167 0 | simulation first's defer | simulation's defer | simulation last's defer
+logged MessageInfo PARITYLOG info | MessageWarning PARITYLOG warn | MessageError PARITYLOG error | MessageWarning PARITYLOG log warning | MessageInfo PARITYLOG a
