@@ -1487,7 +1487,7 @@ mod tests {
         {
             let mut state = engine.state.borrow_mut();
             assert!(state.spatial.world(world).is_some(), "an index made");
-            assert!(state.cameras.unindexed_models.contains_key(&world), "a part waiting");
+            assert!(crate::world::broadphase::waiting(&state, world) > 0, "a part waiting");
             assert!(state.dom.world_log(world).is_some(), "a log kept");
         }
         run(&lua, &engine, r##"game:GetService("ReplicatedStorage").Gone:Destroy()"##);
@@ -1497,7 +1497,7 @@ mod tests {
         let mut state = engine.state.borrow_mut();
         assert!(state.dom.get(world).is_none(), "the WorldModel freed");
         assert!(state.spatial.world(world).is_none(), "its index dropped");
-        assert!(!state.cameras.unindexed_models.contains_key(&world), "its wait dropped");
+        assert!(crate::world::broadphase::waiting(&state, world) == 0, "its wait dropped");
         assert!(state.dom.world_log(world).is_none(), "its log dropped");
     }
 

@@ -1085,8 +1085,8 @@ pub const FIND_PART_ON_RAY_LIST: f64 = 0.05e-6;
 pub const FIND_PART_ON_RAY_LISTED: f64 = 11e-9;
 /// What a spatial query that takes parts into the spatial index pays for them, beyond its own price (world/query.rs take_in_of:
 /// the parts that came into the world of the WorldRoot it is called on since a query of that world or the physics step last took
-/// that world's in, camera_moves.rs `Cameras::unindexed` for the Workspace's and `Cameras::unindexed_models` for a WorldModel's;
-/// a Raycast or any other query of a WorldModel takes in its world's), in a
+/// that world's in, each world's own wait in world/broadphase.rs wait_in; a Raycast or any other query of a WorldModel takes in its
+/// world's), in a
 /// playing client (Studio 0.747, a headless client; os.clock around K parts parented into the Workspace, a Raycast or
 /// GetPartBoundsInBox and the parts parented out again, less the same without the query and the query alone, the median of 31 or
 /// 41 samples, two passes beside no other parts and beside 100,000 parts away): K = 1 1.48-1.61 us, 10 9.2-10.6, 100 95-122,

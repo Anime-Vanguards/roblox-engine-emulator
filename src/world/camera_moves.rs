@@ -24,8 +24,8 @@
 //!   to the near plane's centre and corners; against parts that can collide and are at most 0.95 transparent, the ignore
 //!   list (nil holes in it skipped) and its descendants left out. The largest `length - distance to the first hit`, or 0. A
 //!   part entering the Workspace is not seen until the spatial index takes it in: at the next physics step or another spatial
-//!   query of the Workspace (Raycast, GetPartBoundsInBox, ...; a WorldModel's leaves it waiting; `Cameras::unindexed`, a set of
-//!   the waiting parts still in the Workspace), with the parts moved in with it; a moved, resized or removed part counts at
+//!   query of the Workspace (Raycast, GetPartBoundsInBox, ...; a WorldModel's leaves it waiting; the Workspace's index keeps the
+//!   waiting parts still in the Workspace: world/broadphase.rs wait_in), with the parts moved in with it; a moved, resized or removed part counts at
 //!   once. A WorldModel's parts in the Workspace are never met (the Workspace's grid holds none of them: measured).
 //! - Interpolate(endCFrame, endFocus, duration): the casts from the last argument to the first, then "Interpolation time
 //!   must be positive." (NaN passes; also on a camera that is not Scriptable), then "Attempted to use interpolation with a
@@ -210,8 +210,8 @@ fn zoom_to_extents(engine: &Engine, names: &Names, camera: InstanceId, center: &
 
 // GetLargestCutoffDistance and the spatial index's lag
 
-/// Which wait a world's parts are in: the Workspace's or a WorldModel's (`Cameras::unindexed`, `unindexed_models`), by its
-/// WorldRoot
+/// Which wait a world's parts are in: the Workspace's or a WorldModel's (each world's index keeps its own: world/broadphase.rs
+/// wait_in), by its WorldRoot
 #[derive(Clone, Copy, PartialEq)]
 enum Wait {
     Workspace(InstanceId),
@@ -219,40 +219,27 @@ enum Wait {
 }
 
 impl Wait {
-    fn insert(self, state: &mut State, part: InstanceId) {
+    fn root(self) -> InstanceId {
         match self {
-            Wait::Workspace(_) => state.cameras.unindexed.insert(part),
-            Wait::Model(model) => state.cameras.unindexed_models.entry(model).or_default().insert(part),
-        };
-        super::broadphase::came_in(state, part);
+            Wait::Workspace(root) | Wait::Model(root) => root,
+        }
     }
 
-    /// Out of the wait, and out of the world's index at once (world/broadphase.rs left)
+    fn insert(self, state: &mut State, part: InstanceId) {
+        super::broadphase::wait_in(state, self.root(), part);
+    }
+
+    /// Out of the wait, and out of the world's index at once (world/broadphase.rs wait_out)
     fn remove(self, state: &mut State, part: InstanceId) {
-        match self {
-            Wait::Workspace(root) => {
-                state.cameras.unindexed.remove(&part);
-                super::broadphase::left(state, root, part);
-                super::broadphase::not_entered(state, part);
-            }
-            Wait::Model(model) => {
-                if let Some(waiting) = state.cameras.unindexed_models.get_mut(&model) {
-                    waiting.remove(&part);
-                    if waiting.is_empty() {
-                        state.cameras.unindexed_models.remove(&model);
-                    }
-                }
-                super::broadphase::left(state, model, part);
-            }
+        super::broadphase::wait_out(state, self.root(), part);
+        if let Wait::Workspace(_) = self {
+            super::broadphase::not_entered(state, part);
         }
     }
 
     /// Whether anything waits in it or its world's index holds a part
     fn holds_any(self, state: &State) -> bool {
-        match self {
-            Wait::Workspace(root) => !state.cameras.unindexed.is_empty() || super::broadphase::holds_any(state, root),
-            Wait::Model(model) => state.cameras.unindexed_models.contains_key(&model) || super::broadphase::holds_any(state, model),
-        }
+        super::broadphase::holds_any(state, self.root())
     }
 }
 
@@ -598,7 +585,6 @@ pub(super) fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors, camera_cla
                 // a WorldModel that leaves the DataModel takes its parts out of the wait and its index with it; one that comes in
                 // has them come in anew (world/broadphase.rs makes its index when it takes them in)
                 if model && leaves {
-                    state.cameras.unindexed_models.remove(&node);
                     super::broadphase::world_gone(state, node);
                 }
                 if is_a(state, node, base_part) {
@@ -639,7 +625,6 @@ pub(super) fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors, camera_cla
     hooks.instance_freed.push(Box::new(|state, id| {
         super::broadphase::world_gone(state, id);
         super::broadphase::freed(state, id);
-        state.cameras.unindexed_models.remove(&id);
     }));
     drop(hooks);
     // InterpolationFinished, after the PreRender handlers (and what they deferred)

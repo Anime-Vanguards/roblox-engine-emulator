@@ -140,7 +140,7 @@ fn aimed(origin: Vec3, direction: Vec3) -> Affine3A {
 /// for them. The read is charged as the ray it is: [`crate::cost::MOUSE_RAY`] and the member's `price`, then the parts
 /// it meets up to its hit (the hit and those under TargetFilter before it) and the hit's own. It sees the parts the spatial index
 /// has: one that entered the Workspace since a spatial query of the Workspace or the physics step last took parts in
-/// (`Cameras::unindexed`, world/camera_moves.rs) is neither met nor paid for, and the read takes nothing in (measured: a
+/// (its world's wait, world/broadphase.rs wait_in) is neither met nor paid for, and the read takes nothing in (measured: a
 /// client's Target misses such a part until a Raycast or the next frame, and GetLargestCutoffDistance still misses it after any
 /// member is read; tools/parity/probes/mouse_index.luau).
 fn pointed(engine: &Engine, target_filter: Option<NameId>, mouse: InstanceId, origin: Vec3, direction: Vec3, price: f64) -> (Vec3, Option<(InstanceId, Vec3)>) {

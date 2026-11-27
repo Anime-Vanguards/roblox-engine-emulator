@@ -5,12 +5,16 @@
 //! WorldModel's grid follows the same rules). The indexes live in the engine's state ([`Spatial`], `State::spatial`) so that
 //! every write can file a part at once.
 //!
-//! - **Coming in**: a part that enters a world waits (camera.rs `Cameras::unindexed`, `unindexed_models`: [`Waiting`], in the
-//!   order the parts came, a moved subtree's parts as a client takes the subtree up: the moved part first, then the rest each
-//!   after its own descendants, world/joints.rs taken_up) until a query of that world or the physics step takes the waiting
-//!   parts in ([`take_in`], [`index_parts`]); each is then filed at the end of its cells' lists.
-//! - **Going out** (destroyed, parented out of the world, into another): it leaves its cells at once ([`left`], from the
-//!   hierarchy hook in camera_moves.rs, a moved subtree's parts in the order they come in), the list's last taking its place.
+//! - **Units**: the grid files units ([`Unit`]), each holding its parts in the order a walk lists them; a walk that meets a
+//!   unit gives each of its parts.
+//! - **Coming in**: a part that enters a world waits (its unit at the end of its world's wait, [`wait_in`] from the hierarchy hook
+//!   in camera_moves.rs, a moved subtree's parts as a client takes the subtree up: the moved part first, then the rest each after
+//!   its own descendants, world/joints.rs taken_up) until a query of that world or the physics step takes the waiting units in
+//!   ([`take_in`], [`index_parts`]); each is then filed at the end of its cells' lists. A unit leaving the wait gives its place to
+//!   the last, as a cell's list does (measured, Studio 0.747, a client and a server: five parts waiting, the second taken out
+//!   before a query, come in as 1, 5, 3, 4; tools/parity/probes/grid_welds.luau).
+//! - **Going out** (destroyed, parented out of the world, into another): it leaves its cells or the wait at once ([`wait_out`],
+//!   from the hierarchy hook, a moved subtree's parts in the order they come in), the list's last taking its place.
 //! - **Every write files at once** ([`stored`], from instance.rs store): a write of CFrame, Size, Anchored, CanCollide or
 //!   CanTouch of a filed part works out its filing again (float32 box arithmetic) and, when it changed, files it: at the end of
 //!   every cell when its level, its list or CanCollide-and-CanTouch-both-off changed, else out of the cells it left and at
@@ -20,11 +24,11 @@
 //!   change logs at the next query of its world (dom.rs `Watch` for the Workspace, `WorldLog` for a WorldModel), which also catch
 //!   what came or went other than through a Parent write (a project mount, a replaced child, a class change): each logged
 //!   instance is looked at once however often it changed, so a query after a change does work for what changed. A world's
-//!   index is made from a walk of it at its first query or physics step (parts that do not wait filed in the walk's order, each
-//!   after its descendants) and walked again only after its log overflowed (twice the parts it holds, at least 4,096 entries),
-//!   which never moves a part already filed.
-//! - A part whose box is not finite (a NaN or infinite position or size) is in no cell: every walk of its world gives it last
-//!   (a list of its own, which it leaves in a step).
+//!   index is made when a part first waits for it, or from a walk of its world at its first query or physics step (parts that do
+//!   not wait filed in the walk's order, each after its descendants); it is walked again only after its log overflowed (twice the
+//!   parts it holds, at least 4,096 entries), which never moves a part already filed.
+//! - A unit whose box is not finite (a NaN or infinite position or size) is in no cell: every walk of its world gives it last (a
+//!   list of its own, which it leaves in a step).
 //!
 //! A collision-group change lists the Workspace's parts from here ([`part_ids`], services/physics.rs), and puts the changed
 //! ones in the Workspace's order ([`sort_by_order`]).
@@ -35,7 +39,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use super::{
     frame,
     grid::{self, Filing, Grid, Passed, Walked},
-    query::Solid,
+    query::{Shape, Solid},
 };
 use crate::{
     ClassId, Engine, InstanceId, K, NameId, State,
@@ -54,7 +58,14 @@ pub struct Entry {
     pub can_collide: bool,
 }
 
-/// Where an entry is: waiting to be taken in, filed in the grid, or in the loose list (its box not finite)
+impl Entry {
+    /// What a part that came into a wait holds until its world's index reads it (the next query reads every part that came in)
+    fn unread(part: InstanceId) -> Entry {
+        Entry { solid: Solid { part, frame: Affine3A::IDENTITY, shape: Shape::Box(Vec3::ZERO) }, can_query: false, can_collide: false }
+    }
+}
+
+/// Where a unit is: waiting to be taken in, filed in the grid, or in the loose list (its box not finite)
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Place {
     Waits,
@@ -62,70 +73,29 @@ enum Place {
     Loose,
 }
 
-/// The parts waiting for a world's spatial index, in the order they came: a set, each part once, so it holds at most the world's
-/// parts and a lookup costs the same whatever it holds. A part that leaves gives its place to the last, as a cell's list does, and
-/// one that comes back is at the end (measured, Studio 0.747, a client and a server: five parts waiting, the second taken out
-/// before a query, come in as 1, 5, 3, 4; tools/parity/probes/grid_welds.luau)
-#[derive(Default, Debug)]
-pub struct Waiting {
-    order: Vec<InstanceId>,
-    at: FxHashMap<InstanceId, u32>,
+/// What a world's grid files: a unit of parts, in the order a walk lists them (its first, then the rest), and where it is
+#[derive(Debug)]
+struct Unit {
+    first: u32,
+    rest: Vec<u32>,
+    place: Place,
+    /// Its place in its world's wait or loose list, while it is in one
+    at: u32,
 }
 
-impl Waiting {
-    pub fn insert(&mut self, part: InstanceId) {
-        if self.at.contains_key(&part) {
-            return;
-        }
-        self.at.insert(part, self.order.len() as u32);
-        self.order.push(part);
+impl Unit {
+    /// Its parts' entries, in the order a walk lists them
+    fn parts(&self) -> impl Iterator<Item = u32> + '_ {
+        std::iter::once(self.first).chain(self.rest.iter().copied())
     }
 
-    pub fn remove(&mut self, part: &InstanceId) {
-        let Some(place) = self.at.remove(part) else { return };
-        let place = place as usize;
-        let last = self.order.pop();
-        if place < self.order.len()
-            && let Some(last) = last
-        {
-            self.order[place] = last;
-            self.at.insert(last, place as u32);
-        }
-    }
-
-    pub fn contains(&self, part: &InstanceId) -> bool {
-        !self.at.is_empty() && self.at.contains_key(part)
-    }
-
-    pub fn len(&self) -> usize {
-        self.at.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.at.is_empty()
-    }
-
-    /// How many parts its table has room for (tests: a burst's table is not kept)
-    #[cfg(test)]
-    pub fn capacity(&self) -> usize {
-        self.at.capacity()
-    }
-
-    pub fn clear(&mut self) {
-        self.order.clear();
-        // (a table that a burst grew is made again for what it held, as dom.rs clear_set does)
-        if self.at.capacity() > 4 * self.at.len().max(1024) {
-            self.at = FxHashMap::default();
-        } else {
-            self.at.clear();
-        }
-    }
-
-    /// The parts in their order
-    pub fn iter(&self) -> impl Iterator<Item = InstanceId> + '_ {
-        self.order.iter().copied()
+    fn len(&self) -> usize {
+        1 + self.rest.len()
     }
 }
+
+/// No unit (an entry's unit while it has none, a free unit's first part)
+const NONE: u32 = u32::MAX;
 
 #[cfg(test)]
 thread_local! {
@@ -179,26 +149,32 @@ struct Names {
     anchored: Option<NameId>,
 }
 
-/// One world's index: its grid and its parts' entries
+/// One world's index: its grid of units, its wait, and its parts' entries
 pub struct WorldIndex {
     /// Its WorldRoot (the Workspace, or a WorldModel)
     root: InstanceId,
     grid: Grid,
     entries: Vec<Entry>,
-    places: Vec<Place>,
-    /// Each entry's part (stale for a free entry)
+    /// Each entry's part (stale for a free entry) and unit
     parts: Vec<InstanceId>,
+    unit_of: Vec<u32>,
     free: Vec<u32>,
     /// The entries in use, in no particular order, and each one's place in that list ([`part_ids`] reads the parts held without
     /// the free entries)
     live: Vec<u32>,
     live_at: Vec<u32>,
-    /// The entries whose box is not finite, and each one's place in that list (by entry), so one comes out in a step: the last
-    /// takes its place. A walk gives them last, in this order
+    units: Vec<Unit>,
+    free_units: Vec<u32>,
+    /// The units waiting to be taken in, in the order they came
+    wait: Vec<u32>,
+    /// How many parts the waiting units hold
+    waiting: usize,
+    /// The units whose box is not finite: a walk gives them last, in this order
     loose: Vec<u32>,
-    loose_at: Vec<u32>,
     /// How many instances the last walk of its world visited (its log's limit)
     walked: usize,
+    /// A walk of its world read it (an index a wait made reads its world whole at its first query, whatever log its WorldRoot kept)
+    read: bool,
 }
 
 impl WorldIndex {
@@ -207,18 +183,22 @@ impl WorldIndex {
             root,
             grid: Grid::default(),
             entries: Vec::new(),
-            places: Vec::new(),
             parts: Vec::new(),
+            unit_of: Vec::new(),
             free: Vec::new(),
             live: Vec::new(),
             live_at: Vec::new(),
+            units: Vec::new(),
+            free_units: Vec::new(),
+            wait: Vec::new(),
+            waiting: 0,
             loose: Vec::new(),
-            loose_at: Vec::new(),
             walked: 0,
+            read: false,
         }
     }
 
-    /// How many parts it holds
+    /// How many parts it holds, waiting ones too
     pub fn len(&self) -> usize {
         self.live.len()
     }
@@ -235,6 +215,95 @@ impl WorldIndex {
 
     fn give(&self, entry: u32) -> (InstanceId, Entry) {
         (self.parts[entry as usize], self.entries[entry as usize])
+    }
+
+    /// The place of `entry`'s unit
+    fn place_of(&self, entry: u32) -> Place {
+        self.units[self.unit_of[entry as usize] as usize].place
+    }
+
+    /// A new unit of the parts `entries` (in their walk order), nowhere yet (taken as waiting, put in no list)
+    fn new_unit(&mut self, entries: &[u32]) -> u32 {
+        let unit = Unit { first: entries[0], rest: entries[1..].to_vec(), place: Place::Waits, at: NONE };
+        let id = match self.free_units.pop() {
+            Some(id) => {
+                self.units[id as usize] = unit;
+                id
+            }
+            None => {
+                self.units.push(unit);
+                (self.units.len() - 1) as u32
+            }
+        };
+        for &entry in entries {
+            self.unit_of[entry as usize] = id;
+        }
+        id
+    }
+
+    /// Frees a unit that is in no list and no cell.
+    fn free_unit(&mut self, unit: u32) {
+        let held = &mut self.units[unit as usize];
+        held.first = NONE;
+        held.rest = Vec::new();
+        held.at = NONE;
+        self.free_units.push(unit);
+    }
+
+    /// Moves `unit` from its place to `place`: out of its cells (the lists' last taking its place), the wait or the loose list (the
+    /// list's last taking its place there too), into the new cells at their ends or at the end of the wait or the loose list; a
+    /// filing of the same level, list and flags moves only the cells that changed. `fresh`: the unit is in no list or cell yet.
+    fn set_place(&mut self, unit: u32, place: Place, fresh: bool, frame: u64) {
+        let old = self.units[unit as usize].place;
+        if !fresh && old == place {
+            return;
+        }
+        match (old, place) {
+            (Place::Filed(a), Place::Filed(b)) if !fresh && a.level == b.level && a.list == b.list && a.off == b.off => self.grid.move_cells(unit, &a, &b, frame),
+            _ => {
+                if !fresh {
+                    match old {
+                        Place::Filed(filing) => self.grid.unfile(unit, &filing, frame),
+                        Place::Loose => self.take_from(unit, false),
+                        Place::Waits => self.take_from(unit, true),
+                    }
+                }
+                match place {
+                    Place::Filed(filing) => self.grid.file(unit, &filing, frame),
+                    Place::Loose => self.push_to(unit, false),
+                    Place::Waits => self.push_to(unit, true),
+                }
+            }
+        }
+        self.units[unit as usize].place = place;
+    }
+
+    /// Takes `unit` out of the wait (or the loose list) in a step: the last takes its place.
+    fn take_from(&mut self, unit: u32, wait: bool) {
+        let at = self.units[unit as usize].at as usize;
+        let count = self.units[unit as usize].len();
+        let list = if wait { &mut self.wait } else { &mut self.loose };
+        if list.get(at) != Some(&unit) {
+            return;
+        }
+        list.swap_remove(at);
+        if let Some(&moved) = list.get(at) {
+            self.units[moved as usize].at = at as u32;
+        }
+        self.units[unit as usize].at = NONE;
+        if wait {
+            self.waiting -= count;
+        }
+    }
+
+    /// Puts `unit` at the end of the wait (or the loose list).
+    fn push_to(&mut self, unit: u32, wait: bool) {
+        let list = if wait { &mut self.wait } else { &mut self.loose };
+        self.units[unit as usize].at = list.len() as u32;
+        list.push(unit);
+        if wait {
+            self.waiting += self.units[unit as usize].len();
+        }
     }
 }
 
@@ -323,6 +392,13 @@ fn filing_of(state: &State, names: &Names, part: InstanceId, list: Option<u8>) -
     Filing::of(&transform, size, list, off)
 }
 
+/// The place a unit's parts give it now, filed in `list` (else its assembly's): its filing, or the loose list.
+fn unit_place(state: &State, names: &Names, world: u32, unit: u32, list: Option<u8>) -> Place {
+    let index = state.spatial.index(world);
+    let first = index.parts[index.units[unit as usize].first as usize];
+    placed(filing_of(state, names, first, list))
+}
+
 /// The list a part is filed in: its assembly's (measured: an unanchored part welded to an anchored one is in the anchored list,
 /// made so or welded later), read from its kept component (world/joints.rs grid_anchored), else its own Anchored.
 fn list_of(state: &State, names: &Names, part: InstanceId) -> u8 {
@@ -330,9 +406,9 @@ fn list_of(state: &State, names: &Names, part: InstanceId) -> u8 {
     if own || super::joints::grid_anchored(state, part) == Some(true) { grid::ANCHORED } else { grid::UNANCHORED }
 }
 
-/// The list `entry` is filed in now, if it is filed
+/// The list `entry`'s unit is filed in now, if it is filed
 fn held_list(spatial: &Spatial, world: u32, entry: u32) -> Option<u8> {
-    match spatial.index(world).places[entry as usize] {
+    match spatial.index(world).place_of(entry) {
         Place::Filed(filing) => Some(filing.list),
         _ => None,
     }
@@ -386,7 +462,7 @@ impl Spatial {
         world
     }
 
-    /// Drops the index of the WorldRoot `root` (a WorldModel freed or out of the DataModel), its parts' entries with it.
+    /// Drops the index of the WorldRoot `root` (a WorldModel freed or out of the DataModel), its parts' entries and its wait with it.
     fn drop_world(&mut self, dom: &mut Dom, root: InstanceId) {
         let Some(world) = self.by_root.remove(&root) else { return };
         let index = self.worlds[world as usize].take().expect("a live index");
@@ -402,8 +478,8 @@ impl Spatial {
         self.free_worlds.push(world);
     }
 
-    /// A new entry in `world` for `part` (taken out of any other index first), with its place
-    fn add(&mut self, world: u32, part: InstanceId, entry: Entry, place: Place, frame: u64) -> u32 {
+    /// A new entry in `world` for `part` (taken out of any other index first), in no unit yet
+    fn add(&mut self, world: u32, part: InstanceId, entry: Entry, frame: u64) -> u32 {
         if let Some((other, old)) = self.holder(part) {
             self.remove(other, old, frame);
         } else if let Some(&(other, old)) = self.slots.get(part.index as usize).filter(|&&(other, _)| other != 0) {
@@ -420,13 +496,13 @@ impl Spatial {
             Some(at) => {
                 index.entries[at as usize] = entry;
                 index.parts[at as usize] = part;
-                index.places[at as usize] = Place::Waits;
+                index.unit_of[at as usize] = NONE;
                 at
             }
             None => {
                 index.entries.push(entry);
                 index.parts.push(part);
-                index.places.push(Place::Waits);
+                index.unit_of.push(NONE);
                 (index.entries.len() - 1) as u32
             }
         };
@@ -440,14 +516,46 @@ impl Spatial {
             self.slots.resize(slot + 1, (0, 0));
         }
         self.slots[slot] = (world + 1, at + 1);
-        self.set_place(world, at, place, frame);
         at
     }
 
-    /// Takes `entry` out of `world`'s index: out of its cells or the loose list, its entry freed.
-    fn remove(&mut self, world: u32, entry: u32, frame: u64) {
-        self.set_place(world, entry, Place::Waits, frame);
+    /// A new entry in `world` for `part` in a unit of its own at `place`
+    fn add_alone(&mut self, world: u32, part: InstanceId, entry: Entry, place: Place, frame: u64) -> u32 {
+        let at = self.add(world, part, entry, frame);
         let index = self.index_mut(world);
+        let unit = index.new_unit(&[at]);
+        index.set_place(unit, place, true, frame);
+        at
+    }
+
+    /// Takes `entry` out of `world`'s index: out of its unit (a unit left with no part out of its cells, the wait or the loose
+    /// list, and freed), its entry freed.
+    fn remove(&mut self, world: u32, entry: u32, frame: u64) {
+        let index = self.index_mut(world);
+        let unit = index.unit_of[entry as usize];
+        if unit != NONE {
+            let held = &mut index.units[unit as usize];
+            if held.rest.is_empty() {
+                let place = held.place;
+                match place {
+                    Place::Filed(filing) => index.grid.unfile(unit, &filing, frame),
+                    Place::Loose => index.take_from(unit, false),
+                    Place::Waits => index.take_from(unit, true),
+                }
+                index.free_unit(unit);
+            } else {
+                // (a part leaving a unit of several: the others stay in it)
+                if held.first == entry {
+                    held.first = held.rest.remove(0);
+                } else if let Some(at) = held.rest.iter().position(|&e| e == entry) {
+                    held.rest.remove(at);
+                }
+                if held.place == Place::Waits {
+                    index.waiting -= 1;
+                }
+            }
+            index.unit_of[entry as usize] = NONE;
+        }
         let part = index.parts[entry as usize];
         index.free.push(entry);
         let at = index.live_at[entry as usize] as usize;
@@ -458,32 +566,6 @@ impl Spatial {
         if self.slots.get(part.index as usize) == Some(&(world + 1, entry + 1)) {
             self.slots[part.index as usize] = (0, 0);
         }
-    }
-
-    /// Moves `entry` from its place to `place`: out of its cells (the lists' last taking its place) or the loose list, into the
-    /// new cells at their ends; a filing of the same level, list and flags moves only the cells that changed.
-    fn set_place(&mut self, world: u32, entry: u32, place: Place, frame: u64) {
-        let index = self.index_mut(world);
-        let old = index.places[entry as usize];
-        if old == place {
-            return;
-        }
-        match (old, place) {
-            (Place::Filed(a), Place::Filed(b)) if a.level == b.level && a.list == b.list && a.off == b.off => index.grid.move_cells(entry, &a, &b, frame),
-            _ => {
-                match old {
-                    Place::Filed(filing) => index.grid.unfile(entry, &filing, frame),
-                    Place::Loose => take_loose(&mut index.loose, &mut index.loose_at, entry),
-                    Place::Waits => {}
-                }
-                match place {
-                    Place::Filed(filing) => index.grid.file(entry, &filing, frame),
-                    Place::Loose => push_loose(&mut index.loose, &mut index.loose_at, entry),
-                    Place::Waits => {}
-                }
-            }
-        }
-        index.places[entry as usize] = place;
     }
 }
 
@@ -504,21 +586,22 @@ pub fn stored(state: &mut State, reflection: &crate::Reflection, id: InstanceId,
     refile(state, id, anchored);
 }
 
-/// `part` filed again as its properties stand now, if an index holds it and it does not wait: in its list as filed, or with
+/// `part`'s unit filed again as its properties stand now, if an index holds it and it does not wait: in its list as filed, or with
 /// `relist` (an Anchored write) its assembly's now; one whose Anchored write anchored or freed its whole kept component files the
 /// component's other parts again too, in their new list (measured: an unanchored pair welded, one of them anchored, both go to
 /// the end of the anchored list, that one first).
 fn refile(state: &mut State, part: InstanceId, relist: bool) {
     let Some(names) = state.spatial.names else { return };
     let Some((world, entry)) = state.spatial.holder(part) else { return };
-    if state.spatial.index(world).places[entry as usize] == Place::Waits {
+    let unit = state.spatial.index(world).unit_of[entry as usize];
+    if state.spatial.index(world).units[unit as usize].place == Place::Waits {
         return;
     }
     let list = if relist { None } else { held_list(&state.spatial, world, entry) };
-    let place = placed(filing_of(state, &names, part, list));
+    let place = unit_place(state, &names, world, unit, list);
     let before = held_list(&state.spatial, world, entry);
     let frame = state.sched.frame;
-    state.spatial.set_place(world, entry, place, frame);
+    state.spatial.index_mut(world).set_place(unit, place, false, frame);
     let after = held_list(&state.spatial, world, entry);
     if relist && before != after && super::joints::grid_anchored(state, part).is_some() {
         for other in super::joints::grid_component(state, part).unwrap_or_default() {
@@ -527,8 +610,9 @@ fn refile(state: &mut State, part: InstanceId, relist: bool) {
             }
             let Some((world, entry)) = state.spatial.holder(other) else { continue };
             if held_list(&state.spatial, world, entry).is_some_and(|list| list != list_of(state, &names, other)) {
-                let place = placed(filing_of(state, &names, other, None));
-                state.spatial.set_place(world, entry, place, frame);
+                let unit = state.spatial.index(world).unit_of[entry as usize];
+                let place = unit_place(state, &names, world, unit, None);
+                state.spatial.index_mut(world).set_place(unit, place, false, frame);
             }
         }
     }
@@ -564,11 +648,31 @@ pub(crate) fn entered_at(state: &State, part: InstanceId) -> u64 {
     state.spatial.entered.get(&part).copied().unwrap_or(0)
 }
 
-/// `part` came into a wait in the Parent write going on (camera_moves.rs).
-pub(crate) fn came_in(state: &mut State, part: InstanceId) {
+/// `part` came into the world of the WorldRoot `root` (camera_moves.rs's hierarchy hook): it waits, in a unit of its own at the
+/// end of its world's wait (the world's index made first when it has none), until a query of that world or the physics step takes
+/// the wait in. A part already in that world's index stays where it is.
+pub(crate) fn wait_in(state: &mut State, root: InstanceId, part: InstanceId) {
+    if state.spatial.names.is_none() {
+        return;
+    }
+    let world = match state.spatial.world(root) {
+        Some(world) => world,
+        None => state.spatial.make(root),
+    };
+    if state.spatial.holder(part).is_some_and(|(holder, _)| holder == world) {
+        return;
+    }
+    let frame = state.sched.frame;
+    state.spatial.add_alone(world, part, Entry::unread(part), Place::Waits, frame);
     if state.joints.created > 0 {
         state.spatial.fresh.insert(part);
     }
+}
+
+/// `part` left the world of the WorldRoot `root` (camera_moves.rs's hierarchy hook): out of its wait or its cells at once, if its
+/// index holds it.
+pub(crate) fn wait_out(state: &mut State, root: InstanceId, part: InstanceId) {
+    left(state, root, part);
 }
 
 /// The links that started (world/joints.rs relink, taken at the end of the joints' work on a write: instance.rs) file their two
@@ -595,10 +699,8 @@ pub(crate) fn links_started(state: &mut State, reflection: &crate::Reflection) {
         // (both out first, then both in, root first: measured, a pair welded after the take-in in the cell list u2 u4 u5 comes
         // to u5 u4 u2)
         let taken = pair.map(|part| part.and_then(|part| take_for_filing(state, part)));
-        for (part, taken) in pair.into_iter().zip(taken) {
-            if let (Some(part), Some(taken)) = (part, taken) {
-                file_back(state, &names, part, taken);
-            }
+        for taken in taken.into_iter().flatten() {
+            file_back(state, &names, taken);
         }
     }
     let mut links = links;
@@ -607,43 +709,38 @@ pub(crate) fn links_started(state: &mut State, reflection: &crate::Reflection) {
     fresh_write(state);
 }
 
-/// Where [`take_for_filing`] took a part from: its world's wait (by the WorldModel's id, None for the Workspace's) or its index
-enum Taken {
-    Wait(Option<InstanceId>),
-    Cells(u32, u32),
+/// Where [`take_for_filing`] took a part's unit from: its world, the unit, and whether it waited
+struct Taken {
+    world: u32,
+    unit: u32,
+    waited: bool,
 }
 
-/// `part` out of its wait if it waits, else out of its cells' lists, for [`file_back`]; None when it is in neither.
+/// `part`'s unit out of its wait if it waits, else out of its cells' lists, for [`file_back`]; None when it is in neither.
 fn take_for_filing(state: &mut State, part: InstanceId) -> Option<Taken> {
-    if state.cameras.unindexed.contains(&part) {
-        state.cameras.unindexed.remove(&part);
-        return Some(Taken::Wait(None));
-    }
-    let home = state.dom.home(part)?;
-    if let Some(waiting) = state.cameras.unindexed_models.get_mut(&home).filter(|waiting| waiting.contains(&part)) {
-        waiting.remove(&part);
-        return Some(Taken::Wait(Some(home)));
-    }
     let (world, entry) = state.spatial.holder(part)?;
-    if !matches!(state.spatial.index(world).places[entry as usize], Place::Filed(_)) {
-        return None;
-    }
     let frame = state.sched.frame;
-    state.spatial.set_place(world, entry, Place::Waits, frame);
-    Some(Taken::Cells(world, entry))
+    let index = state.spatial.index_mut(world);
+    let unit = index.unit_of[entry as usize];
+    let waited = match index.units[unit as usize].place {
+        Place::Waits => {
+            index.take_from(unit, true);
+            true
+        }
+        Place::Filed(filing) => {
+            index.grid.unfile(unit, &filing, frame);
+            false
+        }
+        Place::Loose => return None,
+    };
+    Some(Taken { world, unit, waited })
 }
 
-/// `part` back where [`take_for_filing`] took it from, at the end: of its wait, or of its cells' lists in its assembly's list.
-fn file_back(state: &mut State, names: &Names, part: InstanceId, taken: Taken) {
-    match taken {
-        Taken::Wait(None) => state.cameras.unindexed.insert(part),
-        Taken::Wait(Some(home)) => state.cameras.unindexed_models.entry(home).or_default().insert(part),
-        Taken::Cells(world, entry) => {
-            let place = placed(filing_of(state, names, part, None));
-            let frame = state.sched.frame;
-            state.spatial.set_place(world, entry, place, frame);
-        }
-    }
+/// A unit back where [`take_for_filing`] took it from, at the end: of its wait, or of its cells' lists in its assembly's list.
+fn file_back(state: &mut State, names: &Names, taken: Taken) {
+    let place = if taken.waited { Place::Waits } else { unit_place(state, names, taken.world, taken.unit, None) };
+    let frame = state.sched.frame;
+    state.spatial.index_mut(taken.world).set_place(taken.unit, place, true, frame);
 }
 
 /// `part` left the world of the WorldRoot `root` (camera_moves.rs's hierarchy hook): out of its index at once, if it holds it.
@@ -659,12 +756,13 @@ pub(crate) fn left(state: &mut State, root: InstanceId, part: InstanceId) {
     }
 }
 
-/// Whether the world of `root` has an index holding any part (camera_moves.rs: a subtree leaving it is walked to take them out)
+/// Whether the world of `root` has an index holding any part, waiting ones too (camera_moves.rs: a subtree leaving it is walked
+/// to take them out)
 pub(crate) fn holds_any(state: &State, root: InstanceId) -> bool {
     state.spatial.world(root).is_some_and(|world| !state.spatial.index(world).is_empty())
 }
 
-/// The WorldModel `root` left the DataModel or was freed: its index goes, its parts' entries with it.
+/// The WorldModel `root` left the DataModel or was freed: its index goes, its parts' entries and its wait with it.
 pub(crate) fn world_gone(state: &mut State, root: InstanceId) {
     let State { spatial, dom, .. } = state;
     spatial.drop_world(dom, root);
@@ -679,40 +777,35 @@ pub(crate) fn freed(state: &mut State, id: InstanceId) {
     }
 }
 
-/// Whether `part` waits for the world of `root`
-fn waits(state: &State, workspace: InstanceId, root: InstanceId, part: InstanceId) -> bool {
-    if root == workspace { state.cameras.unindexed.contains(&part) } else { state.cameras.unindexed_models.get(&root).is_some_and(|waiting| waiting.contains(&part)) }
-}
-
-/// Puts `part` in `world`'s index, or reads it again: its entry, and its filing if it does not wait (a new part that waits is
-/// filed when it is taken in).
+/// Puts `part` in `world`'s index, or reads it again: its entry, and its unit filed again if it is filed (a new part is filed in a
+/// unit of its own; one that waits is filed when its unit is taken in).
 fn put(state: &mut State, engine: &Engine, names: Names, world: u32, part: InstanceId) {
     let workspace = engine.world().workspace;
     let entry = entry_of(state, engine, &names, part);
     let root = state.spatial.index(world).root;
-    let waiting = waits(state, workspace, root, part);
     let frame = state.sched.frame;
     match state.spatial.holder(part).filter(|&(holder, _)| holder == world) {
         Some((_, at)) => {
             state.spatial.index_mut(world).entries[at as usize] = entry;
-            let old = state.spatial.index(world).places[at as usize];
-            // (a part that waits stays where it is until taken in; one that came back into the wait leaves its cells; one filed
-            // keeps its list, which only an Anchored write or a link changes)
-            let list = held_list(&state.spatial, world, at);
-            let place = if waiting { Place::Waits } else { placed(filing_of(state, &names, part, list)) };
-            let State { spatial, .. } = state;
-            if !(waiting && old == Place::Waits) {
-                spatial.set_place(world, at, place, frame);
+            // (a unit that waits stays where it is until taken in; one filed keeps its list, which only an Anchored write or a link
+            // changes)
+            let index = state.spatial.index(world);
+            let unit = index.unit_of[at as usize];
+            if index.units[unit as usize].place != Place::Waits {
+                let list = held_list(&state.spatial, world, at);
+                let place = unit_place(state, &names, world, unit, list);
+                state.spatial.index_mut(world).set_place(unit, place, false, frame);
             }
         }
         None => {
-            let place = if waiting { Place::Waits } else { placed(filing_of(state, &names, part, None)) };
-            let State { spatial, dom, .. } = state;
-            spatial.add(world, part, entry, place, frame);
-            if root == workspace {
-                dom.at_mut(part).flags |= flags::INDEXED;
-            }
+            let place = placed(filing_of(state, &names, part, None));
+            state.spatial.add_alone(world, part, entry, place, frame);
         }
+    }
+    // (the Workspace's log keeps the writes of the parts its index holds from their first read: a part that came into the wait is
+    // read here before it is taken in)
+    if root == workspace {
+        state.dom.at_mut(part).flags |= flags::INDEXED;
     }
 }
 
@@ -786,7 +879,7 @@ fn open_workspace(state: &mut State, engine: &Engine, names: Names, workspace: I
 
 fn open_workspace_log(state: &mut State, engine: &Engine, names: Names, workspace: InstanceId) -> u32 {
     let made = state.spatial.world(workspace);
-    let current = made.is_some() && state.dom.watch.as_ref().is_some_and(|watch| !watch.overflowed && watch.root == workspace);
+    let current = made.is_some_and(|world| state.spatial.index(world).read) && state.dom.watch.as_ref().is_some_and(|watch| !watch.overflowed && watch.root == workspace);
     let world = match made {
         Some(world) => world,
         None => state.spatial.make(workspace),
@@ -871,7 +964,7 @@ fn open_workspace_log(state: &mut State, engine: &Engine, names: Names, workspac
 /// [`open`] for a WorldModel's world: its index, how many instances it looked at and how many parts a walk of its world filed.
 fn open_model(state: &mut State, engine: &Engine, names: Names, model: InstanceId) -> (u32, usize, usize) {
     let made = state.spatial.world(model);
-    let current = made.is_some() && state.dom.world_log(model).is_some_and(|log| !log.overflowed);
+    let current = made.is_some_and(|world| state.spatial.index(world).read) && state.dom.world_log(model).is_some_and(|log| !log.overflowed);
     let world = match made {
         Some(world) => world,
         None => state.spatial.make(model),
@@ -965,7 +1058,7 @@ fn post_order(dom: &Dom, id: InstanceId, once: bool, seen: &mut FxHashSet<Instan
 
 /// The index made (or made again, after its log overflowed) from a walk of its world: every part read and, unless it waits or is
 /// filed, filed in the walk's order (each part after its descendants); entries whose parts are no longer in it taken out. A part
-/// already filed keeps its place. How many instances it visited and how many parts it filed.
+/// already filed or waiting keeps its place. How many instances it visited and how many parts it filed.
 fn walk_world(state: &mut State, engine: &Engine, names: Names, world: u32, root: InstanceId) -> (usize, usize) {
     #[cfg(test)]
     if root == engine.world().workspace {
@@ -993,9 +1086,9 @@ fn walk_world(state: &mut State, engine: &Engine, names: Names, world: u32, root
         }
         if is_part(engine, names, class) && state.dom.home(node) == Some(root) {
             found.insert(node);
-            let before = state.spatial.holder(node).map(|(holder, entry)| (holder, state.spatial.index(holder).places[entry as usize]));
+            let before = state.spatial.holder(node).map(|(holder, entry)| (holder, state.spatial.index(holder).place_of(entry)));
             put(state, engine, names, world, node);
-            let now = state.spatial.holder(node).map(|(_, entry)| state.spatial.index(world).places[entry as usize]);
+            let now = state.spatial.holder(node).map(|(_, entry)| state.spatial.index(world).place_of(entry));
             filed += usize::from(now.is_some_and(|place| place != Place::Waits) && !before.is_some_and(|(holder, place)| holder == world && place != Place::Waits));
         }
     }
@@ -1007,51 +1100,47 @@ fn walk_world(state: &mut State, engine: &Engine, names: Names, world: u32, root
         take_out(state, world, part);
     }
     state.spatial.index_mut(world).walked = visited;
+    state.spatial.index_mut(world).read = true;
     state.spatial.walk = walk;
     state.spatial.order = order;
     state.spatial.seen = seen;
     (visited, filed)
 }
 
-/// A query of the world of `root` takes in the parts that wait for it, in the order they came: each filed at the end of its
-/// cells' lists. Its index (made first when it has none: none for a WorldModel outside the DataModel) and how many it took in.
+/// A query of the world of `root` takes in the units that wait for it, in the order they came: each filed at the end of its
+/// cells' lists. Its index (made first when it has none: none for a WorldModel outside the DataModel), how many parts it took in
+/// and what opening the index cost.
 pub(crate) fn take_in(engine: &Engine, root: InstanceId) -> (Option<u32>, usize, f64) {
     let (world, opened) = open(engine, root);
     let mut state = engine.state.borrow_mut();
-    let taken = take_in_world(&mut state, engine, world, root);
+    let taken = match world {
+        Some(world) => take_in_world(&mut state, &engine.reflection, world),
+        None => 0,
+    };
     (world, taken, opened)
 }
 
-fn take_in_world(state: &mut State, engine: &Engine, world: Option<u32>, root: InstanceId) -> usize {
-    links_started(state, &engine.reflection);
-    let workspace = engine.world().workspace;
-    let waiting = if root == workspace { std::mem::take(&mut state.cameras.unindexed) } else { state.cameras.unindexed_models.remove(&root).unwrap_or_default() };
-    let count = waiting.len();
-    if let (Some(world), Some(names)) = (world, state.spatial.names) {
-        for part in waiting.iter() {
-            if state.dom.get(part).is_none() {
-                continue;
-            }
-            match state.spatial.holder(part) {
-                Some((holder, entry)) if holder == world => {
-                    let place = placed(filing_of(state, &names, part, None));
-                    let frame = state.sched.frame;
-                    let State { spatial, .. } = &mut *state;
-                    if spatial.index(world).places[entry as usize] == Place::Waits {
-                        spatial.set_place(world, entry, place, frame);
-                    }
-                }
-                // (not in its index yet: read in now)
-                _ if state.dom.home(part) == Some(root) => put(state, engine, names, world, part),
-                _ => {}
-            }
-        }
+fn take_in_world(state: &mut State, reflection: &crate::Reflection, world: u32) -> usize {
+    links_started(state, reflection);
+    let Some(names) = state.spatial.names else { return 0 };
+    let frame = state.sched.frame;
+    let mut wait = std::mem::take(&mut state.spatial.index_mut(world).wait);
+    let count = state.spatial.index(world).waiting;
+    for &unit in &wait {
+        let place = unit_place(state, &names, world, unit, None);
+        let index = state.spatial.index_mut(world);
+        index.units[unit as usize].at = NONE;
+        index.set_place(unit, place, true, frame);
     }
-    let mut waiting = waiting;
-    waiting.clear();
-    if root == workspace {
-        state.cameras.unindexed = waiting;
+    // (a table that a burst grew is made again for what it held, as dom.rs clear_set does)
+    if wait.capacity() > 4 * wait.len().max(1024) {
+        wait = Vec::new();
+    } else {
+        wait.clear();
     }
+    let index = state.spatial.index_mut(world);
+    index.wait = wait;
+    index.waiting = 0;
     count
 }
 
@@ -1060,18 +1149,20 @@ fn take_in_world(state: &mut State, engine: &Engine, world: Option<u32>, root: I
 pub fn index_parts(engine: &Engine) {
     let workspace = engine.world().workspace;
     let (world, _) = open(engine, workspace);
-    let mut models: Vec<InstanceId> = engine.state.borrow().cameras.unindexed_models.keys().copied().collect();
+    if let Some(world) = world {
+        take_in_world(&mut engine.state.borrow_mut(), &engine.reflection, world);
+    }
+    let mut models: Vec<InstanceId> = {
+        let state = engine.state.borrow();
+        let spatial = &state.spatial;
+        spatial.by_root.iter().filter(|&(&root, &world)| root != workspace && !spatial.index(world).wait.is_empty()).map(|(&root, _)| root).collect()
+    };
     models.sort_unstable();
-    {
-        let mut state = engine.state.borrow_mut();
-        take_in_world(&mut state, engine, world, workspace);
-    }
     for model in models {
-        let (world, _) = open(engine, model);
-        let mut state = engine.state.borrow_mut();
-        take_in_world(&mut state, engine, world, model);
+        if let (Some(world), _) = open(engine, model) {
+            take_in_world(&mut engine.state.borrow_mut(), &engine.reflection, world);
+        }
     }
-    engine.state.borrow_mut().cameras.unindexed_models.clear();
 }
 
 /// A walk's parts, in its order, into `out` (each with its entry), and what it did; `first` the list a cell gives first
@@ -1081,23 +1172,28 @@ pub(crate) fn walk_box(state: &mut State, world: u32, lo: Vec3, hi: Vec3, first:
     let State { spatial, sched, .. } = state;
     let index = spatial.index_mut(world);
     let before = out.len();
-    let entries = index.entries.len();
-    let WorldIndex { grid, entries: held, parts, loose, .. } = index;
+    let slots = index.units.len();
+    let WorldIndex { grid, entries: held, parts, units, loose, .. } = index;
+    let give = |out: &mut Vec<(InstanceId, Entry)>, unit: u32| out.extend(units[unit as usize].parts().map(|entry| (parts[entry as usize], held[entry as usize])));
     #[cfg_attr(not(test), allow(unused_mut))]
     let mut walked = None;
     #[cfg(test)]
     if scan() && grid::count_walk(lo, hi, grid.top(sched.frame)) <= 2_000_000 {
-        let (order, reference) = grid.walk_box_reference(lo, hi, sched.frame, entries, first);
-        out.extend(order.into_iter().map(|entry| (parts[entry as usize], held[entry as usize])));
+        let (order, reference) = grid.walk_box_reference(lo, hi, sched.frame, slots, first);
+        for unit in order {
+            give(out, unit);
+        }
         walked = Some(reference);
     }
     let walked = walked.unwrap_or_else(|| {
-        grid.walk_box(lo, hi, sched.frame, entries, first, |entry| {
-            out.push((parts[entry as usize], held[entry as usize]));
+        grid.walk_box(lo, hi, sched.frame, slots, first, |unit| {
+            give(out, unit);
             true
         })
     });
-    out.extend(loose.iter().map(|&entry| (parts[entry as usize], held[entry as usize])));
+    for &unit in loose.iter() {
+        give(out, unit);
+    }
     taken(out.len() - before);
     walked
 }
@@ -1107,19 +1203,27 @@ pub(crate) fn walk_box(state: &mut State, world: u32, lo: Vec3, hi: Vec3, first:
 pub(crate) fn visit_box(state: &mut State, world: u32, lo: Vec3, hi: Vec3, first: u8, mut visit: impl FnMut(InstanceId, &Entry) -> bool) -> Walked {
     let State { spatial, sched, .. } = state;
     let index = spatial.index_mut(world);
-    let entries = index.entries.len();
-    let WorldIndex { grid, entries: held, parts, loose, .. } = index;
+    let slots = index.units.len();
+    let WorldIndex { grid, entries: held, parts, units, loose, .. } = index;
     let mut going = true;
-    let walked = grid.walk_box(lo, hi, sched.frame, entries, first, |entry| {
-        going = visit(parts[entry as usize], &held[entry as usize]);
+    let mut given = 0usize;
+    let walked = grid.walk_box(lo, hi, sched.frame, slots, first, |unit| {
+        for entry in units[unit as usize].parts() {
+            given += 1;
+            going = visit(parts[entry as usize], &held[entry as usize]);
+            if !going {
+                break;
+            }
+        }
         going
     });
-    let mut given = walked.given as usize;
     if going {
-        for &entry in loose.iter() {
-            given += 1;
-            if !visit(parts[entry as usize], &held[entry as usize]) {
-                break;
+        'loose: for &unit in loose.iter() {
+            for entry in units[unit as usize].parts() {
+                given += 1;
+                if !visit(parts[entry as usize], &held[entry as usize]) {
+                    break 'loose;
+                }
             }
         }
     }
@@ -1134,24 +1238,28 @@ pub(crate) fn walk_ray(state: &mut State, world: u32, origin: Vec3, direction: V
     let State { spatial, sched, .. } = state;
     let index = spatial.index_mut(world);
     let before = out.len();
-    let entries = index.entries.len();
-    let WorldIndex { grid, entries: held, parts, loose, .. } = index;
+    let slots = index.units.len();
+    let WorldIndex { grid, entries: held, parts, units, loose, .. } = index;
     #[cfg_attr(not(test), allow(unused_mut))]
     let mut found = Vec::new();
     #[cfg_attr(not(test), allow(unused_mut))]
     let mut done = false;
     #[cfg(test)]
     if scan() && grid::count_ray(origin, direction, grid.top(sched.frame)) <= 2_000_000 {
-        let (cells, order) = grid.walk_ray_reference(origin, direction, sched.frame, entries);
+        let (cells, order) = grid.walk_ray_reference(origin, direction, sched.frame, slots);
         *passed = cells;
         found = order;
         done = true;
     }
     if !done {
-        grid.walk_ray(origin, direction, sched.frame, entries, passed, &mut found);
+        grid.walk_ray(origin, direction, sched.frame, slots, passed, &mut found);
     }
-    out.extend(found.into_iter().map(|(entry, cell)| (parts[entry as usize], held[entry as usize], cell)));
-    out.extend(loose.iter().map(|&entry| (parts[entry as usize], held[entry as usize], u32::MAX)));
+    for (unit, cell) in found {
+        out.extend(units[unit as usize].parts().map(|entry| (parts[entry as usize], held[entry as usize], cell)));
+    }
+    for &unit in loose.iter() {
+        out.extend(units[unit as usize].parts().map(|entry| (parts[entry as usize], held[entry as usize], u32::MAX)));
+    }
     taken(out.len() - before);
 }
 
@@ -1159,7 +1267,7 @@ pub(crate) fn walk_ray(state: &mut State, world: u32, origin: Vec3, direction: V
 pub(crate) fn all_parts(state: &State, world: u32, out: &mut Vec<(InstanceId, Entry)>) {
     let index = state.spatial.index(world);
     let before = out.len();
-    out.extend(index.live.iter().filter(|&&entry| index.places[entry as usize] != Place::Waits).map(|&entry| index.give(entry)));
+    out.extend(index.live.iter().filter(|&&entry| index.place_of(entry) != Place::Waits).map(|&entry| index.give(entry)));
     taken(out.len() - before);
 }
 
@@ -1201,16 +1309,26 @@ pub(crate) fn held(state: &State, world: u32) -> usize {
     state.spatial.index(world).len()
 }
 
-/// Whether the world's index holds what a walk of its world finds: the same parts, each with the entry the dom gives it now and
-/// filed as its properties file it now, or waiting exactly while it waits; and its grid sound (tests)
+/// How many parts wait for the world of `root` (tests)
+#[cfg(test)]
+pub(crate) fn waiting(state: &State, root: InstanceId) -> usize {
+    state.spatial.world(root).map_or(0, |world| state.spatial.index(world).waiting)
+}
+
+/// How many units the wait of the world of `root` has room for (tests: a burst's list is not kept)
+#[cfg(test)]
+pub(crate) fn wait_capacity(state: &State, root: InstanceId) -> usize {
+    state.spatial.world(root).map_or(0, |world| state.spatial.index(world).wait.capacity())
+}
+
+/// Whether the world's index holds what a walk of its world finds: the same parts, each with the entry the dom gives it now, in a
+/// unit filed as its parts file it now or waiting; its units, wait, loose list and grid sound (tests)
 #[cfg(test)]
 pub(crate) fn check_world(engine: &Engine, root: InstanceId) -> Result<(), String> {
     let world = open(engine, root).0.ok_or("no index")?;
     let state = engine.state.borrow();
     let names = state.spatial.names.expect("names");
     let index = state.spatial.index(world);
-    let workspace = engine.world().workspace;
-    let reflection = &engine.reflection;
     let mut walked: Vec<String> = state
         .dom
         .descendants(root)
@@ -1218,10 +1336,7 @@ pub(crate) fn check_world(engine: &Engine, root: InstanceId) -> Result<(), Strin
         .filter(|&id| is_part(engine, names, state.dom.at(id).class) && state.dom.home(id) == Some(root))
         .map(|id| {
             let entry = entry_of(&state, engine, &names, id);
-            // (the list as filed: an assembly's list is read from what the joints keep, which a check does not work out)
-            let held = state.spatial.holder(id).and_then(|(world, entry)| held_list(&state.spatial, world, entry));
-            let place = if waits(&state, workspace, root, id) { Place::Waits } else { placed(filing_of(&state, &names, id, held)) };
-            format!("{id:?} {:?} {} {} {place:?}", entry.solid, entry.can_query, entry.can_collide)
+            format!("{id:?} {:?} {} {}", entry.solid, entry.can_query, entry.can_collide)
         })
         .collect();
     let mut kept: Vec<String> = index
@@ -1229,52 +1344,68 @@ pub(crate) fn check_world(engine: &Engine, root: InstanceId) -> Result<(), Strin
         .iter()
         .map(|&entry| {
             let (id, held) = index.give(entry);
-            format!("{id:?} {:?} {} {} {:?}", held.solid, held.can_query, held.can_collide, index.places[entry as usize])
+            // (a waiting part's entry is read at the next query: the check opened the index, which read it)
+            format!("{id:?} {:?} {} {}", held.solid, held.can_query, held.can_collide)
         })
         .collect();
     crate::sort::ord(&mut walked);
     crate::sort::ord(&mut kept);
-    let _ = reflection;
     if walked != kept {
         let missing: Vec<&String> = walked.iter().filter(|line| !kept.contains(line)).take(3).collect();
         let extra: Vec<&String> = kept.iter().filter(|line| !walked.contains(line)).take(3).collect();
         return Err(format!("{} walked, {} held; missing {missing:?}; extra {extra:?}", walked.len(), kept.len()));
     }
-    let filed: Vec<(u32, Filing)> = index.live.iter().filter_map(|&entry| match index.places[entry as usize] {
-        Place::Filed(filing) => Some((entry, filing)),
-        _ => None,
-    }).collect();
-    index.grid.check(&filed)?;
-    let loose_ok = index.loose.iter().enumerate().all(|(place, &entry)| index.loose_at[entry as usize] as usize == place && index.places[entry as usize] == Place::Loose);
-    if !loose_ok || index.live.iter().filter(|&&entry| index.places[entry as usize] == Place::Loose).count() != index.loose.len() {
-        return Err("the loose list".to_string());
-    }
+    // each live entry in exactly one live unit, each live unit's parts live entries
+    let mut units_seen: FxHashMap<u32, usize> = FxHashMap::default();
     for &entry in &index.live {
+        let unit = index.unit_of[entry as usize];
+        if unit == NONE || index.units.get(unit as usize).is_none_or(|held| held.first == NONE) {
+            return Err(format!("entry {entry} in no unit"));
+        }
+        if !index.units[unit as usize].parts().any(|e| e == entry) {
+            return Err(format!("entry {entry} not in its unit {unit}"));
+        }
+        *units_seen.entry(unit).or_default() += 1;
         if state.spatial.holder(index.parts[entry as usize]) != Some((world, entry)) {
             return Err(format!("entry {entry}'s slot"));
         }
     }
-    Ok(())
-}
-
-/// Puts `entry` at the end of a list of entries whose box is not finite, keeping its place there in `at` (by entry).
-fn push_loose(loose: &mut Vec<u32>, at: &mut Vec<u32>, entry: u32) {
-    if at.len() <= entry as usize {
-        at.resize(entry as usize + 1, 0);
-    }
-    at[entry as usize] = loose.len() as u32;
-    loose.push(entry);
-}
-
-/// Takes `entry` out of a list of entries whose box is not finite in a step, by the place `at` keeps for it: the last takes its
-/// place.
-fn take_loose(loose: &mut Vec<u32>, at: &mut [u32], entry: u32) {
-    if let Some(place) = at.get(entry as usize).map(|&place| place as usize).filter(|&place| loose.get(place) == Some(&entry)) {
-        loose.swap_remove(place);
-        if let Some(&moved) = loose.get(place) {
-            at[moved as usize] = place as u32;
+    let mut filed: Vec<(u32, Filing)> = Vec::new();
+    let mut waiting = 0usize;
+    for (&unit, &count) in &units_seen {
+        let held = &index.units[unit as usize];
+        if held.len() != count {
+            return Err(format!("unit {unit} holds {} parts, {count} live", held.len()));
+        }
+        match held.place {
+            Place::Filed(filing) => {
+                filed.push((unit, filing));
+                let now = unit_place(&state, &names, world, unit, Some(filing.list));
+                if now != held.place {
+                    return Err(format!("unit {unit} filed as {:?}, its parts file it as {now:?}", held.place));
+                }
+            }
+            Place::Loose => {
+                if index.loose.get(held.at as usize) != Some(&unit) {
+                    return Err(format!("unit {unit} not at its place in the loose list"));
+                }
+            }
+            Place::Waits => {
+                waiting += count;
+                if index.wait.get(held.at as usize) != Some(&unit) {
+                    return Err(format!("unit {unit} not at its place in the wait"));
+                }
+            }
         }
     }
+    if waiting != index.waiting || index.wait.iter().map(|&unit| index.units[unit as usize].len()).sum::<usize>() != waiting {
+        return Err(format!("{} waiting counted, {waiting} in waiting units", index.waiting));
+    }
+    if index.loose.iter().any(|&unit| index.units[unit as usize].place != Place::Loose) || index.wait.iter().any(|&unit| index.units[unit as usize].place != Place::Waits) {
+        return Err("a list holds a unit placed elsewhere".to_string());
+    }
+    index.grid.check(&filed)?;
+    Ok(())
 }
 
 /// Puts `items` in the order the Workspace's descendants are listed in ([`Dom::descendants`] from `root`), each item's part

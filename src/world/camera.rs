@@ -79,15 +79,6 @@ pub struct Cameras {
     pub(super) finished: Vec<InstanceId>,
     /// An Interpolate step is writing CFrame and Focus (not a script's write)
     pub(super) stepping: bool,
-    /// The parts that came into the Workspace's own world (not a WorldModel's in it: camera_moves.rs) since the spatial index last
-    /// took the Workspace's in (the physics step, a spatial query of the Workspace) and are still in it, in the order they came
-    /// (world/broadphase.rs files them in that order): GetLargestCutoffDistance, the PlayerMouse's rays and the Workspace's
-    /// Region3 queries do not see them yet (camera_moves.rs, mouse.rs, region.rs). Each part once however often it came back in,
-    /// and a part that leaves the world drops out, so it holds at most the world's parts
-    pub(crate) unindexed: super::broadphase::Waiting,
-    /// The same for each WorldModel in the DataModel and its own world's parts, by WorldModel (none while none waits): a client
-    /// keeps an index for each world, and a query takes in only its own world's new parts (measured: world/region.rs)
-    pub(crate) unindexed_models: FxHashMap<InstanceId, super::broadphase::Waiting>,
     /// The stack the hierarchy hook walks a moved subtree with, kept between its runs (camera_moves.rs)
     pub(super) walk: Vec<(InstanceId, Option<InstanceId>)>,
     /// The parts that walk met, each with the WorldModel above it within the subtree

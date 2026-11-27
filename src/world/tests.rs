@@ -9178,14 +9178,14 @@ fn camera_largest_cutoff_distance_costs_what_a_client_spent() {
     run(&lua, &engine, r##"shared.Wall.CFrame = shared.Wall.CFrame + Vector3.new(0, 0, 10) assert(string.format("%.3f", shared.Cam:GetLargestCutoffDistance({})) == "10.000")"##);
 }
 
-/// The parts waiting for the spatial index (camera.rs `Cameras::unindexed`, which a PlayerMouse ray and GetLargestCutoffDistance
+/// The parts waiting for the spatial index (its world's wait, world/broadphase.rs wait_in, which a PlayerMouse ray and GetLargestCutoffDistance
 /// look each part they meet up in) are each held once and only while in the Workspace: a model of 200 parts moved out of the
 /// Workspace and back 50 times in one frame leaves 200 waiting (it held 10,200, every entry again), a model that leaves takes its
 /// parts out (it kept them), and what waits is still unseen until a spatial query takes it in.
 #[test]
 fn parts_waiting_for_the_spatial_index_are_held_once_while_in_the_workspace() {
     let (lua, engine) = start_play();
-    let waiting = || engine.state.borrow().cameras.unindexed.len();
+    let waiting = || super::broadphase::waiting(&engine.state.borrow(), engine.world().workspace);
     run(
         &lua,
         &engine,
@@ -10435,12 +10435,12 @@ fn a_query_pays_for_the_parts_it_takes_into_the_spatial_index() {
         Enter(10)
         "##,
     );
-    assert_eq!(engine.state.borrow().cameras.unindexed.len(), 10, "ten waiting");
+    assert_eq!(super::broadphase::waiting(&engine.state.borrow(), engine.world().workspace), 10, "ten waiting");
     crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
-    assert_eq!(engine.state.borrow().cameras.unindexed.len(), 0, "the physics step took them in: no query pays for them");
+    assert_eq!(super::broadphase::waiting(&engine.state.borrow(), engine.world().workspace), 0, "the physics step took them in: no query pays for them");
 }
 
-/// Parts that entered the Workspace and wait for the spatial index (camera.rs Cameras::unindexed) stay out of the broadphase's tree
+/// Parts that entered the Workspace and wait for the spatial index (world/broadphase.rs wait_in) stay out of the broadphase's tree
 /// until a query or the physics step takes them in, so the PlayerMouse's ray and GetLargestCutoffDistance, which do not see them,
 /// are not handed them: with 10,000 waiting parts across the mouse's ray and 10,000 across the cutoff's rays, 2,000 reads of each
 /// take from the index what they take beside none, cost about its host work and the same work clock, as a playing client's reads
@@ -10493,13 +10493,13 @@ fn parts_waiting_for_the_spatial_index_are_not_handed_to_the_mouse_or_the_cutoff
     };
     let (alone, alone_host) = reads("Alone");
     run(&lua, &engine, "shared.Add(10000)");
-    assert_eq!(engine.state.borrow().cameras.unindexed.len(), 20_000, "every new part waits");
+    assert_eq!(super::broadphase::waiting(&engine.state.borrow(), engine.world().workspace), 20_000, "every new part waits");
     let (waiting, waiting_host) = reads("Waiting");
     assert_eq!(waiting, alone, "the reads took {waiting} parts from the index beside the waiting parts, {alone} beside none");
     run(&lua, &engine, "assert(math.abs(shared.Work.Waiting - shared.Work.Alone) < 1e-9, `the reads cost {shared.Work.Waiting} s of work beside the waiting parts, {shared.Work.Alone} s beside none`)");
     assert!(waiting_host < 0.25, "2,000 reads beside 20,000 waiting parts took {waiting_host:.3} s of host time, {alone_host:.3} s beside none");
     run(&lua, &engine, "workspace:Raycast(Vector3.new(0, 5000, 0), Vector3.new(0, 1, 0))");
-    assert!(engine.state.borrow().cameras.unindexed.is_empty(), "the Raycast took them in");
+    assert_eq!(super::broadphase::waiting(&engine.state.borrow(), engine.world().workspace), 0, "the Raycast took them in");
     run(&lua, &engine, "shared.Reads(10, true, \"Seen\")");
 }
 
@@ -11669,8 +11669,8 @@ fn parts_whose_bounds_are_not_finite_leave_the_index_in_a_step() {
     assert!(loose < 3.0 * tree + 0.1, "the queries after 60,000 parts whose bounds are not finite were written twice, moved out and back and destroyed took {loose:.3} s of host time, after as many in the tree {tree:.3} s");
 }
 
-/// The sets the spatial index fills and empties once a round (dom.rs Watch::logged, the broadphase's walk marks, camera.rs
-/// Cameras::unindexed) keep no table a burst grew them to (dom.rs clear_set): after 500,000 folders moved between two queries
+/// The sets the spatial index fills and empties once a round (dom.rs Watch::logged, the broadphase's walk marks, the
+/// worlds' waits) keep no table a burst grew them to (dom.rs clear_set): after 500,000 folders moved between two queries
 /// (from the log, no walk of the Workspace) each later round of one part moved and one query costs about what it cost before
 /// the burst, where it cleared two tables of a million slots (32 us of host time a round after a million folders moved, 2 us
 /// before them), and after 50,000 parts entered the Workspace at once and a query took them in, the waiting parts' table is
@@ -11767,7 +11767,7 @@ fn a_burst_of_changes_leaves_the_spatial_index_no_work_after_it() {
     engine_lua::instance::set_parent(&engine, store, Some(workspace)).expect("store in workspace");
     call(&lua, &engine, &query_empty, ());
     call(&lua, &engine, &rounds, 4usize);
-    let capacity = engine.state.borrow().cameras.unindexed.capacity();
+    let capacity = super::broadphase::wait_capacity(&engine.state.borrow(), engine.world().workspace);
     assert!(capacity < 4096, "after 50,000 parts waited and were taken in, the waiting parts' table holds {capacity}");
     super::query::index_matches_a_walk(&engine).unwrap();
 }
