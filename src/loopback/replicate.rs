@@ -407,6 +407,9 @@ pub fn join(server_lua: &Lua, server: &Rc<Engine>, client_lua: &Lua, client: &Rc
             crate::services::physics::apply_model_snapshot(client, copy, snapshot);
         }
     }
+    // (the manifest's aliases, for the client's own requests at its copy of the mount: project::model_assets share_aliases)
+    #[cfg(feature = "bundles")]
+    crate::project::model_assets::share_aliases(server, client, &|id| bridge.ids.borrow().to_client.get(id));
     server.state.borrow_mut().loopback_log = Some(Vec::new());
     install(server, bridge, filter, excluded);
     install_client(client, bridge);

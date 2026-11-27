@@ -2406,6 +2406,97 @@ return {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A client script asking for a manifest alias's path gets the alias as the game's installer makes it on a client: a copy of the
+/// model of its own (its bundle imported on the server first), in the key's folders, which the server does not have; a server
+/// script's request makes the server's, which reaches the client as the server's new instances do
+#[cfg(feature = "bundles")]
+#[test]
+fn a_loopback_client_asking_for_a_manifest_alias_gets_the_alias() {
+    let (dir, root, files) = bundle_project("bundles-alias-client");
+    let manifest = dir.join("project").join(crate::project::model_assets::MANIFEST);
+    std::fs::write(&manifest, "return {\n\t[\"Models/Racing/Steed\"] = { AliasOf = \"Models/Machines/Touched\" },\n\t[\"Models/Parade/Pony\"] = { AliasOf = \"Models/Machines/Untouched\" },\n}\n").unwrap();
+    let fetched = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let host = bundle_host(files, &fetched);
+    let harness = dir.join("Alias.luau");
+    std::fs::write(
+        &harness,
+        r##"
+local Storage = game:GetService("ReplicatedStorage")
+return {
+	Server = function(Context)
+		task.wait(0.05)
+		local Pony = Storage.Library.Models.Parade.Pony
+		local Names = {}
+		for _, Child in Storage.Library.Models:GetChildren() do
+			table.insert(Names, Child.Name)
+		end
+		table.sort(Names)
+		print("server pony", Pony.ClassName, #Pony:GetChildren(), table.concat(Names, " "))
+	end,
+	Client = function(Context)
+		local Models = Storage.Library.Models
+		local Steed = Models.Racing.Steed
+		print("client steed", Steed.ClassName, Steed.Name, Steed.Parent.Name, #Steed:GetChildren(), Steed.PrimaryPart and Steed.PrimaryPart.Name, Steed:GetAttribute("Reach"), Models.Machines.Touched ~= Steed)
+		task.wait(0.2)
+		local Pony = Models:FindFirstChild("Parade") and Models.Parade:FindFirstChild("Pony")
+		print("client pony", Pony and Pony.ClassName, Pony and #Pony:GetChildren())
+		print("@done")
+	end,
+}
+"##,
+    )
+    .unwrap();
+    let words: Vec<String> = ["--harness", &harness.to_string_lossy(), "--roots", &root.to_string_lossy(), "--seconds", "1", "--assets-at", "ReplicatedStorage.Library", "--assets", "Models", "--run-context", "loopback"].iter().map(|s| s.to_string()).collect();
+    let args = run::parse(&words, false).unwrap();
+    let (done, emulator) = run::execute(&args, &host, false).unwrap();
+    let lines = lines(&done.summary);
+    assert_eq!(done.summary["status"], "ok", "{lines:?}");
+    assert!(has(&lines, "client print: client steed Model Steed Racing 2 Body 5 true"), "{lines:?}");
+    assert!(has(&lines, "server print: server pony Model 2 Items Machines Parade Units"), "{lines:?}");
+    assert!(has(&lines, "client print: client pony Model 2"), "{lines:?}");
+    let fetched = fetched.borrow().clone();
+    assert!(fetched.contains(&"Models/Machines/Touched".to_string()) && fetched.contains(&"Models/Machines/Untouched".to_string()), "{fetched:?}");
+    drop(emulator);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A placeholder passed to a method the engine implements in Luau is the bundle's instance before the method runs, as a Rust
+/// method's argument is: its bundle is fetched at the call, before a later look at another placeholder
+#[cfg(feature = "bundles")]
+#[test]
+fn a_placeholder_passed_to_a_luau_method_is_its_bundle_first() {
+    for loopback in [false, true] {
+        let ending = if loopback { "return { Server = function() end, Client = function() Run() end }" } else { "return function() Run() end" };
+        let harness = format!("{}{ending}
+", r##"
+local Storage = game:GetService("ReplicatedStorage")
+local function Run()
+	-- (the machines in their mount's order: Broken, ServerFirst, Touched, Untouched; listed, not touched)
+	local Machines = Storage.Library.Models.Machines:GetChildren()
+	local Humanoid = Instance.new("Humanoid")
+	pcall(Humanoid.GetStateEnabled, Humanoid, Machines[3])
+	local Later = #Machines[4]:GetChildren()
+	print("ran", Machines[3].ClassName, Later)
+	print("@done")
+end
+"##);
+        let (done, emulator, fetched, dir) = run_bundles_in(
+            if loopback { "bundles-luau-method-loopback" } else { "bundles-luau-method" },
+            &harness,
+            "ReplicatedStorage.Library",
+            &[],
+            "1",
+            loopback,
+        );
+        let lines = lines(&done.summary);
+        assert_eq!(done.summary["status"], "ok", "{lines:?}");
+        assert!(lines.iter().any(|line| line.ends_with("ran Model 2")), "{lines:?}");
+        assert_eq!(fetched.first().map(String::as_str), Some("Models/Machines/Touched"), "loopback {loopback}: {fetched:?}");
+        drop(emulator);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
 /// A bundle whose tags cannot be read (one the source cannot fetch, one whose file does not load) is named in one warning, and
 /// its missing file is noted among the run's reads, so a run prepared from it goes stale once the file is there
 #[cfg(feature = "bundles")]

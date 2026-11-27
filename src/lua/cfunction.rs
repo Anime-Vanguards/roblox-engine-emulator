@@ -430,6 +430,8 @@ unsafe extern "C-unwind" fn luau_method(state: *mut ffi::lua_State) -> c_int {
             charge_raised(state, false);
             ffi::lua_error(state);
         }
+        // (a bundle placeholder among the arguments is the bundle's instance first, as a Rust method's is: lua/instance.rs)
+        super::raw::reveal_stack_arguments(state);
         luau_call(state, Kind::Served)
     }
 }

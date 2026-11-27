@@ -954,6 +954,28 @@ pub(crate) unsafe fn stack_instance_is_a(state: *mut ffi::lua_State, index: c_in
     }
 }
 
+/// The manifest bundle placeholders ([`flags::BUNDLE_ROOT`]) among a Luau-implemented method's arguments (stack slots 2 and up)
+/// become their bundles' instances first, as a Rust method's arguments do (lua/instance.rs reveal_arguments): the method works
+/// on the instance the game has there
+pub(crate) unsafe fn reveal_stack_arguments(state: *mut ffi::lua_State) {
+    unsafe {
+        let top = ffi::lua_gettop(state);
+        for index in 2..=top {
+            let payload = ffi::lua_touserdatatagged(state, index, INSTANCE_TAG) as *const Payload;
+            if payload.is_null() {
+                continue;
+            }
+            let payload = &*payload;
+            let engine = &*(*payload.api).engine;
+            let id = InstanceId { index: payload.index, generation: payload.generation };
+            let placeholder = engine.state.try_borrow().is_ok_and(|dom_state| dom_state.dom.get(id).is_some_and(|instance| instance.has(flags::BUNDLE_ROOT)));
+            if placeholder {
+                super::instance::reveal_bundle(engine, id);
+            }
+        }
+    }
+}
+
 #[inline]
 /// The instance the stack value at `index` is, if any.
 pub(crate) unsafe fn stack_instance(state: *mut ffi::lua_State, index: c_int) -> Option<InstanceId> {

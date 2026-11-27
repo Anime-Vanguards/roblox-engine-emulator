@@ -130,8 +130,40 @@ fn folder(engine: &Engine, parent: InstanceId, name: &str) -> InstanceId {
     }
     let class = engine.reflection.class_id("Folder").unwrap();
     let child = core::create_named(&mut state, &engine.reflection, class, name);
+    let before = state.dom.at(parent).children.len();
     state.dom.attach(child, parent);
+    drop(state);
+    made_here(engine, parent, before);
     child
+}
+
+/// `parent` got children past `before` that the mount made where a script asked (an alias's folders and copy): on a loopback
+/// server they replicate as the server's new instances do (loopback/lazy.rs `materialized`), as the game's installer's copy on
+/// a server reaches its clients
+fn made_here(engine: &Engine, parent: InstanceId, before: usize) {
+    if engine.loopback.borrow().is_some() {
+        crate::loopback::lazy::materialized(engine, parent, before);
+    }
+}
+
+/// A loopback client's share of its server's mount (loopback/replicate.rs join): its copy of the mount's root (`to_client`) and
+/// the manifest's aliases, so that a client script asking for an alias's path makes the alias there as the game's installer
+/// does on a client (a copy of the model of its own, the model's bundle imported on the server first: loopback/lazy.rs), while
+/// a server script's request makes the server's, which replicates. Each side's aliases not asked for yet are its own.
+pub fn share_aliases(server: &Engine, client: &Engine, to_client: &dyn Fn(InstanceId) -> Option<InstanceId>) {
+    let (root, project) = {
+        let state = server.state.borrow();
+        let assets = &state.project.model_assets;
+        (assets.root, assets.project.clone())
+    };
+    let Some(copy) = root.and_then(to_client) else { return };
+    let aliases = aliases_in(&project);
+    if aliases.is_empty() {
+        return;
+    }
+    let mut state = client.state.borrow_mut();
+    state.project.model_assets.root = Some(copy);
+    state.project.model_assets.aliases = aliases;
 }
 
 /// Mounts the manifest's bundle folders (rur.json `modelAssets`, or `chosen`'s mount and prefixes;
@@ -1055,8 +1087,12 @@ fn install_alias(engine: &Engine, key: &str, model: &str) {
         }
         copy
     };
-    if copy.is_none() {
-        engine.warn(format!("modelAssets {key}: its AliasOf {model} is not Archivable"));
+    match copy {
+        Some(_) => {
+            let after = engine.state.borrow().dom.at(parent).children.len();
+            made_here(engine, parent, after.saturating_sub(1));
+        }
+        None => engine.warn(format!("modelAssets {key}: its AliasOf {model} is not Archivable")),
     }
 }
 
