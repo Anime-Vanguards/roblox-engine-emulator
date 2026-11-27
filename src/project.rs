@@ -21,6 +21,7 @@ use super::{
 };
 
 pub mod json_model;
+mod localization_csv;
 #[cfg(feature = "bundles")]
 pub mod model_assets;
 pub mod plan;
@@ -525,19 +526,26 @@ impl StudioIndex {
     }
 }
 
-const SCRIPT_SUFFIXES: &[(&str, &str)] = &[
-    (".server.luau", "Script"),
-    (".server.lua", "Script"),
-    (".client.luau", "LocalScript"),
-    (".client.lua", "LocalScript"),
-    (".luau", "ModuleScript"),
-    (".lua", "ModuleScript"),
+/// Rojo's script rules: a file's suffix, its instance's class and the RunContext it sets (`.plugin.luau` is a Script that runs in
+/// a plugin alone). A rule takes its suffix in lower case only: `A.LUAU` and `C.SERVER.LUAU` make nothing, `E.Server.luau` is a
+/// ModuleScript "E.Server" (`rojo build` 7.6.1 and 7.7.0, whose sync rules are case-sensitive globs, on Windows too).
+const SCRIPT_SUFFIXES: &[(&str, &str, Option<&str>)] = &[
+    (".server.luau", "Script", None),
+    (".server.lua", "Script", None),
+    (".client.luau", "LocalScript", None),
+    (".client.lua", "LocalScript", None),
+    (".plugin.luau", "Script", Some("Plugin")),
+    (".plugin.lua", "Script", Some("Plugin")),
+    (".luau", "ModuleScript", None),
+    (".lua", "ModuleScript", None),
 ];
 
 /// The files that make a directory a script, in the order Rojo looks for them (a module before a server script before a client
 /// one, `.luau` before `.lua`: `rojo build` 7.6.1 and 7.7.0-rc.1 make a directory holding `init.luau` and `init.server.luau` a
-/// ModuleScript). Every other `init.` file is an entry as any other: `init.txt` is a StringValue "init", `init.json` a JSON module
-/// "init", `init.storybook.luau` a ModuleScript "init.storybook".
+/// ModuleScript); `init.csv` comes after them (a LocalizationTable: [`mount_plain_directory_as`]). Every other `init.` file is an
+/// entry as any other: `init.txt` is a StringValue "init", `init.json` a JSON module "init", `init.storybook.luau` a ModuleScript
+/// "init.storybook", `init.plugin.luau` a Script "init" with RunContext Plugin (7.6.1, the game's; 7.7.0 makes that one the
+/// directory's script, a Script with RunContext Plugin).
 const INIT_SCRIPTS: &[(&str, &str)] = &[
     ("init.luau", "ModuleScript"),
     ("init.lua", "ModuleScript"),
@@ -547,10 +555,20 @@ const INIT_SCRIPTS: &[(&str, &str)] = &[
     ("init.client.lua", "LocalScript"),
 ];
 
-/// Whether a directory's entry `entry` belongs to the directory itself rather than making a child: one of its init scripts, its
-/// `init.meta.json`, or `init.csv` (which makes a directory a LocalizationTable in Rojo; ree reads no `.csv`)
+/// Whether directory entry `entry` is the file Rojo opens at `<directory>/<name>`. Rojo looks a directory's init files,
+/// `init.meta.json` and `default.project.json` up by path, so the file system's case rule decides: NTFS and APFS ignore case,
+/// and on Windows `rojo build` 7.6.1 makes a directory holding `Init.luau` a ModuleScript of it ([`is_init_entry`] keeps the file
+/// a child too).
+fn opens_as(entry: &str, name: &str) -> bool {
+    if cfg!(any(windows, target_os = "macos")) { entry.eq_ignore_ascii_case(name) } else { entry == name }
+}
+
+/// Whether a directory's entry `entry` makes no child of its own: Rojo skips these names exactly as they are spelled
+/// (snapshot_from_vfs), so an init file the directory found under another case (`Init.luau`, `INIT.lua`, `Init.server.luau`)
+/// is also a child by its own rule ("Init", "INIT"; `INIT.LUAU` takes no rule). `.meta.json` files make nothing either
+/// ([`mount_directory`]).
 fn is_init_entry(entry: &str) -> bool {
-    INIT_SCRIPTS.iter().any(|(name, _)| entry.eq_ignore_ascii_case(name)) || entry.eq_ignore_ascii_case("init.meta.json") || entry.eq_ignore_ascii_case("init.csv")
+    matches!(entry, "init.server.luau" | "init.server.lua" | "init.client.luau" | "init.client.lua" | "init.luau" | "init.lua" | "init.csv")
 }
 
 /// Offline stand-ins (lua/packages/*, compiled in) for packages a place keeps only in Studio.
@@ -1616,13 +1634,14 @@ mod kept_listing {
     }
 }
 
-/// A script file's instance name and class. Rojo strips a `.server` / `.client` suffix whole, so `.server.luau` is a Script
-/// named "", and names a module by its file stem, so `.luau` is a ModuleScript named ".luau" (`rojo build` 7.6.1 and 7.7.0-rc.1).
-fn script_info(file_name: &str) -> Option<(&str, &'static str)> {
-    for (suffix, class) in SCRIPT_SUFFIXES {
-        if ends_with_ignore_ascii_case(file_name, suffix) {
+/// A script file's instance name, class and RunContext ([`SCRIPT_SUFFIXES`]). Rojo strips a `.server` / `.client` / `.plugin`
+/// suffix whole, so `.server.luau` is a Script named "", and names a module by its file stem, so `.luau` is a ModuleScript named
+/// ".luau" (`rojo build` 7.6.1 and 7.7.0-rc.1).
+fn script_info(file_name: &str) -> Option<(&str, &'static str, Option<&'static str>)> {
+    for (suffix, class, run_context) in SCRIPT_SUFFIXES {
+        if file_name.ends_with(suffix) {
             let stem = &file_name[..file_name.len() - suffix.len()];
-            return Some((if stem.is_empty() && *class == "ModuleScript" { file_name } else { stem }, class));
+            return Some((if stem.is_empty() && *class == "ModuleScript" { file_name } else { stem }, class, *run_context));
         }
     }
     None
@@ -1788,12 +1807,14 @@ fn mount_directory(engine: &Engine, node: &ScanNode, instance: InstanceId, mount
                 continue;
             }
         }
-        if is_init_entry(entry) || ends_with_ignore_ascii_case(entry, ".meta.json") {
+        // (Rojo's JSON rule leaves out `*.meta.json`, in that case alone: `x.Meta.json` is a JSON module "x.Meta"; a directory's
+        // own default.project.json made it that project, or, one ree could not follow, is no entry of its plain mount)
+        if is_init_entry(entry) || entry.ends_with(".meta.json") || opens_as(entry, "default.project.json") {
             continue;
         }
         full_path.truncate(prefix_len);
         full_path.push_str(entry);
-        mount_file(engine, &full_path, entry, None, instance, mount, child_index.as_mut());
+        mount_file(engine, &full_path, entry, None, instance, mount, child_index.as_mut(), Some(node));
     }
 }
 
@@ -1818,7 +1839,7 @@ fn mount_directory_as(
 /// directory" (rojo.space/docs/v7/sync-details/#projects), init scripts included. Wally packages each ship one.
 /// None, reported, for a file that isn't a project.
 fn nested_project(engine: &Engine, node: &ScanNode) -> Option<std::sync::Arc<serde_json::Value>> {
-    let file = node.entries.iter().find(|entry| entry.eq_ignore_ascii_case("default.project.json"))?;
+    let file = node.entries.iter().find(|entry| opens_as(entry, "default.project.json"))?;
     let path = format!("{}/{file}", node.path);
     let project = read_json(&path).filter(|project| project.get("tree").is_some_and(serde_json::Value::is_object));
     if project.is_none() {
@@ -1859,10 +1880,11 @@ fn mount_nested_project(
     }
     mount.projects += 1;
     mount.project_depth += 1;
+    let project_file = format!("{}/default.project.json", node.path);
     let mounted = project
         .get("tree")
         .and_then(serde_json::Value::as_object)
-        .and_then(|tree| mount_project_node(engine, node, tree, parent, name, mount, relative, parent_index.as_deref_mut()));
+        .and_then(|tree| mount_project_node(engine, node, &project_file, tree, parent, name, mount, relative, parent_index.as_deref_mut()));
     let instance = match mounted {
         Some(instance) => instance,
         None => mount_plain_directory_as(engine, node, parent, name, mount, relative, parent_index),
@@ -1901,16 +1923,20 @@ fn mount_listed_path(
         return None;
     }
     let full_path = format!("{}/{last}", folder.path);
-    mount_file(engine, &full_path, last, Some(name), parent, mount, parent_index.as_deref_mut())
+    mount_file(engine, &full_path, last, Some(name), parent, mount, parent_index.as_deref_mut(), Some(folder))
 }
 
-/// A node of a nested project's tree (`$path`s relative to `base`, the project file's directory) mounted as the child
-/// `name` of `parent`, then its child nodes; `$properties` and `$attributes` are ignored, as cli/rojo.mjs does. None when
-/// its `$path` is refused or names nothing, reported unless Rojo allows that (`{ "optional": ... }`).
+/// A node of a nested project's tree (`$path`s relative to `base`, the folder of `project_file`) mounted as the child `name` of
+/// `parent`, then its child nodes; `$properties` and `$attributes` are ignored, as cli/rojo.mjs does. A `$className` beside a
+/// `$path` gives the class when the `$path` makes a Folder, as Rojo's snapshot_project_node does (a project file's `$path` to an
+/// empty folder with `"$className": "Configuration"` is a Configuration; with another class Rojo refuses the build, and the
+/// `$path`'s class is kept, reported). None when its `$path` is refused or names nothing, reported unless Rojo allows that
+/// (`{ "optional": ... }`).
 #[allow(clippy::too_many_arguments)]
 fn mount_project_node(
     engine: &Engine,
     base: &ScanNode,
+    project_file: &str,
     tree: &serde_json::Map<String, serde_json::Value>,
     parent: InstanceId,
     name: &str,
@@ -1918,10 +1944,11 @@ fn mount_project_node(
     relative: &str,
     parent_index: Option<&mut ChildIndex>,
 ) -> Option<InstanceId> {
+    let reflection = &engine.reflection;
+    let class_name = tree.get("$className").and_then(|value| value.as_str()).filter(|class_name| reflection.class_id(class_name).is_some_and(|class| !reflection.class(class).service));
     let optional = tree.get("$path").and_then(|value| value.get("optional")?.as_str());
     let instance = match optional.or_else(|| tree.get("$path")?.as_str()) {
         Some(path) => {
-            let project_file = format!("{}/default.project.json", base.path);
             let segments: Vec<&str> = path.split(['/', '\\']).filter(|segment| !segment.is_empty() && *segment != ".").collect();
             if leaves_project_folder(path, &segments) {
                 engine.warn(format!("{project_file}: $path {path} leaves the project's folder; not mounted"));
@@ -1931,24 +1958,33 @@ fn mount_project_node(
             if found.is_none() && optional.is_none() {
                 engine.warn(format!("{project_file}: $path {path} names nothing ree can mount; not mounted"));
             }
-            found?
+            let found = found?;
+            if let Some(class_name) = class_name {
+                let mut state = engine.state.borrow_mut();
+                let made = reflection.class(state.dom.at(found).class).name.clone();
+                if &*made == "Folder" {
+                    let class = reflection.class_id(class_name).expect("a class");
+                    state.dom.set_class(reflection, found, class);
+                    state.project.implicit_dirs.retain(|&dir| dir != found);
+                } else if &*made != class_name {
+                    drop(state);
+                    engine.warn(format!("{project_file}: {name} has \"$className\": \"{class_name}\" and a $path to {path}, which is a {made}: Rojo takes both only when the $path is a Folder; mounted as the {made}"));
+                }
+            }
+            found
         }
-        None => {
-            let reflection = &engine.reflection;
-            let class_name = tree.get("$className").and_then(|value| value.as_str()).filter(|class_name| reflection.class_id(class_name).is_some_and(|class| !reflection.class(class).service)).unwrap_or("Folder");
-            ensure_child_indexed(&mut engine.state.borrow_mut(), reflection, parent, name, class_name, mount, parent_index)
-        }
+        None => ensure_child_indexed(&mut engine.state.borrow_mut(), reflection, parent, name, class_name.unwrap_or("Folder"), mount, parent_index),
     };
     for (child_name, child) in tree {
         if let (false, Some(child)) = (child_name.starts_with('$'), child.as_object()) {
-            mount_project_node(engine, base, child, instance, child_name, mount, &format!("{relative}/{child_name}"), None);
+            mount_project_node(engine, base, project_file, child, instance, child_name, mount, &format!("{relative}/{child_name}"), None);
         }
     }
     Some(instance)
 }
 
-/// A scanned directory mounted as the child `name` of `parent` (init scripts and init.meta.json
-/// className decide its class; a Folder otherwise), then its contents.
+/// A scanned directory mounted as the child `name` of `parent` (its init script, else its `init.csv`, else its init.meta.json
+/// className decide its class, as Rojo looks for them; a Folder otherwise), then its contents.
 fn mount_plain_directory_as(
     engine: &Engine,
     node: &ScanNode,
@@ -1964,34 +2000,54 @@ fn mount_plain_directory_as(
         engine.warn(format!("{full_path}: a Git repository's own directory; mounted as an empty Folder (Rojo builds what is in it)"));
     }
     let mut meta_entry: Option<&str> = None;
+    let mut csv_entry: Option<&str> = None;
     // (priority in INIT_SCRIPTS, entry index, class)
     let mut best_init: Option<(usize, usize, &'static str)> = None;
     for (index, entry) in node.entries.iter().enumerate() {
         if !starts_with_ignore_ascii_case(entry, "init.") {
             continue;
         }
-        if entry.eq_ignore_ascii_case("init.meta.json") {
+        if opens_as(entry, "init.meta.json") {
             meta_entry = Some(entry.as_str());
             continue;
         }
-        if let Some(priority) = INIT_SCRIPTS.iter().position(|(name, _)| entry.eq_ignore_ascii_case(name)) {
+        if opens_as(entry, "init.csv") {
+            csv_entry = Some(entry.as_str());
+            continue;
+        }
+        if let Some(priority) = INIT_SCRIPTS.iter().position(|(name, _)| opens_as(entry, name)) {
             if best_init.is_none_or(|(best_p, _, _)| priority < best_p) {
                 best_init = Some((priority, index, INIT_SCRIPTS[priority].1));
             }
         }
     }
-    let meta = meta_entry.and_then(|file| read_json(&format!("{full_path}/{file}")));
-    let meta_class = meta.as_ref().and_then(|m| m.get("className")).and_then(|c| c.as_str());
+    let meta_file = meta_entry.map(|file| format!("{full_path}/{file}"));
+    let meta = meta_file.as_deref().and_then(read_json);
+    // (a class the engine's reflection does not have: `rojo build` 7.6.1 builds an instance of that class name, which ree
+    // cannot make; a service's class, such as Workspace, both make, as a child like any other)
+    let meta_class = meta.as_ref().and_then(|m| m.get("className")).and_then(|c| c.as_str()).filter(|class_name| {
+        let known = reflection.class_id(class_name).is_some();
+        if !known {
+            engine.warn(format!("{}: className {class_name} is no class ree knows (Rojo builds an instance of that class name); mounted as a Folder", meta_file.as_deref().unwrap_or_default()));
+        }
+        known
+    });
     let init = best_init.map(|(_, index, class)| {
         let found = &node.entries[index];
         (format!("{full_path}/{found}"), class)
     });
+    // (Rojo looks for init.csv after the init scripts)
+    let table = csv_entry.filter(|_| init.is_none()).and_then(|file| localization_contents(engine, &format!("{full_path}/{file}"), mount));
+    if let (Some(meta_class), Some(file), true) = (meta_class, &meta_file, init.is_some() || table.is_some()) {
+        let kind = if init.is_some() { "script" } else { "LocalizationTable" };
+        engine.warn(format!("{file}: className in init.meta.json can only be specified if the affected directory would turn into a Folder instance (Rojo refuses the build); the directory is its init file's {kind}, not a {meta_class}"));
+    }
     let known = match relative {
         "StarterPlayer/StarterPlayerScripts" => Some("StarterPlayerScripts"),
         "StarterPlayer/StarterCharacterScripts" => Some("StarterCharacterScripts"),
         _ => None,
     };
-    let explicit_class = init.as_ref().map(|&(_, c)| c).or(meta_class).or(known);
+    let explicit_class = init.as_ref().map(|&(_, c)| c).or(table.as_ref().map(|_| "LocalizationTable")).or(meta_class).or(known);
     let implicit = explicit_class.is_none();
     let class_name = explicit_class.unwrap_or("Folder");
     let child = {
@@ -2002,6 +2058,9 @@ fn mount_plain_directory_as(
             instance.set_source_path(Some(Rc::from(path.as_str())));
             instance.set_source(None);
             mount.scripts += 1;
+        }
+        if let Some(contents) = table {
+            set_localization_contents(&mut state, reflection, child, contents);
         }
         // (a directory that says no class of its own takes the place's, once its hierarchy is known: use_studio_hierarchy)
         if implicit {
@@ -2022,9 +2081,12 @@ fn file_stem(file_name: &str) -> &str {
     }
 }
 
-/// A file entry of a mounted directory (`file_name` its name on disk; `name` overrides the
-/// instance name): scripts by suffix, JSON models, JSON modules, models, text files. Other files are ignored. The instance it
-/// mounted (a model file's top instance named `name`), if any.
+/// A file entry of a mounted directory (`file_name` its name on disk; `name` overrides the instance name; `folder`: the listing
+/// holding it, when the caller has it) by Rojo's sync rules, each taking its suffix in lower case alone: scripts by suffix,
+/// project files, JSON models, JSON modules, localization tables, text files, models. Other files are ignored, but for those a
+/// rule of Rojo's takes and ree does not read (`.toml`, `.yaml`, `.yml`), which are reported. The instance it mounted (a model
+/// file's top instance named `name`), if any.
+#[allow(clippy::too_many_arguments)]
 fn mount_file(
     engine: &Engine,
     full_path: &str,
@@ -2033,9 +2095,10 @@ fn mount_file(
     instance: InstanceId,
     mount: &mut MountCounts,
     parent_index: Option<&mut ChildIndex>,
+    folder: Option<&ScanNode>,
 ) -> Option<InstanceId> {
     let reflection = &engine.reflection;
-    if let Some((script_name, class_name)) = script_info(file_name) {
+    if let Some((script_name, class_name, run_context)) = script_info(file_name) {
         let mut state = engine.state.borrow_mut();
         let child = ensure_child_indexed(&mut state, reflection, instance, name.unwrap_or(script_name), class_name, mount, parent_index);
         let class = state.dom.at(child).class;
@@ -2047,8 +2110,27 @@ fn mount_file(
             instance.set_flag(flags::JSON_MODULE, false);
             mount.scripts += 1;
         }
+        // (`.plugin.luau`: a Script that runs in a plugin alone, which a playing client or server never starts: scripts.rs)
+        if let (Some(run_context), Some(property)) = (run_context, reflection.name_id("RunContext")) {
+            if let (true, Some(item)) = (reflection.is_a(class, "Script"), reflection.enum_item("RunContext", run_context)) {
+                core::raw_set_silent(&mut state, reflection, child, property, Value::EnumItem(item));
+            }
+        }
         Some(child)
-    } else if ends_with_ignore_ascii_case(file_name, ".txt") {
+    } else if file_name.ends_with(".project.json") {
+        // Rojo's project rule: a project file beside other files is its project's tree
+        let listed_folder;
+        let folder = match folder {
+            Some(folder) => folder,
+            None => {
+                let Some((directory, _)) = full_path.rsplit_once('/') else { return None };
+                listed_folder = listed(directory.to_string());
+                keep_listing(engine, listed_folder.clone());
+                &*listed_folder
+            }
+        };
+        mount_project_file(engine, folder, full_path, file_name, name, instance, mount, parent_index)
+    } else if file_name.ends_with(".txt") {
         // Rojo's text file: a StringValue named by the file's stem holding the file's text as it is (its line endings and a
         // byte order mark kept). Rojo refuses a file that is not UTF-8 (`rojo build` 7.6.1: "File was not valid UTF-8").
         let text = match std::fs::read(full_path).map(String::from_utf8) {
@@ -2070,7 +2152,7 @@ fn mount_file(
             core::raw_set_silent(&mut state, reflection, child, K::Value as NameId, Value::String(Str::from(text.as_str())));
         }
         Some(child)
-    } else if ends_with_ignore_ascii_case(file_name, ".model.json") {
+    } else if file_name.ends_with(".model.json") {
         // Rojo's JSON model (project/json_model.rs): one instance, named after the file
         match mounted_plan(engine, full_path) {
             Some(plan) => instantiate_model(engine, &plan, name, instance, parent_index),
@@ -2079,7 +2161,7 @@ fn mount_file(
                 None
             }
         }
-    } else if ends_with_ignore_ascii_case(file_name, ".json") {
+    } else if file_name.ends_with(".json") && !file_name.ends_with(".meta.json") {
         // JSON modules (Rojo / JSON-backed data) return the decoded value; read on require
         let module_name = name.unwrap_or(&file_name[..file_name.len() - 5]);
         let mut state = engine.state.borrow_mut();
@@ -2091,13 +2173,97 @@ fn mount_file(
             instance.set_flag(flags::JSON_MODULE, true);
         }
         Some(child)
-    } else if ends_with_ignore_ascii_case(file_name, ".rbxm") || ends_with_ignore_ascii_case(file_name, ".rbxmx") {
-        // (one top instance, named by the file's stem as Rojo names it; Rojo refuses a model with more, which mount as they are)
+    } else if file_name.ends_with(".csv") {
+        // Rojo's localization table (localization_csv.rs), named by the file's stem
+        let contents = localization_contents(engine, full_path, mount)?;
+        let mut state = engine.state.borrow_mut();
+        let child = ensure_child_indexed(&mut state, reflection, instance, name.unwrap_or(file_stem(file_name)), "LocalizationTable", mount, parent_index);
+        set_localization_contents(&mut state, reflection, child, contents);
+        Some(child)
+    } else if file_name.ends_with(".rbxm") || file_name.ends_with(".rbxmx") {
+        // One top instance, named by the file's stem as Rojo names it. Rojo refuses the build for a model with none or more
+        // (`rojo build` 7.6.1 and 7.7.0: "Rojo currently only supports model files with one top-level instance.").
         let plan = mounted_plan(engine, full_path)?;
+        if plan.root_count() != 1 {
+            engine.warn(format!("{full_path}: Rojo currently only supports model files with one top-level instance (this one has {}); not mounted", plan.root_count()));
+            mount.skipped += 1;
+            return None;
+        }
         instantiate_model(engine, &plan, Some(name.unwrap_or(file_stem(file_name))), instance, parent_index)
     } else {
+        // Rojo's rules for data files ree has no parser for: each makes a ModuleScript of the file's data in Rojo
+        let format = [(".toml", "TOML"), (".yaml", "YAML"), (".yml", "YAML")].into_iter().find(|(suffix, _)| file_name.ends_with(suffix));
+        if let Some((_, format)) = format {
+            engine.warn(format!("{full_path}: a {format} file, which Rojo builds as a ModuleScript of its data; ree reads no {format}; not mounted"));
+            mount.skipped += 1;
+        }
         None
     }
+}
+
+/// The Contents of the LocalizationTable a CSV file makes (localization_csv.rs), or None, reported, for one Rojo refuses or
+/// that does not read
+fn localization_contents(engine: &Engine, path: &str, mount: &mut MountCounts) -> Option<String> {
+    let problem = match std::fs::read(path) {
+        Ok(bytes) => match localization_csv::contents(&bytes) {
+            Ok(contents) => return Some(contents),
+            Err(problem) => format!("not a valid LocalizationTable CSV file ({problem}; Rojo refuses the build)"),
+        },
+        Err(error) => error.to_string(),
+    };
+    engine.warn(format!("{path}: {problem}; not mounted"));
+    mount.skipped += 1;
+    None
+}
+
+/// Gives a mounted LocalizationTable its Contents (what its entries are read from: services/localization.rs)
+fn set_localization_contents(state: &mut State, reflection: &Reflection, table: InstanceId, contents: String) {
+    if let (true, Some(property)) = (reflection.is_a(state.dom.at(table).class, "LocalizationTable"), reflection.name_id("Contents")) {
+        core::raw_set_silent(state, reflection, table, property, Value::String(Str::from(contents.as_str())));
+    }
+}
+
+/// A project file beside other files (`*.project.json`; `folder`, the listing holding it) mounted as the child `name` of
+/// `parent`: its project's tree, as Rojo's project rule builds it (`rojo build` 7.6.1 and 7.7.0): named by the project's
+/// `name`, else by the file with its suffix stripped whole (`x.project.json` "x", `.project.json` ""), or by the project node
+/// whose `$path` names it, its `$path`s relative to its folder. One that does not read is reported and not mounted (Rojo
+/// refuses the build: "File was not a valid Rojo project").
+#[allow(clippy::too_many_arguments)]
+fn mount_project_file(
+    engine: &Engine,
+    folder: &ScanNode,
+    path: &str,
+    file_name: &str,
+    name: Option<&str>,
+    parent: InstanceId,
+    mount: &mut MountCounts,
+    parent_index: Option<&mut ChildIndex>,
+) -> Option<InstanceId> {
+    let project = read_json(path);
+    let Some(tree) = project.as_ref().and_then(|project| project.get("tree")).and_then(serde_json::Value::as_object) else {
+        engine.warn(format!("{path}: not a valid Rojo project (JSON with a \"tree\" object; Rojo refuses the build); not mounted"));
+        mount.skipped += 1;
+        return None;
+    };
+    let stem = &file_name[..file_name.len() - ".project.json".len()];
+    let name = name.or_else(|| project.as_ref()?.get("name")?.as_str()).unwrap_or(stem);
+    let stopped = if mount.project_depth > MAX_PROJECT_NESTING {
+        Some(format!("project nesting too deep (past {MAX_PROJECT_NESTING} levels)"))
+    } else if mount.projects >= MAX_PROJECTS_PER_MOUNT {
+        Some(format!("more than {MAX_PROJECTS_PER_MOUNT} projects in one mount"))
+    } else {
+        None
+    };
+    if let Some(reason) = stopped {
+        engine.warn(format!("{path}: {reason}; not mounted"));
+        mount.skipped += 1;
+        return None;
+    }
+    mount.projects += 1;
+    mount.project_depth += 1;
+    let instance = mount_project_node(engine, folder, path, tree, parent, name, mount, "", parent_index);
+    mount.project_depth -= 1;
+    instance
 }
 
 /// A mounted model file's instances made under `parent`; with `name` (Rojo: a model file is one instance, named by its file or
@@ -2127,7 +2293,7 @@ fn instantiate_model(engine: &Engine, plan: &ModelPlan, name: Option<&str>, pare
 fn decode_model_file(engine: &Engine, path: &str, bytes: &[u8]) -> Option<(WeakDom, bool)> {
     let file_name = Path::new(path).file_name()?.to_string_lossy();
     let mut noted = false;
-    let mut dom = if !file_name.to_ascii_lowercase().ends_with(".model.json") {
+    let mut dom = if !file_name.ends_with(".model.json") {
         match decode_model(bytes) {
             Ok((dom, notes)) => {
                 noted = !notes.is_empty();
@@ -2290,7 +2456,7 @@ pub fn mount_at(engine: &Engine, spec: &Mount) -> Result<MountCounts, String> {
                         instantiate_model(engine, &plan, Some(last), parent, None);
                     }
                 } else {
-                    mount_file(engine, &path, &file_name, Some(last), parent, &mut mount, None);
+                    mount_file(engine, &path, &file_name, Some(last), parent, &mut mount, None, None);
                 }
             }
         }
@@ -2770,7 +2936,7 @@ fn rename_studio_path(engine: &Engine, disk: &[&str], studio: &[&str]) -> usize 
         if INIT_SCRIPTS.iter().any(|(name, _)| part.eq_ignore_ascii_case(name)) {
             return String::new();
         }
-        script_info(part).map(|(name, _)| name.to_string()).unwrap_or_else(|| part.to_string())
+        script_info(part).map(|(name, _, _)| name.to_string()).unwrap_or_else(|| part.to_string())
     };
     let game = engine.world().game;
     let Some(mut current) = services::find_service(engine, game, disk[0]) else { return 0 };

@@ -353,7 +353,7 @@ impl Walk<'_> {
             crate::files::note(&source);
             if !source.exists() {
                 built.source = if optional { Source::Skipped } else { Source::Missing(source) };
-            } else if is_project_file(&source.to_string_lossy()) {
+            } else if source.to_string_lossy().ends_with(".project.json") {
                 let project = self.build_project(&source, files)?;
                 built.class = self.combined_class(name, built.class, project.class, &source, files)?;
                 built.source = project.source;

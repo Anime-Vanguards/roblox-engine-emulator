@@ -2623,6 +2623,224 @@ fn text_files_and_entries_of_one_name_mount_as_rojo_builds_them() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// `files` (and the empty directories `dirs`) written to a fresh folder, mounted at ReplicatedStorage/A, and listed: each
+/// instance's line (class, name, a StringValue's value, a LocalizationTable's entries, a Script's RunContext, a module's
+/// answer) with each folder's lines sorted, then the run's warnings and errors, sorted, with the folder spelled `<root>`
+fn mount_and_list(tag: &str, files: &[(&str, &[u8])], dirs: &[&str]) -> (Vec<String>, Vec<String>) {
+    use super::project::{Mount, mount_at};
+    let dir = std::env::temp_dir().join(format!("ree-{tag}-test-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    for (relative, bytes) in files {
+        let file = dir.join(relative);
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(file, bytes).unwrap();
+    }
+    for relative in dirs {
+        std::fs::create_dir_all(dir.join(relative)).unwrap();
+    }
+    let root = dir.to_string_lossy().replace('\\', "/");
+    let (lua, engine) = start();
+    mount_at(&engine, &Mount::parse(&format!("ReplicatedStorage/A={root}/A"), false).unwrap()).unwrap();
+    let output = run(&lua, &engine, r#"
+        local RS = game:GetService("ReplicatedStorage")
+        local HttpService = game:GetService("HttpService")
+        local function show(child)
+            local text = child.ClassName .. " " .. string.format("%q", child.Name)
+            if child:IsA("StringValue") then
+                text ..= ' = "' .. child.Value .. '"'
+            elseif child:IsA("LocalizationTable") then
+                text ..= " " .. HttpService:JSONEncode(child:GetEntries())
+            elseif child.ClassName == "Script" then
+                text ..= " " .. child.RunContext.Name
+            elseif child:IsA("ModuleScript") then
+                local ok, value = pcall(require, child)
+                text ..= " -> " .. (if typeof(value) == "table" then HttpService:JSONEncode(value) else tostring(value))
+            end
+            return text
+        end
+        local function list(instance, depth)
+            local shown = {}
+            for _, child in instance:GetChildren() do
+                table.insert(shown, { show(child), child })
+            end
+            table.sort(shown, function(a, b) return a[1] < b[1] end)
+            for _, entry in shown do
+                print("tree", string.rep("  ", depth) .. entry[1])
+                list(entry[2], depth + 1)
+            end
+        end
+        list(RS.A, 0)
+    "#);
+    drop(lua);
+    let _ = std::fs::remove_dir_all(&dir);
+    let tree = output.iter().filter_map(|line| line.strip_prefix("print: tree ")).map(str::to_string).collect();
+    let mut reported: Vec<String> = output.iter().filter(|line| line.starts_with("warn") || line.starts_with("error")).map(|line| line.replace(&root, "<root>")).collect();
+    reported.sort();
+    (tree, reported)
+}
+
+/// Suffixes and init files as `rojo build` 7.6.1 (the game's) and 7.7.0 read them: a sync rule takes its suffix in lower case
+/// alone, on Windows too (`A.LUAU` makes nothing, `E.Server.luau` is a ModuleScript "E.Server", `h.Meta.json` a JSON module),
+/// and a directory's init file is the file its path opens, so on a file system that ignores case `Init.luau` makes its
+/// directory a ModuleScript and, not named exactly `init.luau`, is a child "Init" too.
+#[test]
+fn suffixes_and_init_files_follow_rojos_case_rules() {
+    let rbxmx = br#"<roblox version="4"><Item class="Configuration" referent="R0"><Properties><string name="Name">Other</string></Properties></Item></roblox>"#;
+    let files: &[(&str, &[u8])] = &[
+        ("A/case/A.LUAU", b"return 'A'"),
+        ("A/case/B.Luau", b"return 'B'"),
+        ("A/case/C.SERVER.LUAU", b"print(1)"),
+        ("A/case/D.JSON", b"[1]"),
+        ("A/case/E.Server.luau", b"return 'E'"),
+        ("A/case/F.RBXMX", rbxmx),
+        ("A/case/G.Model.json", br#"{ "className": "Configuration" }"#),
+        ("A/case/h.Meta.json", br#"{ "m": 1 }"#),
+        ("A/case/i.meta.JSON", b"{}"),
+        ("A/case/m.Project.json", br#"{ "name": "NotAProject", "tree": { "$className": "Configuration" } }"#),
+        ("A/case/UPPER.TXT", b"upper"),
+        ("A/case/z.txt", b"z"),
+        ("A/inits/a/Init.luau", b"return 'Init a'"),
+        ("A/inits/a/c.luau", b"return 'c'"),
+        ("A/inits/b/INIT.LUAU", b"return 'INIT b'"),
+        ("A/inits/d/init.Server.luau", b"return 'd'"),
+        ("A/inits/l/init.luau", b"return 'init l'"),
+        ("A/inits/l/Init.server.luau", b"print('l')"),
+    ];
+    let (tree, reported) = mount_and_list("case-rules", files, &[]);
+    let mut expected = vec![
+        r#"Folder "case""#,
+        r#"  ModuleScript "E.Server" -> E"#,
+        r#"  ModuleScript "G.Model" -> {"className":"Configuration"}"#,
+        r#"  ModuleScript "h.Meta" -> {"m":1}"#,
+        r#"  ModuleScript "m.Project" -> {"name":"NotAProject","tree":{"$className":"Configuration"}}"#,
+        r#"  StringValue "z" = "z""#,
+        r#"Folder "inits""#,
+    ];
+    // (the file system's case rule decides which file a directory's init file is: NTFS and APFS ignore case)
+    if cfg!(any(windows, target_os = "macos")) {
+        expected.extend([
+            r#"  ModuleScript "a" -> Init a"#, r#"    ModuleScript "Init" -> Init a"#, r#"    ModuleScript "c" -> c"#,
+            r#"  ModuleScript "b" -> INIT b"#,
+            r#"  ModuleScript "l" -> init l"#, r#"    Script "Init" Legacy"#,
+            r#"  Script "d" Legacy"#, r#"    ModuleScript "init.Server" -> d"#,
+        ]);
+    } else {
+        expected.extend([
+            r#"  Folder "a""#, r#"    ModuleScript "Init" -> Init a"#, r#"    ModuleScript "c" -> c"#,
+            r#"  Folder "b""#,
+            r#"  Folder "d""#, r#"    ModuleScript "init.Server" -> d"#,
+            r#"  ModuleScript "l" -> init l"#, r#"    Script "Init" Legacy"#,
+        ]);
+    }
+    assert_eq!(tree, expected);
+    assert!(reported.is_empty(), "{reported:?}");
+}
+
+/// Rojo's other sync rules, as `rojo build` 7.6.1 (the game's) and 7.7.0 build this tree: `.csv` LocalizationTables (and an
+/// `init.csv` directory, found whatever its case where the file system ignores it), `.plugin.luau` Scripts with RunContext
+/// Plugin, project files beside other files as their trees (a `$className` over a `$path`'s Folder), and what Rojo refuses (a
+/// model of two top instances or none, a CSV of uneven records, a file that is no project, an init.meta.json className beside
+/// an init script) reported and not mounted, as are `.toml` files, which ree has no parser for.
+#[test]
+fn rojo_sync_rules_mount_as_rojo_builds_them() {
+    let csv = b"Key,Source,Context,Example,en,es\nHello,Hello,,,Hello,Hola\nBye,Goodbye,ctx,an example,Bye,Adios\n";
+    let rbxmx = |names: &[&str]| {
+        let items: String = names.iter().enumerate().map(|(index, name)| format!(r#"<Item class="Configuration" referent="R{index}"><Properties><string name="Name">{name}</string></Properties></Item>"#)).collect();
+        format!(r#"<roblox version="4">{items}</roblox>"#).into_bytes()
+    };
+    let (one, two, zero) = (rbxmx(&["Inside"]), rbxmx(&["One", "Two"]), rbxmx(&[]));
+    let files: &[(&str, &[u8])] = &[
+        ("A/inits/f/Init.csv", csv),
+        ("A/inits/p/init.plugin.luau", b"print('p')"),
+        ("A/inits/meta/init.luau", b"return 'meta'"),
+        ("A/inits/meta/init.meta.json", br#"{ "className": "Configuration" }"#),
+        ("A/csv/plain.csv", csv),
+        ("A/csv/a.b.csv", b"Key,Source,en\nAB,ab,x\n"),
+        ("A/csv/ragged.csv", b"Key,Source,en\nA,a\nB,b,c,d\n"),
+        ("A/csv/dir/init.csv", b"Key,Source,en\nD,dir,d\n"),
+        ("A/csv/dir/k.luau", b"return 'k'"),
+        ("A/plugin/x.plugin.luau", b"print('x')"),
+        ("A/plugin/.plugin.luau", b"print('dot')"),
+        ("A/plugin/v.plugin.luau", b"print('v')"),
+        ("A/plugin/v.luau", b"return 'v module'"),
+        ("A/proj/named.project.json", br#"{ "name": "Named", "tree": { "$className": "Configuration" } }"#),
+        ("A/proj/noname.project.json", br#"{ "tree": { "$className": "Model" } }"#),
+        ("A/proj/withpath.project.json", br#"{ "name": "WithPath", "tree": { "$path": "src" } }"#),
+        ("A/proj/src/m.luau", b"return 'm'"),
+        ("A/proj/kids.project.json", br#"{ "name": "Kids", "tree": { "$className": "Model", "A": { "$className": "Configuration" }, "B": { "$path": "src/m.luau" } } }"#),
+        ("A/proj/classpath.project.json", br#"{ "name": "ClassPath", "tree": { "$className": "Configuration", "$path": "empty" } }"#),
+        ("A/proj/nested.project.json", br#"{ "name": "Nested", "tree": { "$path": "named.project.json" } }"#),
+        ("A/proj/bad.project.json", b"{"),
+        ("A/models/one.rbxmx", &one),
+        ("A/models/two.rbxmx", &two),
+        ("A/models/zero.rbxmx", &zero),
+        ("A/data/x.toml", b"a = 1\n"),
+        ("A/data/y.jsonc", b"{ \"a\": 1 // 7.7 reads this\n}"),
+    ];
+    let (tree, reported) = mount_and_list("sync-rules", files, &["A/proj/empty"]);
+    let entries = r#"[{"Key":"Hello","Values":{"en":"Hello","es":"Hola"},"Example":"","Context":"","Source":"Hello"},{"Key":"Bye","Values":{"en":"Bye","es":"Adios"},"Example":"an example","Context":"ctx","Source":"Goodbye"}]"#;
+    let mut expected: Vec<String> = [
+        r#"Folder "csv""#,
+        r#"  LocalizationTable "a.b" [{"Key":"AB","Values":{"en":"x"},"Example":"","Context":"","Source":"ab"}]"#,
+        r#"  LocalizationTable "dir" [{"Key":"D","Values":{"en":"d"},"Example":"","Context":"","Source":"dir"}]"#,
+        r#"    ModuleScript "k" -> k"#,
+    ]
+    .map(str::to_string)
+    .into_iter()
+    .chain([format!(r#"  LocalizationTable "plain" {entries}"#), r#"Folder "data""#.into(), r#"Folder "inits""#.into()])
+    .collect();
+    if cfg!(any(windows, target_os = "macos")) {
+        expected.extend([
+            r#"  Folder "p""#.to_string(),
+            r#"    Script "init" Plugin"#.into(),
+            format!(r#"  LocalizationTable "f" {entries}"#),
+            format!(r#"    LocalizationTable "Init" {entries}"#),
+        ]);
+    } else {
+        expected.extend([
+            r#"  Folder "f""#.to_string(),
+            format!(r#"    LocalizationTable "Init" {entries}"#),
+            r#"  Folder "p""#.into(),
+            r#"    Script "init" Plugin"#.into(),
+        ]);
+    }
+    expected.extend(
+        [
+            r#"  ModuleScript "meta" -> meta"#,
+            r#"Folder "models""#, r#"  Configuration "one""#,
+            r#"Folder "plugin""#, r#"  ModuleScript "v" -> v module"#, r#"  Script "" Plugin"#, r#"  Script "v" Plugin"#, r#"  Script "x" Plugin"#,
+            r#"Folder "proj""#, r#"  Configuration "ClassPath""#, r#"  Configuration "Named""#, r#"  Configuration "Nested""#, r#"  Folder "WithPath""#,
+            r#"    ModuleScript "m" -> m"#, r#"  Folder "empty""#, r#"  Folder "src""#, r#"    ModuleScript "m" -> m"#, r#"  Model "Kids""#,
+            r#"    Configuration "A""#, r#"    ModuleScript "B" -> m"#, r#"  Model "noname""#,
+        ]
+        .map(str::to_string),
+    );
+    assert_eq!(tree, expected);
+    assert_eq!(reported, [
+        "warn: <root>/A/csv/ragged.csv: not a valid LocalizationTable CSV file (CSV error: record 1 (line: 2, byte: 14): found record with 2 fields, but the previous record has 3 fields; Rojo refuses the build); not mounted",
+        "warn: <root>/A/data/x.toml: a TOML file, which Rojo builds as a ModuleScript of its data; ree reads no TOML; not mounted",
+        "warn: <root>/A/inits/meta/init.meta.json: className in init.meta.json can only be specified if the affected directory would turn into a Folder instance (Rojo refuses the build); the directory is its init file's script, not a Configuration",
+        "warn: <root>/A/models/two.rbxmx: Rojo currently only supports model files with one top-level instance (this one has 2); not mounted",
+        "warn: <root>/A/models/zero.rbxmx: Rojo currently only supports model files with one top-level instance (this one has 0); not mounted",
+        "warn: <root>/A/proj/bad.project.json: not a valid Rojo project (JSON with a \"tree\" object; Rojo refuses the build); not mounted",
+    ]);
+}
+
+/// An init.meta.json className the engine has no class for: `rojo build` 7.6.1 builds an instance of that class name, which
+/// ree cannot make, so the directory is a Folder, reported (ree panicked); a service's class is made as Rojo makes it, a
+/// child like any other
+#[test]
+fn an_init_meta_class_ree_has_no_class_for_mounts_a_folder() {
+    let files: &[(&str, &[u8])] = &[
+        ("A/u/init.meta.json", br#"{ "className": "NotAClassAtAll" }"#),
+        ("A/u/k.luau", b"return 'k'"),
+        ("A/w/init.meta.json", br#"{ "className": "Workspace" }"#),
+    ];
+    let (tree, reported) = mount_and_list("meta-class", files, &[]);
+    assert_eq!(tree, [r#"Folder "u""#, r#"  ModuleScript "k" -> k"#, r#"Workspace "w""#]);
+    assert_eq!(reported, ["warn: <root>/A/u/init.meta.json: className NotAClassAtAll is no class ree knows (Rojo builds an instance of that class name); mounted as a Folder"]);
+}
+
 /// A `default.project.json` can come from a third-party package, so a `$path` stays inside the folder
 /// holding it. One that is absolute or has a `..` segment is reported and not followed, on a tree's root
 /// or a child node. A required `$path` that names nothing and a project file that can't be read are

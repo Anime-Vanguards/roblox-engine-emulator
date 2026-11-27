@@ -176,6 +176,46 @@ fn a_client_script_runs_anywhere_in_the_data_model_and_a_server_script_on_a_serv
     }
 }
 
+/// A Script whose RunContext is Plugin (Rojo's `.plugin.luau`) runs in a plugin alone: a playing client and server start it in no
+/// container (roblox-sim 0.747, identity-4 jobs making Legacy, Client, Server and Plugin Scripts in the Workspace,
+/// ReplicatedStorage, ReplicatedFirst, Lighting, StarterGui and the player's PlayerGui, and on the server ServerScriptService
+/// and ServerStorage too: no Plugin one started, twice)
+#[test]
+fn a_plugin_script_starts_nowhere_on_a_client_or_a_server() {
+    for (options, containers) in [(client(), "{ workspace, RS, game:GetService('ReplicatedFirst'), game:GetService('Lighting') }"), (server(), "{ workspace, game:GetService('ServerScriptService'), game:GetService('ServerStorage'), RS }")] {
+        let engine = Engine::new(options).expect("engine");
+        let lua = Lua::new();
+        engine_lua::start(&lua, &engine).expect("start");
+        {
+            let reflection = &engine.reflection;
+            let mut state = engine.state.borrow_mut();
+            let script = super::instance::create_named(&mut state, reflection, reflection.class_id("Script").unwrap(), "Plugged");
+            let item = reflection.enum_item("RunContext", "Plugin").unwrap();
+            super::instance::raw_set_silent(&mut state, reflection, script, reflection.name_id("RunContext").unwrap(), crate::value::Value::EnumItem(item));
+            state.dom.at_mut(script).set_source(Some(Rc::from(&b"_G.L('start ' .. script.Name)"[..])));
+            let holder = super::instance::create_named(&mut state, reflection, reflection.class_id("ObjectValue").unwrap(), "Holder");
+            super::instance::raw_set_silent(&mut state, reflection, holder, reflection.name_id("Value").unwrap(), crate::value::Value::Instance(script));
+            let game = engine.world().game;
+            let storage = state.dom.find_child_of_class(game, reflection.class_id("ReplicatedStorage").unwrap()).unwrap();
+            super::instance::set_parent(&mut state, reflection, &engine.hooks.borrow(), holder, Some(storage)).unwrap();
+        }
+        let (prints, errors) = run_on(&lua, &engine, &with_helpers(&format!(r#"
+            task.wait()
+            local Plugged = RS.Holder.Value
+            for _, Container in {containers} do
+                Plugged.Parent = Container
+                task.wait()
+                Plugged.Enabled = false
+                Plugged.Enabled = true
+                task.wait()
+            end
+            L("done " .. Plugged.RunContext.Name)
+        "#)));
+        assert!(errors.is_empty(), "{errors:?}");
+        check(&prints, &["done Plugin"]);
+    }
+}
+
 #[test]
 fn a_stop_takes_what_the_script_left_waiting_and_a_restart_runs_it_again() {
     let (prints, errors) = run(client(), &with_helpers(r#"

@@ -64,6 +64,7 @@ struct Names {
     character: NameId,
     client: Option<EnumItemId>,
     server: Option<EnumItemId>,
+    plugin: Option<EnumItemId>,
 }
 
 /// A script's start or run
@@ -202,6 +203,7 @@ fn names(reflection: &Reflection) -> Option<Names> {
         character: reflection.name_id("Character")?,
         client: reflection.enum_item("RunContext", "Client"),
         server: reflection.enum_item("RunContext", "Server"),
+        plugin: reflection.enum_item("RunContext", "Plugin"),
     })
 }
 
@@ -239,6 +241,10 @@ fn need(state: &State, names: &Names, side: Side, script: InstanceId) -> Option<
         return None;
     }
     let context = state.dom.raw_get(script, names.run_context).and_then(Value::as_enum);
+    // (a Plugin Script runs in a plugin alone: a playing client and server start none, in any container)
+    if context.is_some() && context == names.plugin {
+        return None;
+    }
     if context.is_some() && context == names.client {
         (side == Side::Client).then_some(Need::Anywhere)
     } else if context.is_some() && context == names.server {
