@@ -1110,6 +1110,45 @@ fn value_curves_cast_their_arguments_and_keep_nothing() {
     );
 }
 
+/// A frame steps the Animators under a WorldRoot only, and an animator over a rig without joints holds its tracks (measured on
+/// a 0.747 playing client and server: animation_stepping.luau); GetTrackByAnimationId finds the tracks that have not ended.
+#[test]
+fn only_animators_under_a_world_root_step() {
+    check(
+        r#"
+        local Model, Animator = Rig()
+        local Animation = Sequence({ {0, 0}, {1, 1} })
+        local Track = Animator:LoadAnimation(Animation)
+        assert(Animator:GetTrackByAnimationId(Animation.AnimationId) == nil, "a track not played is not found")
+        Model.Parent = game:GetService("ReplicatedStorage")
+        Track:Play(0)
+        task.wait(0.2)
+        assert(Track.TimePosition == 0 and Track.WeightCurrent == 0, "an animator outside a WorldRoot does not step")
+        assert(Animator:GetTrackByAnimationId(Animation.AnimationId) == Track, "a played track is found")
+        Track:Stop(0)
+        task.wait(0.1)
+        assert(Animator:GetTrackByAnimationId(Animation.AnimationId) == Track, "nor does it end there")
+        Model.Parent = workspace
+        task.wait(0.1)
+        assert(Animator:GetTrackByAnimationId(Animation.AnimationId) == nil, "in the Workspace it ends")
+        local Bare = Instance.new("Model")
+        local Controller = Instance.new("AnimationController")
+        Controller.Parent = Bare
+        local Lone = Instance.new("Animator")
+        Lone.Parent = Controller
+        Bare.Parent = workspace
+        local Held = Lone:LoadAnimation(Animation)
+        Held:Play(0)
+        task.wait(0.2)
+        assert(Held.TimePosition == 0 and Held.WeightCurrent == 0, "a rig without joints holds its tracks")
+        Held:Stop(0)
+        task.wait(0.1)
+        assert(Lone:GetTrackByAnimationId(Animation.AnimationId) == nil, "a stop still ends them")
+        "#,
+        1.0,
+    );
+}
+
 /// IKControl's chain reads before any solve, the members a game script may not call, the node pins and the track parameters
 /// (measured: animation_members.luau).
 #[test]

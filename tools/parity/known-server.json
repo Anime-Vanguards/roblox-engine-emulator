@@ -1303,14 +1303,6 @@
 		{
 			"line": "Register",
 			"why": "a running game (the capture client and its server) refuses the providers' registration, \"Usage error: RegisterKeyframeSequence can only be called in Studio.\" and \"... can only be used in Solo mode.\" (RegisterActiveAnimationClip names RegisterActiveKeyframeSequence), before its argument; ree registers in play mode as in edit mode, because previews of unpublished animations play that way (a Studio solo test registers; not measured)"
-		},
-		{
-			"line": "stopped, new",
-			"why": "an Animator outside the DataModel is not stepped on a client, so a track stopped there is never ended; ree steps it (the next commit)"
-		},
-		{
-			"line": "outside tracks",
-			"why": "an Animator outside the DataModel is not stepped on a client (its tracks keep weight 0); ree steps it (the next commit)"
 		}
 	]
 }

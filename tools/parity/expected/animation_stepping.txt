@@ -1,0 +1,16 @@
+# engine: Roblox Studio 0.747.0.7471481, a headless playing client (script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-27
+rig workspace length 4.30000019 moved true playing true weight 1
+rig workspace no joints length 4.30000019 moved false playing true weight 0
+rig folder length 4.30000019 moved true playing true weight 1
+rig replicated storage length 4.30000019 moved false playing true weight 0
+rig world model length 4.30000019 moved true playing true weight 1
+rig outside length 0 moved false playing true weight 0
+rig outside no joints length 0 moved false playing true weight 0
+rig workspace after stop false weight 1
+rig workspace no joints after stop false weight 0
+rig folder after stop false weight 1
+rig replicated storage after stop true weight 0
+rig world model after stop false weight 1
+rig outside after stop true weight 0
+rig outside no joints after stop true weight 0

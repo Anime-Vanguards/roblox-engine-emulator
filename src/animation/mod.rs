@@ -146,6 +146,8 @@ struct Names {
     humanoid: ClassId,
     animation_controller: ClassId,
     face_controls: Option<ClassId>,
+    world_root: ClassId,
+    data_model: ClassId,
     /// Enum.AnimationPriority items by value
     priorities: Vec<(u32, crate::reflection::EnumItemId)>,
 }
@@ -189,6 +191,8 @@ impl Names {
             humanoid: c("Humanoid")?,
             animation_controller: c("AnimationController")?,
             face_controls: c("FaceControls"),
+            world_root: c("WorldRoot")?,
+            data_model: c("DataModel")?,
             priorities,
         })
     }
@@ -1000,8 +1004,13 @@ fn arrive(engine: &Rc<Engine>, shared: &Shared, names: &Names) {
         let mut guard = shared.borrow_mut();
         let animations = &mut *guard;
         let mut arrived = Vec::new();
+        let state = engine.state.borrow();
         animations.pending.retain(|id| {
             let Some(track) = animations.tracks.get_mut(id) else { return false };
+            // (an asset arrives for an animator in the DataModel only: [`placement`])
+            if placement(&state, &engine.reflection, names, track.animator) == Placement::Outside && state.dom.get(track.animator).is_some_and(|instance| !instance.has(crate::dom::flags::DESTROYED)) {
+                return true;
+            }
             let Some((_, clip)) = track.pending.take_if(|(at, _)| *at <= now + 1e-9) else { return track.pending.is_some() };
             track.clip = Some(clip.clone());
             if track.playing {
@@ -1042,6 +1051,32 @@ pub fn step(engine: &Rc<Engine>, delta: f64) {
     step_of(engine, delta, None);
 }
 
+/// Where an Animator is, as the frame's step treats it (measured, a 0.747 playing client, the tracks of an asset played
+/// with a fade of 0 and read after 1.5 s: tools/parity/probes/animation_stepping.luau). Under a WorldRoot (the Workspace, a
+/// Folder in it, a WorldModel even in ReplicatedStorage) its tracks step. Elsewhere in the DataModel (ReplicatedStorage) its
+/// assets arrive (Length reads the asset's) but nothing steps: TimePosition and WeightCurrent stay 0 and a track stopped is
+/// never ended (GetTrackByAnimationId still finds it). Outside the DataModel not even the asset arrives (Length 0).
+#[derive(Clone, Copy, PartialEq)]
+enum Placement {
+    World,
+    DataModel,
+    Outside,
+}
+
+fn placement(state: &State, reflection: &Reflection, names: &Names, animator: InstanceId) -> Placement {
+    let mut at = Some(animator);
+    let mut top = animator;
+    while let Some(id) = at {
+        let Some(instance) = state.dom.get(id) else { break };
+        if reflection.class(instance.class).is_a(names.world_root) {
+            return Placement::World;
+        }
+        top = id;
+        at = instance.parent;
+    }
+    if state.dom.get(top).is_some_and(|instance| instance.class == names.data_model) { Placement::DataModel } else { Placement::Outside }
+}
+
 /// [`step`] for every animator, or for `only` (Animator:StepAnimations).
 fn step_of(engine: &Rc<Engine>, delta: f64, only: Option<InstanceId>) {
     let Some((shared, names)) = engine.extension::<AnimationExtension>().and_then(|found| found.state.borrow().clone()) else { return };
@@ -1051,10 +1086,33 @@ fn step_of(engine: &Rc<Engine>, delta: f64, only: Option<InstanceId>) {
     if shared.borrow().active.is_empty() {
         return;
     }
+    // (the frame's step passes over the animators outside a WorldRoot, but for a destroyed one, which stops its tracks;
+    // Animator:StepAnimations steps the one it is called on)
+    let mut held: FxHashMap<InstanceId, bool> = FxHashMap::default();
     let active: Vec<InstanceId> = {
         let animations = shared.borrow();
-        animations.active.iter().copied().filter(|id| only.is_none_or(|only| animations.tracks[id].animator == only)).collect()
+        let state = engine.state.borrow();
+        animations
+            .active
+            .iter()
+            .copied()
+            .filter(|id| {
+                let animator = animations.tracks[id].animator;
+                match only {
+                    Some(only) => animator == only,
+                    None => {
+                        let destroyed = state.dom.get(animator).is_none_or(|instance| instance.has(crate::dom::flags::DESTROYED));
+                        let skipped = *held.entry(animator).or_insert_with(|| !destroyed && placement(&state, &engine.reflection, &names, animator) != Placement::World);
+                        !skipped
+                    }
+                }
+            })
+            .collect()
     };
+    held.retain(|_, skipped| *skipped);
+    // (measured: the tracks of an animator whose rig has no Motor6D and no Bone neither move nor take weight, and a stop
+    // still ends them: animation_stepping.luau)
+    let mut jointless: FxHashMap<InstanceId, bool> = FxHashMap::default();
     for id in active {
         refresh(engine, &shared, id);
         let mut fired = Vec::new();
@@ -1067,6 +1125,12 @@ fn step_of(engine: &Rc<Engine>, delta: f64, only: Option<InstanceId>) {
             let set_time = state.dom.number(id, names.time_position).filter(|&t| t != track.time && !(t.is_nan() && track.time.is_nan()));
             (alive, looped, set_time)
         };
+        let animator = shared.borrow().tracks[&id].animator;
+        let still = only.is_none()
+            && *jointless.entry(animator).or_insert_with(|| {
+                let mut state = engine.state.borrow_mut();
+                cached_rig(&shared, &mut state, &engine.reflection, &names, animator).is_some_and(|rig| rig.all.is_empty())
+            });
         let (finished, time, weight, playing, waiting) = {
             let mut animations = shared.borrow_mut();
             let track = animations.tracks.get_mut(&id).expect("active track");
@@ -1099,9 +1163,11 @@ fn step_of(engine: &Rc<Engine>, delta: f64, only: Option<InstanceId>) {
                             time.clamp(0.0, length)
                         } as f64;
                     }
-                    fade_step(track, delta);
-                    if let Some(clip) = clip {
-                        if track.playing { advance(track, &clip, delta, looped, &mut fired) } else { drift(track, &clip, delta, looped) }
+                    if !still {
+                        fade_step(track, delta);
+                        if let Some(clip) = clip {
+                            if track.playing { advance(track, &clip, delta, looped, &mut fired) } else { drift(track, &clip, delta, looped) }
+                        }
                     }
                 }
             }
@@ -1165,7 +1231,7 @@ fn step_of(engine: &Rc<Engine>, delta: f64, only: Option<InstanceId>) {
         let mut at: FxHashMap<InstanceId, usize> = FxHashMap::default();
         for id in &animations.active {
             let track = &animations.tracks[id];
-            if only.is_some_and(|only| track.animator != only) {
+            if only.is_some_and(|only| track.animator != only) || held.contains_key(&track.animator) {
                 continue;
             }
             let index = *at.entry(track.animator).or_insert_with(|| {
