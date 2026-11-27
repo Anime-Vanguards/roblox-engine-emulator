@@ -62,8 +62,10 @@ enum Place {
     Loose,
 }
 
-/// The parts waiting for a world's spatial index, in the order they came: a set, each part once (a part that leaves drops out,
-/// and one that comes back is at the end), so it holds at most the world's parts and a lookup costs the same whatever it holds
+/// The parts waiting for a world's spatial index, in the order they came: a set, each part once, so it holds at most the world's
+/// parts and a lookup costs the same whatever it holds. A part that leaves gives its place to the last, as a cell's list does, and
+/// one that comes back is at the end (measured, Studio 0.747, a client and a server: five parts waiting, the second taken out
+/// before a query, come in as 1, 5, 3, 4; tools/parity/probes/grid_welds.luau)
 #[derive(Default, Debug)]
 pub struct Waiting {
     order: Vec<InstanceId>,
@@ -75,15 +77,20 @@ impl Waiting {
         if self.at.contains_key(&part) {
             return;
         }
-        if self.order.len() >= 64 && self.order.len() > 2 * self.at.len() {
-            self.compact();
-        }
         self.at.insert(part, self.order.len() as u32);
         self.order.push(part);
     }
 
     pub fn remove(&mut self, part: &InstanceId) {
-        self.at.remove(part);
+        let Some(place) = self.at.remove(part) else { return };
+        let place = place as usize;
+        let last = self.order.pop();
+        if place < self.order.len()
+            && let Some(last) = last
+        {
+            self.order[place] = last;
+            self.at.insert(last, place as u32);
+        }
     }
 
     pub fn contains(&self, part: &InstanceId) -> bool {
@@ -114,17 +121,9 @@ impl Waiting {
         }
     }
 
-    /// The parts in the order they came
+    /// The parts in their order
     pub fn iter(&self) -> impl Iterator<Item = InstanceId> + '_ {
-        self.order.iter().enumerate().filter(|(place, part)| self.at.get(part) == Some(&(*place as u32))).map(|(_, &part)| part)
-    }
-
-    fn compact(&mut self) {
-        let kept: Vec<InstanceId> = self.iter().collect();
-        self.order = kept;
-        for (place, part) in self.order.iter().enumerate() {
-            self.at.insert(*part, place as u32);
-        }
+        self.order.iter().copied()
     }
 }
 

@@ -1,0 +1,143 @@
+# engine: Roblox Studio 0.747.0.7471481, the server of a headless play session (a Script in ServerScriptService, script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-27
+welds1 pair listed b,a
+welds1 pair-rev listed b,a
+welds1 pair-under-b listed b,a
+welds1 pair-big-a listed a,b
+welds1 pair-big-b listed b,a
+welds1 pair-x listed b,a,x
+welds1 pair-x-rev listed b,a,x
+welds1 chain3 listed a,b,c
+welds1 chain3-rev listed a,b,c
+welds1 chain3-big-c listed a,b,c
+welds1 chain3-big-a listed a,b,c
+welds1 star listed a,b,c,d
+welds1 star-d listed a,b,c,d
+welds1 two listed a2,a1,b2,b1
+welds1 two-rev listed a2,a1,b2,b1
+welds1 model6 listed m1,m2,m4,m6,m3,m5
+welds1 model6-folder listed m1,m2,m4,m6,m3,m5
+welds1 model6-weld listed m1,m2,m4,m6,m3,m5
+welds1 anchored listed x,y,a,b,c
+welds1 after-pair in a,b
+welds1 after-pair listed b,a
+welds1 after-pair-x in a,x,b
+welds1 after-pair-x listed x,b,a
+welds1 after-chain3 in a,b,c
+welds1 after-chain3 weld ab c,b,a
+welds1 after-chain3 weld bc a,b,c
+welds1 after-chain3 listed a,b,c
+welds1 after-star in a,b,c,d
+welds1 after-star weld ab d,c,b,a
+welds1 after-star weld ac d,a,b,c
+welds1 after-star weld ad a,b,c,d
+welds1 after-star listed a,b,c,d
+welds1 after-two in a1,b1,a2,b2
+welds1 after-two weld a1a2 b2,b1,a2,a1
+welds1 after-two weld b1b2 a2,a1,b2,b1
+welds1 after-two listed a2,a1,b2,b1
+welds1 far listed r,p
+welds1 far-r-first listed r,p
+welds1 far-after in p,r
+welds1 far-after listed r,p
+welds1 cells listed b,a,x
+welds1 cells-rev listed a,b,x
+welds1 ends listed a,b,c,d
+welds1 ends bc-ends d,c,b,a
+welds1 ends ab-ends d,c,b,a
+welds1 ends-cells listed m1,m2,m4,m6,m3,m5
+welds1 ends-cells weld-ends m1,m2,m6,m4,m3,m5
+welds1 ends-cells anchored m1,m2,m6,m4,m3,m5
+welds1 ends-cells unanchored m1,m2,m6,m4,m3,m5
+welds1 ends-cells m4-anchored m1,m2,m6,m3,m5,m4
+welds1 anchor-write listed a,b,c,x
+welds1 anchor-write b-anchored x,a,b,c
+welds1 anchor-write b-free x,a,b,c
+welds1 anchor-write c-anchored x,a,b,c
+welds2 chain-parented-cab listed a,b,c
+welds2 chain-parented-bca listed a,b,c
+welds2 pair-parented-ba listed b,a
+welds2 pair-big-parented-ba listed a,b
+welds2 four-parented-dcba listed a,b,c,d
+welds2 four-parented-bdac listed a,b,c,d
+welds2 chain-root-mid listed a,b,c
+welds2 chain-root-a listed a,b,c
+welds2 triangle listed a,b,c
+welds2 three-x listed y,x,a,b,c
+welds2 x-first listed x,a,b,c
+welds2 after-cd-ab-bc in a,b,c,d
+welds2 after-cd-ab-bc weld cd a,b,d,c
+welds2 after-cd-ab-bc weld ab d,c,b,a
+welds2 after-cd-ab-bc weld bc a,b,c,d
+welds2 after-bc-ab in a,b,c
+welds2 after-bc-ab weld bc a,c,b
+welds2 after-bc-ab weld ab a,b,c
+welds2 after-ca-cb in a,b,c,x
+welds2 after-ca-cb weld ca x,b,c,a
+welds2 after-ca-cb weld cb x,a,b,c
+welds2 after-big in a,b,c
+welds2 after-big weld ab c,b,a
+welds2 after-big weld bc a,b,c
+welds2 after-pair-big-first in a,b,x
+welds2 after-pair-big-first weld ab x,a,b
+welds2 after-pair-under in a,x,b
+welds2 after-pair-under weld ab x,b,a
+welds2 after-pair-rev in a,x,b
+welds2 after-pair-rev weld ba x,b,a
+welds2 move listed x,b,a,y
+welds2 move a-moved x,b,a,y
+welds2 move x-moved x,b,a,y
+welds2 move b-moved x,b,a,y
+welds2 move-out-back listed x,b,a,y
+welds2 move-out-back a-out-back x,y,b,a
+welds2 level-100 listed p,r
+welds2 level-147 listed p,r
+welds2 level-149 listed r,p
+welds2 level-200 listed r,p
+welds2 span listed b,x
+welds2 span-b listed x,b
+welds2 ray-tie listed x,a
+welds2 ray-tie hit x
+welds2 ray-tie block a
+welds2 ray-tie-near listed x,b,a
+welds2 ray-tie-near hit x
+welds3 wait-leave p1,p5,p3,p4
+welds3 wait-leave back p1,p5,p3,p4,p2
+welds3 cell-leave p1,p5,p3,p4
+welds3 folder false a,b,c,x,y
+welds3 folder true y,x,a,b,c
+welds3 split a in a,b,c,d,x
+welds3 split a mid-ends x,a,b,d,c
+welds3 split d in a,b,c,d,x
+welds3 split d mid-ends x,d,c,b,a
+welds3 split b in a,b,c,d,x
+welds3 split b mid-ends x,b,a,d,c
+welds3 star in h,a,b,c
+welds3 star hub-out c,b,a
+welds3 star hub-back h,a,b,c
+welds3 grow in a,r
+welds3 grow welded r,a
+welds3 grow unwelded r,a
+welds3 move in x,y,b,a
+welds3 move root-moved x,y,b,a
+welds3 move member-out x,y
+welds3 move member-back x,y,b,a
+welds3 anchor in x,y,b,a,k
+welds3 anchor a-anchored x,y,k,a,b
+welds3 anchor a-free x,y,b,a,k
+welds3 anchor y-to-k x,b,a,k,y
+welds3 anchor b-to-k x,a,b,k,y
+welds4 ax-b-F b,a,x
+welds4 F-axb b,a,x
+welds4 a-F-xb b,a,x
+welds4 ax-F-b b,a,x
+welds4 axbW b,a,x
+welds4 Waxb b,a,x
+welds4 axWb b,a,x
+welds4 axb-weld b,a,x
+welds4 Waxb-weld b,a,x
+welds4 axbyc-FWV a,b,c,x,y
+welds4 FWV-axbyc a,b,c,x,y
+welds4 axbyc-WV a,b,c,x,y
+welds4 WV-axbyc a,b,c,x,y
+welds4 aW-x-bV-y-c a,b,c,x,y

@@ -677,6 +677,34 @@ fn queries_leave_out_parts_their_params_group_does_not_collide_with() {
 /// touching a part only at its path's end or only at its start misses it; a Spherecast meets a box's edges and corners rounded;
 /// a Blockcast's Position divides the two centres by the boxes' half extents along the hit face, at the face's edge where both
 /// boxes' far edges coincide, and at the box's corner for a negative side.
+/// A part leaving the spatial index's wait gives its place to the last, as a cell's list does, and one coming back is at the
+/// end (a 0.747 client and server: tools/parity/probes/grid_welds.luau `wait-leave`).
+#[test]
+fn a_part_leaving_the_wait_gives_its_place_to_the_last() {
+    check(
+        r#"
+        local Parts = {}
+        for Index = 1, 5 do
+            local Part = Instance.new("Part")
+            Part.Name, Part.Anchored, Part.Size, Part.Position = "p" .. Index, true, Vector3.one, Vector3.new(512 + Index, 68, 516)
+            Part.Parent = workspace
+            Parts[Index] = Part
+        end
+        local function List()
+            local Names = {}
+            for _, Part in workspace:GetPartBoundsInBox(CFrame.new(516, 68, 516), Vector3.new(7.8, 7.8, 7.8)) do
+                table.insert(Names, Part.Name)
+            end
+            return table.concat(Names, ",")
+        end
+        Parts[2].Parent = nil
+        assert(List() == "p1,p5,p3,p4", List())
+        Parts[2].Parent = workspace
+        assert(List() == "p1,p5,p3,p4,p2", List())
+        "#,
+    );
+}
+
 /// Wedges, corner wedges and trusses as a 0.747 client's queries meet them (tools/parity/probes/query_wedges.luau): rays onto a
 /// slope, from inside the box above it and along a box face's plane; a sphere and a box against the slope; GetPartsInPart and
 /// ArePartsTouchingOthers on the shape, GetPartBoundsInBox on the box; a truss's Size and its edge normal; a wedge's mass.

@@ -257,6 +257,304 @@
 			"why": "ree's physics differs: a client's block resting on a floor fires Touched, up to the grid's bound, and falls through the floor past it; ree's fires no Touched for it and has no bound"
 		}
 	],
+	"grid_welds": [
+		{
+			"line": "welds1 pair listed ",
+			"why": "a client files each welded assembly as one entry of the spatial grid (its parts' joined box, on that box's level, its parts listed together: a pair root first, more in the order they were made) and moves it as one when welds start or end, a member moves or an Anchored write relists it; ree files each part on its own (rules in notes/spatial-grid.md, \"Assemblies as entries\")"
+		},
+		{
+			"line": "welds1 pair-rev listed ",
+			"why": "a client files each welded assembly as one entry of the spatial grid (its parts' joined box, on that box's level, its parts listed together: a pair root first, more in the order they were made) and moves it as one when welds start or end, a member moves or an Anchored write relists it; ree files each part on its own (rules in notes/spatial-grid.md, \"Assemblies as entries\")"
+		},
+		{
+			"line": "welds1 pair-under-b listed ",
+			"why": "a client files each welded assembly as one entry of the spatial grid (its parts' joined box, on that box's level, its parts listed together: a pair root first, more in the order they were made) and moves it as one when welds start or end, a member moves or an Anchored write relists it; ree files each part on its own (rules in notes/spatial-grid.md, \"Assemblies as entries\")"
+		},
+		{
+			"line": "welds1 pair-big-b listed ",
+			"why": "a client files each welded assembly as one entry of the spatial grid (its parts' joined box, on that box's level, its parts listed together: a pair root first, more in the order they were made) and moves it as one when welds start or end, a member moves or an Anchored write relists it; ree files each part on its own (rules in notes/spatial-grid.md, \"Assemblies as entries\")"
+		},
+		{
+			"line": "welds1 pair-x listed ",
+			"why": "a client files each welded assembly as one entry of the spatial grid (its parts' joined box, on that box's level, its parts listed together: a pair root first, more in the order they were made) and moves it as one when welds start or end, a member moves or an Anchored write relists it; ree files each part on its own (rules in notes/spatial-grid.md, \"Assemblies as entries\")"
+		},
+		{
+			"line": "welds1 pair-x-rev listed ",
+			"why": "a client files each welded assembly as one entry of the spatial grid (its parts' joined box, on that box's level, its parts listed together: a pair root first, more in the order they were made) and moves it as one when welds start or end, a member moves or an Anchored write relists it; ree files each part on its own (rules in notes/spatial-grid.md, \"Assemblies as entries\")"
+		},
+		{
+			"line": "welds1 two listed ",
+			"why": "a client files each welded assembly as one entry of the spatial grid (its parts' joined box, on that box's level, its parts listed together: a pair root first, more in the order they were made) and moves it as one when welds start or end, a member moves or an Anchored write relists it; ree files each part on its own (rules in notes/spatial-grid.md, \"Assemblies as entries\")"
+		},
+		{
+			"line": "welds1 two-rev listed ",
+			"why": "a client files each welded assembly as one entry of the spatial grid (its parts' joined box, on that box's level, its parts listed together: a pair root first, more in the order they were made) and moves it as one when welds start or end, a member moves or an Anchored write relists it; ree files each part on its own (rules in notes/spatial-grid.md, \"Assemblies as entries\")"
+		},
+		{
+			"line": "welds1 after-chain3 weld bc ",
+			"why": "a client files each welded assembly as one entry of the spatial grid (its parts' joined box, on that box's level, its parts listed together: a pair root first, more in the order they were made) and moves it as one when welds start or end, a member moves or an Anchored write relists it; ree files each part on its own (rules in notes/spatial-grid.md, \"Assemblies as entries\")"
+		},
+		{
+			"line": "welds1 after-chain3 listed ",
+			"why": "a client files each welded assembly as one entry of the spatial grid (its parts' joined box, on that box's level, its parts listed together: a pair root first, more in the order they were made) and moves it as one when welds start or end, a member moves or an Anchored write relists it; ree files each part on its own (rules in notes/spatial-grid.md, \"Assemblies as entries\")"
+		},
+		{
+			"line": "welds1 after-star weld ab ",
+			"why": "a client files each welded assembly as one entry of the spatial grid (its parts' joined box, on that box's level, its parts listed together: a pair root first, more in the order they were made) and moves it as one when welds start or end, a member moves or an Anchored write relists it; ree files each part on its own (rules in notes/spatial-grid.md, \"Assemblies as entries\")"
+		},
+		{
+			"line": "welds1 after-star weld ac ",
+			"why": "a client files each welded assembly as one entry of the spatial grid (its parts' joined box, on that box's level, its parts listed together: a pair root first, more in the order they were made) and moves it as one when welds start or end, a member moves or an Anchored write relists it; ree files each part on its own (rules in notes/spatial-grid.md, \"Assemblies as entries\")"
+		},
+		{
+			"line": "welds1 after-star weld ad ",
+			"why": "a client files each welded assembly as one entry of the spatial grid (its parts' joined box, on that box's level, its parts listed together: a pair root first, more in the order they were made) and moves it as one when welds start or end, a member moves or an Anchored write relists it; ree files each part on its own (rules in notes/spatial-grid.md, \"Assemblies as entries\")"
+		},
+		{
+			"line": "welds1 after-star listed ",
+			"why": "a client files each welded assembly as one entry of the spatial grid (its parts' joined box, on that box's level, its parts listed together: a pair root first, more in the order they were made) and moves it as one when welds start or end, a member moves or an Anchored write relists it; ree files each part on its own (rules in notes/spatial-grid.md, \"Assemblies as entries\")"
+		},
+		{
+			"line": "welds1 after-two weld b1b2 ",
+			"why": "a client files each welded assembly as one entry of the spatial grid (its parts' joined box, on that box's level, its parts listed together: a pair root first, more in the order they were made) and moves it as one when welds start or end, a member moves or an Anchored write relists it; ree files each part on its own (rules in notes/spatial-grid.md, \"Assemblies as entries\")"
+		},
+		{
+			"line": "welds1 after-two listed ",
+			"why": "a client files each welded assembly as one entry of the spatial grid (its parts' joined box, on that box's level, its parts listed together: a pair root first, more in the order they were made) and moves it as one when welds start or end, a member moves or an Anchored write relists it; ree files each part on its own (rules in notes/spatial-grid.md, \"Assemblies as entries\")"
+		},
+		{
+			"line": "welds1 far listed ",
+			"why": "a client files each welded assembly as one entry of the spatial grid (its parts' joined box, on that box's level, its parts listed together: a pair root first, more in the order they were made) and moves it as one when welds start or end, a member moves or an Anchored write relists it; ree files each part on its own (rules in notes/spatial-grid.md, \"Assemblies as entries\")"
+		},
+		{
+			"line": "welds1 cells listed ",
+			"why": "a client files each welded assembly as one entry of the spatial grid (its parts' joined box, on that box's level, its parts listed together: a pair root first, more in the order they were made) and moves it as one when welds start or end, a member moves or an Anchored write relists it; ree files each part on its own (rules in notes/spatial-grid.md, \"Assemblies as entries\")"
+		},
+		{
+			"line": "welds1 cells-rev listed ",
+			"why": "a client files each welded assembly as one entry of the spatial grid (its parts' joined box, on that box's level, its parts listed together: a pair root first, more in the order they were made) and moves it as one when welds start or end, a member moves or an Anchored write relists it; ree files each part on its own (rules in notes/spatial-grid.md, \"Assemblies as entries\")"
+		},
+		{
+			"line": "welds1 ends bc-ends ",
+			"why": "a client files each welded assembly as one entry of the spatial grid (its parts' joined box, on that box's level, its parts listed together: a pair root first, more in the order they were made) and moves it as one when welds start or end, a member moves or an Anchored write relists it; ree files each part on its own (rules in notes/spatial-grid.md, \"Assemblies as entries\")"
+		},
+		{
+			"line": "welds1 ends ab-ends ",
+			"why": "a client files each welded assembly as one entry of the spatial grid (its parts' joined box, on that box's level, its parts listed together: a pair root first, more in the order they were made) and moves it as one when welds start or end, a member moves or an Anchored write relists it; ree files each part on its own (rules in notes/spatial-grid.md, \"Assemblies as entries\")"
+		},
+		{
+			"line": "welds1 ends-cells listed ",
+			"why": "a client files each welded assembly as one entry of the spatial grid (its parts' joined box, on that box's level, its parts listed together: a pair root first, more in the order they were made) and moves it as one when welds start or end, a member moves or an Anchored write relists it; ree files each part on its own (rules in notes/spatial-grid.md, \"Assemblies as entries\")"
+		},
+		{
+			"line": "welds1 ends-cells weld-ends ",
+			"why": "a client files each welded assembly as one entry of the spatial grid (its parts' joined box, on that box's level, its parts listed together: a pair root first, more in the order they were made) and moves it as one when welds start or end, a member moves or an Anchored write relists it; ree files each part on its own (rules in notes/spatial-grid.md, \"Assemblies as entries\")"
+		},
+		{
+			"line": "welds1 ends-cells anchored ",
+			"why": "a client files each welded assembly as one entry of the spatial grid (its parts' joined box, on that box's level, its parts listed together: a pair root first, more in the order they were made) and moves it as one when welds start or end, a member moves or an Anchored write relists it; ree files each part on its own (rules in notes/spatial-grid.md, \"Assemblies as entries\")"
+		},
+		{
+			"line": "welds1 ends-cells unanchored ",
+			"why": "a client files each welded assembly as one entry of the spatial grid (its parts' joined box, on that box's level, its parts listed together: a pair root first, more in the order they were made) and moves it as one when welds start or end, a member moves or an Anchored write relists it; ree files each part on its own (rules in notes/spatial-grid.md, \"Assemblies as entries\")"
+		},
+		{
+			"line": "welds1 ends-cells m4-anchored ",
+			"why": "a client files each welded assembly as one entry of the spatial grid (its parts' joined box, on that box's level, its parts listed together: a pair root first, more in the order they were made) and moves it as one when welds start or end, a member moves or an Anchored write relists it; ree files each part on its own (rules in notes/spatial-grid.md, \"Assemblies as entries\")"
+		},
+		{
+			"line": "welds1 anchor-write b-anchored ",
+			"why": "a client files each welded assembly as one entry of the spatial grid (its parts' joined box, on that box's level, its parts listed together: a pair root first, more in the order they were made) and moves it as one when welds start or end, a member moves or an Anchored write relists it; ree files each part on its own (rules in notes/spatial-grid.md, \"Assemblies as entries\")"
+		},
+		{
+			"line": "welds1 anchor-write b-free ",
+			"why": "a client files each welded assembly as one entry of the spatial grid (its parts' joined box, on that box's level, its parts listed together: a pair root first, more in the order they were made) and moves it as one when welds start or end, a member moves or an Anchored write relists it; ree files each part on its own (rules in notes/spatial-grid.md, \"Assemblies as entries\")"
+		},
+		{
+			"line": "welds1 anchor-write c-anchored ",
+			"why": "a client files each welded assembly as one entry of the spatial grid (its parts' joined box, on that box's level, its parts listed together: a pair root first, more in the order they were made) and moves it as one when welds start or end, a member moves or an Anchored write relists it; ree files each part on its own (rules in notes/spatial-grid.md, \"Assemblies as entries\")"
+		},
+		{
+			"line": "welds2 chain-parented-cab listed ",
+			"why": "a client files each welded assembly as one entry of the spatial grid (its parts' joined box, on that box's level, its parts listed together: a pair root first, more in the order they were made) and moves it as one when welds start or end, a member moves or an Anchored write relists it; ree files each part on its own (rules in notes/spatial-grid.md, \"Assemblies as entries\")"
+		},
+		{
+			"line": "welds2 chain-parented-bca listed ",
+			"why": "a client files each welded assembly as one entry of the spatial grid (its parts' joined box, on that box's level, its parts listed together: a pair root first, more in the order they were made) and moves it as one when welds start or end, a member moves or an Anchored write relists it; ree files each part on its own (rules in notes/spatial-grid.md, \"Assemblies as entries\")"
+		},
+		{
+			"line": "welds2 pair-big-parented-ba listed ",
+			"why": "a client files each welded assembly as one entry of the spatial grid (its parts' joined box, on that box's level, its parts listed together: a pair root first, more in the order they were made) and moves it as one when welds start or end, a member moves or an Anchored write relists it; ree files each part on its own (rules in notes/spatial-grid.md, \"Assemblies as entries\")"
+		},
+		{
+			"line": "welds2 four-parented-dcba listed ",
+			"why": "a client files each welded assembly as one entry of the spatial grid (its parts' joined box, on that box's level, its parts listed together: a pair root first, more in the order they were made) and moves it as one when welds start or end, a member moves or an Anchored write relists it; ree files each part on its own (rules in notes/spatial-grid.md, \"Assemblies as entries\")"
+		},
+		{
+			"line": "welds2 four-parented-bdac listed ",
+			"why": "a client files each welded assembly as one entry of the spatial grid (its parts' joined box, on that box's level, its parts listed together: a pair root first, more in the order they were made) and moves it as one when welds start or end, a member moves or an Anchored write relists it; ree files each part on its own (rules in notes/spatial-grid.md, \"Assemblies as entries\")"
+		},
+		{
+			"line": "welds2 three-x listed ",
+			"why": "a client files each welded assembly as one entry of the spatial grid (its parts' joined box, on that box's level, its parts listed together: a pair root first, more in the order they were made) and moves it as one when welds start or end, a member moves or an Anchored write relists it; ree files each part on its own (rules in notes/spatial-grid.md, \"Assemblies as entries\")"
+		},
+		{
+			"line": "welds2 after-cd-ab-bc weld bc ",
+			"why": "a client files each welded assembly as one entry of the spatial grid (its parts' joined box, on that box's level, its parts listed together: a pair root first, more in the order they were made) and moves it as one when welds start or end, a member moves or an Anchored write relists it; ree files each part on its own (rules in notes/spatial-grid.md, \"Assemblies as entries\")"
+		},
+		{
+			"line": "welds2 after-bc-ab weld ab ",
+			"why": "a client files each welded assembly as one entry of the spatial grid (its parts' joined box, on that box's level, its parts listed together: a pair root first, more in the order they were made) and moves it as one when welds start or end, a member moves or an Anchored write relists it; ree files each part on its own (rules in notes/spatial-grid.md, \"Assemblies as entries\")"
+		},
+		{
+			"line": "welds2 after-ca-cb weld cb ",
+			"why": "a client files each welded assembly as one entry of the spatial grid (its parts' joined box, on that box's level, its parts listed together: a pair root first, more in the order they were made) and moves it as one when welds start or end, a member moves or an Anchored write relists it; ree files each part on its own (rules in notes/spatial-grid.md, \"Assemblies as entries\")"
+		},
+		{
+			"line": "welds2 after-big weld bc ",
+			"why": "a client files each welded assembly as one entry of the spatial grid (its parts' joined box, on that box's level, its parts listed together: a pair root first, more in the order they were made) and moves it as one when welds start or end, a member moves or an Anchored write relists it; ree files each part on its own (rules in notes/spatial-grid.md, \"Assemblies as entries\")"
+		},
+		{
+			"line": "welds2 move listed ",
+			"why": "a client files each welded assembly as one entry of the spatial grid (its parts' joined box, on that box's level, its parts listed together: a pair root first, more in the order they were made) and moves it as one when welds start or end, a member moves or an Anchored write relists it; ree files each part on its own (rules in notes/spatial-grid.md, \"Assemblies as entries\")"
+		},
+		{
+			"line": "welds2 move a-moved ",
+			"why": "a client files each welded assembly as one entry of the spatial grid (its parts' joined box, on that box's level, its parts listed together: a pair root first, more in the order they were made) and moves it as one when welds start or end, a member moves or an Anchored write relists it; ree files each part on its own (rules in notes/spatial-grid.md, \"Assemblies as entries\")"
+		},
+		{
+			"line": "welds2 move x-moved ",
+			"why": "a client files each welded assembly as one entry of the spatial grid (its parts' joined box, on that box's level, its parts listed together: a pair root first, more in the order they were made) and moves it as one when welds start or end, a member moves or an Anchored write relists it; ree files each part on its own (rules in notes/spatial-grid.md, \"Assemblies as entries\")"
+		},
+		{
+			"line": "welds2 move b-moved ",
+			"why": "a client files each welded assembly as one entry of the spatial grid (its parts' joined box, on that box's level, its parts listed together: a pair root first, more in the order they were made) and moves it as one when welds start or end, a member moves or an Anchored write relists it; ree files each part on its own (rules in notes/spatial-grid.md, \"Assemblies as entries\")"
+		},
+		{
+			"line": "welds2 move-out-back listed ",
+			"why": "a client files each welded assembly as one entry of the spatial grid (its parts' joined box, on that box's level, its parts listed together: a pair root first, more in the order they were made) and moves it as one when welds start or end, a member moves or an Anchored write relists it; ree files each part on its own (rules in notes/spatial-grid.md, \"Assemblies as entries\")"
+		},
+		{
+			"line": "welds2 move-out-back a-out-back ",
+			"why": "a client files each welded assembly as one entry of the spatial grid (its parts' joined box, on that box's level, its parts listed together: a pair root first, more in the order they were made) and moves it as one when welds start or end, a member moves or an Anchored write relists it; ree files each part on its own (rules in notes/spatial-grid.md, \"Assemblies as entries\")"
+		},
+		{
+			"line": "welds2 level-149 listed ",
+			"why": "a client files each welded assembly as one entry of the spatial grid (its parts' joined box, on that box's level, its parts listed together: a pair root first, more in the order they were made) and moves it as one when welds start or end, a member moves or an Anchored write relists it; ree files each part on its own (rules in notes/spatial-grid.md, \"Assemblies as entries\")"
+		},
+		{
+			"line": "welds2 level-200 listed ",
+			"why": "a client files each welded assembly as one entry of the spatial grid (its parts' joined box, on that box's level, its parts listed together: a pair root first, more in the order they were made) and moves it as one when welds start or end, a member moves or an Anchored write relists it; ree files each part on its own (rules in notes/spatial-grid.md, \"Assemblies as entries\")"
+		},
+		{
+			"line": "welds2 span listed ",
+			"why": "a client files each welded assembly as one entry of the spatial grid (its parts' joined box, on that box's level, its parts listed together: a pair root first, more in the order they were made) and moves it as one when welds start or end, a member moves or an Anchored write relists it; ree files each part on its own (rules in notes/spatial-grid.md, \"Assemblies as entries\")"
+		},
+		{
+			"line": "welds2 ray-tie block ",
+			"why": "a client's Blockcast takes the welded part of two parts tied at the same distance, as its walk meets the assembly's entry; ree files each part on its own"
+		},
+		{
+			"line": "welds2 ray-tie-near listed ",
+			"why": "a client files each welded assembly as one entry of the spatial grid (its parts' joined box, on that box's level, its parts listed together: a pair root first, more in the order they were made) and moves it as one when welds start or end, a member moves or an Anchored write relists it; ree files each part on its own (rules in notes/spatial-grid.md, \"Assemblies as entries\")"
+		},
+		{
+			"line": "welds3 folder false ",
+			"why": "a client files each welded assembly as one entry of the spatial grid (its parts' joined box, on that box's level, its parts listed together: a pair root first, more in the order they were made) and moves it as one when welds start or end, a member moves or an Anchored write relists it; ree files each part on its own (rules in notes/spatial-grid.md, \"Assemblies as entries\")"
+		},
+		{
+			"line": "welds3 folder true ",
+			"why": "a client files each welded assembly as one entry of the spatial grid (its parts' joined box, on that box's level, its parts listed together: a pair root first, more in the order they were made) and moves it as one when welds start or end, a member moves or an Anchored write relists it; ree files each part on its own (rules in notes/spatial-grid.md, \"Assemblies as entries\")"
+		},
+		{
+			"line": "welds3 split a mid-ends ",
+			"why": "a client files each welded assembly as one entry of the spatial grid (its parts' joined box, on that box's level, its parts listed together: a pair root first, more in the order they were made) and moves it as one when welds start or end, a member moves or an Anchored write relists it; ree files each part on its own (rules in notes/spatial-grid.md, \"Assemblies as entries\")"
+		},
+		{
+			"line": "welds3 split d mid-ends ",
+			"why": "a client files each welded assembly as one entry of the spatial grid (its parts' joined box, on that box's level, its parts listed together: a pair root first, more in the order they were made) and moves it as one when welds start or end, a member moves or an Anchored write relists it; ree files each part on its own (rules in notes/spatial-grid.md, \"Assemblies as entries\")"
+		},
+		{
+			"line": "welds3 split b mid-ends ",
+			"why": "a client files each welded assembly as one entry of the spatial grid (its parts' joined box, on that box's level, its parts listed together: a pair root first, more in the order they were made) and moves it as one when welds start or end, a member moves or an Anchored write relists it; ree files each part on its own (rules in notes/spatial-grid.md, \"Assemblies as entries\")"
+		},
+		{
+			"line": "welds3 star hub-out ",
+			"why": "a client files each welded assembly as one entry of the spatial grid (its parts' joined box, on that box's level, its parts listed together: a pair root first, more in the order they were made) and moves it as one when welds start or end, a member moves or an Anchored write relists it; ree files each part on its own (rules in notes/spatial-grid.md, \"Assemblies as entries\")"
+		},
+		{
+			"line": "welds3 star hub-back ",
+			"why": "a client files each welded assembly as one entry of the spatial grid (its parts' joined box, on that box's level, its parts listed together: a pair root first, more in the order they were made) and moves it as one when welds start or end, a member moves or an Anchored write relists it; ree files each part on its own (rules in notes/spatial-grid.md, \"Assemblies as entries\")"
+		},
+		{
+			"line": "welds3 move member-back ",
+			"why": "a client files each welded assembly as one entry of the spatial grid (its parts' joined box, on that box's level, its parts listed together: a pair root first, more in the order they were made) and moves it as one when welds start or end, a member moves or an Anchored write relists it; ree files each part on its own (rules in notes/spatial-grid.md, \"Assemblies as entries\")"
+		},
+		{
+			"line": "welds3 anchor a-free ",
+			"why": "a client files each welded assembly as one entry of the spatial grid (its parts' joined box, on that box's level, its parts listed together: a pair root first, more in the order they were made) and moves it as one when welds start or end, a member moves or an Anchored write relists it; ree files each part on its own (rules in notes/spatial-grid.md, \"Assemblies as entries\")"
+		},
+		{
+			"line": "welds3 anchor b-to-k ",
+			"why": "a client files each welded assembly as one entry of the spatial grid (its parts' joined box, on that box's level, its parts listed together: a pair root first, more in the order they were made) and moves it as one when welds start or end, a member moves or an Anchored write relists it; ree files each part on its own (rules in notes/spatial-grid.md, \"Assemblies as entries\")"
+		},
+		{
+			"line": "welds4 ax-b-F ",
+			"why": "a client files each welded assembly as one entry of the spatial grid (its parts' joined box, on that box's level, its parts listed together: a pair root first, more in the order they were made) and moves it as one when welds start or end, a member moves or an Anchored write relists it; ree files each part on its own (rules in notes/spatial-grid.md, \"Assemblies as entries\")"
+		},
+		{
+			"line": "welds4 F-axb ",
+			"why": "a client files each welded assembly as one entry of the spatial grid (its parts' joined box, on that box's level, its parts listed together: a pair root first, more in the order they were made) and moves it as one when welds start or end, a member moves or an Anchored write relists it; ree files each part on its own (rules in notes/spatial-grid.md, \"Assemblies as entries\")"
+		},
+		{
+			"line": "welds4 a-F-xb ",
+			"why": "a client files each welded assembly as one entry of the spatial grid (its parts' joined box, on that box's level, its parts listed together: a pair root first, more in the order they were made) and moves it as one when welds start or end, a member moves or an Anchored write relists it; ree files each part on its own (rules in notes/spatial-grid.md, \"Assemblies as entries\")"
+		},
+		{
+			"line": "welds4 ax-F-b ",
+			"why": "a client files each welded assembly as one entry of the spatial grid (its parts' joined box, on that box's level, its parts listed together: a pair root first, more in the order they were made) and moves it as one when welds start or end, a member moves or an Anchored write relists it; ree files each part on its own (rules in notes/spatial-grid.md, \"Assemblies as entries\")"
+		},
+		{
+			"line": "welds4 axbW ",
+			"why": "a client files each welded assembly as one entry of the spatial grid (its parts' joined box, on that box's level, its parts listed together: a pair root first, more in the order they were made) and moves it as one when welds start or end, a member moves or an Anchored write relists it; ree files each part on its own (rules in notes/spatial-grid.md, \"Assemblies as entries\")"
+		},
+		{
+			"line": "welds4 Waxb ",
+			"why": "a client files each welded assembly as one entry of the spatial grid (its parts' joined box, on that box's level, its parts listed together: a pair root first, more in the order they were made) and moves it as one when welds start or end, a member moves or an Anchored write relists it; ree files each part on its own (rules in notes/spatial-grid.md, \"Assemblies as entries\")"
+		},
+		{
+			"line": "welds4 axWb ",
+			"why": "a client files each welded assembly as one entry of the spatial grid (its parts' joined box, on that box's level, its parts listed together: a pair root first, more in the order they were made) and moves it as one when welds start or end, a member moves or an Anchored write relists it; ree files each part on its own (rules in notes/spatial-grid.md, \"Assemblies as entries\")"
+		},
+		{
+			"line": "welds4 axb-weld ",
+			"why": "a client files each welded assembly as one entry of the spatial grid (its parts' joined box, on that box's level, its parts listed together: a pair root first, more in the order they were made) and moves it as one when welds start or end, a member moves or an Anchored write relists it; ree files each part on its own (rules in notes/spatial-grid.md, \"Assemblies as entries\")"
+		},
+		{
+			"line": "welds4 Waxb-weld ",
+			"why": "a client files each welded assembly as one entry of the spatial grid (its parts' joined box, on that box's level, its parts listed together: a pair root first, more in the order they were made) and moves it as one when welds start or end, a member moves or an Anchored write relists it; ree files each part on its own (rules in notes/spatial-grid.md, \"Assemblies as entries\")"
+		},
+		{
+			"line": "welds4 axbyc-FWV ",
+			"why": "a client files each welded assembly as one entry of the spatial grid (its parts' joined box, on that box's level, its parts listed together: a pair root first, more in the order they were made) and moves it as one when welds start or end, a member moves or an Anchored write relists it; ree files each part on its own (rules in notes/spatial-grid.md, \"Assemblies as entries\")"
+		},
+		{
+			"line": "welds4 FWV-axbyc ",
+			"why": "a client files each welded assembly as one entry of the spatial grid (its parts' joined box, on that box's level, its parts listed together: a pair root first, more in the order they were made) and moves it as one when welds start or end, a member moves or an Anchored write relists it; ree files each part on its own (rules in notes/spatial-grid.md, \"Assemblies as entries\")"
+		},
+		{
+			"line": "welds4 axbyc-WV ",
+			"why": "a client files each welded assembly as one entry of the spatial grid (its parts' joined box, on that box's level, its parts listed together: a pair root first, more in the order they were made) and moves it as one when welds start or end, a member moves or an Anchored write relists it; ree files each part on its own (rules in notes/spatial-grid.md, \"Assemblies as entries\")"
+		},
+		{
+			"line": "welds4 WV-axbyc ",
+			"why": "a client files each welded assembly as one entry of the spatial grid (its parts' joined box, on that box's level, its parts listed together: a pair root first, more in the order they were made) and moves it as one when welds start or end, a member moves or an Anchored write relists it; ree files each part on its own (rules in notes/spatial-grid.md, \"Assemblies as entries\")"
+		},
+		{
+			"line": "welds4 aW-x-bV-y-c ",
+			"why": "a client files each welded assembly as one entry of the spatial grid (its parts' joined box, on that box's level, its parts listed together: a pair root first, more in the order they were made) and moves it as one when welds start or end, a member moves or an Anchored write relists it; ree files each part on its own (rules in notes/spatial-grid.md, \"Assemblies as entries\")"
+		}
+	],
 	"lifetime": [
 		{
 			"line": "weak-values-left Closure,DelayedThread,EnumItem,HeldByHandler,HeldByOther,InWorld,String,Vector3",
