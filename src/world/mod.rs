@@ -512,6 +512,15 @@ fn read_rotation(t: &Affine3A) -> Value {
     frame::vector_value(frame::rotation_xyz(&t.matrix3.into()))
 }
 
+/// A part's Orientation and Rotation: to the thousandth of a degree (frame::part_degrees)
+fn read_part_orientation(t: &Affine3A) -> Value {
+    frame::vector_value(frame::part_degrees(frame::orientation(&t.matrix3.into())))
+}
+
+fn read_part_rotation(t: &Affine3A) -> Value {
+    frame::vector_value(frame::part_degrees(frame::rotation_xyz(&t.matrix3.into())))
+}
+
 fn write_rotation(t: &Affine3A, value: &Value) -> Option<Affine3A> {
     Some(Affine3A::from_mat3_translation(frame::from_rotation_xyz(frame::vector_of(value)?), frame::translation(t)))
 }
@@ -580,8 +589,8 @@ pub fn install(engine: &Rc<Engine>) {
     // Parts: Position, Orientation and Rotation are views of CFrame (writing one moves the part
     // without its assembly)
     cframe_view(engine, "BasePart", "Position", read_position, write_position, true);
-    cframe_view(engine, "BasePart", "Orientation", read_orientation, write_orientation, true);
-    cframe_view(engine, "BasePart", "Rotation", read_rotation, write_rotation, true);
+    cframe_view(engine, "BasePart", "Orientation", read_part_orientation, write_orientation, true);
+    cframe_view(engine, "BasePart", "Rotation", read_part_rotation, write_rotation, true);
     // Attachments: the same of their own CFrame, plus the axes
     cframe_view(engine, "Attachment", "Position", read_position, write_position, false);
     cframe_view(engine, "Attachment", "Orientation", read_orientation, write_orientation, false);

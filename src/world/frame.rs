@@ -97,17 +97,27 @@ pub fn vector_of(value: &Value) -> Option<Vec3> {
     }
 }
 
-/// Where an Euler decomposition loses an axis (its middle angle at +-90 degrees): the last angle
-/// is taken as 0 there.
-const GIMBAL: f32 = 0.99999;
-
-/// `CFrame:ToOrientation()` in degrees (Ry * Rx * Rz).
-pub fn orientation(matrix: &Mat3) -> Vec3 {
-    // m[row][col]: glam is column-major
+/// A rotation's rows (glam is column-major)
+fn rows_of(matrix: &Mat3) -> [[f32; 3]; 3] {
     let r = |row: usize, col: usize| matrix.col(col)[row];
-    let x = (-r(1, 2)).clamp(-1.0, 1.0).asin();
-    let (y, z) = if r(1, 2).abs() < GIMBAL { (r(0, 2).atan2(r(2, 2)), r(1, 0).atan2(r(1, 1))) } else { ((-r(2, 0)).atan2(r(0, 0)), 0.0) };
+    [[r(0, 0), r(0, 1), r(0, 2)], [r(1, 0), r(1, 1), r(1, 2)], [r(2, 0), r(2, 1), r(2, 2)]]
+}
+
+/// `CFrame:ToOrientation()` in degrees (Ry * Rx * Rz): the datatype's own decomposition (lune_roblox's float32::to_euler,
+/// G3D's branches, locked when the middle term is within seven float steps of 1 or -1), each angle turned to degrees. A
+/// client's Attachment.Orientation and its world forms read it so; a part's are [`part_degrees`] of it (measured on a 0.747
+/// playing client and a server, two sessions: tools/parity/probes/euler_lock.luau).
+pub fn orientation(matrix: &Mat3) -> Vec3 {
+    let (x, y, z) = lune_roblox::datatypes::types::float32::to_euler("YXZ", &rows_of(matrix));
     Vec3::new(x.to_degrees(), y.to_degrees(), z.to_degrees())
+}
+
+/// A BasePart's Orientation and Rotation as a client reads them: each angle to the nearest thousandth of a degree, a half
+/// rounded up (-0.0004 reads 0, -0.00051 reads -0.001; measured, tools/parity/probes/euler_lock.luau `read`); an
+/// Attachment's are not rounded.
+pub fn part_degrees(degrees: Vec3) -> Vec3 {
+    let round = |angle: f32| (((angle as f64) * 1000.0 + 0.5).floor() / 1000.0) as f32;
+    Vec3::new(round(degrees.x), round(degrees.y), round(degrees.z))
 }
 
 /// `CFrame.fromOrientation` of degrees.
@@ -116,11 +126,9 @@ pub fn from_orientation(degrees: Vec3) -> Mat3 {
     Mat3::from_rotation_y(radians.y) * Mat3::from_rotation_x(radians.x) * Mat3::from_rotation_z(radians.z)
 }
 
-/// `CFrame:ToEulerAnglesXYZ()` in degrees (Rx * Ry * Rz).
+/// `CFrame:ToEulerAnglesXYZ()` in degrees (Rx * Ry * Rz), as [`orientation`] decomposes
 pub fn rotation_xyz(matrix: &Mat3) -> Vec3 {
-    let r = |row: usize, col: usize| matrix.col(col)[row];
-    let y = r(0, 2).clamp(-1.0, 1.0).asin();
-    let (x, z) = if r(0, 2).abs() < GIMBAL { ((-r(1, 2)).atan2(r(2, 2)), (-r(0, 1)).atan2(r(0, 0))) } else { (r(2, 1).atan2(r(1, 1)), 0.0) };
+    let (x, y, z) = lune_roblox::datatypes::types::float32::to_euler("XYZ", &rows_of(matrix));
     Vec3::new(x.to_degrees(), y.to_degrees(), z.to_degrees())
 }
 

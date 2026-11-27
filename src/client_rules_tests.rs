@@ -213,3 +213,43 @@ fn datatype_method_values_are_new_functions() {
     );
     done(&lines);
 }
+
+/// Euler angles lock when the middle term is within seven float steps of 1 (eight is open), whatever the rest of the row; a part's
+/// Orientation and Rotation are those angles to the thousandth of a degree, halves up; an Attachment's are not rounded.
+#[test]
+fn euler_angles_lock_seven_steps_from_one_and_a_part_rounds_them() {
+    let lines = run(
+        play(),
+        r#"
+        local Half = math.pi / 2
+        local function Middle(K)
+            local E = 1 - K * 2 ^ -24
+            local S = math.sqrt(1 - E * E)
+            local _, Y = CFrame.new(0, 0, 0, S, 0, E, 0, 1, 0, -E, 0, S):ToEulerAnglesXYZ()
+            local X = CFrame.new(0, 0, 0, 1, 0, 0, 0, S, -E, 0, E, S):ToOrientation()
+            return Y, X
+        end
+        local Y7, X7 = Middle(7)
+        local Y8, X8 = Middle(8)
+        assert(math.abs(Y7 - Half) < 1e-7 and math.abs(X7 - Half) < 1e-7, "seven steps lock")
+        assert(Y8 < Half - 1e-4 and X8 < Half - 1e-4, "eight are open")
+        local _, Wide = CFrame.new(0, 0, 0, 0.5, 0.5, 0.9999999, 0, 1, 0, 0, 0, 1):ToEulerAnglesXYZ()
+        assert(math.abs(Wide - Half) < 1e-7, "the entry decides")
+        local Part = Instance.new("Part")
+        Part.CFrame = CFrame.fromOrientation(math.rad(10.12345), math.rad(20.6789), math.rad(30.5555))
+        local O = Part.Orientation
+        assert(string.format("%.9g %.9g %.9g", O.X, O.Y, O.Z) == "10.1230001 20.6790009 30.5559998", tostring(O))
+        Part.CFrame = CFrame.fromOrientation(math.rad(0.00049), math.rad(-0.0004), math.rad(-0.00051))
+        O = Part.Orientation
+        assert(O.X == 0 and O.Y == 0 and 1 / O.Y > 0 and string.format("%.9g", O.Z) == "-0.00100000005", tostring(O))
+        local Att = Instance.new("Attachment")
+        Att.CFrame = CFrame.fromOrientation(math.rad(10.12345), 0, 0)
+        assert(math.abs(Att.Orientation.X - 10.12345) < 1e-4 and Att.Orientation.X ~= 10.123, tostring(Att.Orientation))
+        Part.CFrame = CFrame.fromOrientation(math.rad(89.95), math.rad(30), math.rad(20))
+        assert(Part.Orientation == Vector3.new(90, 10, 0), tostring(Part.Orientation))
+        print("done")
+        "#,
+        0.0,
+    );
+    done(&lines);
+}

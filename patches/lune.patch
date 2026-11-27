@@ -3050,20 +3050,20 @@ index 8c561eb..7784c6d 100644
 +        product.map(|row| row.map(term_value))
 +    }
 +
-+    /// ToEulerAngles(order) as (x, y, z), G3D's Matrix3::toEulerAngles*: while the middle axis's term `m` is inside
-+    /// (-1, 1), asinf of it and atan2f for the other two; at gimbal lock (`m` at or past 1 or -1, and not-a-number, which
-+    /// fails `m < 1`), the middle angle is a quarter turn (the float of pi / 2, signed as asin would sign it), the last
-+    /// axis's angle is +0 and the first axis's angle carries the whole free rotation, atan2f of two terms the lock leaves.
-+    /// Measured to the bit for all six orders at both locks, exact quarter turns and a not-a-number matrix (Studio 0.747,
-+    /// ree's tools/parity/probes/datatype_edges.luau `euler` and datatype_edges_more.luau `lock`, `quarter`).
++    /// ToEulerAngles(order) as (x, y, z), G3D's Matrix3::toEulerAngles*: while the middle axis's term `m` is more than seven
++    /// float steps inside 1 and -1 (|m| < 0.9999996), asinf of it and atan2f for the other two; at gimbal lock (`m` nearer, at
++    /// or past 1 or -1, and not-a-number, which fails `m < lock`), the middle angle is a quarter turn (the float of pi / 2,
++    /// signed as asin would sign it), the last axis's angle is +0 and the first axis's angle carries the free rotation, atan2f
++    /// of two terms the lock leaves. Measured to the bit for all six orders (Studio 0.747, ree's datatype_edges.luau `euler`,
++    /// datatype_edges_more.luau `lock`, `quarter`; euler_lock.luau: 1 - 7 float steps locks, 1 - 8 does not, wherever m is).
 +    pub fn to_euler(order: &str, r: &Rot) -> (f32, f32, f32) {
-+        let half = std::f64::consts::FRAC_PI_2 as f32;
-+        // (middle term, the open branch as (x, y, z), the branch at m <= -1, the branch at m >= 1 or not-a-number)
++        let (half, lock) = (std::f64::consts::FRAC_PI_2 as f32, 0.9999996_f32);
++        // (middle term, the open branch as (x, y, z), the branch at m <= -lock, the branch at m >= lock or not-a-number)
 +        match order {
 +            "XYZ" => {
 +                let m = r[0][2];
-+                if m < 1.0 {
-+                    if m > -1.0 {
++                if m < lock {
++                    if m > -lock {
 +                        ((-r[1][2]).atan2(r[2][2]), m.asin(), (-r[0][1]).atan2(r[0][0]))
 +                    } else {
 +                        (-r[1][0].atan2(r[1][1]), -half, 0.0)
@@ -3074,8 +3074,8 @@ index 8c561eb..7784c6d 100644
 +            }
 +            "YXZ" => {
 +                let m = r[1][2];
-+                if m < 1.0 {
-+                    if m > -1.0 {
++                if m < lock {
++                    if m > -lock {
 +                        ((-m).asin(), r[0][2].atan2(r[2][2]), r[1][0].atan2(r[1][1]))
 +                    } else {
 +                        (half, r[0][1].atan2(r[0][0]), 0.0)
@@ -3086,8 +3086,8 @@ index 8c561eb..7784c6d 100644
 +            }
 +            "ZXY" => {
 +                let m = r[2][1];
-+                if m < 1.0 {
-+                    if m > -1.0 {
++                if m < lock {
++                    if m > -lock {
 +                        (m.asin(), (-r[2][0]).atan2(r[2][2]), (-r[0][1]).atan2(r[1][1]))
 +                    } else {
 +                        (-half, 0.0, -r[0][2].atan2(r[0][0]))
@@ -3098,8 +3098,8 @@ index 8c561eb..7784c6d 100644
 +            }
 +            "XZY" => {
 +                let m = r[0][1];
-+                if m < 1.0 {
-+                    if m > -1.0 {
++                if m < lock {
++                    if m > -lock {
 +                        (r[2][1].atan2(r[1][1]), r[0][2].atan2(r[0][0]), (-m).asin())
 +                    } else {
 +                        (r[2][0].atan2(r[2][2]), 0.0, half)
@@ -3110,8 +3110,8 @@ index 8c561eb..7784c6d 100644
 +            }
 +            "YZX" => {
 +                let m = r[1][0];
-+                if m < 1.0 {
-+                    if m > -1.0 {
++                if m < lock {
++                    if m > -lock {
 +                        ((-r[1][2]).atan2(r[1][1]), (-r[2][0]).atan2(r[0][0]), m.asin())
 +                    } else {
 +                        (0.0, -r[2][1].atan2(r[2][2]), -half)
@@ -3122,8 +3122,8 @@ index 8c561eb..7784c6d 100644
 +            }
 +            _ => {
 +                let m = r[2][0];
-+                if m < 1.0 {
-+                    if m > -1.0 {
++                if m < lock {
++                    if m > -lock {
 +                        (r[2][1].atan2(r[2][2]), (-m).asin(), r[1][0].atan2(r[0][0]))
 +                    } else {
 +                        (0.0, half, -r[0][1].atan2(r[0][2]))
