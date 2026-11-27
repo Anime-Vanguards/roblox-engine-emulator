@@ -129,6 +129,83 @@ fn marking_a_loaded_engine_chunk_revokes_its_cold_code() {
     }
 }
 
+/// A frame that never ends gives back the pages its collector frees (patches/luau/31-cold-pages-in-long-frames.patch). While cold
+/// touches are tracked, a page of collected objects waits for the next frame, since the list of marked objects may point into it,
+/// and a loop that never yields kept every one: a string grown one letter at a time took `ree run` past 2 GB in about a second while
+/// gcinfo read 2 MB. A playing client and a server keep their memory flat through such loops (roblox-sim 0.747, captured twice each:
+/// 5 GB of collected strings, tables and closures in one resumption, gcinfo under 1 MB, private bytes unchanged). The VM's allocator
+/// counts the kept pages, so a limit 48 MB above the heap ends this loop with a memory error when they are kept to the frame's end;
+/// the loops free about 600 MB.
+#[test]
+fn a_loop_that_never_yields_gives_back_the_memory_its_collector_frees() {
+    let (lua, _engine) = start();
+    let limit = lua.used_memory() + (48 << 20);
+    lua.set_memory_limit(limit).unwrap();
+    let result = lua
+        .load(
+            r#"
+        -- long strings (each over 1 KB from 1,025 letters on: a page of its own)
+        local S = ""
+        for _ = 1, 30000 do
+            S ..= "n"
+        end
+        -- short ones, in pages of many that empty as they are collected
+        local T
+        for I = 1, 500000 do
+            T = string.rep("x", 100 + I % 400)
+        end
+        return #S + #T
+    "#,
+        )
+        .set_name("=never-yields")
+        .eval::<i64>();
+    lua.set_memory_limit(0).unwrap();
+    let length = result.unwrap_or_else(|error| panic!("the loop ran out of the 48 MB above its heap: {error}"));
+    assert_eq!(length, 30000 + 100 + 500000 % 400);
+}
+
+/// Trimming the list of marked objects within a frame (patch 31: a full list of a million entries, kept pages past 8 MiB) keeps every
+/// mark: a table touched before the trims is not counted again after them in the same frame, and is in the next frame.
+#[test]
+fn trimming_the_marked_objects_within_a_frame_keeps_their_marks() {
+    let (lua, _engine) = start();
+    let tables = || unsafe { (*crate::cost::lua_workcounters(main_state(&lua))).coldtables };
+    let touch: LuaFunction = lua.load("local Old = { 1 }\nreturn function() return Old[1] end").set_name("=old").eval().unwrap();
+    let churn: LuaFunction = lua
+        .load(
+            r#"return function()
+        -- 1.2 million tables made in the frame (a list entry each), every 64th kept; then 128 MB of long strings collected
+        local Kept = {}
+        for I = 1, 1200000 do
+            local T = { I }
+            if I % 64 == 0 then
+                Kept[#Kept + 1] = T
+            end
+        end
+        local S = ""
+        for _ = 1, 8000 do
+            S ..= "nnnn"
+        end
+        return #Kept + #S
+    end"#,
+        )
+        .set_name("=churn")
+        .eval()
+        .unwrap();
+    crate::cost::cold_frame(&lua);
+    let before = tables();
+    assert_eq!(touch.call::<i64>(()).unwrap(), 1);
+    assert_eq!(tables() - before, 1, "the table made in an earlier frame is cold at its first touch");
+    assert_eq!(churn.call::<i64>(()).unwrap(), 1200000 / 64 + 32000);
+    let before = tables();
+    assert_eq!(touch.call::<i64>(()).unwrap(), 1);
+    assert_eq!(tables(), before, "still marked after the trims");
+    crate::cost::cold_frame(&lua);
+    let before = tables();
+    assert_eq!(touch.call::<i64>(()).unwrap(), 1);
+    assert_eq!(tables() - before, 1, "cold again in the next frame");
+}
+
 #[test]
 fn a_binding_helpers_code_belongs_to_its_executing_frame() {
     let (lua, _engine) = start();

@@ -4,6 +4,7 @@
 
 #include "Luau/BytecodeUtils.h"
 
+#include <algorithm>
 #include <mutex>
 #include <new>
 #include <unordered_map>
@@ -1771,6 +1772,8 @@ struct ColdState
     lua_Page** pages = nullptr;
     size_t pagecount = 0;
     size_t pagecapacity = 0;
+    // the kept pages' bytes (coldtrim gives them back once they pass coldtrimbytes)
+    size_t pagebytes = 0;
     // the frames lua_coldframe began, and the last of them each function's code ran in (LUA_WORK_RAREPROTOS)
     uint32_t frame = 0;
     // direct-indexed slots keyed by 1-based Proto::coldslot (1..65534); avoids per-instruction hash lookups
@@ -1816,14 +1819,29 @@ static bool coldgrow(void** items, size_t* capacity, size_t itemsize)
     return true;
 }
 
-static void coldpush(global_State* g, GCObject* o)
+static void coldtrim(lua_State* L, ColdState* c);
+
+// a full list of at least this many entries is trimmed (coldtrim) before it grows, and grows only if it is still over half full: a
+// frame that makes objects without end (a loop that never yields) keeps a list of about twice its marked objects, trimmed after as
+// many pushes as it kept
+static const size_t kColdTrimEntries = size_t(1) << 20;
+
+static void coldpush(lua_State* L, GCObject* o)
 {
+    global_State* g = L->global;
     ColdState* c = coldstates[g->coldslot];
-    if (c->touchedcount == c->touchedcapacity && !coldgrow((void**)&c->touched, &c->touchedcapacity, sizeof(GCObject*)))
+    if (c->touchedcount == c->touchedcapacity)
     {
-        // (out of memory: stop tracking; the marks already set stay, so those objects read touched from now on)
-        g->coldon = 0;
-        return;
+        bool trimmed = c->touchedcapacity >= kColdTrimEntries;
+        if (trimmed)
+            coldtrim(L, c);
+        if ((!trimmed || c->touchedcount * 2 > c->touchedcapacity) && !coldgrow((void**)&c->touched, &c->touchedcapacity, sizeof(GCObject*)) &&
+            c->touchedcount == c->touchedcapacity)
+        {
+            // (out of memory: stop tracking; the marks already set stay, so those objects read touched from now on)
+            g->coldon = 0;
+            return;
+        }
     }
     c->touched[c->touchedcount++] = o;
 }
@@ -2002,7 +2020,7 @@ void luaC_coldtouch(lua_State* L, GCObject* o)
     l_setbit(o->gch.marked, COLDBIT);
     if (!g->coldon)
         return;
-    coldpush(g, o);
+    coldpush(L, o);
     // counted for a script's work: its instruction (or a C function it called) touched the table, or the function it runs is a script's
     if (!luaE_scriptwork(L))
         return;
@@ -2071,7 +2089,7 @@ void luaC_coldcall(lua_State* L, Closure* cl, int host, const TValue* self, cons
     if (!g->coldon || testbit(cl->marked, COLDBIT))
         return;
     l_setbit(cl->marked, COLDBIT);
-    coldpush(g, obj2gco(cl));
+    coldpush(L, obj2gco(cl));
     // a C function the host's own code calls (a method its __namecall dispatches to, the binding's calls while it serves a
     // script's read, a getter its helper chunks call) runs inside an engine path the host prices where the script called it
     if (!host && (!caller || (caller->source && strncmp(getstr(caller->source), "=__mlua", 7) == 0)))
@@ -2098,7 +2116,18 @@ void luaC_coldmade(lua_State* L, GCObject* o)
     l_setbit(o->gch.marked, COLDBIT);
     global_State* g = L->global;
     if (g->coldon)
-        coldpush(g, o);
+        coldpush(L, o);
+}
+
+// the kept pages' bytes past which they go back before the frame ends (coldtrim): at least 8 MiB, so a frame of a game's usual work
+// keeps its pages to its end as before, and 64 bytes an entry of the list, so trimming a long list stays a small share of the work
+// that freed the pages
+static const size_t kColdTrimBytes = size_t(8) << 20;
+
+static size_t coldtrimbytes(ColdState* c)
+{
+    size_t perentry = c->touchedcount * 64;
+    return perentry > kColdTrimBytes ? perentry : kColdTrimBytes;
 }
 
 bool luaC_colddefer(lua_State* L, lua_Page* page)
@@ -2108,9 +2137,72 @@ bool luaC_colddefer(lua_State* L, lua_Page* page)
         return false;
     ColdState* c = coldstates[g->coldslot];
     if (c->pagecount == c->pagecapacity && !coldgrow((void**)&c->pages, &c->pagecapacity, sizeof(lua_Page*)))
-        return false;
+    {
+        // (out of memory for the list: the kept pages go back now, which makes room)
+        if (c->pagecount == 0)
+            return false;
+        coldtrim(L, c);
+    }
+    int pageblocks, busyblocks, blocksize, pagesize;
+    luaM_getpageinfo(page, &pageblocks, &busyblocks, &blocksize, &pagesize);
     c->pages[c->pagecount++] = page;
+    c->pagebytes += size_t(pagesize);
+    if (c->pagebytes >= coldtrimbytes(c))
+        coldtrim(L, c);
     return true;
+}
+
+// Gives the pages kept since the frame began back to the allocator before the frame ends. Upstream frees a collected object's page at
+// once; ree keeps it to the frame's end, while the list of marked objects may point into it, so a frame that never ends (a loop that
+// never yields until the script timeout) kept every page the collector freed: a string grown one letter at a time took a process past
+// 2 GB in about a second while the heap (totalbytes, gcinfo) stayed at 2 MB, where a playing client and a server keep their memory flat
+// (roblox-sim 0.747). The list's entries into the kept pages go first (their objects are collected), and so do its entries for a free
+// block (an object collected in a page still in use: its header reads LUA_TNIL until the block is made again, and a block made again
+// has its header written whole), for an object no mark is on (a block made again into an object of a kind no touch marks) and repeats
+// (a block made again into a marked object); what is left is each marked object once, so the marks coldclear clears and every count
+// stay as they were. Nothing the VM counts moves: the pages left the heap's totals when their objects were freed.
+static void coldtrim(lua_State* L, ColdState* c)
+{
+    struct Range
+    {
+        uintptr_t begin;
+        uintptr_t end;
+    };
+    std::vector<Range> ranges;
+    ranges.reserve(c->pagecount);
+    for (size_t i = 0; i < c->pagecount; ++i)
+    {
+        int pageblocks, busyblocks, blocksize, pagesize;
+        luaM_getpageinfo(c->pages[i], &pageblocks, &busyblocks, &blocksize, &pagesize);
+        uintptr_t begin = uintptr_t(c->pages[i]);
+        ranges.push_back({begin, begin + uintptr_t(pagesize)});
+    }
+    std::sort(ranges.begin(), ranges.end(), [](const Range& a, const Range& b) {
+        return a.begin < b.begin;
+    });
+    size_t kept = 0;
+    for (size_t i = 0; i < c->touchedcount; ++i)
+    {
+        GCObject* o = c->touched[i];
+        uintptr_t at = uintptr_t(o);
+        auto next = std::upper_bound(ranges.begin(), ranges.end(), at, [](uintptr_t value, const Range& range) {
+            return value < range.begin;
+        });
+        if (next != ranges.begin() && at < (next - 1)->end)
+            continue;
+        if (o->gch.tt == LUA_TNIL || !testbit(o->gch.marked, COLDBIT))
+            continue;
+        // (cleared while the list is walked, so a repeat finds it clear; set again below)
+        o->gch.marked &= cast_byte(~bitmask(COLDBIT));
+        c->touched[kept++] = o;
+    }
+    for (size_t i = 0; i < kept; ++i)
+        l_setbit(c->touched[i]->gch.marked, COLDBIT);
+    c->touchedcount = kept;
+    for (size_t i = 0; i < c->pagecount; ++i)
+        luaM_releasepage(L, c->pages[i]);
+    c->pagecount = 0;
+    c->pagebytes = 0;
 }
 
 // clears the marks of the objects marked since the last frame and returns the pages freed since then to the allocator
@@ -2150,6 +2242,7 @@ static void coldclear(lua_State* L, ColdState* c)
     for (size_t i = 0; i < c->pagecount; ++i)
         luaM_releasepage(L, c->pages[i]);
     c->pagecount = 0;
+    c->pagebytes = 0;
 }
 
 static void coldrestore(ColdState* c, bool preserveLast)
