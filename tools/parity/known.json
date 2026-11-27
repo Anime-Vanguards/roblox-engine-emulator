@@ -175,56 +175,6 @@
 			"why": "an Attachment's CFrame write matches but for the scaled write of 0.1 and the skew of 2e-5, one ulp off in its normalized columns (the client's reciprocal square root); a joint's C0 and Model:PivotTo (FIX-R23) match on every line"
 		}
 	],
-	"chunknames": [
-		{
-			"line": "odd-names info ReplicatedStorage.ParityProbes.Chunk",
-			"why": "Roblox keeps one compiled chunk per source text: a module whose Source matches an earlier module's carries that module's chunk name (not emulated: ree names every module by its own full name)"
-		},
-		{
-			"line": "odd-names fail ReplicatedStorage.ParityProbes.Chunk:3: inside",
-			"why": "Roblox keeps one compiled chunk per source text: a module whose Source matches an earlier module's carries that module's chunk name (not emulated: ree names every module by its own full name)"
-		},
-		{
-			"line": "odd-names index ReplicatedStorage.ParityProbes.Chunk:4: attempt to index nil with 'Field'",
-			"why": "Roblox keeps one compiled chunk per source text: a module whose Source matches an earlier module's carries that module's chunk name (not emulated: ree names every module by its own full name)"
-		},
-		{
-			"line": "odd-names trace t / ReplicatedStorage.ParityProbes.Chunk:5 function trace",
-			"why": "Roblox keeps one compiled chunk per source text: a module whose Source matches an earlier module's carries that module's chunk name (not emulated: ree names every module by its own full name)"
-		},
-		{
-			"line": "loose info ReplicatedStorage.ParityProbes.Chunk",
-			"why": "Roblox keeps one compiled chunk per source text: a module whose Source matches an earlier module's carries that module's chunk name (not emulated: ree names every module by its own full name)"
-		},
-		{
-			"line": "loose fail ReplicatedStorage.ParityProbes.Chunk:3: inside",
-			"why": "Roblox keeps one compiled chunk per source text: a module whose Source matches an earlier module's carries that module's chunk name (not emulated: ree names every module by its own full name)"
-		},
-		{
-			"line": "loose index ReplicatedStorage.ParityProbes.Chunk:4: attempt to index nil with 'Field'",
-			"why": "Roblox keeps one compiled chunk per source text: a module whose Source matches an earlier module's carries that module's chunk name (not emulated: ree names every module by its own full name)"
-		},
-		{
-			"line": "loose trace t / ReplicatedStorage.ParityProbes.Chunk:5 function trace",
-			"why": "Roblox keeps one compiled chunk per source text: a module whose Source matches an earlier module's carries that module's chunk name (not emulated: ree names every module by its own full name)"
-		},
-		{
-			"line": "long info ReplicatedStorage.ParityProbes.Chunk",
-			"why": "Roblox keeps one compiled chunk per source text: a module whose Source matches an earlier module's carries that module's chunk name (not emulated: ree names every module by its own full name)"
-		},
-		{
-			"line": "long fail ReplicatedStorage.ParityProbes.Chunk:3: inside",
-			"why": "Roblox keeps one compiled chunk per source text: a module whose Source matches an earlier module's carries that module's chunk name (not emulated: ree names every module by its own full name)"
-		},
-		{
-			"line": "long index ReplicatedStorage.ParityProbes.Chunk:4: attempt to index nil with 'Field'",
-			"why": "Roblox keeps one compiled chunk per source text: a module whose Source matches an earlier module's carries that module's chunk name (not emulated: ree names every module by its own full name)"
-		},
-		{
-			"line": "long trace t / ReplicatedStorage.ParityProbes.Chunk:5 function trace",
-			"why": "Roblox keeps one compiled chunk per source text: a module whose Source matches an earlier module's carries that module's chunk name (not emulated: ree names every module by its own full name)"
-		}
-	],
 	"collection_tags": [
 		{
 			"line": "all-tags ",
@@ -667,12 +617,8 @@
 	],
 	"loadmodule": [
 		{
-			"line": "env keys [_G,script,shared] metatable string index nil frozen false",
-			"why": "a script's environment: Roblox's holds script, _G and shared under a locked metatable and its require is one global; ree's holds script and a require of the script's own over a plain metatable"
-		},
-		{
 			"line": "env is-getfenv(f) true is-caller's false script true raw-script true thread-env-is-caller's true _G true shared true require true game true",
-			"why": "require: Roblox's is one global function that finds the calling script; ree gives each script a require of its own, so a loaded module's is not the caller's"
+			"why": "getfenv(0) is the running thread's globals in Roblox (the script whose thread runs, which a thread made by coroutine.create or task.spawn inherits from the thread that made it), not the calling function's environment: here the loaded module's function was called from the probe's thread"
 		}
 	],
 	"logservice": [
@@ -1567,24 +1513,6 @@
 		{
 			"line": "Permits held true true nil",
 			"why": "ree emulates no SecurityCapabilities: Permits holds none and reports itself as not emulated (Output missing)"
-		}
-	],
-	"require_errors": [
-		{
-			"line": "shared-after ReplicatedStorage.ParityRequireLog.Second | ReplicatedStorage.ParityRequireLog.Second",
-			"why": "chunk names: modules with identical source share the first compiled one's chunk name in a client; ree names each module by its own path"
-		},
-		{
-			"line": "shared-renamed ReplicatedStorage.ParityRequireLog.Second",
-			"why": "chunk names: modules with identical source share the first compiled one's chunk name in a client; ree names each module by its own path"
-		},
-		{
-			"line": "shared-destroyed ReplicatedStorage.ParityRequireLog.Second",
-			"why": "chunk names: modules with identical source share the first compiled one's chunk name in a client; ree names each module by its own path"
-		},
-		{
-			"line": "shared-clone ReplicatedStorage.ParityRequireLog.Second",
-			"why": "chunk names: modules with identical source share the first compiled one's chunk name in a client; ree names each module by its own path"
 		}
 	],
 	"rigid_joints": [

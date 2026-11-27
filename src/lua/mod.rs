@@ -189,9 +189,16 @@ pub struct LuaRefs {
     pub prelude: Option<Rc<Prelude>>,
     /// The shared global table every script environment inherits
     pub shared: Option<LuaTable>,
-    /// Rust halves of a script's `require` closure (stored for fast Rust-side environment creation)
+    /// The Rust halves of the scripts' `require` (lua/builtins.rs require_function)
     pub require_begin: Option<LuaFunction>,
     pub require_run: Option<LuaFunction>,
+    /// The metatable of the main VM's script environments (modules.rs environment_in)
+    pub env_meta: Option<LuaTable>,
+    /// An Actor's VM by its key (modules.rs vm_key): its `_G`, its `shared` and its script environments' metatable
+    pub vm_envs: FxHashMap<u64, (LuaTable, LuaTable, LuaTable)>,
+    /// The first chunk compiled from each source text that its VM still has, by slot (modules.rs ChunkNames): a table with weak
+    /// values, so a chunk no longer referenced is gone from it at the next collection, as from a client's
+    pub chunk_firsts: Option<LuaTable>,
     /// Signal / connection member functions
     pub signal_members: Option<LuaTable>,
     pub connection_members: Option<LuaTable>,

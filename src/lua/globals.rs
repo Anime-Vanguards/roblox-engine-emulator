@@ -581,16 +581,9 @@ fn load_prelude(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     r.set("RequireRun", require_run.clone())?;
     {
         let mut refs = engine.lua.borrow_mut();
-        refs.require_begin = Some(require_begin.clone());
-        refs.require_run = Some(require_run.clone());
+        refs.require_begin = Some(require_begin);
+        refs.require_run = Some(require_run);
     }
-    // a script's require (prelude.luau Environment): `MakeRequire(Script, Vm)`, a C function of its own (lua/builtins.rs)
-    r.set(
-        "MakeRequire",
-        super::create_boxed_val2(lua, Box::new(move |lua, script, vm| {
-            super::builtins::require_function(lua, script, vm, require_begin.clone(), require_run.clone()).map(LuaValue::Function)
-        }))?,
-    )?;
 
     // Vector3 is the native vector type, as in Roblox (vector3.luau, loaded by the prelude): vectors
     // get their members through the type's metatable, and Lune's CFrame / Ray / Region3 convert,
@@ -1457,6 +1450,12 @@ fn build_shared(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<LuaTable> {
         shared.raw_set(name, script_library.call::<LuaValue>(name)?)?;
     }
     shared.raw_set("_G", lua.create_table()?)?;
+    // require: one function every script reads through its environment, which finds the calling script (lua/builtins.rs)
+    let (begin, run) = {
+        let refs = engine.lua.borrow();
+        (refs.require_begin.clone().expect("RequireBegin"), refs.require_run.clone().expect("RequireRun"))
+    };
+    shared.raw_set("require", super::builtins::require_function(lua, begin, run)?)?;
     Ok(shared)
 }
 

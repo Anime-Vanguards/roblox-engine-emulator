@@ -688,24 +688,24 @@ local function CallBody(Box, Callback, ...)
 	end
 end
 
-local VmGlobals = {} -- an Actor's _G, by its key (modules.rs vm_key): its VM's own, as in Studio
-local function Environment(Shared, Script, Vm)
-	local Env = {
-		script = Script,
-		-- (a C function of the script's own: lua/builtins.rs require_function, over RequireBegin and RequireRun as Require is)
-		require = R.MakeRequire(Script, Vm),
-		--
-	}
-	if Vm ~= nil then
-		local Globals = VmGlobals[Vm]
-		if Globals == nil then
-			Globals = {}
-			VmGlobals[Vm] = Globals
-		end
-		Env._G = Globals
-	end
-	return setmetatable(Env, { __index = Shared })
-end
+-- (a script's environment, and an Actor's _G: lua/modules.rs environment_in; the scripts' one require: lua/builtins.rs
+-- require_function, over RequireBegin and RequireRun as Require is)
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
+--
 
 -- RaycastParams / OverlapParams, as a 0.747 playing client and server take them (tools/parity/probes/query_params.luau;
 -- below the traced functions: rur's goldens record prelude lines). The queries read what is stored through ParamsData, one
@@ -1627,6 +1627,6 @@ return {
 	Warn = Warn,
 	Stringify = Stringify,
 	Require = Require,
-	Environment = Environment,
+	--
 	CallBody = CallBody,
 }

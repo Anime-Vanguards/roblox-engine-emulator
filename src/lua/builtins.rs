@@ -48,13 +48,60 @@ unsafe fn output_body(state: *mut ffi::lua_State) -> c_int {
     }
 }
 
-/// A script's require (prelude.luau Environment): the module's value, through `begin` and `run` (lua/modules.rs require_begin
-/// and require_run, as prelude.luau Require answers them), the requiring script and its VM's key given to them. A module that
-/// must load has its chunk run on a thread of its own (require_run, as a client does), and one whose chunk yielded, or whose
-/// loading another thread began, is waited for (a yield, then the asking again).
-pub fn require_function(lua: &Lua, script: LuaValue, vm: LuaValue, begin: LuaFunction, run: LuaFunction) -> LuaResult<LuaFunction> {
-    let extras = vec![script, vm, LuaValue::Function(begin), LuaValue::Function(run)];
+/// The scripts' require, one global function as a client's is (every script's environment reads it through its metatable,
+/// lua/modules.rs environment_in): the module's value, through `begin` and `run` (lua/modules.rs require_begin and require_run,
+/// as prelude.luau Require answers them). It finds the requiring script as a client does, at each call: the nearest Luau function
+/// up the stack (C functions such as pcall passed over, and the engine's own Luau, which runs in the VM's globals), whose
+/// environment's own `script` (read raw, as it is at the call: a `setfenv` or a write of `script` changes it) is the script a
+/// path is resolved from, and whose environment says which VM's records to read (its metatable's [`VM_FIELD`]: an Actor's VM). With
+/// no Luau function on the stack (`coroutine.create(require)`) a path raises; an Instance is required as from anywhere. Measured, a
+/// 0.747 playing client and a server: tools/parity/probes/script_env.luau. A module that must load has its chunk run on a thread of
+/// its own (require_run, as a client does), and one whose chunk yielded, or whose loading another thread began, is waited for (a
+/// yield, then the asking again).
+pub fn require_function(lua: &Lua, begin: LuaFunction, run: LuaFunction) -> LuaResult<LuaFunction> {
+    let extras = vec![LuaValue::Function(begin), LuaValue::Function(run)];
     cfunction::raw(lua, "require", Kind::Library, require_body, Some(require_resume), extras)
+}
+
+/// The field of a script environment's metatable that holds its VM's key (an Actor's: lua/modules.rs vm_key), absent for the main
+/// VM's. Scripts never see it: the metatable is locked.
+pub const VM_FIELD: &std::ffi::CStr = c"ree.vm";
+
+/// Pushes the requiring script and its VM's key (see [`require_function`]): the environment's own `script` of the nearest Luau
+/// function up the stack that is no engine Luau, and the key its environment's metatable holds (nil for the main VM); `false` and
+/// nil when no such function is on the stack.
+unsafe fn push_caller(state: *mut ffi::lua_State) {
+    unsafe {
+        ffi::luaL_checkstack(state, 5, c"require".as_ptr());
+        let mut debug: ffi::lua_Debug = std::mem::zeroed();
+        let mut level = 1;
+        while ffi::lua_getinfo(state, level, c"f".as_ptr(), &mut debug) != 0 {
+            level += 1;
+            if ffi::lua_iscfunction(state, -1) != 0 {
+                ffi::lua_pop(state, 1);
+                continue;
+            }
+            ffi::lua_getfenv(state, -1);
+            if ffi::lua_type(state, -1) != ffi::LUA_TTABLE || ffi::lua_rawequal(state, -1, ffi::LUA_GLOBALSINDEX) != 0 {
+                ffi::lua_pop(state, 2);
+                continue;
+            }
+            // (function, environment)
+            ffi::lua_rawgetfield(state, -1, c"script".as_ptr());
+            if ffi::lua_getmetatable(state, -2) != 0 {
+                ffi::lua_rawgetfield(state, -1, VM_FIELD.as_ptr());
+                ffi::lua_remove(state, -2);
+            } else {
+                ffi::lua_pushnil(state);
+            }
+            // (function, environment, script, vm)
+            ffi::lua_remove(state, -4);
+            ffi::lua_remove(state, -3);
+            return;
+        }
+        ffi::lua_pushboolean(state, 0);
+        ffi::lua_pushnil(state);
+    }
 }
 
 // The slots of require's frame: its target, then what the continuation goes on with
@@ -76,20 +123,23 @@ unsafe fn require_ask(state: *mut ffi::lua_State) -> c_int {
     unsafe {
         ffi::lua_settop(state, TARGET);
         ffi::luaL_checkstack(state, 6, c"require".as_ptr());
-        ffi::lua_pushvalue(state, extra(3));
-        ffi::lua_pushvalue(state, TARGET);
         ffi::lua_pushvalue(state, extra(1));
-        ffi::lua_pushvalue(state, extra(2));
+        ffi::lua_pushvalue(state, TARGET);
+        push_caller(state);
+        // (the VM's key, for RequireRun)
+        ffi::lua_pushvalue(state, -1);
+        ffi::lua_insert(state, 2);
         ffi::lua_call(state, 3, 3);
-        // (status, A, B at 2, 3, 4)
-        if ffi::lua_tointegerx(state, 2, std::ptr::null_mut()) == 3 {
+        // (vm at 2; status, A, B at 3, 4, 5)
+        if ffi::lua_tointegerx(state, 3, std::ptr::null_mut()) == 3 {
             // (run the chunk A for the module B: RequireRun answers as RequireBegin does, 2 when it yielded)
-            ffi::lua_pushvalue(state, extra(4));
-            ffi::lua_insert(state, 3);
             ffi::lua_pushvalue(state, extra(2));
+            ffi::lua_insert(state, 4);
+            ffi::lua_pushvalue(state, 2);
             ffi::lua_call(state, 3, 3);
-            ffi::lua_remove(state, 2);
+            ffi::lua_remove(state, 3);
         }
+        ffi::lua_remove(state, 2);
         match ffi::lua_tointegerx(state, 2, std::ptr::null_mut()) {
             0 => {
                 ffi::lua_settop(state, 3);

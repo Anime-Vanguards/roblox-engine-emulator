@@ -1,0 +1,13 @@
+# engine: Roblox Studio 0.747.0.7471481, the server of a headless play session (loadstring in the server's bridge, script identity 4; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-27
+renamed ReplicatedStorage.ParityShare.BeforeRename | twin ReplicatedStorage.ParityShare.BeforeRename
+held ReplicatedStorage.ParityShare.Held1 | cycle true twin ReplicatedStorage.ParityShare.Held1
+pair ReplicatedStorage.ParityShare.Pair1 | ReplicatedStorage.ParityShare.Pair1
+pair cycle true third ReplicatedStorage.ParityShare.Pair3 | fourth ReplicatedStorage.ParityShare.Pair3
+none ReplicatedStorage.ParityShare.None1
+none cycle true twin ReplicatedStorage.ParityShare.None2
+running ReplicatedStorage.ParityShare.Running | ReplicatedStorage.ParityShare.Running
+other text ReplicatedStorage.ParityShare.Spaced
+syntax error Requested module experienced an error while loading | error Requested module experienced an error while loading
+runtime error Requested module experienced an error while loading | error Requested module experienced an error while loading
+log MessageError:ReplicatedStorage.ParityShare.Bad1:1: Expected identifier when parsing variable name, got '=' | MessageError:ReplicatedStorage.ParityShare.Bad2:1: Expected identifier when parsing variable name, got '=' | MessageError:ReplicatedStorage.ParityShare.Err1:1: share-err | MessageError:ReplicatedStorage.ParityShare.Err1:1: share-err

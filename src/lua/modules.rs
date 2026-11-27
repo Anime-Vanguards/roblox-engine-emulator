@@ -40,6 +40,9 @@ const LOAD_FAILED: &str = "Requested module experienced an error while loading";
 const NOT_ONE_VALUE: &str = "Module code did not return exactly one value";
 /// What a require of a module that is loading in the chain of loads now running raises
 const RECURSIVE: &str = "Requested module was required recursively";
+/// What a require of a path raises where no Luau function called require (`coroutine.create(require)`): measured, a 0.747 playing
+/// client, tools/parity/probes/script_env.luau
+const NO_LUAU_CALLER: &str = "require must be called by a Luau function in this context (e.g. function() require(...) end)";
 
 impl Record {
     fn loading() -> Self {
@@ -102,7 +105,12 @@ pub struct ModuleRecords {
     /// Module chunks this engine compiled from their text (not loaded from bytecode compiled ahead: [`Prefetch`],
     /// [`reuse_compiled_modules`]); a loopback run's second side compiles none of the modules both sides require
     pub text_compiles: u32,
+    /// The chunk names a source text's later compiles take ([`ChunkKey`] -> its slot in the VM's table of first chunks, the name)
+    chunk_names: FxHashMap<ChunkKey, (i64, Rc<str>)>,
 }
+
+/// A source text a VM compiled: its VM, its length and its 64-bit hash
+type ChunkKey = (Vm, usize, u64);
 
 impl ModuleRecords {
     /// Whether an Actor's script has started (actors.rs).
@@ -948,7 +956,7 @@ pub fn deterministic_source<'a>(chunk_name: &str, source: &'a [u8]) -> std::borr
     result.into()
 }
 
-/// The environment a script runs in (globals.luau Environment).
+/// The environment a script of the main VM runs in ([`environment_in`]).
 pub fn environment(lua: &Lua, engine: &Rc<Engine>, script: InstanceId) -> LuaResult<LuaTable> {
     environment_in(lua, engine, script, None)
 }
@@ -971,63 +979,89 @@ fn clone_with_env(lua: &Lua, template: &LuaFunction, env: &LuaTable) -> LuaResul
     }
 }
 
-/// [`environment`] for a script of the VM `vm`: its `_G` and its `require` are that VM's.
-pub fn environment_in(lua: &Lua, engine: &Rc<Engine>, script: InstanceId, vm: Vm) -> LuaResult<LuaTable> {
-    let safe = engine.options.native || engine.modules.borrow().interpreted || cfg!(not(feature = "jit"));
-    if vm.is_none() {
-        let (shared, req_begin, req_run) = {
-            let refs = engine.lua.borrow();
-            (refs.shared.clone().expect("shared globals"), refs.require_begin.clone(), refs.require_run.clone())
-        };
-        if let (Some(req_begin), Some(req_run)) = (req_begin, req_run) {
-            let script_val = instance_value(lua, engine, script)?;
-            let require_fn = super::builtins::require_function(lua, script_val.clone(), LuaValue::Nil, req_begin, req_run)?;
-            // prelude.luau Environment's shape: each environment has its own fresh writable metatable
-            // `{ __index = shared }`, built alongside `env` and optional `lua_setsafeenv` in one C call.
-            return unsafe {
-                lua.exec_raw::<LuaTable>((shared, script_val, require_fn), move |state| {
-                    use mlua::ffi;
-                    ffi::lua_rawcheckstack(state, 4);
-                    // stack: -3 = shared, -2 = script_val, -1 = require_fn
-                    ffi::lua_createtable(state, 0, 2); // -1 = env
-                    ffi::lua_pushvalue(state, -3);
-                    ffi::lua_rawsetfield(state, -2, c"script".as_ptr());
-                    ffi::lua_pushvalue(state, -2);
-                    ffi::lua_rawsetfield(state, -2, c"require".as_ptr());
-                    ffi::lua_createtable(state, 0, 1); // -1 = meta, -2 = env, -5 = shared
-                    ffi::lua_pushvalue(state, -5);
-                    ffi::lua_rawsetfield(state, -2, c"__index".as_ptr());
-                    ffi::lua_setmetatable(state, -2);
-                    if safe {
-                        ffi::lua_setsafeenv(state, -1, 1);
-                    }
-                    ffi::lua_replace(state, -4);
-                    ffi::lua_pop(state, 2);
-                })
-            };
-        }
-        let make: LuaFunction = engine.prelude().exports.get("Environment")?;
-        let env: LuaTable = make.call((shared, instance_value(lua, engine, script)?, vm))?;
-        if safe {
-            unsafe { lua.exec_raw::<()>(&env, |state| mlua::ffi::lua_setsafeenv(state, -1, 1))? };
-        }
-        return Ok(env);
+/// What a script environment's metatable answers getmetatable with (measured, a 0.747 playing client and a server:
+/// tools/parity/probes/script_env.luau)
+pub const LOCKED_METATABLE: &str = "The metatable is locked";
+
+/// A metatable for the script environments of a VM: `__index` the globals, locked, and for an Actor's VM its key
+/// ([`super::builtins::VM_FIELD`]), read only.
+pub fn environment_metatable(lua: &Lua, shared: &LuaTable, vm: Vm) -> LuaResult<LuaTable> {
+    let meta = lua.create_table_with_capacity(0, 3)?;
+    meta.raw_set("__index", shared)?;
+    meta.raw_set("__metatable", LOCKED_METATABLE)?;
+    if let Some(key) = vm {
+        meta.raw_set(super::builtins::VM_FIELD.to_str().expect("ascii"), key as f64)?;
     }
-    let (shared, make) = {
-        let refs = engine.lua.borrow();
-        let prelude = refs.prelude.clone().expect("prelude");
-        (refs.shared.clone().expect("shared globals"), prelude.exports.get::<LuaFunction>("Environment")?)
-    };
-    let env: LuaTable = make.call((shared, instance_value(lua, engine, script)?, vm))?;
+    meta.set_readonly(true);
+    Ok(meta)
+}
+
+/// [`environment`] for a script of the VM `vm`, as a client makes one (measured, a 0.747 playing client and a server:
+/// tools/parity/probes/script_env.luau): a table of its own holding `_G`, `script` and `shared` (`next` visits them in that order),
+/// under a metatable the VM's environments share, whose `__index` is the globals (one `require` there for every script, which finds
+/// the calling script: lua/builtins.rs require_function) and whose `__metatable` locks it: getmetatable answers "The metatable is
+/// locked" and setmetatable raises "cannot change a protected metatable". An Actor's VM has a `_G` and a `shared` of its own (a
+/// value one sets, the main VM's scripts do not see, nor it theirs).
+pub fn environment_in(lua: &Lua, engine: &Rc<Engine>, script: InstanceId, vm: Vm) -> LuaResult<LuaTable> {
     // An interpreted script's environment is safe, as Roblox makes every script's: builtins take the VM's
     // fast calls and ipairs / pairs loops run inline (getfenv / setfenv end it, as there). Native code would
     // inline them with its own arithmetic (vector.magnitude in doubles), which Studio's interpreted scripts
     // do not, so a VM that compiles modules natively keeps the environment unsafe unless `--native` asks for
     // Roblox's native execution.
-    if safe {
-        unsafe { lua.exec_raw::<()>(&env, |state| mlua::ffi::lua_setsafeenv(state, -1, 1))? };
+    let safe = engine.options.native || engine.modules.borrow().interpreted || cfg!(not(feature = "jit"));
+    let (globals, meta, shared) = {
+        let shared_globals = engine.lua.borrow().shared.clone().expect("shared globals");
+        match vm {
+            None => {
+                let meta = engine.lua.borrow().env_meta.clone();
+                let meta = match meta {
+                    Some(meta) => meta,
+                    None => {
+                        let meta = environment_metatable(lua, &shared_globals, None)?;
+                        engine.lua.borrow_mut().env_meta = Some(meta.clone());
+                        meta
+                    }
+                };
+                (shared_globals.raw_get::<LuaValue>("_G")?, meta, shared_globals.raw_get::<LuaValue>("shared")?)
+            }
+            Some(key) => {
+                let found = engine.lua.borrow().vm_envs.get(&key).cloned();
+                let (globals, shared, meta) = match found {
+                    Some(found) => found,
+                    None => {
+                        let made = (lua.create_table()?, lua.create_table()?, environment_metatable(lua, &shared_globals, vm)?);
+                        engine.lua.borrow_mut().vm_envs.insert(key, made.clone());
+                        made
+                    }
+                };
+                (LuaValue::Table(globals), meta, LuaValue::Table(shared))
+            }
+        }
+    };
+    let script_val = instance_value(lua, engine, script)?;
+    // SAFETY: the four values are pushed as the arguments; the new table takes three of them as its fields and the fourth as its
+    // metatable, and is left as the one result
+    unsafe {
+        lua.exec_raw::<LuaTable>((globals, script_val, shared, meta), move |state| {
+            use mlua::ffi;
+            ffi::lua_rawcheckstack(state, 2);
+            // (stack: -4 _G, -3 script, -2 shared, -1 metatable)
+            ffi::lua_createtable(state, 0, 3);
+            ffi::lua_pushvalue(state, -5);
+            ffi::lua_rawsetfield(state, -2, c"_G".as_ptr());
+            ffi::lua_pushvalue(state, -4);
+            ffi::lua_rawsetfield(state, -2, c"script".as_ptr());
+            ffi::lua_pushvalue(state, -3);
+            ffi::lua_rawsetfield(state, -2, c"shared".as_ptr());
+            ffi::lua_pushvalue(state, -2);
+            ffi::lua_setmetatable(state, -2);
+            if safe {
+                ffi::lua_setsafeenv(state, -1, 1);
+            }
+            ffi::lua_replace(state, -5);
+            ffi::lua_pop(state, 3);
+        })
     }
-    Ok(env)
 }
 
 /// Modules.Compile: the chunk of a script's source in its own environment, named by its full name.
@@ -1052,7 +1086,7 @@ fn should_jit_chunk(source: &[u8]) -> bool {
 /// ([`crate::cost::LUAU_SLOW_IMPORT`]: 20,000 `script` reads cost a loaded module 214 us against a required one's 56).
 pub fn compile_for_loadmodule(lua: &Lua, engine: &Rc<Engine>, script: InstanceId, source: &[u8]) -> LuaResult<LuaFunction> {
     if !engine.options.native {
-        return compile_in(lua, engine, script, source, None);
+        return compile_in_with(lua, engine, script, source, None, None, false);
     }
     let env = environment_in(lua, engine, script, None)?;
     let name = engine.state.borrow().dom.full_name(&engine.reflection, script);
@@ -1202,15 +1236,85 @@ pub fn compile_for_loadmodule(lua: &Lua, engine: &Rc<Engine>, script: InstanceId
 
 /// [`compile`] for a script of the VM `vm`.
 pub fn compile_in(lua: &Lua, engine: &Rc<Engine>, script: InstanceId, source: &[u8], vm: Vm) -> LuaResult<LuaFunction> {
-    compile_in_with(lua, engine, script, source, None, vm)
+    compile_in_with(lua, engine, script, source, None, vm, true)
 }
 
-fn compile_in_with(lua: &Lua, engine: &Rc<Engine>, script: InstanceId, raw_source: &[u8], precompiled: Option<StoredBytes>, vm: Vm) -> LuaResult<LuaFunction> {
-    let env = environment_in(lua, engine, script, vm)?;
+/// The hash a source text's compiles are matched by ([`ChunkKey`])
+fn chunk_key(vm: Vm, source: &[u8]) -> ChunkKey {
+    use std::hash::Hasher;
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    hasher.write(source);
+    (vm, source.len(), hasher.finish())
+}
+
+/// The name of the first chunk the VM compiled from this source text, while that chunk lives (see [`compile_in_with`])
+fn first_chunk_name(engine: &Engine, key: &ChunkKey) -> Option<Rc<str>> {
+    let (slot, name) = engine.modules.borrow().chunk_names.get(key).cloned()?;
+    let firsts = engine.lua.borrow().chunk_firsts.clone()?;
+    matches!(firsts.raw_get::<LuaValue>(slot), Ok(LuaValue::Function(_))).then_some(name)
+}
+
+/// Keeps `chunk`, named `name`, as the first chunk of its source text (held weakly: [`super::LuaRefs::chunk_firsts`])
+fn remember_first_chunk(lua: &Lua, engine: &Engine, key: ChunkKey, chunk: &LuaFunction, name: &str) -> LuaResult<()> {
+    let firsts = engine.lua.borrow().chunk_firsts.clone();
+    let firsts = match firsts {
+        Some(firsts) => firsts,
+        None => {
+            let firsts = lua.create_table()?;
+            let meta = lua.create_table()?;
+            meta.raw_set("__mode", "v")?;
+            firsts.set_metatable(Some(meta));
+            engine.lua.borrow_mut().chunk_firsts = Some(firsts.clone());
+            firsts
+        }
+    };
+    let mut modules = engine.modules.borrow_mut();
+    let slot = match modules.chunk_names.get(&key) {
+        Some(&(slot, _)) => slot,
+        None => modules.chunk_names.len() as i64 + 1,
+    };
+    modules.chunk_names.insert(key, (slot, Rc::from(name)));
+    drop(modules);
+    firsts.raw_set(slot, chunk)
+}
+
+/// A script's chunk (`share`: a script's or a module's, not `debug.loadmodule`'s), named by the script's full name as Roblox names
+/// it, unless the VM compiled the same source text before and that first chunk still lives: then it carries that chunk's name
+/// (its errors, tracebacks and `debug.info(f, "s")` read it). A client keeps the first chunk it compiles from each text, holding
+/// it only weakly, and compiles a later script of that text from it: so a module or a script (LocalScript, Script) whose source
+/// equals an earlier one's is named as the earlier one was when it compiled, until a collection finds that chunk unreferenced
+/// (a chunk the earlier script's code still holds, or that is still running, keeps it), however many other texts compile between.
+/// A source that does not compile names no chunk; `loadstring`'s and `debug.loadmodule`'s chunks are their own, and an Actor's VM
+/// keeps its own. Measured, a 0.747 playing client and a server: tools/parity/probes/chunknames.luau, require_errors.luau.
+fn compile_in_with(lua: &Lua, engine: &Rc<Engine>, script: InstanceId, raw_source: &[u8], precompiled: Option<StoredBytes>, vm: Vm, share: bool) -> LuaResult<LuaFunction> {
+    let key = share.then(|| chunk_key(vm, raw_source));
+    let first = key.as_ref().and_then(|key| first_chunk_name(engine, key));
     let (name, source_path) = {
         let state = engine.state.borrow();
         (state.dom.full_name(&engine.reflection, script), state.dom.at(script).source_path().cloned())
     };
+    let chunk_name = format!("={}", first.as_deref().unwrap_or(&name));
+    let compiled = compile_named(lua, engine, script, raw_source, precompiled, vm, &name, source_path, &chunk_name);
+    if let (Some(key), None, Ok(chunk)) = (key, &first, &compiled) {
+        remember_first_chunk(lua, engine, key, chunk, &name)?;
+    }
+    compiled
+}
+
+/// [`compile_in_with`]'s chunk of the script `name` (its own full name), named `chunk_name`
+#[allow(clippy::too_many_arguments)]
+fn compile_named(
+    lua: &Lua,
+    engine: &Rc<Engine>,
+    script: InstanceId,
+    raw_source: &[u8],
+    precompiled: Option<StoredBytes>,
+    vm: Vm,
+    name: &str,
+    source_path: Option<Rc<str>>,
+    chunk_name: &str,
+) -> LuaResult<LuaFunction> {
+    let env = environment_in(lua, engine, script, vm)?;
     // (a profile's annotated listing reads the chunk's source: profiler.rs)
     if crate::profiler::active() {
         crate::profiler::source_loaded(&name, source_path.as_deref(), &std::rc::Rc::from(raw_source));
@@ -1223,7 +1327,7 @@ fn compile_in_with(lua: &Lua, engine: &Rc<Engine>, script: InstanceId, raw_sourc
                 .and_then(|map| map.read().ok())
                 .and_then(|map| map.get(&**path).and_then(|(cached_raw, bc)| (&**cached_raw == raw_source).then(|| bc.clone())))
             {
-                let chunk = lua.load(&*bc).set_mode(mlua::chunk::ChunkMode::Binary).set_name(format!("={name}")).set_environment(env.clone());
+                let chunk = lua.load(&*bc).set_mode(mlua::chunk::ChunkMode::Binary).set_name(chunk_name).set_environment(env.clone());
                 if let Ok(function) = load(lua, engine, chunk) {
                     return Ok(function);
                 }
@@ -1298,10 +1402,10 @@ fn compile_in_with(lua: &Lua, engine: &Rc<Engine>, script: InstanceId, raw_sourc
     // (measured in a playing client, Studio 0.744: tools/parity/probes/chunknames.luau). The source is always text, as
     // Roblox compiles it: left to guess, mlua takes text whose first byte is below 9 for bytecode, and a zero first byte
     // then fails to load with an error whose text is only the chunk name.
-    let text = || lua.load(&*source).set_mode(mlua::chunk::ChunkMode::Text).set_compiler(compiler()).set_name(format!("={name}")).set_environment(env.clone());
+    let text = || lua.load(&*source).set_mode(mlua::chunk::ChunkMode::Text).set_compiler(compiler()).set_name(chunk_name).set_environment(env.clone());
     match &bytecode {
         Some(bytecode) => {
-            let chunk = lua.load(&**bytecode).set_mode(mlua::chunk::ChunkMode::Binary).set_name(format!("={name}")).set_environment(env.clone());
+            let chunk = lua.load(&**bytecode).set_mode(mlua::chunk::ChunkMode::Binary).set_name(chunk_name).set_environment(env.clone());
             load(lua, engine, chunk).or_else(|_| {
                 // Bytecode compiled earlier (kept by this process, or read from the module store) that does not load is
                 // not the script's error: compile the source again, so a script fails only for its own reasons
@@ -1665,61 +1769,63 @@ fn error_result(lua: &Lua, message: String, level: i64) -> LuaResult<LuaMultiVal
     ]))
 }
 
-/// Resolves a require-by-string path from the calling script.
-fn resolve_path(engine: &Rc<Engine>, path: &[u8], caller: InstanceId) -> Result<InstanceId, String> {
+/// Resolves a require-by-string path from the requiring script (`caller`: the calling Luau function's environment's `script`,
+/// None when that is no Instance), as a client does (measured, a 0.747 playing client and a server:
+/// tools/parity/probes/script_env.luau). `./` starts at the script's parent and `../` there too, its own `..` then going up once
+/// more; `@self` starts at the script and `@game` at the DataModel (an alias is named in any case; any other raises, in lower
+/// case). Each further component is a child by its exact name (no file extension dropped), `..` a parent, and `.` or an empty
+/// component nothing; a backslash separates as `/` does. A `..` that finds no parent raises naming the component before it, or
+/// the requiring context when there is none. Without a script the requiring context is a place of its own, with no parent and no
+/// children: `@self` ends there (None), as no module. What the path ends at must be a ModuleScript (require_begin).
+fn resolve_path(engine: &Rc<Engine>, path: &[u8], caller: Option<InstanceId>) -> Result<Option<InstanceId>, String> {
     let text = String::from_utf8_lossy(path).into_owned();
-    let segments: Vec<&str> = text.split('/').collect();
-    let first = segments[0];
-    let parent_of = |id: InstanceId| engine.state.borrow().dom.at(id).parent;
-    let (mut current, start) = if first == "." {
-        (parent_of(caller), 1)
-    } else if first == ".." {
-        (parent_of(caller).and_then(parent_of), 1)
-    } else if first == "@self" {
-        (Some(caller), 1)
-    } else if let Some(alias) = first.strip_prefix('@') {
-        (resolve_alias(engine, alias), 1)
-    } else {
-        return Err(format!("error requiring \"{text}\": require path must start with a valid prefix: ./, ../, or @"));
-    };
-    for segment in &segments[start..] {
-        let Some(node) = current else { break };
-        if *segment == ".." {
-            current = parent_of(node);
-        } else if *segment != "." && !segment.is_empty() {
-            materialize(engine, node);
-            let state = engine.state.borrow();
-            let mut found = state.dom.find_child(node, segment.as_bytes());
-            if found.is_none() {
-                let lower = segment.to_ascii_lowercase();
-                let stripped = if lower.ends_with(".luau") {
-                    &segment[..segment.len() - 5]
-                } else if lower.ends_with(".lua") {
-                    &segment[..segment.len() - 4]
-                } else {
-                    segment
-                };
-                found = state.dom.find_child(node, stripped.as_bytes());
-            }
-            current = found;
+    let fail = |reason: String| format!("error requiring \"{text}\": {reason}");
+    let parent_of = |id: Option<InstanceId>| id.and_then(|id| engine.state.borrow().dom.at(id).parent);
+    const NO_CONTEXT_PARENT: &str = "could not get parent of requiring context";
+    let path = text.replace('\\', "/");
+    let first = path.split('/').next().unwrap_or("");
+    // (where the path starts, and its components from there: a `./` or `../` path's own first component included)
+    let (mut current, components) = if first == "." || first == ".." {
+        if !path.contains('/') {
+            return Err(fail(PREFIX.into()));
         }
+        let Some(start) = parent_of(caller) else { return Err(fail(NO_CONTEXT_PARENT.into())) };
+        (Some(start), path.as_str())
+    } else if let Some(alias) = first.strip_prefix('@') {
+        let lower = alias.to_lowercase();
+        let start = match lower.as_str() {
+            "self" => caller,
+            "game" => Some(engine.world().game),
+            _ => return Err(fail(format!("@{lower} is not a valid alias"))),
+        };
+        (start, &path[first.len()..])
+    } else {
+        return Err(fail(PREFIX.into()));
+    };
+    let mut previous: Option<&str> = None;
+    for component in components.split('/') {
+        if component == "." || component.is_empty() {
+            continue;
+        }
+        if component == ".." {
+            current = Some(parent_of(current).ok_or_else(|| match previous {
+                Some(previous) => fail(format!("could not get parent of component \"{previous}\"")),
+                None => fail(NO_CONTEXT_PARENT.into()),
+            })?);
+        } else {
+            let found = current.and_then(|node| {
+                materialize(engine, node);
+                engine.state.borrow().dom.find_child(node, component.as_bytes())
+            });
+            current = Some(found.ok_or_else(|| fail(format!("could not resolve child component \"{component}\"")))?);
+        }
+        previous = Some(component);
     }
-    current.ok_or_else(|| {
-        format!(
-            "Could not resolve require path '{text}' from {}",
-            engine.state.borrow().dom.full_name(&engine.reflection, caller)
-        )
-    })
+    Ok(current)
 }
 
-/// Modules.ResolveAlias: @game, or a service of the DataModel.
-fn resolve_alias(engine: &Rc<Engine>, alias: &str) -> Option<InstanceId> {
-    let game = engine.world().game;
-    if alias == "game" {
-        return Some(game);
-    }
-    crate::services::get_service(engine, game, alias).ok()
-}
+/// What a path that starts with no prefix raises after its `error requiring "<path>": `
+const PREFIX: &str = "require path must start with a valid prefix: ./, ../, or @";
 
 fn thread_key(thread: &LuaThread) -> usize {
     thread.to_pointer() as usize
@@ -1733,11 +1839,14 @@ pub fn require_begin(lua: &Lua, engine: &Rc<Engine>, (target, caller, vm): (LuaV
     };
     let module = match &target {
         LuaValue::String(path) => {
-            let Some(caller) = caller_id else {
-                return error_result(lua, "require by string needs a calling script".into(), 0);
-            };
-            match resolve_path(engine, &path.as_bytes(), caller) {
-                Ok(module) => module,
+            // (the requiring script is the calling Luau function's environment's `script`: lua/builtins.rs require_function; none
+            // when no Luau function called, false)
+            if matches!(caller, LuaValue::Boolean(false)) {
+                return error_result(lua, NO_LUAU_CALLER.into(), 0);
+            }
+            match resolve_path(engine, &path.as_bytes(), caller_id) {
+                Ok(Some(module)) => module,
+                Ok(None) => return error_result(lua, format!("Unable to require module from given path '{}'", path.to_string_lossy()), 0),
                 Err(message) => return error_result(lua, message, 0),
             }
         }
@@ -1755,6 +1864,9 @@ pub fn require_begin(lua: &Lua, engine: &Rc<Engine>, (target, caller, vm): (LuaV
     };
     let module_script = engine.class_id("ModuleScript");
     if Some(engine.state.borrow().dom.at(module).class) != module_script {
+        if let LuaValue::String(path) = &target {
+            return error_result(lua, format!("Unable to require module from given path '{}'", path.to_string_lossy()), 0);
+        }
         return error_result(lua, "Attempted to call require with invalid argument(s).".into(), 0);
     }
 
@@ -1867,16 +1979,19 @@ pub fn require_begin(lua: &Lua, engine: &Rc<Engine>, (target, caller, vm): (LuaV
     engine.modules.borrow_mut().records.insert((vm, module), Record::loading());
     // (a module's first require loads its chunk: cost.rs required, by its source's bytes)
     let loading = crate::cost::required(source_bytes.len(), engine.options.server());
-    match compile_in_with(lua, engine, module, source_bytes, precompiled, vm) {
+    match compile_in_with(lua, engine, module, source_bytes, precompiled, vm, true) {
         Ok(chunk) => {
             engine.state.borrow().sched.charge(loading);
             Ok(LuaMultiValue::from_iter([LuaValue::Integer(3), LuaValue::Function(chunk), instance_value(lua, engine, module)?]))
         }
         Err(error) => {
-            // A compile error fails the module like a runtime error (pcall(Modules.Compile))
+            // A source that does not compile fails the module as an error in its chunk does: the compiler's message (named by the
+            // module itself) is logged once as an error, with no stack and no ScriptContext.Error, and this require and every later
+            // one raise LOAD_FAILED, a fixed Source too (measured, a 0.747 playing client: tools/parity/probes/script_env.luau)
             let message = super::super::scheduler::error_message(&error);
+            engine.output_error_with_script(message, None, None, false);
             finish(lua, engine, vm, module, Err(LOAD_FAILED));
-            Ok(LuaMultiValue::from_iter([LuaValue::Integer(1), LuaValue::String(lua.create_string(message)?), LuaValue::Integer(0)]))
+            error_result(lua, LOAD_FAILED.into(), 0)
         }
     }
 }

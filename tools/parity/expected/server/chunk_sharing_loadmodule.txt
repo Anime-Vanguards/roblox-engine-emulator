@@ -1,0 +1,5 @@
+# engine: Roblox Studio 0.747.0.7471481, the server of a headless play session (loadstring in the server's bridge, script identity 4; Workspace.SignalBehavior Deferred; FFlagEnableLoadModule on)
+# captured: 2026-11-27
+loaded first ReplicatedStorage.ParityShareLoad.LoadedFirst | require ReplicatedStorage.ParityShareLoad.RequiredAfter | load again ReplicatedStorage.ParityShareLoad.LoadedAgain
+required first ReplicatedStorage.ParityShareLoad.RequiredFirst | load ReplicatedStorage.ParityShareLoad.LoadedAfter | require again ReplicatedStorage.ParityShareLoad.RequiredFirst
+load renamed ReplicatedStorage.ParityShareLoad.HeldLoad | ReplicatedStorage.ParityShareLoad.HeldRenamed

@@ -79,6 +79,8 @@ mod teams_tests;
 #[cfg(test)]
 mod loading_tests;
 #[cfg(test)]
+mod script_env_tests;
+#[cfg(test)]
 mod rojo_tests;
 #[cfg(test)]
 mod unemulated_tests;

@@ -1,0 +1,96 @@
+# engine: Roblox Studio 0.747.0.7471481, the server of a headless play session (loadstring in the server's bridge, script identity 4; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-27
+keys _G,script,shared | _G,script,shared
+metatable string The metatable is locked
+setmetatable error cannot change a protected metatable | nil error cannot change a protected metatable
+frozen false write ok 1
+raw require nil script EnvA _G table shared table game nil
+require one true through-index true here true
+_G one true here true shared one true here true
+chunk thread-env true
+require function: ADDR [C] require
+caller call ok F1-sib | upvalue ok F1-sib | pcalled ok F1-sib
+caller wrapped error ReplicatedStorage.ParityEnv.F1.Caller:9: require must be called by a Luau function in this context (e.g. function() require(...) end)
+caller bare-thread ok require must be called by a Luau function in this context (e.g. function() require(...) end) | instance ok F2-other | nothing ok Attempted to call require with invalid argument(s).
+caller spawned F1-sib
+setfenv script ok F2-sib
+setfenv empty error error requiring "./Sib": could not get parent of requiring context | instance ok F2-other
+setfenv empty [@self] error Unable to require module from given path '@self'
+setfenv empty [@self/x] error error requiring "@self/x": could not resolve child component "x"
+setfenv empty [@game/ReplicatedStorage/ParityEnv/F1/Sib] ok F1-sib
+setfenv indexed error error requiring "./Sib": could not get parent of requiring context
+setfenv string error error requiring "./Sib": could not get parent of requiring context
+setfenv folder error error requiring "./Sib": could not resolve child component "Sib"
+script written ok F2-sib | upvalue ok F2-sib
+script rawset ok F1-sib
+script nil error error requiring "./Sib": could not get parent of requiring context | instance ok F2-other
+parentless [./Sib] error error requiring "./Sib": could not get parent of requiring context
+parentless [../Sib] error error requiring "../Sib": could not get parent of requiring context
+parentless [@self] ok table: ADDR
+parentless [@self/x] error error requiring "@self/x": could not resolve child component "x"
+parentless [@game/ReplicatedStorage/ParityEnv/F1/Sib] ok F1-sib
+path [./Sib] ok F1-sib
+path [./Missing] error error requiring "./Missing": could not resolve child component "Missing"
+path [../F2/Sib] ok F2-sib
+path [../Missing/Sib] error error requiring "../Missing/Sib": could not resolve child component "Missing"
+path [./Sib/] ok F1-sib
+path [./Sib.lua] error error requiring "./Sib.lua": could not resolve child component "Sib.lua"
+path [./Sib.luau] error error requiring "./Sib.luau": could not resolve child component "Sib.luau"
+path [./sib] error error requiring "./sib": could not resolve child component "sib"
+path [./LOWER] error error requiring "./LOWER": could not resolve child component "LOWER"
+path [./Plain] error Unable to require module from given path './Plain'
+path [./Plain/X] error error requiring "./Plain/X": could not resolve child component "X"
+path [./] error Unable to require module from given path './'
+path [.] error error requiring ".": require path must start with a valid prefix: ./, ../, or @
+path [] error error requiring "": require path must start with a valid prefix: ./, ../, or @
+path [..] error error requiring "..": require path must start with a valid prefix: ./, ../, or @
+path [../] error Unable to require module from given path '../'
+path [./Inner] ok F1-inner
+path [./Inner/init] ok inner-init
+path [@self/Child] ok caller-child
+path [@self/Missing] error error requiring "@self/Missing": could not resolve child component "Missing"
+path [@game] error Unable to require module from given path '@game'
+path [@game/ReplicatedStorage/ParityEnv/F2/Sib] ok F2-sib
+path [@ReplicatedStorage] error error requiring "@ReplicatedStorage": @replicatedstorage is not a valid alias
+path [@Unknown/x] error error requiring "@Unknown/x": @unknown is not a valid alias
+path [@] error error requiring "@": @ is not a valid alias
+path [/Sib] error error requiring "/Sib": require path must start with a valid prefix: ./, ../, or @
+path [F2/Sib] error error requiring "F2/Sib": require path must start with a valid prefix: ./, ../, or @
+path [./../F2/Sib] ok F2-sib
+path [.//Sib] ok F1-sib
+path [../../../../../../../../../x] error error requiring "../../../../../../../../../x": could not get parent of component ".."
+path [./Sib/../Sib] ok F1-sib
+path [@Self/Child] ok caller-child
+path [@SELF/Child] ok caller-child
+path [@Game/ReplicatedStorage/ParityEnv/F1/Sib] ok F1-sib
+path [@game/] error Unable to require module from given path '@game/'
+path [@game//ReplicatedStorage/ParityEnv/F1/Sib] ok F1-sib
+path [@self/..] error Unable to require module from given path '@self/..'
+path [@self/../Sib] ok F1-sib
+path [@game/..] error error requiring "@game/..": could not get parent of requiring context
+path [@plugin] error error requiring "@plugin": @plugin is not a valid alias
+path [@self/Child/] ok caller-child
+path [./Sib/./] ok F1-sib
+path [@game/Workspace] error Unable to require module from given path '@game/Workspace'
+path [./Child] error error requiring "./Child": could not resolve child component "Child"
+path [@self/Child/x] error error requiring "@self/Child/x": could not resolve child component "x"
+path [@game/NotAService/x] error error requiring "@game/NotAService/x": could not resolve child component "NotAService"
+path [.\Sib] ok F1-sib
+path [@game\ReplicatedStorage\ParityEnv\F1\Sib] ok F1-sib
+path [./Sib\] ok F1-sib
+path [@game/x/..] error error requiring "@game/x/..": could not resolve child component "x"
+path [@game/ReplicatedStorage/../..] error error requiring "@game/ReplicatedStorage/../..": could not get parent of component ".."
+syntax error Requested module experienced an error while loading
+syntax log MessageError:ReplicatedStorage.ParityEnv.BadSyntax:2: Expected identifier when parsing variable name, got '='
+syntax errors 
+syntax again error Requested module experienced an error while loading
+syntax fixed error Requested module experienced an error while loading
+syntax again log 
+syntax again errors 
+syntax twin error Requested module experienced an error while loading
+syntax twin log MessageError:ReplicatedStorage.ParityEnv.BadTwin:2: Expected identifier when parsing variable name, got '='
+syntax twin errors 
+empty error Module code did not return exactly one value
+syntax inner error Requested module experienced an error while loading
+syntax inner log MessageError:ReplicatedStorage.ParityEnv.BadInner:1: Expected identifier when parsing expression, got <eof> | MessageError:Requested module experienced an error while loading /     Stack Begin /     Script 'ReplicatedStorage.ParityEnv.Outer', Line 1 /     Stack End
+syntax inner errors Requested module experienced an error while loading [ReplicatedStorage.ParityEnv.Outer, line 1 / ] ReplicatedStorage.ParityEnv.Outer

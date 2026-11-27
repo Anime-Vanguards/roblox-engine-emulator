@@ -23,12 +23,31 @@ fn run(options: Options, source: &str) -> Vec<String> {
 
 #[inline(never)]
 fn script(lua: &Lua, engine: &Rc<Engine>, source: &str) -> Vec<String> {
+    script_with(lua, engine, source, false)
+}
+
+/// [`run`] with the VM's globals at `Base` in the script's environment: a script cannot reach them (its environment's metatable
+/// is locked, as a client's), and the native sandbox tests chain their sandboxes to them, the VM's safe global base
+#[inline(never)]
+fn run_with_base(options: Options, source: &str) -> Vec<String> {
+    let engine = Engine::new(options).expect("engine");
+    let lua = Lua::new();
+    engine_lua::start(&lua, &engine).expect("start");
+    script_with(&lua, &engine, source, true)
+}
+
+#[inline(never)]
+fn script_with(lua: &Lua, engine: &Rc<Engine>, source: &str, base: bool) -> Vec<String> {
     let script = {
         let mut state = engine.state.borrow_mut();
         let class = engine.reflection.class_id("ModuleScript").unwrap();
         super::instance::create_named(&mut state, &engine.reflection, class, "Test")
     };
     let env = engine_lua::modules::environment(lua, engine, script).expect("environment");
+    if base {
+        let globals = engine.lua.borrow().shared.clone().expect("globals");
+        env.raw_set("Base", globals).expect("Base");
+    }
     let function = lua.load(source).set_name("=Test").set_environment(env).into_function().expect("compile");
     let call = engine_lua::globals::call(lua, engine, function, LuaMultiValue::new()).expect("call");
     if let CallOutcome::Failed(message, _) = call.outcome().unwrap() {
@@ -381,7 +400,6 @@ fn native_loadmodule_preserves_sandbox_overrides_and_falls_back_for_other_global
         ]])
         local Fn = debug.loadmodule(Worker)
         local Default = getfenv(Fn)
-        local Base = getmetatable(Default).__index
         local Sandbox = table.freeze(setmetatable({
             script = { Name = "MockedScript" },
             os = setmetatable({ clock = function() return 42.5 end }, { __index = Base.os }),
@@ -431,7 +449,7 @@ fn native_loadmodule_preserves_sandbox_overrides_and_falls_back_for_other_global
         print("reuse", Again ~= Fn, getfenv(Again) ~= Default, Again().ScriptName)
         "##
     );
-    let lines = run(Options { load_module: true, native: true, ..Options::default() }, &source);
+    let lines = run_with_base(Options { load_module: true, native: true, ..Options::default() }, &source);
     check(
         &lines,
         &[
@@ -505,7 +523,7 @@ fn native_loadmodule_template_cache_isolates_envs_and_invalidates_on_change() {
 
 /// Without `--native` each `debug.loadmodule` is the module's chunk loaded in its own environment, as `require` loads
 /// one: its `script` resolves at load (a shared template's run-time lookups were charged 7.9 ns a read), and its
-/// environment's metatable is its own and writable, as prelude.luau Environment makes it.
+/// environment is a script's: its own table, under the locked metatable (modules.rs environment_in).
 #[test]
 fn loadmodule_without_native_loads_each_chunk_in_its_own_environment() {
     let engine = Engine::new(Options { load_module: true, ..Options::default() }).expect("engine");
@@ -530,16 +548,13 @@ fn loadmodule_without_native_loads_each_chunk_in_its_own_environment() {
         print("script reads cost as required", Required > 0, math.abs(Loaded - Required) < 1e-7, math.abs(Again - Required) < 1e-7)
 
         local Reader = Make("Reader", "return function() return getfenv(1) end")
-        local First = getmetatable(debug.loadmodule(Reader)()())
-        local Second = getmetatable(debug.loadmodule(Reader)()())
-        local Wrote = pcall(function()
-            First.Marker = true
-        end)
-        print("metatables shared", rawequal(First, Second), "frozen", table.isfrozen(First), "writable", Wrote)
+        local First = debug.loadmodule(Reader)()()
+        local Second = debug.loadmodule(Reader)()()
+        print("environments", rawequal(First, Second), getmetatable(First), pcall(setmetatable, First, {}))
         "##
     );
     let lines = script(&lua, &engine, &source);
-    check(&lines, &["script reads cost as required true true true", "metatables shared false frozen false writable true"]);
+    check(&lines, &["script reads cost as required true true true", "environments false The metatable is locked false cannot change a protected metatable"]);
 }
 
 /// What follows a wait in a test script runs and is checked: the helper steps frames until the script ends (an assert after a

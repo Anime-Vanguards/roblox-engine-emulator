@@ -1,7 +1,7 @@
 //! Actors: the scripts under an Actor run in a VM of their own, as in Studio.
 //!
 //! An Actor's scripts have their own `_G` and their own copy of every module they require (modules.rs
-//! `Vm`, prelude.luau `Environment`). A Script (RunContext Client) or LocalScript that is enabled and
+//! `Vm`, modules.rs `environment_in`). A Script (RunContext Client) or LocalScript that is enabled and
 //! under an Actor in the DataModel starts when it gets there, inside the assignment that put it there
 //! ([`start_under`]; measured in a Studio client: the worker's first lines print before the line after
 //! `Actor.Parent = ...`).
@@ -209,7 +209,7 @@ pub fn parallel_phase(lua: &Lua, engine: &Rc<Engine>, threads: Vec<(LuaThread, L
 }
 
 /// Whether the running thread's innermost script frame (C functions and the engine's own Luau skipped) runs in an Actor's VM, whose
-/// environments have their own `_G` (prelude.luau `Environment`): the calling script is one under an Actor, or a module such a
+/// environments' metatable holds its key (modules.rs `environment_in`): the calling script is one under an Actor, or a module such a
 /// script required.
 pub fn caller_in_actor(lua: &Lua) -> bool {
     use mlua::ffi;
@@ -231,10 +231,10 @@ pub fn caller_in_actor(lua: &Lua) -> bool {
             }
             ffi::lua_getfenv(state, -1);
             let mut actor = false;
-            if ffi::lua_type(state, -1) == ffi::LUA_TTABLE {
-                ffi::lua_rawgetfield(state, -1, c"_G".as_ptr());
+            if ffi::lua_type(state, -1) == ffi::LUA_TTABLE && ffi::lua_getmetatable(state, -1) != 0 {
+                ffi::lua_rawgetfield(state, -1, super::builtins::VM_FIELD.as_ptr());
                 actor = ffi::lua_type(state, -1) != ffi::LUA_TNIL;
-                ffi::lua_pop(state, 1);
+                ffi::lua_pop(state, 2);
             }
             ffi::lua_pop(state, 2);
             return actor;
