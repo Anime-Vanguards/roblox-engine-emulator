@@ -30,6 +30,7 @@ pub mod clip;
 pub mod curve;
 pub mod curve_clip;
 mod curves;
+mod members;
 pub mod source;
 #[cfg(test)]
 mod curve_tests;
@@ -790,6 +791,7 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
     add(behaviors, "AnimationClipProvider", "RegisterActiveAnimationClip", register(true, true, true, "Argument must be an 'AnimationClip' object"));
 
     curves::install(engine, behaviors);
+    members::install(engine, behaviors);
 
     *extension(engine).state.borrow_mut() = Some((shared, names));
 }

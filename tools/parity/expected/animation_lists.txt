@@ -1,0 +1,83 @@
+# engine: Roblox Studio 0.747.0.7471481, a headless playing client (script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-27
+add returns 0
+parent true true
+children [K1:Keyframe,K3:Keyframe,K2:Keyframe,K4:Keyframe]
+keyframes [K1:Keyframe,K3:Keyframe,K2:Keyframe,K4:Keyframe]
+after time [K1:Keyframe,K3:Keyframe,K2:Keyframe,K4:Keyframe]
+with others [K1:Keyframe,K3:Keyframe,K2:Keyframe,K4:Keyframe]
+same table false
+readd [K1:Keyframe,K3:Keyframe,K2:Keyframe,K4:Keyframe,F:Folder,Odd:Part]
+moved KS []
+add nil ok 
+add none error Argument 1 missing or nil
+add number error Unable to cast value to Object
+add string error Unable to cast value to Object
+add table error Unable to cast value to Object
+add part ok KS
+add folder ok KS
+add pose ok KS
+add marker ok KS
+add self error Attempt to set KS as its own parent
+add sequence ok KS
+add ancestor error Attempt to set parent of Outer to Outer.KS would result in circular reference
+add destroyed error The Parent property of XD is locked, current parent: NULL, new parent KS
+add service error The Parent property of Workspace is locked, current parent: <place>, new parent KS
+dot call error Expected ':' not '.' calling member function AddKeyframe
+dot other error Expected ':' not '.' calling member function AddKeyframe
+remove returns 0
+removed nil [K1:Keyframe,K3:Keyframe,K4:Keyframe,F:Folder,Odd:Part,Moved:Keyframe,XP:Part,XF:Folder,XPose:Pose,XM:KeyframeMarker,XS:KeyframeSequence]
+remove again ok nil
+remove other's ok KS2
+remove part child ok nil
+remove deep ok F
+remove nil ok 
+remove number error Unable to cast value to Object
+remove pose child ok nil
+remove self ok nil
+addpose returns 0
+addpose numberpose ok K
+addpose part ok K
+addpose keyframe ok K
+addpose marker ok K
+addpose nil ok 
+addpose string error Unable to cast value to Object
+addpose self error Attempt to set K as its own parent
+kids [B:Pose,A:Pose,N:NumberPose,XP:Part,XK:Keyframe,XM:KeyframeMarker]
+poses [B:Pose,A:Pose]
+markers none [XM:KeyframeMarker]
+removepose ok nil
+removepose sub ok A
+removepose numberpose ok nil
+removepose part ok nil
+removepose nil ok 
+removepose outside ok nil
+poses after [A:Pose] [A:Pose,XK:Keyframe,XM:KeyframeMarker]
+addmarker returns 0
+addmarker pose ok K
+addmarker part ok K
+addmarker nil ok 
+addmarker number error Unable to cast value to Object
+markers [XM:KeyframeMarker,M2:KeyframeMarker,M1:KeyframeMarker]
+poses with markers [A:Pose,MP:Pose]
+removemarker ok nil
+removemarker pose ok nil
+removemarker nil ok 
+markers after [XM:KeyframeMarker,M1:KeyframeMarker] [XK:Keyframe,XM:KeyframeMarker,M1:KeyframeMarker,MP:Pose,MX:Part]
+addsub returns 0
+addsub numberpose ok Root
+addsub part ok Root
+addsub keyframe ok Root
+addsub nil ok 
+addsub self error Attempt to set Root as its own parent
+addsub parent error Attempt to set parent of Up to Up.Root would result in circular reference
+subposes [S2:Pose,S1:Pose]
+removesub ok nil
+removesub part ok nil
+removesub nil ok 
+removesub outside ok nil
+subposes after [S1:Pose] [S1:Pose,SN:NumberPose,SK:Keyframe]
+numberpose getsub error GetSubPoses is not a valid member of NumberPose "N"
+into destroyed ok Gone
+locked pose error The Parent property of LP is locked, current parent: NULL, new parent K
+events after add; after remove; added EP; ancestry EK; parent changed; removed EP; ancestry nil; parent changed

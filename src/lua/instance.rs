@@ -1285,7 +1285,7 @@ fn property_name_arg(engine: &Engine, id: InstanceId, args: &Args, method: &str)
 /// nil`, any other value (a number, a table, a datatype, an EnumItem, a function, a buffer, a signal, an InstanceHandle)
 /// `Unable to cast value to Object`, both without a position (measured, Studio 0.748, a client and a server alike:
 /// tools/parity/probes/object_parameter_casts.luau)
-fn object_arg(engine: &Engine, args: &Args, index: usize) -> Result<Option<InstanceId>, Flow> {
+pub(crate) fn object_arg(engine: &Engine, args: &Args, index: usize) -> Result<Option<InstanceId>, Flow> {
     if index >= args.len() {
         return raise(format!("Argument {index} missing or nil"));
     }

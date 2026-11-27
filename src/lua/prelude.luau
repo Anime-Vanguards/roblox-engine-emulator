@@ -1610,6 +1610,8 @@ return {
 	DockWidgetPluginGuiInfo = EngineLibrary(DockWidgetPluginGuiInfoLibrary),
 	SecurityCapabilities = EngineLibrary(SecurityCapabilitiesLibrary),
 	ValueCurveKey = EngineLibrary(ValueCurveKeyLibrary),
+	-- (ValueCurve:GetKeyAtIndex's answer, animation/curves.rs: a key of time 0 and value nil, which new cannot make)
+	ValueCurveKeyOfNone = function() local Object = Proxy("ValueCurveKey", KeyIndex, KeyNewIndex, KeyMeta) KeyModes = KeyModes or { Constant = GetEnumItem("KeyInterpolationMode", "Constant"), Cubic = GetEnumItem("KeyInterpolationMode", "Cubic") } KeyInfo[Object] = { Time = 0, Interpolation = KeyModes.Constant } return Object end,
 	InertLibrary = InertLibrary,
 	MakeStubTree = MakeStubTree,
 	Utf8 = Utf8Table,

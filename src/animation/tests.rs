@@ -1032,3 +1032,80 @@ fn registering_a_clip_makes_nothing_a_script_sees() {
         0.5,
     );
 }
+
+/// KeyframeSequence, Keyframe and Pose list methods are Parent writes and child lists (measured on a 0.747 playing client and
+/// server: tools/parity/probes/animation_lists.luau).
+#[test]
+fn keyframe_list_methods_are_parent_writes_and_child_lists() {
+    check(
+        r#"
+        local Sequence = Instance.new("KeyframeSequence")
+        local A, B = Instance.new("Keyframe"), Instance.new("Keyframe")
+        A.Name, B.Name, A.Time, B.Time = "A", "B", 2, 1
+        Sequence:AddKeyframe(A)
+        Sequence:AddKeyframe(B)
+        local Part = Instance.new("Part")
+        Sequence:AddKeyframe(Part)
+        assert(Part.Parent == Sequence, "any instance is parented")
+        local Listed = Sequence:GetKeyframes()
+        assert(#Listed == 2 and Listed[1] == A and Listed[2] == B, "keyframes in child order, Time not looked at")
+        Sequence:RemoveKeyframe(Part)
+        assert(Part.Parent == nil, "any child is taken out")
+        local Elsewhere = Instance.new("Keyframe")
+        Elsewhere.Parent = workspace
+        Sequence:RemoveKeyframe(Elsewhere)
+        assert(Elsewhere.Parent == workspace, "a keyframe that is no child stays")
+        Sequence:AddKeyframe(nil)
+        local Ok, Why = pcall(function() Sequence:AddKeyframe() end)
+        assert(not Ok and Why == "Argument 1 missing or nil", Why)
+        Ok, Why = pcall(function() Sequence:AddKeyframe(5) end)
+        assert(not Ok and Why == "Unable to cast value to Object", Why)
+        Ok, Why = pcall(function() Sequence:AddKeyframe(Sequence) end)
+        assert(not Ok and Why == "Attempt to set KeyframeSequence as its own parent", Why)
+        local Pose, Number = Instance.new("Pose"), Instance.new("NumberPose")
+        A:AddPose(Pose)
+        A:AddPose(Number)
+        assert(#A:GetPoses() == 1 and A:GetPoses()[1] == Pose, "a NumberPose is no Pose")
+        assert(A:GetPoses() ~= A:GetPoses(), "a new table each call")
+        local Sub = Instance.new("Pose")
+        Pose:AddSubPose(Sub)
+        assert(#Pose:GetSubPoses() == 1 and Pose:GetSubPoses()[1] == Sub)
+        local Marker = Instance.new("KeyframeMarker")
+        A:AddMarker(Marker)
+        assert(#A:GetMarkers() == 1 and A:GetMarkers()[1] == Marker)
+        A:RemoveMarker(Marker)
+        assert(Marker.Parent == nil)
+        "#,
+        0.1,
+    );
+}
+
+/// ValueCurve and CompositeValueCurve cast their arguments and keep nothing (measured: animation_value_curves.luau).
+#[test]
+fn value_curves_cast_their_arguments_and_keep_nothing() {
+    check(
+        r#"
+        local Curve = Instance.new("ValueCurve")
+        local Inserted = Curve:InsertKeyValue(1, 10, Enum.KeyInterpolationMode.Linear)
+        assert(type(Inserted) == "table" and next(Inserted) == nil and Curve.Length == 0 and Curve.ValueType == "nil")
+        assert(Curve:GetValueAtTime(1) == nil and #Curve:GetKeys() == 0 and #Curve:GetKeyIndicesAtTime(1) == 0)
+        assert(Curve:RemoveKeyAtIndex(1) == 0 and Curve:SetKeys({ 1, 2 }) == 0)
+        local Key = Curve:GetKeyAtIndex(7)
+        assert(typeof(Key) == "ValueCurveKey" and Key.Time == 0 and Key.Value == nil and Key.Interpolation == Enum.KeyInterpolationMode.Constant)
+        assert(Key == Curve:GetKeyAtIndex(1) and not rawequal(Key, Curve:GetKeyAtIndex(1)), "new keys that are equal")
+        local Ok, Why = pcall(function() Curve:InsertKeyValue({}, 1, Enum.Material.Plastic) end)
+        assert(Why == "Unable to cast Material to KeyInterpolationMode", Why)
+        Ok, Why = pcall(function() Curve:InsertKeyValue({}, nil) end)
+        assert(Why == "Argument 2 missing or nil", Why)
+        Ok, Why = pcall(function() Curve:InsertKeyValue({}, 1) end)
+        assert(Why == "Unable to cast Array to float", Why)
+        Ok, Why = pcall(function() Curve:InsertKey(FloatCurveKey.new(0, 1)) end)
+        assert(Why == "Unable to cast FloatCurveKey to ValueCurveKey", Why)
+        Ok, Why = pcall(function() Curve:SetKeys({ a = 1 }) end)
+        assert(Why == "Unable to cast Dictionary to Array", Why)
+        local Composite = Instance.new("CompositeValueCurve")
+        assert(#Composite:GetComponentCurves() == 0 and Composite:GetValueAtTime(0) == nil)
+        "#,
+        0.1,
+    );
+}

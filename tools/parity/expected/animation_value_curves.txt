@@ -1,0 +1,163 @@
+# engine: Roblox Studio 0.747.0.7471481, a headless playing client (script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-27
+new Length 0 ValueType nil
+ValuesAndTimes error ValuesAndTimes is not a valid member of ValueCurve "Instance"
+get empty ok 1 nil nil
+keys empty ok 1 table#0{}
+indices empty ok 1 table#0{}
+at 1 empty ok 1 key(number 0|nil nil|Enum.KeyInterpolationMode.Constant|nil|nil)
+insert value ok 1 table#0{}
+one Length 0 ValueType nil
+insert value 2 ok 1 table#0{}
+insert value 3 ok 1 table#0{}
+insert same ok 1 table#0{}
+three Length 0 ValueType nil
+keys ok 1 table#0{}
+at 0 ok 1 key(number 0|nil nil|Enum.KeyInterpolationMode.Constant|nil|nil)
+at 1 ok 1 key(number 0|nil nil|Enum.KeyInterpolationMode.Constant|nil|nil)
+at 2 ok 1 key(number 0|nil nil|Enum.KeyInterpolationMode.Constant|nil|nil)
+at 3 ok 1 key(number 0|nil nil|Enum.KeyInterpolationMode.Constant|nil|nil)
+at 4 ok 1 key(number 0|nil nil|Enum.KeyInterpolationMode.Constant|nil|nil)
+value -1 ok 1 nil nil
+indices -1 ok 1 table#0{}
+value 0 ok 1 nil nil
+indices 0 ok 1 table#0{}
+value 0.5 ok 1 nil nil
+indices 0.5 ok 1 table#0{}
+value 1 ok 1 nil nil
+indices 1 ok 1 table#0{}
+value 1.5 ok 1 nil nil
+indices 1.5 ok 1 table#0{}
+value 3 ok 1 nil nil
+indices 3 ok 1 table#0{}
+value 4 ok 1 nil nil
+indices 4 ok 1 table#0{}
+insert vector ok 1 table#0{}
+insert string ok 1 table#0{}
+insert table ok 1 table#0{}
+insert function ok 1 table#0{}
+after inserts Length 0 ValueType nil
+keys now ok 1 table#0{}
+mode name error Unable to cast string to KeyInterpolationMode
+mode item name ok 1 table#0{}
+mode number error Unable to cast double to KeyInterpolationMode
+mode fraction ok 1 table#0{}
+mode value ok 1 table#0{}
+mode bool error Unable to cast bool to KeyInterpolationMode
+mode table error Unable to cast Array to KeyInterpolationMode
+mode vector error Unable to cast Vector3 to KeyInterpolationMode
+mode other enum error Unable to cast Material to KeyInterpolationMode
+mode nil ok 1 table#0{}
+value nil error Argument 2 missing or nil
+value none error Argument 2 missing or nil
+no arguments error Argument 2 missing or nil
+time bool ok 1 table#0{}
+time nil error Argument 1 missing or nil
+time number string ok 1 table#0{}
+time string error Unable to cast string to float
+time table error Unable to cast Array to float
+time vector error Unable to cast Vector3 to float
+time bad, value nil error Argument 2 missing or nil
+time bad, mode bad error Unable to cast Material to KeyInterpolationMode
+value nil, mode bad error Unable to cast Material to KeyInterpolationMode
+insertkey ok 1 table#0{}
+D Length 0 ValueType nil
+insertkey nil error Argument 1 missing or nil
+insertkey none error Argument 1 missing or nil
+insertkey number error Unable to cast double to ValueCurveKey
+insertkey string error Unable to cast string to ValueCurveKey
+insertkey table error Unable to cast Array to ValueCurveKey
+insertkey float key error Unable to cast FloatCurveKey to ValueCurveKey
+insertkey rotation key error Unable to cast null to ValueCurveKey
+insertkey own key ok 1 table#0{}
+vec 0.25 ok 1 nil nil
+index string error Unable to cast string to int
+index number string ok 1 key(number 0|nil nil|Enum.KeyInterpolationMode.Constant|nil|nil)
+index table error Unable to cast Array to int
+index fraction ok 1 key(number 0|nil nil|Enum.KeyInterpolationMode.Constant|nil|nil)
+index negative ok 1 key(number 0|nil nil|Enum.KeyInterpolationMode.Constant|nil|nil)
+index big ok 1 key(number 0|nil nil|Enum.KeyInterpolationMode.Constant|nil|nil)
+index bool ok 1 key(number 0|nil nil|Enum.KeyInterpolationMode.Constant|nil|nil)
+index nan ok 1 key(number 0|nil nil|Enum.KeyInterpolationMode.Constant|nil|nil)
+index nil error Argument 1 missing or nil
+index none error Argument 1 missing or nil
+key same ok 3 boolean true ; boolean false ; string 
+key write ok 3 number 5 ; number 2 ; nil nil
+key right tangent error Attempting to set a right tangent value on a curve key for which the interpolation mode is not Cubic
+key equals new ok 1 boolean false
+remove 1 ok 1 number 0
+remove 0 ok 1 number 0
+remove negative count ok 1 number 0
+remove 5 ok 1 number 0
+remove string error Unable to cast string to int
+remove nil error Argument 1 missing or nil
+remove count string error Unable to cast string to int
+remove count nil ok 1 number 0
+remove tables error Unable to cast Array to int
+setkeys ok 1 number 0
+D set Length 0 ValueType nil
+setkeys empty ok 1 number 0
+setkeys numbers ok 1 number 0
+setkeys nil error Argument 1 missing or nil
+setkeys none error Argument 1 missing or nil
+setkeys number error Unable to cast double to Array
+setkeys string error Unable to cast string to Array
+setkeys dictionary error Unable to cast Dictionary to Array
+value nil error Argument 1 missing or nil
+value string error Unable to cast string to float
+value number string ok 1 nil nil
+value table error Unable to cast Array to float
+indices nil error Argument 1 missing or nil
+indices table error Unable to cast Array to float
+D end Length 0 ValueType nil
+type number Linear nil 0 nil nil nil nil
+type number Constant nil 0 nil nil nil nil
+type number Cubic nil 0 nil nil nil nil
+type Vector3 Linear nil 0 nil nil nil nil
+type Vector3 Constant nil 0 nil nil nil nil
+type Vector3 Cubic nil 0 nil nil nil nil
+type CFrame Linear nil 0 nil nil nil nil
+type CFrame Constant nil 0 nil nil nil nil
+type CFrame Cubic nil 0 nil nil nil nil
+type Color3 Linear nil 0 nil nil nil nil
+type Color3 Constant nil 0 nil nil nil nil
+type Color3 Cubic nil 0 nil nil nil nil
+type UDim2 Linear nil 0 nil nil nil nil
+type UDim2 Constant nil 0 nil nil nil nil
+type UDim2 Cubic nil 0 nil nil nil nil
+type string Linear nil 0 nil nil nil nil
+type string Constant nil 0 nil nil nil nil
+type string Cubic nil 0 nil nil nil nil
+type boolean Linear nil 0 nil nil nil nil
+type boolean Constant nil 0 nil nil nil nil
+type boolean Cubic nil 0 nil nil nil nil
+type EnumItem Linear nil 0 nil nil nil nil
+type EnumItem Constant nil 0 nil nil nil nil
+type EnumItem Cubic nil 0 nil nil nil nil
+type Instance Linear nil 0 nil nil nil nil
+type Instance Constant nil 0 nil nil nil nil
+type Instance Cubic nil 0 nil nil nil nil
+type table Linear nil 0 nil nil nil nil
+type table Constant nil 0 nil nil nil nil
+type table Cubic nil 0 nil nil nil nil
+write length error Unable to assign property Length. Property is read only
+write type error Unable to assign property ValueType. Property is read only
+clone ok 2 number 0 ; string nil
+changed ok 1 string 
+composite type Enum.CompositeValueCurveType.NumberRange
+components ok 3 string table ; number 0 ; nil nil
+children 0
+composite value ok 1 nil nil
+composite ColorRGB ok 3 number 0 ; nil nil ; number 1
+composite ColorHSV ok 3 number 0 ; nil nil ; number 1
+composite NumberRange ok 3 number 0 ; nil nil ; number 1
+composite Rect ok 3 number 0 ; nil nil ; number 1
+composite UDim ok 3 number 0 ; nil nil ; number 1
+composite UDim2 ok 3 number 0 ; nil nil ; number 1
+composite Vector2 ok 3 number 0 ; nil nil ; number 1
+composite Vector3 ok 3 number 0 ; nil nil ; number 1
+composite time string error Unable to cast string to float
+composite time number string ok 1 nil nil
+composite time table error Unable to cast Array to float
+composite time nil error Argument 1 missing or nil
+composite type write ok 1 EnumItem Enum.CompositeValueCurveType.Vector3

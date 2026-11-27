@@ -563,4 +563,78 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
         let rotation = Affine3A::from_mat3(curve::euler_matrix(x, y, z, order));
         Ok(values([convert::to_lua(lua, engine, &crate::world::frame::cframe_value(&rotation))?]))
     }));
+
+    install_value_curves(&reflection, behaviors);
+}
+
+/// A ValueCurveKey argument: nil "Argument 1 missing or nil", anything else that is no ValueCurveKey "Unable to cast <value> to
+/// ValueCurveKey" (a RotationCurveKey is "null" there, a FloatCurveKey keeps its name: measured)
+fn value_key_arg(engine: &Engine, args: &Args) -> Result<(), Flow> {
+    match args.get(1) {
+        LuaValue::Nil => raise("Argument 1 missing or nil"),
+        LuaValue::UserData(ud) if ud.is::<LRotationCurveKey>() => raise("Unable to cast null to ValueCurveKey"),
+        other if typeof_value(engine, other) == "ValueCurveKey" => Ok(()),
+        other => raise(format!("Unable to cast {} to ValueCurveKey", crate::services::tween::cast_name(engine, other))),
+    }
+}
+
+/// ValueCurve and CompositeValueCurve as a 0.747 playing client and server have them (measured in roblox-sim, twice:
+/// tools/parity/probes/animation_value_curves.luau): every method casts its arguments as its API types say, from the last to
+/// the first, and keeps nothing. InsertKey and InsertKeyValue answer an empty table, Length stays 0 and ValueType "nil", GetKeys
+/// and GetKeyIndicesAtTime are empty tables, GetValueAtTime nil, RemoveKeyAtIndex and SetKeys 0 (an array of anything), and
+/// GetKeyAtIndex, at any index, a new ValueCurveKey of time 0, value nil and Constant interpolation (a key ValueCurveKey.new
+/// cannot make). CompositeValueCurve:GetComponentCurves is an empty table and GetValueAtTime nil.
+fn install_value_curves(reflection: &crate::Reflection, behaviors: &mut Behaviors) {
+    let add = |behaviors: &mut Behaviors, class: &str, name: &str, function: crate::services::MethodFn| {
+        if let (Some(class), Some(name)) = (reflection.class_id(class), reflection.name_id(name)) {
+            behaviors.add_method(class, name, function);
+        }
+    };
+    let empty = |lua: &Lua| -> LuaResult<LuaMultiValue> { Ok(values([LuaValue::Table(lua.create_table()?)])) };
+    add(behaviors, "ValueCurve", "GetKeyAtIndex", method(|lua, engine, _, args| {
+        index_arg(lua, engine, args, 1)?;
+        let make: LuaFunction = engine.prelude().exports.raw_get("ValueCurveKeyOfNone")?;
+        Ok(values([make.call::<LuaValue>(())?]))
+    }));
+    add(behaviors, "ValueCurve", "GetKeyIndicesAtTime", method(move |lua, engine, _, args| {
+        time_arg(lua, engine, args, 1)?;
+        Ok(empty(lua)?)
+    }));
+    add(behaviors, "ValueCurve", "GetKeys", method(move |lua, _, _, _| Ok(empty(lua)?)));
+    add(behaviors, "ValueCurve", "GetValueAtTime", method(|lua, engine, _, args| {
+        time_arg(lua, engine, args, 1)?;
+        Ok(values([LuaValue::Nil]))
+    }));
+    add(behaviors, "ValueCurve", "InsertKey", method(move |lua, engine, _, args| {
+        value_key_arg(engine, args)?;
+        Ok(empty(lua)?)
+    }));
+    add(behaviors, "ValueCurve", "InsertKeyValue", method(move |lua, engine, _, args| {
+        // (the interpolation, then the value, then the time: "Unable to cast string to KeyInterpolationMode" for a name no item
+        // has, a fraction truncated as an item's value; nil is the default)
+        if !args.get(3).is_nil() {
+            crate::services::tween::enum_arg(lua, engine, args, 3, "KeyInterpolationMode")?;
+        }
+        if args.get(2).is_nil() {
+            return raise("Argument 2 missing or nil");
+        }
+        time_arg(lua, engine, args, 1)?;
+        Ok(empty(lua)?)
+    }));
+    add(behaviors, "ValueCurve", "RemoveKeyAtIndex", method(|lua, engine, _, args| {
+        if !args.get(2).is_nil() {
+            index_arg(lua, engine, args, 2)?;
+        }
+        index_arg(lua, engine, args, 1)?;
+        Ok(values([LuaValue::Number(0.0)]))
+    }));
+    add(behaviors, "ValueCurve", "SetKeys", method(|_, engine, _, args| {
+        key_table(engine, args)?;
+        Ok(values([LuaValue::Number(0.0)]))
+    }));
+    add(behaviors, "CompositeValueCurve", "GetComponentCurves", method(move |lua, _, _, _| Ok(empty(lua)?)));
+    add(behaviors, "CompositeValueCurve", "GetValueAtTime", method(|lua, engine, _, args| {
+        time_arg(lua, engine, args, 1)?;
+        Ok(values([LuaValue::Nil]))
+    }));
 }
