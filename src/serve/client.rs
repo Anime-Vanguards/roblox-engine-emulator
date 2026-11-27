@@ -263,10 +263,14 @@ pub fn ensure(state_dir: &Path) -> Result<u16, String> {
     result
 }
 
-/// The service runs from a copy of the binary (`<state dir>/bin/ree-<build>.exe`), so the
+/// The service runs from a copy of the binary `exe` (`<state dir>/bin/ree-<build>.exe`), so the
 /// original can be rebuilt while it runs; copies of other builds are removed once not running.
-fn service_binary(state_dir: &Path, build: &str) -> Result<PathBuf, String> {
-    let exe = std::env::current_exe().map_err(|e| format!("locating ree: {e}"))?;
+/// With `link` (`REE_SERVICE_LINK=1`) it is a hard link to the binary instead, where the volume allows
+/// one: for a binary nothing rebuilds or replaces while its services run, such as a test suite's
+/// install, since a virus scanner reads every new copy of an executable in full (Windows Defender:
+/// half a second of CPU and of wall time for each copy of ree) and a link to a file it has read is no
+/// new file to it.
+fn service_binary(exe: &Path, state_dir: &Path, build: &str, link: bool) -> Result<PathBuf, String> {
     let directory = state_dir.join("bin");
     std::fs::create_dir_all(&directory).map_err(|e| e.to_string())?;
     let extension = exe.extension().map(|extension| format!(".{}", extension.to_string_lossy())).unwrap_or_default();
@@ -274,7 +278,12 @@ fn service_binary(state_dir: &Path, build: &str) -> Result<PathBuf, String> {
     let target = directory.join(&name);
     if !target.exists() {
         let temporary = directory.join(format!("{name}.{}.tmp", std::process::id()));
-        std::fs::copy(&exe, &temporary).map_err(|e| format!("copying the service binary: {e}"))?;
+        let _ = std::fs::remove_file(&temporary);
+        // (the link names the file itself: a link to a symbolic link would start whatever it pointed at later)
+        let linked = link && std::fs::canonicalize(exe).and_then(|file| std::fs::hard_link(file, &temporary)).is_ok();
+        if !linked {
+            std::fs::copy(exe, &temporary).map_err(|e| format!("copying the service binary: {e}"))?;
+        }
         if std::fs::rename(&temporary, &target).is_err() {
             let _ = std::fs::remove_file(&temporary);
         }
@@ -313,7 +322,8 @@ fn same_source(a: Option<&str>, b: Option<&str>) -> bool {
 fn start(state_dir: &Path, build: &str, env: &str) -> Result<u16, String> {
     // (the service runs in its state dir: a relative one is the caller's)
     let state_dir = &std::path::absolute(state_dir).map_err(|e| format!("{}: {e}", state_dir.display()))?;
-    let exe = service_binary(state_dir, build)?;
+    let running = std::env::current_exe().map_err(|e| format!("locating ree: {e}"))?;
+    let exe = service_binary(&running, state_dir, build, std::env::var_os("REE_SERVICE_LINK").is_some_and(|value| value == "1"))?;
     let log = OpenOptions::new().create(true).append(true).open(state_dir.join("serve.log")).map_err(|e| format!("opening serve.log: {e}"))?;
     let source = source();
     let mut command = std::process::Command::new(&exe);
@@ -410,6 +420,30 @@ mod tests {
         let pid = child.id();
         child.wait().unwrap();
         assert!(!alive(pid), "an exited process");
+    }
+
+    /// The service's binary is a copy of the running one, or with `link` a hard link to it; a build's
+    /// file is made once, and other builds' files go
+    #[cfg(feature = "bundles")]
+    #[test]
+    fn the_service_binary_is_a_copy_or_with_link_a_hard_link() {
+        let state = std::env::temp_dir().join(format!("ree-service-binary-{}-{}", std::process::id(), SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let (copied, linked) = (state.join("copied"), state.join("linked"));
+        std::fs::create_dir_all(linked.join("bin")).unwrap();
+        std::fs::write(linked.join("bin").join("ree-old"), "an earlier build's").unwrap();
+        // (a stand-in for the binary beside them, on their volume: a copy of this test's own would be a 100 MB one)
+        let exe = state.join("ree.exe");
+        std::fs::write(&exe, "the running binary").unwrap();
+        let copy = service_binary(&exe, &copied, "b", false).unwrap();
+        let link = service_binary(&exe, &linked, "b", true).unwrap();
+        assert_eq!(copy, copied.join("bin").join("ree-b.exe"));
+        assert_eq!(std::fs::read(&copy).unwrap(), b"the running binary");
+        assert!(!crate::files::same_file(&copy, &exe), "a copy is a file of its own");
+        assert!(crate::files::same_file(&link, &exe), "a link is the binary's own file");
+        assert_eq!(service_binary(&exe, &linked, "b", true).unwrap(), link, "made once");
+        let left: Vec<String> = std::fs::read_dir(linked.join("bin")).unwrap().map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        assert_eq!(left, [link.file_name().unwrap().to_string_lossy().into_owned()], "no other build's file nor a temporary one");
+        let _ = std::fs::remove_dir_all(&state);
     }
 
     /// A lone job runs in its client; one within [`BURST`] of the last (this build and environment)

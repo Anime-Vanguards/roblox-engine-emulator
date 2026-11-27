@@ -1,8 +1,8 @@
 // Process tests for the installed asset worker, with a local JSON worker and no downloads.
 //
-// Each check copies the ree binary into a fresh folder and runs it there, so it is a standalone install. The worker is
-// a Node launcher that a --require script turns into a mock worker, and it logs every request it gets to a file. The
-// checks read that log to see which executable ran and which paths it was sent.
+// Each check installs the ree binary in a fresh folder (a hard link to one staged copy) and runs it there, so it is a
+// standalone install. The worker is a Node launcher that a --require script turns into a mock worker, and it logs every
+// request it gets to a file. The checks read that log to see which executable ran and which paths it was sent.
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
@@ -13,6 +13,7 @@ import { after, describe, test } from "node:test";
 import { setTimeout as sleep } from "node:timers/promises";
 import { realPath } from "../tools/release/common.mjs";
 import { removeTestFolder, servedRun, startManualService, stopServices, waitForProcesses } from "../tools/release/smoke.mjs";
+import { installNode, installRee, removeStage } from "./install.mjs";
 
 const CONCURRENCY = os.availableParallelism() >= 8 ? Math.min(6, Math.floor(os.availableParallelism() / 4)) : 1;
 
@@ -119,7 +120,7 @@ require("node:readline").createInterface({ input: process.stdin }).on("line", (l
 
 // Puts a mock worker (or helper, or decoy) at `file`, with the file mode `mode`.
 //
-// Windows copies node itself. On Unix a copy would not start: Homebrew's node on macOS finds its libnode library
+// Windows installs node itself. On Unix a copy would not start: Homebrew's node on macOS finds its libnode library
 // relative to where it is installed (@loader_path/../lib), so a lone copy makes dyld exit before the mock runs. The
 // file is a small launcher instead, which runs the installed node by absolute path. It can't be `#!/usr/bin/env node`,
 // because several checks set PATH to only the worker and helper folders, where `node` is not found.
@@ -127,40 +128,11 @@ require("node:readline").createInterface({ input: process.stdin }).on("line", (l
 // The launcher passes its own path to node as argv[1], and the mock logs that as the worker: a log of the shared node
 // would not show which of the files on PATH the OS picked. The empty `-e` program stops node from treating "$0" as a
 // script to run, so stdin is left to the mock that --require loads.
-let stageDir = null;
-let stagedRee = null;
-let stagedNode = null;
-function ensureStageDir() {
-	if (!stageDir) stageDir = realPath(fs.mkdtempSync(path.join(os.tmpdir(), "ree-worker-stage-")));
-	return stageDir;
-}
-function installRee(dest) {
-	if (!stagedRee) {
-		stagedRee = path.join(ensureStageDir(), WINDOWS ? "ree.exe" : "ree");
-		fs.copyFileSync(process.env.REE_TEST_BINARY, stagedRee);
-		if (!WINDOWS) fs.chmodSync(stagedRee, 0o755);
-	}
-	try {
-		fs.linkSync(stagedRee, dest);
-	} catch (error) {
-		if (error.code !== "EXDEV" && error.code !== "EPERM" && error.code !== "EACCES") throw error;
-		fs.copyFileSync(process.env.REE_TEST_BINARY, dest);
-		if (!WINDOWS) fs.chmodSync(dest, 0o755);
-	}
-}
-
+//
+// ree and node are staged once and each install is a hard link to the staged file (tests/install.mjs).
 function installWorker(file, mode = 0o755) {
 	if (WINDOWS) {
-		if (!stagedNode) {
-			stagedNode = path.join(ensureStageDir(), "node.exe");
-			fs.copyFileSync(process.execPath, stagedNode);
-		}
-		try {
-			fs.linkSync(stagedNode, file);
-		} catch (error) {
-			if (error.code !== "EXDEV" && error.code !== "EPERM" && error.code !== "EACCES") throw error;
-			fs.copyFileSync(process.execPath, file);
-		}
+		installNode(file);
 	} else {
 		const node = `'${process.execPath.replaceAll("'", "'\\''")}'`; // single-quoted for sh
 		fs.writeFileSync(file, `#!/bin/sh\nexec ${node} -e '' "$0" "$@"\n`);
@@ -187,6 +159,7 @@ function check(name, body) {
 		Object.assign(env, {
 			REE_PARENT_WATCH: "0",
 			REE_SERVE_WORKERS: "1",
+			REE_SERVICE_LINK: "1",
 			RUR_STATE_DIR: path.join(root, "state"),
 			REE_WORKER_LOG: path.join(root, "requests.jsonl"),
 			NODE_OPTIONS: `--require=${JSON.stringify(mock)}`,
@@ -323,9 +296,7 @@ async function serviceJobCounts(ree, directory) {
 const WORKER_VIEW_FIELDS = ["nodePath", "moduleValue", "customValue", "customRelative", "cwd"];
 
 describe("asset worker", { concurrency: CONCURRENCY }, () => {
-after(async () => {
-	if (stageDir) await removeTestFolder(stageDir);
-});
+after(removeStage);
 
 // The worker is a Node script that reports its environment. A service is keyed by everything the worker receives, so
 // each environment below differs from the one before it (NODE_PATH, then WORKER_VALUE set, then removed) and must
@@ -957,6 +928,7 @@ test("a junctioned or symlinked target directory stays in checkout mode directly
 		XDG_CACHE_HOME: userCache,
 		REE_PARENT_WATCH: "0",
 		REE_SERVE_WORKERS: "1",
+		REE_SERVICE_LINK: "1",
 		REE_WORKER_LOG: path.join(root, "requests.jsonl"),
 		NODE_OPTIONS: `--require=${JSON.stringify(mock)}`,
 		[HOST_WORKER_VARIABLE]: worker,
@@ -1037,6 +1009,7 @@ test("a checkout binary reached through a link outside the checkout keeps its se
 		XDG_CACHE_HOME: userCache,
 		REE_PARENT_WATCH: "0",
 		REE_SERVE_WORKERS: "1",
+		REE_SERVICE_LINK: "1",
 		REE_WORKER_LOG: path.join(root, "requests.jsonl"),
 		NODE_OPTIONS: `--require=${JSON.stringify(mock)}`,
 		[HOST_WORKER_VARIABLE]: worker,

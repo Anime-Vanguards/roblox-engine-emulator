@@ -115,7 +115,7 @@ fn binary_without_cache() {
     assert_eq!(launch::prepare(&Default::default(), &default_repo()).err().unwrap(), expected);
 }
 
-/// Copies this test executable into a made-up host checkout and runs three of its tests there: the host's defaults
+/// Installs this test executable in a made-up host checkout and runs three of its tests there: the host's defaults
 /// with its `Cargo.lock`, and the same without it (the dot fallback), then the binary's defaults, with its per-user
 /// cache folder and without one.
 #[test]
@@ -134,7 +134,10 @@ fn a_consumer_keeps_its_checkout_and_dot_fallback() {
     let host = root.join("host");
     let binary = host.join(format!("target/release/host{}", std::env::consts::EXE_SUFFIX));
     std::fs::create_dir_all(binary.parent().unwrap()).unwrap();
-    std::fs::copy(std::env::current_exe().unwrap(), &binary).unwrap();
+    // (a hard link where the folder is on the binary's volume: a virus scanner reads every new copy of an executable in full)
+    if std::fs::hard_link(std::env::current_exe().unwrap(), &binary).is_err() {
+        std::fs::copy(std::env::current_exe().unwrap(), &binary).unwrap();
+    }
     std::fs::write(host.join("Cargo.toml"), "[package]\nname = \"ree-test-host\"\n").unwrap();
     std::fs::write(host.join("Cargo.lock"), "").unwrap();
     assert_eq!(checkout_of(&binary), Some(host.clone()));

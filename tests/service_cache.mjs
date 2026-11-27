@@ -8,27 +8,10 @@ import { createHash } from "node:crypto";
 import { after, describe, test } from "node:test";
 import { realPath } from "../tools/release/common.mjs";
 import { pixelPng, removeTestFolder, servedRun, startManualService, stopServices } from "../tools/release/smoke.mjs";
+import { installRee, removeStage } from "./install.mjs";
 
 const WINDOWS = process.platform === "win32";
 const CONCURRENCY = os.availableParallelism() >= 8 ? Math.min(6, Math.floor(os.availableParallelism() / 4)) : 1;
-
-let stageDir = null;
-let stagedBinary = null;
-function installBinary(dest) {
-	if (!stagedBinary) {
-		stageDir = realPath(fs.mkdtempSync(path.join(os.tmpdir(), "ree-service-cache-stage-")));
-		stagedBinary = path.join(stageDir, WINDOWS ? "ree.exe" : "ree");
-		fs.copyFileSync(process.env.REE_TEST_BINARY, stagedBinary);
-		if (!WINDOWS) fs.chmodSync(stagedBinary, 0o755);
-	}
-	try {
-		fs.linkSync(stagedBinary, dest);
-	} catch (error) {
-		if (error.code !== "EXDEV" && error.code !== "EPERM" && error.code !== "EACCES") throw error;
-		fs.copyFileSync(process.env.REE_TEST_BINARY, dest);
-		if (!WINDOWS) fs.chmodSync(dest, 0o755);
-	}
-}
 
 function spawnAsync(executable, args, { cwd, env, timeout = 120_000 }) {
 	return new Promise((resolve) => {
@@ -75,7 +58,8 @@ function check(name, body) {
 		// the real path of the temp folder: ree reports paths with links resolved, and the checks compare against them
 		const root = realPath(fs.mkdtempSync(path.join(os.tmpdir(), "ree-service-cache-")));
 		const executable = path.join(root, WINDOWS ? "ree.exe" : "ree");
-		installBinary(executable);
+		// (a hard link to the staged ree: tests/install.mjs)
+		installRee(executable);
 		const inputs = path.join(root, "inputs");
 		const project = path.join(root, "project");
 		for (const dir of [inputs, project, path.join(root, "temp")]) fs.mkdirSync(dir);
@@ -94,7 +78,7 @@ function check(name, body) {
 			USERPROFILE: path.join(root, "home"),
 			XDG_CACHE_HOME: path.join(root, "xdg"),
 			TMP: path.join(root, "temp"), TEMP: path.join(root, "temp"), TMPDIR: path.join(root, "temp"),
-			REE_PARENT_WATCH: "0", REE_SERVE_WORKERS: "1",
+			REE_PARENT_WATCH: "0", REE_SERVE_WORKERS: "1", REE_SERVICE_LINK: "1",
 		});
 		const run = async (args, cwd = project, customEnv = env) => {
 			const result = await spawnAsync(executable, args, { cwd, env: customEnv, timeout: 120_000 });
@@ -170,9 +154,7 @@ async function stopAllServices(ree, started) {
 }
 
 describe("service cache", { concurrency: CONCURRENCY }, () => {
-after(async () => {
-	if (stageDir) await removeTestFolder(stageDir);
-});
+after(removeStage);
 
 // A relative XDG_CACHE_HOME is ignored, so the cache is HOME/.cache/ree on Linux. A service normalizes its environment
 // and changes its folder, so every job it runs must still use the cache the client's environment chose.

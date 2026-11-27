@@ -282,7 +282,7 @@ Each probe diffs `playback.json`, `camera.json`, `events.json`, and per-frame `f
 
 `--service` delegates `ree run` and `ree record` to a warm `ree serve` daemon sharing the same build and environment. The daemon keeps the reflection database, compiled module bytecode, and converted bundle plans in memory (~0.25 GB idle) while isolating every job in its own fresh engine, Luau VM, and `DataModel`.
 
-- **Auto-start & lifecycle:** A lone command runs in-process (avoiding ~0.4 s daemon startup). A second invocation within 10 s starts the daemon detached from a binary copy in `<state dir>/bin` (so Cargo can rebuild `ree` freely; newer builds replace it). Runs with CWD = `<state dir>` so git worktrees aren't locked, and exits 20 s after its last job (`--idle`; health checks and pre-warming don't reset idle).
+- **Auto-start & lifecycle:** A lone command runs in-process (avoiding ~0.4 s daemon startup). A second invocation within 10 s starts the daemon detached from a binary copy in `<state dir>/bin` (so Cargo can rebuild `ree` freely; newer builds replace it). With `REE_SERVICE_LINK=1` that file is a hard link to the binary instead (a copy where the volume allows no link), for a binary nothing rebuilds or replaces while its services run, such as a test suite's install: a virus scanner reads every new copy of an executable in full. Runs with CWD = `<state dir>` so git worktrees aren't locked, and exits 20 s after its last job (`--idle`; health checks and pre-warming don't reset idle).
 - **Concurrency:** Runs `REE_SERVE_WORKERS` parallel workers (default: `clamp(min(threads/4, ram_gb/4), 1, 4)`, or `ree serve --workers <n>`), refusing concurrent starts when free RAM < 2 GB.
 - **Service key & security:** Keyed by build +
   environment variables a run reads (`RUR_*`, `REE_*`, `ROR_*`).
@@ -508,5 +508,5 @@ Many variables retain `RUR_*` names for compatibility with `rur` tooling (full l
 | `RUR_LUAU_ALLOC_PROFILE=<file>` | Folded allocation bytes (+ `<file>.counts`; `RUR_LUAU_ALLOC_STEP=<bytes>`, default `1024`) |
 | `REE_PROFILE`, `REE_PROFILE_OUT`, `REE_PROFILE_COUNTERS`, `REE_HW_COUNTERS`, `REE_HW_PIN` | Profiling & hardware counter controls |
 | `REE_SCRIPT_TIMEOUT`, `REE_MAX_SCRIPT_TIMEOUTS`, `REE_MAX_WALL_SECONDS`, `REE_PARENT_WATCH` | Watchdog & limit controls |
-| `REE_DEVICE` (the client profile's `device.kind`), `REE_TIMING_CHECK`, `REE_TIMING_PROBES`, `REE_FROZEN_CLOCK`, `REE_SERVE_WORKERS`, `REE_ASSET_WORKER`, `REE_ASSET_WORKER_ARGS`, `REE_VIEW_COLOR` | Runtime, service, and viewer controls |
+| `REE_DEVICE` (the client profile's `device.kind`), `REE_TIMING_CHECK`, `REE_TIMING_PROBES`, `REE_FROZEN_CLOCK`, `REE_SERVE_WORKERS`, `REE_SERVICE_LINK`, `REE_ASSET_WORKER`, `REE_ASSET_WORKER_ARGS`, `REE_VIEW_COLOR` | Runtime, service, and viewer controls |
 | `REE_LOCALIZED_PLACES`, `REE_MATCH_PLACES` | Place IDs with extra client localization/geometry write costs ([engine.md](engine.md)) |

@@ -70,11 +70,14 @@ fn a_library_host_keeps_relative_worker_paths() {
         return;
     }
 
-    // The child runs from a copy of this test binary in a temp folder, outside any checkout
+    // The child runs from this test binary installed in a temp folder, outside any checkout: a hard link where the folder is
+    // on the binary's volume (a virus scanner reads every new copy of an executable in full), else a copy
     let root = std::env::temp_dir().join(format!("ree-host-worker-{}", std::process::id()));
     std::fs::create_dir_all(&root).unwrap();
     let binary = root.join(if cfg!(windows) { "host-test.exe" } else { "host-test" });
-    std::fs::copy(std::env::current_exe().unwrap(), &binary).unwrap();
+    if std::fs::hard_link(std::env::current_exe().unwrap(), &binary).is_err() {
+        std::fs::copy(std::env::current_exe().unwrap(), &binary).unwrap();
+    }
     // The worker is node itself, turned into the mock by NODE_OPTIONS
     let node = Command::new("node").args(["-p", "process.execPath"]).output().unwrap();
     assert!(node.status.success());

@@ -69,7 +69,15 @@ function thisPlatform() {
 function install(options, bin, platform) {
 	const executable = path.join(bin, platform.exe);
 	if (options.binary) {
-		fs.copyFileSync(options.binary, executable);
+		// A hard link where the binary is on this folder's volume, else a copy: a virus scanner reads every new copy of an
+		// executable in full, and a link to a file it has read is not a new file to it (tests/standalone.rs runs this smoke
+		// several times on a binary it staged in the temporary folder)
+		try {
+			fs.linkSync(options.binary, executable);
+		} catch (error) {
+			if (error.code !== "EXDEV" && error.code !== "EPERM" && error.code !== "EACCES") throw error;
+			fs.copyFileSync(options.binary, executable);
+		}
 		fs.chmodSync(executable, 0o755);
 		return executable;
 	}

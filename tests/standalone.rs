@@ -1,16 +1,66 @@
 //! The same offline smoke as a release runner, with only ree copied outside its build checkout.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::sync::{Arc, Mutex, Weak};
+
+/// The executables the scripts here install in their test folders, staged once for the tests that run at the same time:
+/// ree, and on Windows node, which the asset worker checks put where a worker is looked up. A virus scanner reads every
+/// new copy of an executable in full (Windows Defender: half a second to two seconds of CPU for each copy of ree or node,
+/// many at once when the scripts run side by side), and a hard link to a staged copy is not a new file to it, so the
+/// scripts link their installs from here (`REE_TEST_STAGE`, tests/install.mjs). The folder goes when the last test holding
+/// it ends.
+struct Stage(PathBuf);
+
+impl Stage {
+    fn ree(&self) -> PathBuf {
+        self.0.join(if cfg!(windows) { "ree.exe" } else { "ree" })
+    }
+}
+
+impl Drop for Stage {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+fn stage() -> Arc<Stage> {
+    static STAGE: Mutex<Weak<Stage>> = Mutex::new(Weak::new());
+    static STAGES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let mut held = STAGE.lock().unwrap();
+    if let Some(stage) = held.upgrade() {
+        return stage;
+    }
+    let number = STAGES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let stage = Stage(std::env::temp_dir().join(format!("ree-test-stage-{}-{number}", std::process::id())));
+    let _ = std::fs::remove_dir_all(&stage.0);
+    std::fs::create_dir_all(&stage.0).unwrap();
+    // a hard link where the binary is on the same volume, else the one copy
+    let install = |source: &Path, dest: &Path| {
+        if std::fs::hard_link(source, dest).is_err() {
+            std::fs::copy(source, dest).unwrap();
+        }
+    };
+    install(Path::new(env!("CARGO_BIN_EXE_ree")), &stage.ree());
+    if cfg!(windows) {
+        let node = Command::new("node").args(["-p", "process.execPath"]).output().expect("Node.js runs");
+        assert!(node.status.success(), "{}", describe(&node));
+        install(Path::new(String::from_utf8_lossy(&node.stdout).trim()), &stage.0.join("node.exe"));
+    }
+    let stage = Arc::new(stage);
+    *held = Arc::downgrade(&stage);
+    stage
+}
 
 /// Runs `node <script> <args>` with the temporary folder moved to `temp`, so a test can see what the script leaves there.
-/// The scripts that copy and run ree take the binary under test from `REE_TEST_BINARY`.
-fn node(script: &str, args: &[&str], temp: &Path) -> Output {
+/// The scripts that copy and run ree take the binary under test from `REE_TEST_BINARY`, and link it from `stage`.
+fn node(script: &str, args: &[&str], temp: &Path, stage: &Stage) -> Output {
     Command::new("node")
         .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join(script))
         .args(args)
         .env("TMPDIR", temp).env("TMP", temp).env("TEMP", temp)
         .env("REE_TEST_BINARY", env!("CARGO_BIN_EXE_ree"))
+        .env("REE_TEST_STAGE", &stage.0)
         .output()
         .expect("Node.js runs the script")
 }
@@ -51,10 +101,12 @@ fn an_installed_binary_and_its_service_use_only_the_redirected_user_cache() {
     std::fs::create_dir_all(&temp).unwrap();
     // the smoke compares the paths it made with the ones the binary reports, so the root must not be a link
     let temp = std::fs::canonicalize(temp).unwrap();
-    let binary = env!("CARGO_BIN_EXE_ree");
+    let stage = stage();
+    let staged = stage.ree();
+    let binary = staged.to_str().unwrap();
 
     // a passing smoke removes its folder
-    let passed = node("tools/release/smoke.mjs", &["--binary", binary, "--version", env!("CARGO_PKG_VERSION")], &temp);
+    let passed = node("tools/release/smoke.mjs", &["--binary", binary, "--version", env!("CARGO_PKG_VERSION")], &temp, &stage);
     assert!(passed.status.success(), "{}", describe(&passed));
     let cleanup_deferred = report_deferred_cleanup(&passed);
     if !cleanup_deferred {
@@ -62,7 +114,7 @@ fn an_installed_binary_and_its_service_use_only_the_redirected_user_cache() {
     }
 
     // a failing smoke (the wrong version) keeps its folder and says where it is
-    let failed = node("tools/release/smoke.mjs", &["--binary", binary, "--version", "wrong-version"], &temp);
+    let failed = node("tools/release/smoke.mjs", &["--binary", binary, "--version", "wrong-version"], &temp, &stage);
     assert!(!failed.status.success());
     // the folder of the passing run may still be there too (when its removal was deferred), so any line may be the one named;
     // Node prints an ordinary Windows path where `temp` is canonical with a verbatim prefix, so the paths are compared canonical
@@ -80,8 +132,10 @@ fn an_installed_binary_and_its_service_use_only_the_redirected_user_cache() {
 #[test]
 fn asset_workers_keep_the_clients_paths_through_the_service() {
     let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/asset_worker.mjs");
+    let stage = stage();
     let result = Command::new("node").arg("--test").arg(script)
         .env("REE_TEST_BINARY", env!("CARGO_BIN_EXE_ree"))
+        .env("REE_TEST_STAGE", &stage.0)
         .output().expect("Node.js runs the asset worker tests");
     assert!(result.status.success(), "{}", describe(&result));
     report_deferred_cleanup(&result);
@@ -90,8 +144,10 @@ fn asset_workers_keep_the_clients_paths_through_the_service() {
 #[test]
 fn installed_jobs_keep_standalone_state_with_an_input_repo() {
     let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/service_cache.mjs");
+    let stage = stage();
     let result = Command::new("node").arg("--test").arg(script)
         .env("REE_TEST_BINARY", env!("CARGO_BIN_EXE_ree"))
+        .env("REE_TEST_STAGE", &stage.0)
         .output().expect("Node.js runs the service cache tests");
     assert!(result.status.success(), "{}", describe(&result));
     report_deferred_cleanup(&result);
@@ -112,7 +168,9 @@ fn standalone_checks_accept_linked_and_canonical_temporary_folders() {
     // Rust's canonical Windows path has a verbatim prefix; Node must accept that spelling too.
     let canonical = std::fs::canonicalize(&linked).unwrap();
 
-    let smoke_args = ["--binary", env!("CARGO_BIN_EXE_ree"), "--version", env!("CARGO_PKG_VERSION")];
+    let stage = stage();
+    let staged = stage.ree();
+    let smoke_args = ["--binary", staged.to_str().unwrap(), "--version", env!("CARGO_PKG_VERSION")];
     let mut checks: Vec<(&str, &[&str])> = vec![("tests/service_cache.mjs", &[]), ("tools/release/smoke.mjs", &smoke_args)];
     // the asset worker needs the bundles feature
     if cfg!(feature = "bundles") {
@@ -125,7 +183,7 @@ fn standalone_checks_accept_linked_and_canonical_temporary_folders() {
     let cpus = std::thread::available_parallelism().map_or(1, |n| n.get());
     let concurrency = if cpus >= 8 { (cpus / 4).min(6) } else { 1 };
     let results: Vec<(&str, &Path, Output)> = if concurrency <= 1 {
-        runs.into_iter().map(|(script, args, temp)| (script, temp, node(script, args, temp))).collect()
+        runs.into_iter().map(|(script, args, temp)| (script, temp, node(script, args, temp, &stage))).collect()
     } else {
         let queue = std::sync::Mutex::new(runs.into_iter().enumerate());
         let slots: std::sync::Mutex<Vec<Option<(&str, &Path, Output)>>> = std::sync::Mutex::new(Vec::new());
@@ -134,10 +192,11 @@ fn standalone_checks_accept_linked_and_canonical_temporary_folders() {
                 .map(|_| {
                     let queue = &queue;
                     let slots = &slots;
+                    let stage = &stage;
                     scope.spawn(move || loop {
                         let next = queue.lock().unwrap().next();
                         let Some((index, (script, args, temp))) = next else { break };
-                        let output = node(script, args, temp);
+                        let output = node(script, args, temp, stage);
                         let mut guard = slots.lock().unwrap();
                         if guard.len() <= index {
                             guard.resize_with(index + 1, || None);
