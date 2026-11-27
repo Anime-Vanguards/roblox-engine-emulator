@@ -534,6 +534,25 @@ const SCRIPT_SUFFIXES: &[(&str, &str)] = &[
     (".lua", "ModuleScript"),
 ];
 
+/// The files that make a directory a script, in the order Rojo looks for them (a module before a server script before a client
+/// one, `.luau` before `.lua`: `rojo build` 7.6.1 and 7.7.0-rc.1 make a directory holding `init.luau` and `init.server.luau` a
+/// ModuleScript). Every other `init.` file is an entry as any other: `init.txt` is a StringValue "init", `init.json` a JSON module
+/// "init", `init.storybook.luau` a ModuleScript "init.storybook".
+const INIT_SCRIPTS: &[(&str, &str)] = &[
+    ("init.luau", "ModuleScript"),
+    ("init.lua", "ModuleScript"),
+    ("init.server.luau", "Script"),
+    ("init.server.lua", "Script"),
+    ("init.client.luau", "LocalScript"),
+    ("init.client.lua", "LocalScript"),
+];
+
+/// Whether a directory's entry `entry` belongs to the directory itself rather than making a child: one of its init scripts, its
+/// `init.meta.json`, or `init.csv` (which makes a directory a LocalizationTable in Rojo; ree reads no `.csv`)
+fn is_init_entry(entry: &str) -> bool {
+    INIT_SCRIPTS.iter().any(|(name, _)| entry.eq_ignore_ascii_case(name)) || entry.eq_ignore_ascii_case("init.meta.json") || entry.eq_ignore_ascii_case("init.csv")
+}
+
 /// Offline stand-ins (lua/packages/*, compiled in) for packages a place keeps only in Studio.
 const PACKAGE_STAND_INS: &[(&str, &str)] = &[("ui-labs", "ui-labs.luau"), ("UILabs", "ui-labs.luau")];
 
@@ -1636,34 +1655,53 @@ impl std::hash::Hash for ChildKey {
     }
 }
 
-/// First-match child index for mounting directories with many children in O(1) per entry.
+/// A directory listing's children as its entries mount: the first child of each name (built for a directory of 16 entries or more,
+/// so each entry finds its child in O(1)), and the children the listing's own entries made or took. Rojo keeps every entry of a
+/// directory: two entries of one name (`foo.luau` and `foo/`, `foo.json` and `foo.txt`) are two children (`rojo build` 7.6.1 and
+/// 7.7.0-rc.1), so an entry whose name a child of the same listing has makes a child of its own; one an earlier root or snapshot
+/// made is still the entry's to merge into ([`ensure_child_indexed`]).
 struct ChildIndex {
-    by_name: FxHashMap<ChildKey, InstanceId>,
+    by_name: Option<FxHashMap<ChildKey, InstanceId>>,
+    claimed: FxHashSet<InstanceId>,
 }
 
 impl ChildIndex {
     fn new(state: &State, parent: InstanceId, reserve: usize) -> Self {
         let existing = &state.dom.at(parent).children;
-        let mut by_name = FxHashMap::with_capacity_and_hasher(existing.len() + reserve, Default::default());
-        for &child in existing {
-            by_name.entry(ChildKey(state.dom.at(child).name.clone())).or_insert(child);
+        let by_name = (existing.len() + reserve >= 16).then(|| {
+            let mut by_name = FxHashMap::with_capacity_and_hasher(existing.len() + reserve, Default::default());
+            for &child in existing {
+                by_name.entry(ChildKey(state.dom.at(child).name.clone())).or_insert(child);
+            }
+            by_name
+        });
+        ChildIndex { by_name, claimed: FxHashSet::default() }
+    }
+
+    /// The child named `name` an entry of this listing mounts into: the first such child no earlier entry made or took
+    fn get(&self, state: &State, parent: InstanceId, name: &str) -> Option<InstanceId> {
+        let first = match &self.by_name {
+            Some(by_name) => by_name.get(name.as_bytes()).copied(),
+            None => find_child(state, parent, name),
+        }?;
+        if !self.claimed.contains(&first) {
+            return Some(first);
         }
-        ChildIndex { by_name }
+        state.dom.at(parent).children.iter().copied().find(|child| !self.claimed.contains(child) && state.dom.at(*child).name.as_bytes() == name.as_bytes())
     }
 
-    #[inline]
-    fn get(&self, name: &str) -> Option<InstanceId> {
-        self.by_name.get(name.as_bytes()).copied()
-    }
-
-    #[inline]
-    fn insert(&mut self, name: Str, id: InstanceId) {
-        self.by_name.insert(ChildKey(name), id);
-    }
-
-    #[inline]
-    fn insert_if_absent(&mut self, name: Str, id: InstanceId) {
-        self.by_name.entry(ChildKey(name)).or_insert(id);
+    /// `id` is the child an entry made or took, named `name`; `replaced`: the child it took the place of
+    fn claim(&mut self, name: Str, id: InstanceId, replaced: Option<InstanceId>) {
+        self.claimed.insert(id);
+        if let Some(by_name) = &mut self.by_name {
+            match by_name.get_mut(name.as_bytes()) {
+                Some(first) if Some(*first) == replaced => *first = id,
+                Some(_) => {}
+                None => {
+                    by_name.insert(ChildKey(name), id);
+                }
+            }
+        }
     }
 }
 
@@ -1683,53 +1721,46 @@ fn ensure_child_indexed(
     mut index: Option<&mut ChildIndex>,
 ) -> InstanceId {
     let found = match &index {
-        Some(idx) => idx.get(name),
+        Some(idx) => idx.get(state, parent, name),
         None => find_child(state, parent, name),
     };
-    if let Some(existing) = found {
-        let existing_class = state.dom.at(existing).class;
-        if &*reflection.class(existing_class).name == class_name {
-            return existing;
-        }
-        let existing_is_script = is_a(reflection, existing_class, "LuaSourceContainer");
-        let wants_script = reflection.class_id(class_name).is_some_and(|c| is_a(reflection, c, "LuaSourceContainer"));
-        if !existing_is_script && !wants_script {
-            return existing;
-        }
-        let replaces_folder = !existing_is_script && wants_script && &*reflection.class(existing_class).name == "Folder";
-        if (existing_is_script && wants_script) || replaces_folder {
-            let class = reflection.class_id(class_name).expect("script class");
-            let replacement = core::create_named(state, reflection, class, name);
-            state.dom.hand_children(existing, replacement);
-            state.dom.replace_child(parent, existing, replacement);
-            if let Some(idx) = index.as_deref_mut() {
-                idx.insert(state.dom.at(replacement).name.clone(), replacement);
+    let (child, replaced) = match found {
+        Some(existing) => {
+            let existing_class = state.dom.at(existing).class;
+            let existing_is_script = is_a(reflection, existing_class, "LuaSourceContainer");
+            let wants_script = reflection.class_id(class_name).is_some_and(|c| is_a(reflection, c, "LuaSourceContainer"));
+            let replaces_folder = !existing_is_script && wants_script && &*reflection.class(existing_class).name == "Folder";
+            if &*reflection.class(existing_class).name != class_name && ((existing_is_script && wants_script) || replaces_folder) {
+                let class = reflection.class_id(class_name).expect("script class");
+                let replacement = core::create_named(state, reflection, class, name);
+                state.dom.hand_children(existing, replacement);
+                state.dom.replace_child(parent, existing, replacement);
+                (replacement, Some(existing))
+            } else {
+                if wants_script && !existing_is_script && &*reflection.class(existing_class).name != class_name {
+                    mount.conflicts += 1;
+                }
+                (existing, None)
             }
-            return replacement;
         }
-        if wants_script {
-            mount.conflicts += 1;
+        None => {
+            let class = reflection.class_id(class_name).expect("mounted class");
+            let created = core::create_named(state, reflection, class, name);
+            state.dom.attach(created, parent);
+            mount.created += 1;
+            (created, None)
         }
-        return existing;
-    }
-    let class = reflection.class_id(class_name).expect("mounted class");
-    let created = core::create_named(state, reflection, class, name);
-    state.dom.attach(created, parent);
+    };
     if let Some(idx) = index.as_deref_mut() {
-        idx.insert(state.dom.at(created).name.clone(), created);
+        idx.claim(state.dom.at(child).name.clone(), child, replaced);
     }
-    mount.created += 1;
-    created
+    child
 }
 
 fn mount_directory(engine: &Engine, node: &ScanNode, instance: InstanceId, mount: &mut MountCounts, relative: &str) {
     let has_loops = !node.loops.is_empty();
     let has_dirs = !node.dirs.is_empty();
-    let mut child_index = {
-        let state = engine.state.borrow();
-        let existing_len = state.dom.at(instance).children.len();
-        (node.entries.len() + existing_len >= 16).then(|| ChildIndex::new(&state, instance, node.entries.len()))
-    };
+    let mut child_index = Some(ChildIndex::new(&engine.state.borrow(), instance, node.entries.len()));
     let mut full_path = String::with_capacity(node.path.len() + 64);
     full_path.push_str(&node.path);
     full_path.push('/');
@@ -1757,7 +1788,7 @@ fn mount_directory(engine: &Engine, node: &ScanNode, instance: InstanceId, mount
                 continue;
             }
         }
-        if starts_with_ignore_ascii_case(entry, "init.") || ends_with_ignore_ascii_case(entry, ".meta.json") {
+        if is_init_entry(entry) || ends_with_ignore_ascii_case(entry, ".meta.json") {
             continue;
         }
         full_path.truncate(prefix_len);
@@ -1870,12 +1901,7 @@ fn mount_listed_path(
         return None;
     }
     let full_path = format!("{}/{last}", folder.path);
-    mount_file(engine, &full_path, last, Some(name), parent, mount, parent_index.as_deref_mut());
-    let instance = match parent_index {
-        Some(idx) => idx.get(name)?,
-        None => find_child(&engine.state.borrow(), parent, name)?,
-    };
-    Some(instance)
+    mount_file(engine, &full_path, last, Some(name), parent, mount, parent_index.as_deref_mut())
 }
 
 /// A node of a nested project's tree (`$path`s relative to `base`, the project file's directory) mounted as the child
@@ -1938,7 +1964,7 @@ fn mount_plain_directory_as(
         engine.warn(format!("{full_path}: a Git repository's own directory; mounted as an empty Folder (Rojo builds what is in it)"));
     }
     let mut meta_entry: Option<&str> = None;
-    // (priority in SCRIPT_SUFFIXES, entry index, class)
+    // (priority in INIT_SCRIPTS, entry index, class)
     let mut best_init: Option<(usize, usize, &'static str)> = None;
     for (index, entry) in node.entries.iter().enumerate() {
         if !starts_with_ignore_ascii_case(entry, "init.") {
@@ -1948,13 +1974,9 @@ fn mount_plain_directory_as(
             meta_entry = Some(entry.as_str());
             continue;
         }
-        let rest = &entry[4..];
-        for (priority, &(suffix, class)) in SCRIPT_SUFFIXES.iter().enumerate() {
-            if rest.eq_ignore_ascii_case(suffix) {
-                if best_init.is_none_or(|(best_p, _, _)| priority <= best_p) {
-                    best_init = Some((priority, index, class));
-                }
-                break;
+        if let Some(priority) = INIT_SCRIPTS.iter().position(|(name, _)| entry.eq_ignore_ascii_case(name)) {
+            if best_init.is_none_or(|(best_p, _, _)| priority < best_p) {
+                best_init = Some((priority, index, INIT_SCRIPTS[priority].1));
             }
         }
     }
@@ -1991,8 +2013,18 @@ fn mount_plain_directory_as(
     child
 }
 
+/// The name Rojo gives the instance of a file a rule without a suffix of its own takes (`.txt`, `.rbxm`, `.rbxmx`): the file's
+/// stem, its name up to the last dot (`a.b.txt` is "a.b"); a name with no dot but a leading one is all stem (`.txt` is ".txt").
+fn file_stem(file_name: &str) -> &str {
+    match file_name.rfind('.') {
+        Some(0) | None => file_name,
+        Some(dot) => &file_name[..dot],
+    }
+}
+
 /// A file entry of a mounted directory (`file_name` its name on disk; `name` overrides the
-/// instance name): scripts by suffix, JSON models, JSON modules, models. Other files are ignored.
+/// instance name): scripts by suffix, JSON models, JSON modules, models, text files. Other files are ignored. The instance it
+/// mounted (a model file's top instance named `name`), if any.
 fn mount_file(
     engine: &Engine,
     full_path: &str,
@@ -2001,7 +2033,7 @@ fn mount_file(
     instance: InstanceId,
     mount: &mut MountCounts,
     parent_index: Option<&mut ChildIndex>,
-) {
+) -> Option<InstanceId> {
     let reflection = &engine.reflection;
     if let Some((script_name, class_name)) = script_info(file_name) {
         let mut state = engine.state.borrow_mut();
@@ -2011,43 +2043,80 @@ fn mount_file(
             let instance = state.dom.at_mut(child);
             instance.set_source_path(Some(Rc::from(full_path)));
             instance.set_source(None);
+            // (a JSON module of an earlier root this script takes over is a script now)
+            instance.set_flag(flags::JSON_MODULE, false);
             mount.scripts += 1;
         }
+        Some(child)
+    } else if ends_with_ignore_ascii_case(file_name, ".txt") {
+        // Rojo's text file: a StringValue named by the file's stem holding the file's text as it is (its line endings and a
+        // byte order mark kept). Rojo refuses a file that is not UTF-8 (`rojo build` 7.6.1: "File was not valid UTF-8").
+        let text = match std::fs::read(full_path).map(String::from_utf8) {
+            Ok(Ok(text)) => text,
+            Ok(Err(_)) => {
+                engine.warn(format!("{full_path}: a text file that is not UTF-8 (Rojo refuses it); not mounted"));
+                mount.skipped += 1;
+                return None;
+            }
+            Err(error) => {
+                engine.warn(format!("{full_path}: {error}; not mounted"));
+                mount.skipped += 1;
+                return None;
+            }
+        };
+        let mut state = engine.state.borrow_mut();
+        let child = ensure_child_indexed(&mut state, reflection, instance, name.unwrap_or(file_stem(file_name)), "StringValue", mount, parent_index);
+        if reflection.is_a(state.dom.at(child).class, "StringValue") {
+            core::raw_set_silent(&mut state, reflection, child, K::Value as NameId, Value::String(Str::from(text.as_str())));
+        }
+        Some(child)
     } else if ends_with_ignore_ascii_case(file_name, ".model.json") {
         // Rojo's JSON model (project/json_model.rs): one instance, named after the file
         match mounted_plan(engine, full_path) {
             Some(plan) => instantiate_model(engine, &plan, name, instance, parent_index),
-            None => mount.skipped += 1,
+            None => {
+                mount.skipped += 1;
+                None
+            }
         }
     } else if ends_with_ignore_ascii_case(file_name, ".json") {
         // JSON modules (Rojo / JSON-backed data) return the decoded value; read on require
         let module_name = name.unwrap_or(&file_name[..file_name.len() - 5]);
         let mut state = engine.state.borrow_mut();
         let child = ensure_child_indexed(&mut state, reflection, instance, module_name, "ModuleScript", mount, parent_index);
-        let instance = state.dom.at_mut(child);
-        instance.set_source_path(Some(Rc::from(full_path)));
-        instance.set_source(None);
-        instance.set_flag(flags::JSON_MODULE, true);
-    } else if ends_with_ignore_ascii_case(file_name, ".rbxm") || ends_with_ignore_ascii_case(file_name, ".rbxmx") {
-        if let Some(plan) = mounted_plan(engine, full_path) {
-            instantiate_model(engine, &plan, name, instance, parent_index);
+        if is_a(reflection, state.dom.at(child).class, "LuaSourceContainer") {
+            let instance = state.dom.at_mut(child);
+            instance.set_source_path(Some(Rc::from(full_path)));
+            instance.set_source(None);
+            instance.set_flag(flags::JSON_MODULE, true);
         }
+        Some(child)
+    } else if ends_with_ignore_ascii_case(file_name, ".rbxm") || ends_with_ignore_ascii_case(file_name, ".rbxmx") {
+        // (one top instance, named by the file's stem as Rojo names it; Rojo refuses a model with more, which mount as they are)
+        let plan = mounted_plan(engine, full_path)?;
+        instantiate_model(engine, &plan, Some(name.unwrap_or(file_stem(file_name))), instance, parent_index)
+    } else {
+        None
     }
 }
 
-/// A mounted model file's instances made under `parent`; with `name` (Rojo: a model $path is one
-/// instance, named by its project node) a single top instance takes that name.
-fn instantiate_model(engine: &Engine, plan: &ModelPlan, name: Option<&str>, parent: InstanceId, parent_index: Option<&mut ChildIndex>) {
+/// A mounted model file's instances made under `parent`; with `name` (Rojo: a model file is one instance, named by its file or
+/// its project node) a single top instance takes that name. Each is a child of its own (never merged into one of its name).
+fn instantiate_model(engine: &Engine, plan: &ModelPlan, name: Option<&str>, parent: InstanceId, parent_index: Option<&mut ChildIndex>) -> Option<InstanceId> {
     let created = plan.instantiate(engine, Some(parent));
     if let (Some(name), [root]) = (name, created.as_slice()) {
         let mut state = engine.state.borrow_mut();
         core::raw_set_silent(&mut state, &engine.reflection, *root, K::Name as NameId, Value::String(Str::from(name)));
     }
+    let state = engine.state.borrow();
     if let Some(idx) = parent_index {
-        let state = engine.state.borrow();
         for &root in &created {
-            idx.insert_if_absent(state.dom.at(root).name.clone(), root);
+            idx.claim(state.dom.at(root).name.clone(), root, None);
         }
+    }
+    match name {
+        Some(name) => created.iter().copied().find(|root| state.dom.at(*root).name.as_bytes() == name.as_bytes()),
+        None => created.first().copied(),
     }
 }
 
@@ -2698,8 +2767,7 @@ pub fn apply_studio_names(engine: &Engine, roots: &[String]) -> usize {
 /// instances by either name and renames those whose Studio name differs.
 fn rename_studio_path(engine: &Engine, disk: &[&str], studio: &[&str]) -> usize {
     let file_part = |part: &str| -> String {
-        let lower = part.to_ascii_lowercase();
-        if lower.starts_with("init.") && script_info(part).is_some() {
+        if INIT_SCRIPTS.iter().any(|(name, _)| part.eq_ignore_ascii_case(name)) {
             return String::new();
         }
         script_info(part).map(|(name, _)| name.to_string()).unwrap_or_else(|| part.to_string())

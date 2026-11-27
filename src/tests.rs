@@ -2514,6 +2514,115 @@ fn names_starting_with_a_dot_mount_as_rojo_builds_them() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Text files, entries of one name and init files mount as `rojo build` builds this tree (7.6.1 and 7.7.0-rc.1, the same tree): a
+/// `.txt` is a StringValue named by the file's stem holding its text as it is (line endings, a byte order mark and a NUL kept), and
+/// one that is not UTF-8, which Rojo refuses, is reported; two entries of one name in a directory are two children; a directory
+/// holding `init.luau` and `init.server.luau` is a ModuleScript, and an `init.` file of another rule is a child as any other
+/// (`init.txt`, `init.json`, `init.storybook.luau`); a model file's one instance is named by the file. Roots mounted over one
+/// another still merge their entries, and a script taking over an earlier root's JSON module is a script.
+#[test]
+fn text_files_and_entries_of_one_name_mount_as_rojo_builds_them() {
+    use super::project::{Mount, mount_at};
+    let dir = std::env::temp_dir().join(format!("ree-text-dupes-test-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let write = |relative: &str, bytes: &[u8]| {
+        let file = dir.join(relative);
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(file, bytes).unwrap();
+    };
+    write("A/txt/plain.txt", b"hello");
+    write("A/txt/crlf.txt", b"a\r\nb\r\n");
+    write("A/txt/bom.txt", b"\xEF\xBB\xBFbom");
+    write("A/txt/nul.txt", b"a\0b");
+    write("A/txt/empty.txt", b"");
+    write("A/txt/a.b.txt", b"dots");
+    write("A/txt/.txt", b"suffix only");
+    write("A/txt/x.server.txt", b"server text");
+    write("A/txt/bad.txt", b"a\xFFb");
+    write("A/txt/withinit/init.txt", b"init text");
+    write("A/txt/withinit/child.luau", b"return 1");
+    write("A/txt/initmod/init.luau", b"return 2");
+    write("A/txt/initmod/note.txt", b"beside an init");
+    write("A/dupes/scripts/foo.luau", b"return 'luau'");
+    write("A/dupes/scripts/foo.lua", b"return 'lua'");
+    write("A/dupes/scripts/foo.server.luau", b"print('server')");
+    write("A/dupes/dir/foo.luau", b"return 'file'");
+    write("A/dupes/dir/foo/child.luau", b"return 'child'");
+    write("A/dupes/kinds/foo.json", b"[1]");
+    write("A/dupes/kinds/foo.txt", b"text");
+    write("A/dupes/kinds/foo.model.json", br#"{ "className": "Configuration" }"#);
+    write("A/dupes/init/foo/init.luau", b"return 'init'");
+    write("A/dupes/init/foo/child.luau", b"return 'child'");
+    write("A/dupes/init/foo.luau", b"return 'file'");
+    write("A/inits/priority/init.luau", b"return 'module'");
+    write("A/inits/priority/init.server.luau", b"print('server')");
+    write("A/inits/json/init.json", br#"{ "a": 1 }"#);
+    write("A/inits/story/init.storybook.luau", b"return 'story'");
+    write("A/inits/story/x.story.luau", b"return 'x'");
+    write("A/models/single.rbxmx", br#"<roblox version="4"><Item class="Configuration" referent="R0"><Properties><string name="Name">Other</string></Properties></Item></roblox>"#);
+    write("B/layer/data.json", br#"{ "from": "A" }"#);
+    write("B/layer/shared/a.luau", b"return 'a'");
+    write("C/layer/data.luau", b"return 'C'");
+    write("C/layer/shared/b.luau", b"return 'b'");
+    let root = dir.to_string_lossy().replace('\\', "/");
+    let (lua, engine) = start();
+    mount_at(&engine, &Mount::parse(&format!("ReplicatedStorage/A={root}/A"), false).unwrap()).unwrap();
+    mount_at(&engine, &Mount::parse(&format!("ReplicatedStorage/L={root}/B/layer"), false).unwrap()).unwrap();
+    mount_at(&engine, &Mount::parse(&format!("ReplicatedStorage/L={root}/C/layer"), false).unwrap()).unwrap();
+    let output = run(&lua, &engine, r#"
+        local RS = game:GetService("ReplicatedStorage")
+        local function show(child)
+            local text = child.ClassName .. " " .. string.format("%q", child.Name)
+            if child:IsA("StringValue") then
+                text ..= ' = "' .. string.gsub(child.Value, '[%c\128-\255\\"]', function(c) return string.format("\\x%02X", string.byte(c)) end) .. '"'
+            elseif child:IsA("ModuleScript") then
+                local ok, value = pcall(require, child)
+                text ..= " -> " .. (if typeof(value) == "table" then game:GetService("HttpService"):JSONEncode(value) else tostring(value))
+            end
+            return text
+        end
+        local function list(instance, depth)
+            local shown = {}
+            for _, child in instance:GetChildren() do
+                table.insert(shown, { show(child), child })
+            end
+            table.sort(shown, function(a, b) return a[1] < b[1] end)
+            for _, entry in shown do
+                print("tree", string.rep("  ", depth) .. entry[1])
+                list(entry[2], depth + 1)
+            end
+        end
+        list(RS.A, 0)
+        print("layer", #RS.L:GetChildren(), RS.L.data.ClassName, require(RS.L.data), #RS.L.shared:GetChildren())
+    "#);
+    let expected = [
+        r#"Folder "dupes""#,
+        r#"  Folder "dir""#, r#"    Folder "foo""#, r#"      ModuleScript "child" -> child"#, r#"    ModuleScript "foo" -> file"#,
+        r#"  Folder "init""#, r#"    ModuleScript "foo" -> file"#, r#"    ModuleScript "foo" -> init"#, r#"      ModuleScript "child" -> child"#,
+        r#"  Folder "kinds""#, r#"    Configuration "foo""#, r#"    ModuleScript "foo" -> [1]"#, r#"    StringValue "foo" = "text""#,
+        r#"  Folder "scripts""#, r#"    ModuleScript "foo" -> lua"#, r#"    ModuleScript "foo" -> luau"#, r#"    Script "foo""#,
+        r#"Folder "inits""#,
+        r#"  Folder "json""#, r#"    ModuleScript "init" -> {"a":1}"#,
+        r#"  Folder "story""#, r#"    ModuleScript "init.storybook" -> story"#, r#"    ModuleScript "x.story" -> x"#,
+        r#"  ModuleScript "priority" -> module"#,
+        r#"Folder "models""#, r#"  Configuration "single""#,
+        r#"Folder "txt""#,
+        r#"  Folder "withinit""#, r#"    ModuleScript "child" -> 1"#, r#"    StringValue "init" = "init text""#,
+        r#"  ModuleScript "initmod" -> 2"#, r#"    StringValue "note" = "beside an init""#,
+        r#"  StringValue ".txt" = "suffix only""#, r#"  StringValue "a.b" = "dots""#, r#"  StringValue "bom" = "\xEF\xBB\xBFbom""#,
+        r#"  StringValue "crlf" = "a\x0D\x0Ab\x0D\x0A""#,
+        r#"  StringValue "empty" = """#, r#"  StringValue "nul" = "a\x00b""#, r#"  StringValue "plain" = "hello""#,
+        r#"  StringValue "x.server" = "server text""#,
+    ];
+    let tree: Vec<&str> = output.iter().filter_map(|line| line.strip_prefix("print: tree ")).collect();
+    assert_eq!(tree, expected, "{output:?}");
+    assert!(output.contains(&"print: layer 2 ModuleScript C 2".to_string()), "{output:?}");
+    let reported: Vec<&String> = output.iter().filter(|line| line.starts_with("warn") || line.starts_with("error")).collect();
+    assert_eq!(reported, [&format!("warn: {root}/A/txt/bad.txt: a text file that is not UTF-8 (Rojo refuses it); not mounted")], "{output:?}");
+    drop(lua);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A `default.project.json` can come from a third-party package, so a `$path` stays inside the folder
 /// holding it. One that is absolute or has a `..` segment is reported and not followed, on a tree's root
 /// or a child node. A required `$path` that names nothing and a project file that can't be read are
@@ -2879,9 +2988,10 @@ fn archives_mount_with_their_scripts_sources() {
     mount_at(&engine, &Mount::parse(&format!("ReplicatedStorage/Dir={}", dir.join("lib").to_string_lossy()), false).unwrap()).unwrap();
     let loaded = load_model(&engine, &dir.join("Lib.rbx")).unwrap();
     assert_eq!(loaded.len(), 1);
+    // (a model file in a directory is named by the file, as Rojo names it: lib/Inner.rbxm's one instance is Inner)
     let output = run(&lua, &engine, r#"
         local Storage = game:GetService("ReplicatedStorage")
-        print(require(Storage.Archived.Module), require(Storage.Dir.Lib.Module))
+        print(require(Storage.Archived.Module), require(Storage.Dir.Inner.Module))
     "#);
     assert_eq!(output, [format!("print: {text} {text}")]);
     drop(lua);
