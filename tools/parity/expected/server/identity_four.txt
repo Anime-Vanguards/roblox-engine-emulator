@@ -1,0 +1,34 @@
+# engine: Roblox Studio 0.747.0.7471481, the server of a headless play session (loadstring in the server's bridge, script identity 4; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-28
+new PluginAction ok PluginAction
+new DebuggerWatch ok DebuggerWatch
+new Breakpoint error The current thread cannot create 'Breakpoint' (lacking capability RobloxScript)
+new Player error The current thread cannot create 'Player' (lacking capability WritePlayer)
+write enum ok Enum.RunContext.Client
+write string ok Enum.RunContext.Server
+write number ok Enum.RunContext.Legacy
+write bad error Unable to assign property RunContext. Invalid value "Nope" for enum RunContext
+write table error Unable to assign property RunContext. EnumItem, number, or string expected, got table
+write plugin ok Enum.RunContext.Plugin
+write same ok Enum.RunContext.Plugin
+source ok return 1
+writes ok 
+changed Source=Enum.RunContext.Legacy source signal RunContext=Enum.RunContext.Legacy signal Source=Enum.RunContext.Legacy source signal RunContext=Enum.RunContext.Legacy signal
+local write ok Enum.RunContext.Legacy
+local bad error Unable to assign property RunContext. Invalid value "Nope" for enum RunContext
+local changed 0
+thread coroutine ok
+thread defer ok
+thread delay ok
+thread game_script The current thread cannot write 'RunContext' (lacking capability PluginOrOpenCloud)
+thread game_script_calls_module The current thread cannot write 'RunContext' (lacking capability PluginOrOpenCloud)
+thread game_script_handler_fired_by_game_script The current thread cannot write 'RunContext' (lacking capability PluginOrOpenCloud)
+thread game_script_handler_fired_by_own The current thread cannot write 'RunContext' (lacking capability PluginOrOpenCloud)
+thread module_chunk The current thread cannot write 'RunContext' (lacking capability PluginOrOpenCloud)
+thread module_function ok
+thread own ok
+thread own_handler_fired_by_game_script ok
+thread own_handler_fired_by_own ok
+thread ready true
+thread spawn ok
+thread spawn_after_wait ok

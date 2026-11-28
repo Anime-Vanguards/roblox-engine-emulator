@@ -140,6 +140,10 @@ pub struct Options {
     /// RunService:IsStudio(): true for a Studio session (the default), false for a live game's
     /// server or client (`--studio false`), whose scripts then take their live branches
     pub studio: bool,
+    /// The script identity the harness's own code runs at (`--identity`): 2, a game script's (the default), or 4, the command
+    /// bar's in a playing game, whose capabilities the harness's threads then hold (services/reflection_data.rs IDENTITY_4_CAPS,
+    /// scripts.rs HARNESS). What the harness starts or requires (a script, a module's chunk) runs as the game's code does.
+    pub identity: u8,
     /// `debug.loadmodule` works (`--load-module`), as where Roblox's FFlagEnableLoadModule is on (a Studio whose
     /// ClientAppSettings.json sets it); off, as in a live client and a plain Studio, it raises "debug.loadmodule is not enabled."
     pub load_module: bool,
@@ -184,6 +188,7 @@ impl Default for Options {
             mode: "edit".into(),
             run_context: RunContext::Client,
             studio: true,
+            identity: 2,
             load_module: false,
             load_string: false,
             native: false,

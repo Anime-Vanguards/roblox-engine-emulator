@@ -167,6 +167,9 @@ export function runInRee(name, ree, scratch, server = false, realAssets = false)
 	const options = probeOptions(name);
 	const context = server ? ["--run-context", "server", "--load-string"] : options.context === "edit" ? ["--mode", "edit", "--run-context", "edit"] : [];
 	if (options.flag === "FFlagEnableLoadModule") context.push("--load-module");
+	// ("identity=4": a probe the capture ran at the command bar's identity: the harness's own code runs at it, as the capture's job
+	// did, and the scripts it starts at a game script's)
+	if (options.identity === "4") context.push("--identity", "4");
 	// ("studio=false": a probe of what a running game refuses that Studio allows, as the capture's client and server are one:
 	// `--studio false`, ree's live game)
 	if (options.studio === "false") context.push("--studio", "false");

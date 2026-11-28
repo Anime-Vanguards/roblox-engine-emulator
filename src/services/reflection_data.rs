@@ -50,6 +50,12 @@ pub(crate) const SCRIPT_CAPS: Caps = ((1 << 47) - 1) & !((1 << 5) - 1);
 /// job reaches); SecurityCapabilities.fromCurrent() prints a game script's set at identities 2, 4 and 8 alike.
 pub(crate) const PLUGIN_CAPS: Caps = SCRIPT_CAPS | 1 | (1 << 49);
 
+/// The command bar's identity 4, what a harness run at `--identity 4` holds (Options::identity): a plugin's set and LocalUser.
+/// Measured on roblox-sim 0.747, a playing client and a server: a job at identity 4 writes RunContext and Source
+/// (PluginOrOpenCloud), makes a PluginAction (Plugin) and a DebuggerWatch (LocalUser), and is refused a Breakpoint (RobloxScript)
+/// and a Player (WritePlayer): tools/parity/probes/identity_four.luau, player_new.luau.
+pub(crate) const IDENTITY_4_CAPS: Caps = PLUGIN_CAPS | (1 << 1);
+
 /// Whether `held` holds every capability of `need` (Unassigned is always held)
 pub(crate) fn holds(held: Caps, need: Caps) -> bool {
     need & !(held | UNASSIGNED) == 0
@@ -564,6 +570,8 @@ mod tests {
     #[test]
     fn a_plugins_capabilities_and_the_one_a_set_lacks() {
         assert_eq!(PLUGIN_CAPS, SCRIPT_CAPS | caps_of("Plugin | PluginOrOpenCloud"));
+        assert_eq!(IDENTITY_4_CAPS, PLUGIN_CAPS | caps_of("LocalUser"));
+        assert_eq!(first_lacking(IDENTITY_4_CAPS, caps_of("WritePlayer")), Some("WritePlayer"));
         assert_eq!(first_lacking(SCRIPT_CAPS, caps_of("RobloxScript | AvatarAppearance")), Some("RobloxScript"));
         assert_eq!(first_lacking(SCRIPT_CAPS, caps_of("Basic | PluginOrOpenCloud")), Some("PluginOrOpenCloud"));
         assert_eq!(first_lacking(PLUGIN_CAPS, caps_of("Basic | PluginOrOpenCloud")), None);

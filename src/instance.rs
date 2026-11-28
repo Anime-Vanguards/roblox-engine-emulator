@@ -70,6 +70,14 @@ impl Engine {
             self.member_cache.borrow_mut().insert((class, name), member);
             return member;
         }
+        let member = self.gated_for(class, name, self.ungated_member(class, name), self.script_capabilities());
+        self.member_cache.borrow_mut().insert((class, name), member);
+        member
+    }
+
+    /// Member `name` of `class` before the running code's capabilities gate it ([`Engine::resolve_member`]; an alias's own name)
+    fn ungated_member(&self, class: ClassId, name: NameId) -> Member {
+        let reflection = &self.reflection;
         let behaviors = self.behaviors.borrow();
         let info = reflection.class(class);
         let getter = behaviors.find_getter(reflection, class, name).is_some();
@@ -104,8 +112,6 @@ impl Engine {
             Member::None
         };
         drop(behaviors);
-        let member = self.gated(class, name, member);
-        self.member_cache.borrow_mut().insert((class, name), member);
         member
     }
 
@@ -115,9 +121,35 @@ impl Engine {
         if self.options.edit_mode() { crate::services::reflection_data::PLUGIN_CAPS } else { crate::services::reflection_data::SCRIPT_CAPS }
     }
 
-    /// `member` as the capabilities of the running code leave it (reflection.rs CAPABILITY_PROPERTIES): refused when the property's
-    /// Read permit needs one the code lacks, its writes refused (or granted) by its Write permit.
-    fn gated(&self, class: ClassId, name: NameId, member: Member) -> Member {
+    /// The capabilities of the code the thread `state` runs: [`Engine::script_capabilities`], or the command bar's identity 4's for
+    /// the harness's own code in a run at `--identity 4` (scripts.rs HARNESS)
+    pub fn capabilities_of(&self, state: *mut mlua::ffi::lua_State) -> u64 {
+        if self.options.identity == 4 && crate::scripts::harness_identity(state) {
+            crate::services::reflection_data::IDENTITY_4_CAPS
+        } else {
+            self.script_capabilities()
+        }
+    }
+
+    /// [`Engine::capabilities_of`] the running thread of `lua`
+    pub fn capabilities(&self, lua: &mlua::Lua) -> u64 {
+        if self.options.identity == 4 { self.capabilities_of(lua.current_thread().state()) } else { self.script_capabilities() }
+    }
+
+    /// `name` of `class` as the harness's own code at `--identity 4` sees it where a game script's view ([`Engine::resolve_member`])
+    /// refuses it for a capability (a read or a write): resolved anew for identity 4's capabilities (not kept); None for any other
+    /// code, or where identity 4 lacks the capability too
+    pub fn harness_member(&self, lua: &mlua::Lua, class: ClassId, name: NameId) -> Option<Member> {
+        if self.options.identity != 4 || !crate::scripts::harness_identity(lua.current_thread().state()) {
+            return None;
+        }
+        let name = self.reflection.property_alias(class, name).unwrap_or(name);
+        Some(self.gated_for(class, name, self.ungated_member(class, name), crate::services::reflection_data::IDENTITY_4_CAPS))
+    }
+
+    /// `member` as the capabilities `held` (the running code's) leave it (reflection.rs CAPABILITY_PROPERTIES): refused when the
+    /// property's Read permit needs one the code lacks, its writes refused (or granted) by its Write permit.
+    fn gated_for(&self, class: ClassId, name: NameId, member: Member, held: u64) -> Member {
         let reflection = &self.reflection;
         let declared = |list: &[(&str, &str)]| {
             list.iter().any(|&(owner, property)| reflection.name(name) == property && reflection.is_a(class, owner))
@@ -135,7 +167,6 @@ impl Engine {
         if restriction.read.is_none() && restriction.write.is_none() {
             return if matches!(member, Member::Property { getter: true, .. }) { member } else { Member::None };
         }
-        let held = self.script_capabilities();
         let lacking = |need: u64| crate::services::reflection_data::first_lacking(held, need);
         if let Some(capability) = restriction.read.and_then(lacking) {
             return Member::Refused { capability };

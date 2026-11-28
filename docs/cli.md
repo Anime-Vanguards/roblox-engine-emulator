@@ -89,6 +89,7 @@ Context.Leave(Guest)                                                            
 | `--load-string` | Enables `loadstring` on server scripts regardless of `ServerScriptService.LoadStringEnabled`. |
 | `--native` | Runs scripts with Luau native code generation, safe environments, and VM work counters off (fast test execution without work-clock instruction pricing). |
 | `--studio false` | Sets `RunService:IsStudio() == false` (default `true`) so live-server/client branches execute. Part of prepared-run cache key. |
+| `--identity 4` | The harness's own code runs at the command bar's script identity 4 instead of a game script's 2 (the default): it holds a plugin's capabilities and `LocalUser`, so it writes `Script.RunContext` and `Lighting.LightingStyle` and makes a `PluginAction` (not a `Player`), and so do the threads it spawns, defers or delays and the handlers it connects, whoever fires them. A script it starts and a module's chunk run at a game script's identity; a module's function at its caller's. Part of prepared-run cache key. |
 | `--device desktop\|touch\|gamepad\|phone` | The client profile's `device.kind` (also `REE_DEVICE`, default `desktop`; see "Client profile"): `UserInputService`'s inputs, `PreferredInput` (`Touch` on `touch` and `phone`, `Gamepad` on `gamepad`, as a client of that device reports; before the client profile every device read `KeyboardAndMouse`) and `GetLastInputType()`. `phone` emulates touch input and scales work-clock prices by **2.77x** (sim-to-phone script-time calibration). |
 
 ## Client profile

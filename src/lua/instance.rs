@@ -388,7 +388,13 @@ pub fn get(lua: &Lua, engine: &Rc<Engine>, id: InstanceId, key: &LuaValue) -> Re
 
 /// A read of member `name` of an instance of `class`; `None` when the class has no such member a script can read.
 fn get_member(lua: &Lua, engine: &Rc<Engine>, id: InstanceId, class: ClassId, name: NameId) -> Option<Result<LuaValue, Flow>> {
-    let member = engine.resolve_member(class, name);
+    let mut member = engine.resolve_member(class, name);
+    // (the harness's own code at `--identity 4` reads what identity 4 may: Engine::harness_member)
+    if let Member::Refused { .. } = member
+        && let Some(held) = engine.harness_member(lua, class, name)
+    {
+        member = held;
+    }
     // (a deprecated lower-case property reads the property it stands for)
     let name = engine.member_name(class, name);
     Some(match member {
@@ -486,6 +492,11 @@ pub fn assign(lua: &Lua, engine: &Rc<Engine>, id: InstanceId, key: &LuaValue, va
         _ => return raise_at_caller(format!("invalid argument #2 (string expected, got {})", typeof_value(engine, key))),
     };
     let member = name.map_or(Member::None, |name| engine.resolve_member(class, name));
+    // (the harness's own code at `--identity 4` writes what identity 4 may: Engine::harness_member)
+    let member = match (member, name) {
+        (Member::Refused { .. } | Member::Property { write: WriteGate::Refused(_), .. }, Some(name)) => engine.harness_member(lua, class, name).unwrap_or(member),
+        _ => member,
+    };
     let name = match (member, name) {
         (Member::None, _) | (_, None) => return Err(not_a_member(engine, id, key)),
         // (a deprecated lower-case property writes the property it stands for)

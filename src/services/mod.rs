@@ -2262,6 +2262,23 @@ fn fire_frame_event(lua: &Lua, engine: &Rc<Engine>, event: NameId, args: &[Value
 /// ApplyLayout, UIPageLayout navigation, the layout pass and its invalidation hooks), ContentText,
 /// TextService's measurements and live input are a host layer's (crate::Layer).
 #[inline(never)]
+/// A write of a CAPABILITY_WRITES property (reflection.rs) by code that holds its capability: Script.RunContext as the command bar's
+/// identity 4 writes it in a playing client and a server (measured, roblox-sim 0.747, two captures each:
+/// tools/parity/probes/identity_four.luau): the value cast as the property's ("Unable to assign property RunContext. Invalid value
+/// "Nope" for enum RunContext"); a LocalScript keeps its own, firing nothing; a change fires Source's Changed and its property's
+/// signal, then RunContext's; the same value fires nothing.
+fn capability_write(lua: &Lua, engine: &Rc<Engine>, id: InstanceId, name: NameId, value: LuaValue) -> Result<(), Flow> {
+    let class = engine.state.borrow().dom.at(id).class;
+    let Some(info) = engine.reflection.class_property(class, name).cloned() else { return Ok(()) };
+    let cast = convert::coerce(lua, engine, &info, &value)?;
+    if engine.reflection.is_a(class, "LocalScript") || engine.state.borrow().dom.raw_get(id, name).is_some_and(|old| old.same(&cast)) {
+        return Ok(());
+    }
+    core::fire_computed_changed(&mut engine.state.borrow_mut(), &engine.reflection, id, K::Source as NameId);
+    set_property(engine, id, name, cast);
+    Ok(())
+}
+
 pub fn install_gui_behaviors(engine: &Rc<Engine>) {
     let reflection = engine.reflection.clone();
     let mut behaviors = engine.behaviors.borrow_mut();
@@ -2405,12 +2422,19 @@ pub fn install_gui_behaviors(engine: &Rc<Engine>) {
         behaviors.add_setter(owner, name, Rc::new(move |_, _, _, _| raise(write.clone())));
     }
     // Properties a game script reads but may not write (reflection.rs CAPABILITY_WRITES): a write raises as a client's does; a
-    // plugin's code (the edit run context) writes it through the setter it had
+    // plugin's code (the edit run context) writes it through the setter it had, and the harness's own code at `--identity 4`
+    // (Engine::capabilities) as the command bar's does ([`capability_write`])
     if !engine.options.edit_mode() {
         for &(class_name, member, capability) in crate::reflection::CAPABILITY_WRITES {
             let (Some(owner), Some(name)) = (class(&reflection, class_name), n(member)) else { continue };
             let write = format!("The current thread cannot write '{member}' (lacking capability {capability})");
-            behaviors.add_setter(owner, name, Rc::new(move |_, _, _, _| raise(write.clone())));
+            let need = reflection_data::caps_of(capability);
+            behaviors.add_setter(owner, name, Rc::new(move |lua, engine, id, value| {
+                if !reflection_data::holds(engine.capabilities(lua), need) {
+                    return raise(write.clone());
+                }
+                capability_write(lua, engine, id, name, value)
+            }));
         }
     }
     // UIPageLayout.EasingStyle keeps its value when Spring or Bezier is assigned (Studio 0.747: by item, name or value;

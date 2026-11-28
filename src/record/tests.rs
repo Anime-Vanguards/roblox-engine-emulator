@@ -3314,3 +3314,100 @@ fn a_burst_or_a_write_after_the_render_belongs_to_the_next_frame() {
     assert!(close(at("Bound.ParticleEmitter", &|a| a["emit"].is_number()), frame_at(8.0)), "{}", playback["actions"]);
 }
 
+/// `ree run` of `harness` (a server run when `server`) with `extra` arguments: the printed lines
+fn harness_lines(name: &str, harness: &str, server: bool, extra: &[&str]) -> Vec<String> {
+    let root = std::env::temp_dir().join(format!("ree-{name}-test-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+    std::fs::create_dir_all(root.join("place")).unwrap();
+    std::fs::write(root.join("Harness.luau"), harness).unwrap();
+    let place = root.join("place").to_string_lossy().into_owned();
+    let file = root.join("Harness.luau").to_string_lossy().into_owned();
+    let mut args: Vec<String> = ["--harness", &file, "--roots", &place, "--seconds", "1", "--mode", "play"].iter().map(|s| s.to_string()).collect();
+    if server {
+        args.extend(["--run-context", "server"].map(str::to_owned));
+    }
+    args.extend(extra.iter().map(|s| s.to_string()));
+    let parsed = super::run::parse(&args, false).expect("arguments");
+    let (done, emulator) = super::run::execute_with(&parsed, &crate::launch::Host::default(), false, false).expect("run");
+    let mut bytes = Vec::new();
+    done.print(&mut bytes).expect("printed");
+    drop(emulator);
+    let _ = std::fs::remove_dir_all(&root);
+    let summary: Json = serde_json::from_str(&String::from_utf8(bytes).expect("UTF-8")).expect("one line of JSON");
+    summary["output"].as_array().expect("output").iter().filter(|line| line["kind"] == "print").map(|line| line["message"].as_str().unwrap_or_default().to_string()).collect()
+}
+
+/// `--identity 4` runs the harness's own code at the command bar's identity (scripts.rs HARNESS; measured, roblox-sim 0.747, a client
+/// and a server: tools/parity/probes/identity_four.luau): it writes RunContext (a change fires Source's Changed and signal, then
+/// RunContext's; a LocalScript keeps its own), makes a PluginAction but no Player, writes Lighting.LightingStyle, and what it spawns,
+/// defers and connects keeps the identity, whoever fires the handler; a module's chunk and a script it starts run at a game script's,
+/// a module's function at its caller's. Without the option the harness is a game script.
+#[test]
+fn the_harnesses_identity_is_a_run_option() {
+    let harness = r##"return function(Context)
+	local RS = game:GetService("ReplicatedStorage")
+	local IS_SERVER = game:GetService("RunService"):IsServer()
+	local function try(F) local Ok, Problem = pcall(F) return if Ok then "ok" else (string.gsub(tostring(Problem), "^.-:%d+: ", "")) end
+	print("new", try(function() Instance.new("PluginAction") end), try(function() Instance.new("Player") end))
+	print("style", try(function() game:GetService("Lighting").LightingStyle = Enum.LightingStyle.Soft end))
+	local S = Instance.new("Script")
+	local Seen = {}
+	S.Changed:Connect(function(Name) table.insert(Seen, Name) end)
+	S:GetPropertyChangedSignal("Source"):Connect(function() table.insert(Seen, "source signal") end)
+	S:GetPropertyChangedSignal("RunContext"):Connect(function() table.insert(Seen, "signal") end)
+	print("write", try(function() S.RunContext = Enum.RunContext.Client S.RunContext = "Client" end), tostring(S.RunContext), try(function() S.RunContext = "Nope" end))
+	local L = Instance.new("LocalScript")
+	print("local", try(function() L.RunContext = Enum.RunContext.Server end), tostring(L.RunContext))
+	task.wait()
+	print("changed", table.concat(Seen, " "))
+	local Log = Instance.new("Folder")
+	Log.Name = "Log"
+	Log.Parent = RS
+	local Bindable = Instance.new("BindableEvent")
+	Bindable.Name = "Bindable"
+	Bindable.Parent = RS
+	local ATTEMPT = 'local function attempt(Label) local Ok = pcall(function() Instance.new("Script").RunContext = Enum.RunContext.Client end) game:GetService("ReplicatedStorage").Log:SetAttribute(Label, Ok) end\n'
+	local function attempt(Label) local Ok = pcall(function() Instance.new("Script").RunContext = Enum.RunContext.Client end) Log:SetAttribute(Label, Ok)
+	end
+	attempt("own")
+	task.spawn(function() attempt("spawned") end)
+	task.defer(function() attempt("deferred") end)
+	Bindable.Event:Connect(function(From) attempt("handler_" .. From) end)
+	local Module = Instance.new("ModuleScript")
+	Module.Name = "Module"
+	Module.Source = ATTEMPT .. 'attempt("chunk") return attempt'
+	Module.Parent = RS
+	require(Module)("function")
+	local Game = Instance.new(if IS_SERVER then "Script" else "LocalScript")
+	Game.Source = ATTEMPT .. 'attempt("script") require(game:GetService("ReplicatedStorage").Module)("script_calls") game:GetService("ReplicatedStorage").Bindable:Fire("script")'
+	Game.Parent = if IS_SERVER then game:GetService("ServerScriptService") else game:GetService("ReplicatedFirst")
+	task.wait(0.2)
+	local Names = {}
+	for Name, Ok in Log:GetAttributes() do
+		table.insert(Names, Name .. "=" .. tostring(Ok))
+	end
+	table.sort(Names)
+	print("threads", table.concat(Names, " "))
+	print("@done")
+end
+"##;
+    let refused = |member: &str| format!("The current thread cannot write '{member}' (lacking capability PluginOrOpenCloud)");
+    for server in [false, true] {
+        let lines = harness_lines("identity", harness, server, &["--identity", "4"]);
+        assert_eq!(
+            lines[..6],
+            [
+                "new ok The current thread cannot create 'Player' (lacking capability WritePlayer)".to_string(),
+                "style ok".into(),
+                "write ok Enum.RunContext.Client Unable to assign property RunContext. Invalid value \"Nope\" for enum RunContext".into(),
+                "local ok Enum.RunContext.Legacy".into(),
+                "changed Source source signal RunContext signal".into(),
+                "threads chunk=false deferred=true function=true handler_script=true own=true script=false script_calls=false spawned=true".into(),
+            ],
+            "server {server}: {lines:?}"
+        );
+        let lines = harness_lines("game-identity", harness, server, &[]);
+        assert_eq!(lines[0], "new The current thread cannot create 'PluginAction' (lacking capability Plugin) The current thread cannot create 'Player' (lacking capability WritePlayer)", "{lines:?}");
+        assert!(lines[2].starts_with(&format!("write {}", refused("RunContext"))), "{lines:?}");
+        assert!(lines[5].starts_with("threads") && !lines[5].contains("=true"), "{lines:?}");
+    }
+}

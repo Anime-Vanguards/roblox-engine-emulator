@@ -1280,8 +1280,10 @@ fn begin_run_as(lua: &Lua, engine: &Rc<Engine>, args: &RecordArgs, park: bool, s
         Some(crate::loopback::Side::Client) => LuaValue::String(lua.create_string("Client").map_err(lua_error)?),
         None => LuaValue::Nil,
     };
-    // (the harness's thread reads the harness module's environment as its globals, as a client's job reads its own: scripts.rs)
-    let adopt = crate::lua::lua_fn(lua, |lua, harness: LuaValue| {
+    // (the harness's thread reads the harness module's environment as its globals, as a client's job reads its own: scripts.rs; at
+    // `--identity 4` it carries the harness's owner tag, so it and what it makes hold identity 4's capabilities: scripts.rs HARNESS)
+    let owner = if engine.options.identity == 4 { crate::scripts::HARNESS } else { 0 };
+    let adopt = crate::lua::lua_fn(lua, move |lua, harness: LuaValue| {
         let function = match &harness {
             LuaValue::Function(function) => Some(function.clone()),
             LuaValue::Table(table) => table.pairs::<LuaValue, LuaValue>().filter_map(Result::ok).find_map(|(_, value)| match value {
@@ -1290,8 +1292,9 @@ fn begin_run_as(lua: &Lua, engine: &Rc<Engine>, args: &RecordArgs, park: bool, s
             }),
             _ => None,
         };
-        if let Some(globals) = function.and_then(|function| function.environment()) {
-            crate::scripts::set_thread(lua, &lua.current_thread(), Some(&globals), 0);
+        let globals = function.and_then(|function| function.environment());
+        if globals.is_some() || owner != 0 {
+            crate::scripts::set_thread(lua, &lua.current_thread(), globals.as_ref(), owner);
         }
         Ok(())
     })

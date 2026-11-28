@@ -482,6 +482,19 @@ pub fn handler_may_run(state: &mut State, connection: ConnectionId) -> bool {
     }
 }
 
+/// The owner tag of the harness's threads in a run that gives the harness's own code an identity of its own (`--identity 4`,
+/// Options::identity; record/run.rs). No script's run has it, so they never stop; the threads they make and the handlers they
+/// connect take it as a run's do (measured: what code at identity 4 spawns, defers, delays and wraps, and its handlers whoever
+/// fires them, keep identity 4). A module's chunk and a script's run take theirs (a game script's identity, measured likewise:
+/// tools/parity/probes/identity_four.luau).
+pub const HARNESS: u32 = 1 << 31;
+
+/// Whether the running thread `state` is the harness's own code at the run's harness identity ([`HARNESS`])
+pub fn harness_identity(state: *mut mlua::ffi::lua_State) -> bool {
+    // SAFETY: the running thread of the VM
+    tagged() && unsafe { lua_getthreadowner(state) } == HARNESS
+}
+
 /// Whether the engine gave any thread an owner tag or script globals yet (until then no thread has one to pass on)
 static TAGGED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 

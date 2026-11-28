@@ -161,6 +161,8 @@ pub struct Args {
     pub mode: Option<String>,
     pub run_context: Option<String>,
     pub studio: Option<bool>,
+    /// `--identity <2|4>`: the script identity the harness's own code runs at ([`Options::identity`])
+    pub identity: Option<u8>,
     pub load_module: bool,
     pub load_string: bool,
     pub native: bool,
@@ -217,6 +219,13 @@ impl Args {
                     "true" => true,
                     "false" => false,
                     _ => return Err("--studio must be true or false".into()),
+                })
+            }
+            "--identity" => {
+                self.identity = Some(match need()?.as_str() {
+                    "2" => 2,
+                    "4" => 4,
+                    _ => return Err("--identity must be 2 (a game script's, the default) or 4 (the command bar's)".into()),
                 })
             }
             "--player" => self.player = Some(need()?),
@@ -355,6 +364,7 @@ pub fn prepare(args: &Args, default_repo: &Path) -> Result<Prepared, String> {
         mode,
         run_context,
         studio: args.studio.unwrap_or(true),
+        identity: args.identity.unwrap_or(2),
         load_module: args.load_module,
         load_string: args.load_string,
         native: args.native,
@@ -581,6 +591,10 @@ mod tests {
         let live = prepare(&args(&["--mode", "play", "--run-context", "server", "--studio", "false"]), Path::new("C:/somewhere")).unwrap();
         assert!(live.options.server() && !live.options.studio);
         assert!(parse(&["--studio".to_string(), "no".to_string()]).unwrap_err().contains("true or false"));
+        // (the harness's own code at the command bar's identity: --identity 4; 2 is the default, and nothing else is measured)
+        assert_eq!(live.options.identity, 2);
+        assert_eq!(prepare(&args(&["--mode", "play", "--identity", "4"]), Path::new("C:/somewhere")).unwrap().options.identity, 4);
+        assert!(parse(&["--identity".to_string(), "8".to_string()]).unwrap_err().contains("2 (a game script's, the default) or 4"));
         let refused = |words: &[&str]| prepare(&args(words), Path::new("C:/somewhere")).err().unwrap_or_default();
         assert!(refused(&["--run-context", "server"]).contains("needs --mode play"));
         assert!(refused(&["--run-context", "server", "--mode", "play", "--player", "Someone"]).contains("a server has none"));

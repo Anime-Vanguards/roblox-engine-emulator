@@ -146,6 +146,10 @@ fn probe_job(scratch: &Path, empty: &Path, name: &str, source: &str, server: boo
     if directive("flag=FFlagEnableLoadModule") {
         args.push("--load-module".into());
     }
+    // ("identity=4": the harness's own code at the command bar's identity, as the capture's job ran: run.mjs runInRee)
+    if directive("identity=4") {
+        args.extend(["--identity", "4"].map(str::to_owned));
+    }
     // ("studio=false": what a running game refuses that Studio allows: run.mjs runInRee)
     if directive("studio=false") {
         args.extend(["--studio", "false"].map(str::to_owned));
