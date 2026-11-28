@@ -469,18 +469,89 @@ pub fn sent_value(lua: &Lua, engine: &Engine, value: &LuaValue, height: usize, t
 }
 
 /// BindableFunction:Invoke's copy of its arguments and of the callback's results, and a ValueCurveKey's Value's: each
-/// value's tables sitting at `height` (the call's frame: [`capture`]).
-pub fn copied(lua: &Lua, engine: &Engine, values: LuaMultiValue, height: usize) -> Ret {
+/// value's tables sitting at `height` (the call's frame: [`capture`]). With `priced`, charged what a client's copy into the engine
+/// and back out costs (Invoke's: [`copy_price`] twice, the copy at the call and the receiver's).
+pub fn copied(lua: &Lua, engine: &Engine, values: LuaMultiValue, height: usize, priced: bool) -> Ret {
     let mut out = LuaMultiValue::with_capacity(values.len());
     let mut tally = Tally::default();
+    let (mut price, mut tables) = (0.0, 0);
     for value in values.iter() {
         let sent = match capture(lua, engine, value, height, &mut tally) {
             Ok(sent) => sent,
             Err(refused) => return refused.raise(),
         };
+        if priced {
+            price += copy_price(&sent, true, &mut tables);
+        }
         out.push_back(rebuild(lua, &sent)?);
     }
+    if tables > 0 {
+        price += super::actors::MESSAGE_FIRST_TABLE;
+    }
+    if price > 0.0 {
+        let price = 2.0 * price;
+        engine.state.borrow().sched.charge(price);
+        crate::boundary::add_cost(price);
+    }
     Ok(out)
+}
+
+/// What BindableEvent:Fire's copy of its arguments costs a client past the call (roblox-sim 0.747, a headless playing client, six
+/// sessions of 15-sample medians of 200 calls, nothing connected, beyond `Fire()`'s 0.064 us): 0.133 us when it has arguments and
+/// 0.012 an argument (one number 0.145, three 0.169, ten 0.252; a boolean, an Instance or a Vector3 as a number), a string 0.02
+/// and 0.0106 ns a byte (10 bytes 0.015 more than a number, 1,000 0.057, 10,000 0.116, 100,000 1.09), a buffer 0.1 and its bytes
+/// at the same price (100 bytes 0.101, 100,000 1.16), and a table what SendMessage's copy of it costs (lua/actors.rs MESSAGE_*: an
+/// empty one 0.156; its strings' and buffers' bytes as above). With a handler connected it costs what it does without one, past the
+/// queueing (cost.rs signal_costs). BindableFunction:Invoke copies its arguments into the engine and out again for its callback,
+/// and its callback's results so too: each copy [`copy_price`] (an Invoke of a 10-number table 0.80 us more than one of nothing, of
+/// a 10-entry dictionary 1.80, a callback returning a 10-number table 0.77).
+pub const FIRE_ARGUMENTS: f64 = 0.133e-6;
+pub const FIRE_ARGUMENT: f64 = 0.012e-6;
+pub const STRING_SENT: f64 = 0.02e-6;
+pub const BUFFER_SENT: f64 = 0.1e-6;
+pub const BYTE_SENT: f64 = 0.0106e-9;
+
+/// BindableEvent:Fire's price for the arguments it sends ([`FIRE_ARGUMENTS`]), charged by both its paths (raw.rs Base::FireBindable,
+/// services/mod.rs).
+pub fn fire_price(arguments: &[Value]) -> f64 {
+    if arguments.is_empty() {
+        return 0.0;
+    }
+    let mut tables = 0;
+    let mut price = FIRE_ARGUMENTS + arguments.len() as f64 * FIRE_ARGUMENT;
+    for value in arguments {
+        price += match value {
+            Value::String(text) => STRING_SENT + text.as_bytes().len() as f64 * BYTE_SENT,
+            Value::Lua(held) => match &**held {
+                LuaValue::UserData(userdata) => userdata.borrow::<Copied>().map(|copied| copy_price(&copied.0, true, &mut tables)).unwrap_or(0.0),
+                _ => 0.0,
+            },
+            _ => 0.0,
+        };
+    }
+    if tables > 0 {
+        price += super::actors::MESSAGE_FIRST_TABLE;
+    }
+    price
+}
+
+/// What a client's copy of `sent` costs ([`FIRE_ARGUMENTS`]): a table SendMessage's prices (each counted in `tables`), a string's
+/// and a buffer's bytes [`BYTE_SENT`], a string that is an argument ([`STRING_SENT`]) and a buffer ([`BUFFER_SENT`]) more.
+pub fn copy_price(sent: &Sent, top: bool, tables: &mut u32) -> f64 {
+    use super::actors::{MESSAGE_ENTRY, MESSAGE_ITEM, MESSAGE_TABLE};
+    match sent {
+        Sent::Value(LuaValue::String(text)) => (if top { STRING_SENT } else { 0.0 }) + text.as_bytes().len() as f64 * BYTE_SENT,
+        Sent::Value(_) => 0.0,
+        Sent::Buffer(bytes) => BUFFER_SENT + bytes.len() as f64 * BYTE_SENT,
+        Sent::Table(entries) => {
+            *tables += 1;
+            let mut price = MESSAGE_TABLE;
+            for (key, item) in entries {
+                price += if matches!(key, Key::Index(_)) { MESSAGE_ITEM } else { MESSAGE_ENTRY } + copy_price(item, false, tables);
+            }
+            price
+        }
+    }
 }
 
 /// The threads of BindableFunction callbacks (app data, made at the first callback set or run): by callback, the thread that set

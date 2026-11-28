@@ -6527,7 +6527,9 @@ fn the_work_clock_prices_instance_operations_as_the_studio_bench_measured() {
         Within("Connect + Disconnect", Per(1000, function(N) for _ = 1, N do Event.Event:Connect(Noop):Disconnect() end end), 450, 720)
         Within("task.spawn", Per(1000, function(N) for _ = 1, N do task.spawn(Noop) end end), 600, 950)
         Within("coroutine.wrap", Per(1000, function(N) for _ = 1, N do coroutine.wrap(Noop)() end end), 600, 950)
-        Within("BindableEvent:Fire", Per(1000, function(N) for _ = 1, N do Event:Fire(1) end end), 40, 100)
+        Within("BindableEvent:Fire", Per(1000, function(N) for _ = 1, N do Event:Fire() end end), 40, 100)
+        -- (an argument's copy: a 0.747 playing client's Fire(1) 0.19 to 0.22 us, lua/bindable.rs fire_price)
+        Within("BindableEvent:Fire(1)", Per(1000, function(N) for _ = 1, N do Event:Fire(1) end end), 170, 260)
 
         -- parenting inside the DataModel (the bench: a Part from one Folder of the workspace to another 0.51 us)
         local One, Two = Instance.new("Folder"), Instance.new("Folder")
@@ -9814,7 +9816,8 @@ fn a_call_into_an_actor_and_a_shared_increment_cost_what_studio_spent() {
         local Invoke, Increment, Same = Per(function(N) for _ = 1, N do Call:Invoke(1, 2) end end), Per(function(N) for _ = 1, N do SharedTable.increment(Shared, "N", 1) end end), Per(function(N) for _ = 1, N do Plain:Invoke(1, 2) end end)
         assert(Invoke > 850 and Invoke < 1300, "Invoke into an Actor: " .. Invoke)
         assert(Increment > 300 and Increment < 520, "SharedTable.increment: " .. Increment)
-        assert(Same < 300, "a call outside an Actor keeps its price: " .. Same)
+        -- (an Invoke outside an Actor: a 0.747 client's 0.72 to 0.76 us with nothing copied, cost.rs BINDABLE_INVOKE)
+        assert(Same > 600 and Same < 900 and Same < Invoke - 200, "a call outside an Actor: " .. Same)
         print("ok")
         "#,
     );
@@ -16774,6 +16777,55 @@ fn a_method_called_through_its_value_costs_what_its_colon_call_does() {
         Same("Lighting:GetSunDirection (the engine's Luau)", function() Lighting:GetSunDirection() end, function() Sun(Lighting) end)
         Same("BindableEvent:Fire", function() Event:Fire(1) end, function() Fire(Event, 1) end)
         "#,
+    );
+}
+
+/// BindableEvent:Fire charges its arguments' copy as a playing 0.747 client spends on it (lua/bindable.rs fire_price: a 10-number
+/// table 0.51 us more than `Fire()`, a 1,000-byte string 0.20; roblox-sim, six sessions), BindableFunction:Invoke each copy of its
+/// arguments and of its callback's results twice (into the engine and back out: a 10-number table 0.80 us more on the client) and
+/// its callback's run (cost.rs BINDABLE_INVOKE: a callback returning at once 0.74 us); `Fire()` costs no more than before.
+#[test]
+fn bindable_copies_cost_what_a_client_spends_on_them() {
+    let (lua, engine) = start();
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    use super::lua::bindable::{BYTE_SENT, FIRE_ARGUMENT, FIRE_ARGUMENTS, STRING_SENT};
+    use super::lua::actors::{MESSAGE_FIRST_TABLE, MESSAGE_ITEM, MESSAGE_TABLE};
+    let table = MESSAGE_TABLE + MESSAGE_FIRST_TABLE + 10.0 * MESSAGE_ITEM;
+    let fire_table = (FIRE_ARGUMENTS + FIRE_ARGUMENT + table) * 1e6;
+    let fire_text = (FIRE_ARGUMENTS + FIRE_ARGUMENT + STRING_SENT + 1000.0 * BYTE_SENT) * 1e6;
+    let invoke_table = 2.0 * table * 1e6;
+    let invoke = crate::cost::BINDABLE_INVOKE * 1e6;
+    run(
+        &lua,
+        &engine,
+        &format!(
+            r#"
+        local Event = Instance.new("BindableEvent")
+        local Call = Instance.new("BindableFunction")
+        Call.OnInvoke = function() end
+        local Back = Instance.new("BindableFunction")
+        local T10, Text, Nothing = {{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 }}, string.rep("x", 1000), nil
+        Back.OnInvoke = function() return T10 end
+        local function Per(F)
+            F()
+            local Start = os.clock()
+            for _ = 1, 50 do F() end
+            local Middle = os.clock()
+            for _ = 1, 50 do end
+            return ((Middle - Start) - (os.clock() - Middle)) / 50 * 1e6
+        end
+        local function Is(Name, Got, Want)
+            assert(math.abs(Got - Want) < 0.01, `{{Name}}: {{Got}} us, where {{Want}}`)
+        end
+        local Bare = Per(function() Event:Fire(Nothing) end) - Per(function() Event:Fire() end)
+        Is("Fire(T10)", Per(function() Event:Fire(T10) end) - Per(function() Event:Fire() end) - Bare, {fire_table:e} - {argument:e})
+        Is("Fire(Text)", Per(function() Event:Fire(Text) end) - Per(function() Event:Fire() end) - Bare, {fire_text:e} - {argument:e})
+        Is("Invoke(T10)", Per(function() Call:Invoke(T10) end) - Per(function() Call:Invoke(Nothing) end), {invoke_table:e})
+        Is("a callback returning T10", Per(function() Back:Invoke() end) - Per(function() Call:Invoke() end), {invoke_table:e})
+        assert(Per(function() Call:Invoke() end) > {invoke:e}, "Invoke runs its callback at its price")
+        "#,
+            argument = (FIRE_ARGUMENTS + FIRE_ARGUMENT) * 1e6,
+        ),
     );
 }
 

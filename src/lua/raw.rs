@@ -2202,6 +2202,12 @@ unsafe fn base_call(state: *mut ffi::lua_State, api: &Api, engine: &Engine, id: 
                         _ => return Out::General,
                     });
                 }
+                // (what the arguments' copy costs: lua/bindable.rs fire_price)
+                let price = super::bindable::fire_price(&arguments);
+                if price > 0.0 {
+                    api.charge(price);
+                    crate::boundary::add_cost(price);
+                }
                 core::fire_event_measured(&mut engine.state.borrow_mut(), id, K::Event as NameId, arguments, crate::cost::SignalKind::Bindable);
                 Out::Ret(0)
             }

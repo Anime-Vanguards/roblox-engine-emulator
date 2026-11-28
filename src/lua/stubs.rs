@@ -544,12 +544,14 @@ pub fn load(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
             Ok(())
         })?,
     )?;
-    // A BindableFunction's callback run on a thread of its own, its outcome handed to Finished (lua/bindable.rs run_own; no thread
-    // price: the call that runs the callback is priced whole)
+    // A BindableFunction's callback run on a thread of its own, its outcome handed to Finished (lua/bindable.rs run_own), priced
+    // as a client's Invoke: cost.rs BINDABLE_INVOKE
     let e = engine.clone();
     r.set(
         "RunOwn",
         super::lua_fn(lua, move |lua, (target, callback, finished, args): (LuaValue, LuaFunction, LuaFunction, LuaMultiValue)| {
+            e.state.borrow().sched.charge(crate::cost::BINDABLE_INVOKE);
+            crate::boundary::add_cost(crate::cost::BINDABLE_INVOKE);
             super::bindable::run_own(lua, &e, target, callback, finished, args, true, &|| true)
         })?,
     )?;
@@ -558,7 +560,13 @@ pub fn load(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     let e = engine.clone();
     r.set("Copied", super::wrapped(lua, engine, "Copied", move |lua, values| {
         let height = values.len();
-        super::bindable::copied(lua, &e, values, height)
+        super::bindable::copied(lua, &e, values, height, false)
+    })?)?;
+    // (Invoke's copy of its callback's results, charged as a client's: lua/bindable.rs copy_price; named as R.Copied is)
+    let e = engine.clone();
+    r.set("InvokeCopied", super::wrapped(lua, engine, "Copied", move |lua, values| {
+        let height = values.len();
+        super::bindable::copied(lua, &e, values, height, true)
     })?)?;
     // A remote call's arguments after `Height`, converted as the network takes them, their tables' copy above the call's frame of
     // `Height` values: what cannot be sent raises (`tables cannot be cyclic`), before any other check of the call
@@ -577,7 +585,7 @@ pub fn load(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     let e = engine.clone();
     r.set("CopiedArguments", super::wrapped(lua, engine, "CopiedArguments", move |lua, values| {
         let height = values.len() + 1;
-        super::bindable::copied(lua, &e, values, height)
+        super::bindable::copied(lua, &e, values, height, true)
     })?)?;
     // KeyframeSequenceProvider:GetKeyframeSequenceAsync's copy of an animation, else nil and the error
     let e = engine.clone();

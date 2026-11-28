@@ -446,10 +446,10 @@ fn bind(lua: &Lua, engine: &Rc<Engine>, id: InstanceId, args: &Args, member: &st
 /// array value, 82 ns a dictionary entry (ten string keys 1,056), 0.073 ns a string's byte (1,000 bytes 154).
 const MESSAGE_ARGUMENTS: f64 = 65e-9;
 const MESSAGE_ARGUMENT: f64 = 16e-9;
-const MESSAGE_TABLE: f64 = 105e-9;
-const MESSAGE_FIRST_TABLE: f64 = 45e-9;
-const MESSAGE_ITEM: f64 = 15e-9;
-const MESSAGE_ENTRY: f64 = 82e-9;
+pub(crate) const MESSAGE_TABLE: f64 = 105e-9;
+pub(crate) const MESSAGE_FIRST_TABLE: f64 = 45e-9;
+pub(crate) const MESSAGE_ITEM: f64 = 15e-9;
+pub(crate) const MESSAGE_ENTRY: f64 = 82e-9;
 const MESSAGE_BYTE: f64 = 0.073e-9;
 
 /// The copy part of SendMessage's price ([`MESSAGE_ARGUMENTS`] and after) for its copied arguments

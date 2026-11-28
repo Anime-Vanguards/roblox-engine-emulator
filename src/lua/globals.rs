@@ -417,7 +417,7 @@ fn load_prelude(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
             Some(LuaValue::Number(height)) if height >= 0.0 => height as usize,
             _ => 0,
         };
-        super::encode(lua, super::bindable::copied(lua, engine, args, height))
+        super::encode(lua, super::bindable::copied(lua, engine, args, height, false))
     })?)?;
     let e = engine.clone();
     r.set(

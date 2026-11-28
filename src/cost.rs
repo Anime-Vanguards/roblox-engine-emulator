@@ -2213,10 +2213,15 @@ pub fn full_name(names: usize, bytes: usize) -> f64 {
     names as f64 * FULL_NAME_NAME + bytes as f64 * FULL_NAME_BYTE
 }
 /// The parallel bridge's machinery (an empty test place's client, an actor_cost probe, one session, 2026-10-23): BindableFunction:Invoke into an
-/// Actor's OnInvoke 1,025 ns (ree's call itself counts 81.5); a SharedTable read is priced by [`SHARED_READ`], its key's bytes, an integer key it
+/// Actor's OnInvoke 1,025 ns (ree's call itself counts 81.5; [`ACTOR_INVOKE`] is what it adds to any Invoke's [`BINDABLE_INVOKE`]); a SharedTable read is priced by [`SHARED_READ`], its key's bytes, an integer key it
 /// finds and the value it makes ([`SHARED_KEY_BYTE`], [`SHARED_FOUND_INTEGER`], [`SHARED_MADE_VALUE`] and after, [`SHARED_LOADED_BUFFER`]), a
 /// write by [`SHARED_OVERWRITE_STRING`] and after. Charged on top of what the instructions count.
-pub const ACTOR_INVOKE: f64 = 0.94e-6;
+pub const ACTOR_INVOKE: f64 = 0.35e-6;
+/// BindableFunction:Invoke running its callback on a thread of its own (lua/bindable.rs run_own), past what ree's call and the
+/// callback's Luau count: an Invoke whose callback returns at once costs a playing 0.747 client 0.72 to 0.76 us (roblox-sim,
+/// headless, six sessions of 15-sample medians of 100 calls, the callback's thread reused), where ree charged 0.154. Its copies of
+/// the arguments and results: lua/bindable.rs copy_price.
+pub const BINDABLE_INVOKE: f64 = 0.59e-6;
 /// SharedTable.increment of a key the table holds, its write included, beyond the call and its key's hash, and the nodes it copies (a
 /// marked table's at every increment, as its writes: lua/shared_table.rs `node_mut`). A playing client (roblox-sim, Studio 0.747, a
 /// headless client, two sessions; os.clock around 1,000 calls, the median of 15 less an empty loop, beside a part's unchanged CastShadow

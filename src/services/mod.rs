@@ -2125,6 +2125,12 @@ fn install_remotes_and_http(behaviors: &mut Behaviors, reflection: &Reflection) 
                     Err(refused) => return refused.raise(),
                 }
             }
+            // (what the arguments' copy costs: lua/bindable.rs fire_price)
+            let price = super::lua::bindable::fire_price(&arguments);
+            if price > 0.0 {
+                engine.state.borrow().sched.charge(price);
+                crate::boundary::add_cost(price);
+            }
             core::fire_event_measured(&mut engine.state.borrow_mut(), id, K::Event as NameId, arguments, crate::cost::SignalKind::Bindable);
             Ok(none())
         }));

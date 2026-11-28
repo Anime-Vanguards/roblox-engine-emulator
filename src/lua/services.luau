@@ -1328,7 +1328,7 @@ Method("BindableFunction", "Invoke", function(Self, ...)
 		Charge(Cost.ActorInvoke) -- (a call into an Actor's VM: 1.0 us in Studio)
 	end
 	-- (copied as Roblox copies them: lua/bindable.rs; the callback on a thread of its own: R.InvokeOwn, at the end)
-	return R.Copied(R.InvokeOwn(Self, Callback, R.CopiedArguments(...)))
+	return R.InvokeCopied(R.InvokeOwn(Self, Callback, R.CopiedArguments(...)))
 end)
 
 -- LogService:Output, Info, Warn, Error and Log: a line of their MessageType (Output: print's, Info: MessageInfo, Warn: warn's,
@@ -1583,7 +1583,7 @@ R.InvokeApart = function(Self, Callback, ...)
 	if not Outcome then
 		error("thread is not yieldable", 0)
 	end
-	return R.Copied(Answer(Outcome))
+	return R.InvokeCopied(Answer(Outcome))
 end
 
 -- A method's ContentId argument (a string, as it is): nil raises "Argument 1 missing or nil", anything else "Unable to cast <value>
