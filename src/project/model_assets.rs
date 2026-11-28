@@ -119,6 +119,11 @@ pub struct ModelAssets {
     remote: FxHashMap<InstanceId, Vec<String>>,
     /// The tags of the bundles' instances (CollectionService: [`import_tagged`]), read when first asked for
     tags: Option<Box<TagIndex>>,
+    /// rur.json `modelAssets.policy`, until it is asked about the aliases ([`withhold_by_policy`]): the module, by its
+    /// instance path (`Service.Folder.Module`)
+    policy: Option<String>,
+    /// rur.json `modelAssets.policy` as the mount read it (a loopback client asks it too: [`share_aliases`])
+    policy_setting: Option<String>,
 }
 
 fn folder(engine: &Engine, parent: InstanceId, name: &str) -> InstanceId {
@@ -161,9 +166,13 @@ pub fn share_aliases(server: &Engine, client: &Engine, to_client: &dyn Fn(Instan
     if aliases.is_empty() {
         return;
     }
+    // (each side asks the policy module in its own VM, as each side's installer does)
+    let policy = server.state.borrow().project.model_assets.policy_setting.clone();
     let mut state = client.state.borrow_mut();
     state.project.model_assets.root = Some(copy);
     state.project.model_assets.aliases = aliases;
+    state.project.model_assets.policy = policy.clone();
+    state.project.model_assets.policy_setting = policy;
 }
 
 /// Mounts the manifest's bundle folders (rur.json `modelAssets`, or `chosen`'s mount and prefixes;
@@ -210,7 +219,8 @@ pub fn mount(engine: &Engine, roots: &[String], chosen: &ModelAssetsOverride) {
             .collect();
         Decoding::start(files, reflection)
     });
-    engine.state.borrow_mut().project.model_assets = ModelAssets { source: Some(source), shape, project: project.into(), pending, decoding, recent, scene, imported: Vec::new(), root: Some(parent), aliases, remote: FxHashMap::default(), tags: None };
+    let policy = config["policy"].as_str().map(str::to_string);
+    engine.state.borrow_mut().project.model_assets = ModelAssets { source: Some(source), shape, project: project.into(), pending, decoding, recent, scene, imported: Vec::new(), root: Some(parent), aliases, remote: FxHashMap::default(), tags: None, policy: policy.clone(), policy_setting: policy };
     // (an instance freed takes the bundles waiting at it along: nothing imports them, or reads their tags, any more)
     engine.hooks.borrow_mut().instance_freed.push(Box::new(|state, id| {
         let assets = &mut state.project.model_assets;
@@ -1016,16 +1026,25 @@ fn install(engine: &Engine, id: InstanceId, key: &str, plan: &Arc<ModelPlan>, sh
 /// alias's folders. What is at the path then, if anything. An alias nothing asks for is never made, and a listing does not
 /// make one.
 pub fn requested(engine: &Engine, parent: InstanceId, name: &[u8]) -> Option<InstanceId> {
-    let alias = {
-        let mut state = engine.state.borrow_mut();
-        let state = &mut *state;
-        let assets = &mut state.project.model_assets;
+    let ask_policy = {
+        let state = engine.state.borrow();
+        let assets = &state.project.model_assets;
         let root = assets.root.filter(|_| !assets.aliases.is_empty())?;
         // (a lookup that missed outside the mount allocates nothing)
         let mut at = parent;
         while at != root {
             at = state.dom.at(at).parent?;
         }
+        assets.policy.is_some()
+    };
+    if ask_policy {
+        withhold_by_policy(engine);
+    }
+    let alias = {
+        let mut state = engine.state.borrow_mut();
+        let state = &mut *state;
+        let assets = &mut state.project.model_assets;
+        let root = assets.root.filter(|_| !assets.aliases.is_empty())?;
         let mut path = vec![String::from_utf8_lossy(name).into_owned()];
         let mut at = parent;
         while at != root {
@@ -1051,6 +1070,69 @@ pub fn requested(engine: &Engine, parent: InstanceId, name: &[u8]) -> Option<Ins
         }
     }
     engine.state.borrow().dom.find_child(parent, name)
+}
+
+/// rur.json `modelAssets.policy`: the project's Luau module that says which asset paths the game withholds, as its asset
+/// installer asks it before it makes an alias. Required in the run (on each side of a loopback run, in that side's VM) when a
+/// script first asks for a path at or above an alias, its `IsUnavailable(path)` is asked once for each of the manifest's
+/// aliases (paths as the manifest spells them, from the mount: `Models/...`): an alias whose own path it answers truthy for,
+/// or, its own path not, whose model's path (the end of its aliases) it does, is withheld (not made, nor its folders for it).
+/// A module that cannot be found or required, has no `IsUnavailable` function, or raises when asked is reported, and then no
+/// alias is made, as the installer that requires it fails. Without the setting every alias is made.
+fn withhold_by_policy(engine: &Engine) {
+    let (policy, mut aliases) = {
+        let mut state = engine.state.borrow_mut();
+        let assets = &mut state.project.model_assets;
+        let Some(policy) = assets.policy.take() else { return };
+        let aliases: Vec<(String, String)> = assets.aliases.iter().map(|(key, model)| (key.clone(), model.clone())).collect();
+        (policy, aliases)
+    };
+    crate::sort::by(&mut aliases, |a, b| a.0.cmp(&b.0));
+    let withheld = match policy_verdicts(engine, &policy, &aliases) {
+        Ok(withheld) => withheld,
+        Err(problem) => {
+            engine.warn(format!("modelAssets.policy {policy}: {problem}; no alias is made"));
+            aliases.into_iter().map(|(key, _)| key).collect()
+        }
+    };
+    let mut state = engine.state.borrow_mut();
+    for key in withheld {
+        state.project.model_assets.aliases.remove(&key);
+    }
+}
+
+/// The aliases (key, model) that policy module `policy` withholds ([`withhold_by_policy`]), or why it could not say
+fn policy_verdicts(engine: &Engine, policy: &str, aliases: &[(String, String)]) -> Result<Vec<String>, String> {
+    let lua = crate::lua::raw::engine_lua(engine).ok_or("the run's Luau is not running")?;
+    let mut segments = policy.split('.');
+    let service = segments.next().unwrap_or_default();
+    let mut module = services::find_service(engine, engine.world().game, service).ok_or_else(|| format!("no service {service}"))?;
+    for name in segments {
+        module = child_of(engine, module, name).ok_or_else(|| format!("no {name} in {}", engine.state.borrow().dom.full_name(&engine.reflection, module)))?;
+    }
+    let class = engine.state.borrow().dom.at(module).class;
+    if !engine.reflection.is_a(class, "ModuleScript") {
+        return Err(format!("a {}, not a ModuleScript", engine.reflection.class(class).name));
+    }
+    let failed = |error: mlua::Error| crate::scheduler::error_message(&error);
+    let exports = crate::lua::modules::require(&lua, engine, module).map_err(|error| format!("requiring it failed: {}", failed(error)))?;
+    let ask = match &exports {
+        mlua::Value::Table(table) => table.get::<mlua::Value>("IsUnavailable").ok(),
+        _ => None,
+    };
+    let Some(mlua::Value::Function(ask)) = ask else { return Err("it returns no IsUnavailable function".into()) };
+    let unavailable = |path: &str| -> Result<bool, String> {
+        let answer = ask.call::<mlua::Value>(path).map_err(|error| format!("IsUnavailable(\"{path}\") raised: {}", failed(error)))?;
+        Ok(!matches!(answer, mlua::Value::Nil | mlua::Value::Boolean(false)))
+    };
+    let mut withheld = Vec::new();
+    for (key, model) in aliases {
+        // (the installer: a withheld path first, then the path its aliases end at)
+        if unavailable(key)? || unavailable(model)? {
+            withheld.push(key.clone());
+        }
+    }
+    Ok(withheld)
 }
 
 /// Alias `key` of the model at path `model`, as the game's installer makes one: a copy of that model (its bundle imported
@@ -2627,6 +2709,118 @@ mod tests {
         assert!(state.project.model_assets.pending.is_empty());
         state.project.model_assets.source = None;
         drop(state);
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    /// rur.json `modelAssets.policy` names a module of the project the run requires and asks, as a game's asset installer asks
+    /// its policy before it makes an alias: `IsUnavailable(path)` for each alias's own path, then, when that is available,
+    /// for the path its aliases end at. A truthy answer for either withholds the alias, and so its folders made for it; the
+    /// others are made as without a policy. A policy that cannot answer is reported, and then no alias is made.
+    #[test]
+    fn a_policy_module_withholds_the_aliases_it_calls_unavailable() {
+        use crate::{Options, lua};
+        let directory = scratch("alias-policy");
+        let file = directory.join(MANIFEST);
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, r#"return {
+	["Models/Racing/Steed"] = { AliasOf = "Models/Stables/Horse" },
+	["Models/Racing/Steed_Hidden"] = { AliasOf = "Models/Stables/Horse" },
+	["Models/Racing/Pony"] = { AliasOf = "Models/Racing/Foal" },
+	["Models/Racing/Foal"] = { AliasOf = "Models/Stables/Mare_Hidden" },
+	["Models/Racing/Odd"] = { AliasOf = "Models/Stables/Horse" },
+	["Models/Shy/Colt_Hidden"] = { AliasOf = "Models/Stables/Horse" },
+	["Models/Stables/Horse"] = { AssetId = 1, Version = 1 },
+	["Models/Stables/Mare_Hidden"] = { AssetId = 2, Version = 1 },
+}
+"#).unwrap();
+        let horse_file = directory.join("horse.rbxm");
+        write_model(&horse_file, &machine("Horse File"));
+        let mut files: FxHashMap<String, PathBuf> = FxHashMap::default();
+        files.insert("Models/Stables/Horse".into(), horse_file.clone());
+        files.insert("Models/Stables/Mare_Hidden".into(), horse_file);
+        let mut keys: Vec<String> = files.keys().cloned().collect();
+        crate::sort::ord(&mut keys);
+        let policy_source = r#"
+            local Policy = { Asked = {} }
+            function Policy.IsUnavailable(Path)
+                table.insert(Policy.Asked, Path)
+                if Path == "Models/Racing/Odd" then
+                    return "yes"
+                end
+                return string.sub(Path, -7) == "_Hidden"
+            end
+            return Policy
+        "#;
+        // (a run with the policy at `policy`, a module of `source` at ReplicatedStorage.Rules.AssetPolicy; the script's
+        // output and the run's warnings)
+        let run = |policy: &str, source: &str, script: &str| -> Vec<String> {
+            let engine = Engine::new(Options::default()).unwrap();
+            let vm = mlua::Lua::new();
+            lua::start(&vm, &engine).unwrap();
+            let root = folder(&engine, engine.world().game, "Assets");
+            let pending = place_all(&engine, root, keys.iter().map(String::as_str), BundleShape::Uploaded);
+            {
+                let storage = services::get_service(&engine, engine.world().game, "ReplicatedStorage").unwrap();
+                let rules = folder(&engine, storage, "Rules");
+                let mut state = engine.state.borrow_mut();
+                let module = core::create_named(&mut state, &engine.reflection, engine.reflection.class_id("ModuleScript").unwrap(), "AssetPolicy");
+                state.dom.at_mut(module).set_source(Some(Rc::from(source.as_bytes())));
+                state.dom.attach(module, rules);
+            }
+            engine.state.borrow_mut().project.model_assets = ModelAssets {
+                source: Some(Box::new(Uploaded(files.clone(), Rc::new(RefCell::new(Vec::new()))))),
+                shape: BundleShape::Uploaded,
+                project: directory.clone(),
+                pending,
+                root: Some(root),
+                aliases: aliases_in(&directory),
+                policy: Some(policy.to_string()),
+                policy_setting: Some(policy.to_string()),
+                ..Default::default()
+            };
+            let module = {
+                let mut state = engine.state.borrow_mut();
+                core::create_named(&mut state, &engine.reflection, engine.reflection.class_id("ModuleScript").unwrap(), "Test")
+            };
+            let env = lua::modules::environment(&vm, &engine, module).unwrap();
+            env.set("Assets", lua::instance_value(&vm, &engine, root).unwrap()).unwrap();
+            let printed: Vec<String> = vm.load(script).set_environment(env).eval::<Vec<String>>().unwrap();
+            let warned = engine.state.borrow().output.entries.iter().filter(|entry| entry.kind == "warn").map(|entry| format!("warn: {}", entry.message)).collect::<Vec<_>>();
+            engine.state.borrow_mut().project.model_assets.source = None;
+            printed.into_iter().chain(warned).collect()
+        };
+        let made = run(
+            "ReplicatedStorage.Rules.AssetPolicy",
+            policy_source,
+            r#"
+            local Racing = Assets.Models.Racing
+            local Found = {}
+            for _, Name in { "Steed", "Steed_Hidden", "Pony", "Foal", "Odd" } do
+                table.insert(Found, Name .. "=" .. (if Racing:FindFirstChild(Name) then Racing[Name].ClassName else "nil"))
+            end
+            table.insert(Found, "Shy=" .. tostring(Assets.Models:FindFirstChild("Shy")))
+            local Asked = require(game:GetService("ReplicatedStorage").Rules.AssetPolicy).Asked
+            table.insert(Found, "asked " .. table.concat(Asked, ", "))
+            return Found
+            "#,
+        );
+        assert_eq!(
+            made,
+            [
+                "Steed=Model",
+                "Steed_Hidden=nil",
+                "Pony=nil",
+                "Foal=nil",
+                "Odd=nil",
+                "Shy=nil",
+                "asked Models/Racing/Foal, Models/Stables/Mare_Hidden, Models/Racing/Odd, Models/Racing/Pony, Models/Stables/Mare_Hidden, Models/Racing/Steed, Models/Stables/Horse, Models/Racing/Steed_Hidden, Models/Shy/Colt_Hidden",
+            ]
+        );
+        // (a policy that cannot answer: no alias is made, and the run says why)
+        let script = r#"return { "Racing=" .. tostring(Assets.Models:FindFirstChild("Racing")) }"#;
+        assert_eq!(run("ReplicatedStorage.Rules.Missing", policy_source, script), ["Racing=nil", "warn: modelAssets.policy ReplicatedStorage.Rules.Missing: no Missing in ReplicatedStorage.Rules; no alias is made"]);
+        let raising = "return { IsUnavailable = function(Path) error(\"no verdict for \" .. Path, 0) end }";
+        assert_eq!(run("ReplicatedStorage.Rules.AssetPolicy", raising, script), ["Racing=nil", "warn: modelAssets.policy ReplicatedStorage.Rules.AssetPolicy: IsUnavailable(\"Models/Racing/Foal\") raised: no verdict for Models/Racing/Foal; no alias is made"]);
         let _ = std::fs::remove_dir_all(directory);
     }
 

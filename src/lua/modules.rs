@@ -2120,7 +2120,7 @@ fn chunk_outcome(lua: &Lua, engine: &Rc<Engine>, vm: Vm, module: InstanceId, ran
 }
 
 /// Modules.Require from the engine (no calling script): runs on the current thread.
-pub fn require(lua: &Lua, engine: &Rc<Engine>, module: InstanceId) -> LuaResult<LuaValue> {
+pub fn require(lua: &Lua, engine: &Engine, module: InstanceId) -> LuaResult<LuaValue> {
     let prelude = engine.prelude();
     let require: LuaFunction = prelude.exports.get("Require")?;
     require.call((instance_value(lua, engine, module)?, LuaValue::Nil, LuaValue::Nil))
