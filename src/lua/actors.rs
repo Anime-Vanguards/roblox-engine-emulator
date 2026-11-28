@@ -443,23 +443,40 @@ fn bind(lua: &Lua, engine: &Rc<Engine>, id: InstanceId, args: &Args, member: &st
 /// in the rounds where a plain method call read 46-49 ns, as ree charges 58; tools/parity actor message price rows): 65 ns when it
 /// has arguments and 16 ns an argument (one number 81 over none, three 116, ten 224), 105 ns a table it copies and 45 more for the
 /// call's first (a table of one number 248 over none, of ten 384, of a hundred 1,617; three tables of one in a table 635), 15 ns an
-/// array value, 82 ns a dictionary entry (ten string keys 1,056), 0.073 ns a string's byte (1,000 bytes 154).
+/// array value, 82 ns a dictionary entry (ten string keys 1,056); a string's or a buffer's bytes [`MESSAGE_BYTE`], its topic's
+/// [`TOPIC_BYTE`].
 const MESSAGE_ARGUMENTS: f64 = 65e-9;
 const MESSAGE_ARGUMENT: f64 = 16e-9;
 pub(crate) const MESSAGE_TABLE: f64 = 105e-9;
 pub(crate) const MESSAGE_FIRST_TABLE: f64 = 45e-9;
 pub(crate) const MESSAGE_ITEM: f64 = 15e-9;
 pub(crate) const MESSAGE_ENTRY: f64 = 82e-9;
-const MESSAGE_BYTE: f64 = 0.073e-9;
+/// Each byte of a string or a buffer SendMessage copies, and [`MESSAGE_FIRST_BYTE`] more for each of its first 1,000; a string that is
+/// an argument itself has its bytes copied twice (a 0.747 playing client, roblox-sim, four sessions of 15-sample medians of 20 to 200
+/// calls beside an unchanged CastShadow write, gauge-scaled; nothing bound): beyond a number, a string of 10 bytes 0.005 us, 100 0.043,
+/// 1,000 0.217, 10,000 1.06, 100,000 6.97; a buffer of 100 0.054, 1,000 0.19, 10,000 0.52, 100,000 3.3 (3.3 in a table as well); a string
+/// in a table, beyond a table of a number, 1,000 0.145, 10,000 0.46, 100,000 3.44; ten 1,000-byte strings in a table 2.09 in all.
+/// (BindableEvent:Fire's copy of the same strings costs 0.0106 ns a byte: lua/bindable.rs BYTE_SENT.)
+const MESSAGE_BYTE: f64 = 0.033e-9;
+const MESSAGE_FIRST_BYTE: f64 = 0.13e-9;
+/// Each byte of the topic, and [`TOPIC_FIRST_BYTE`] more for each of its first 1,000 (the same sessions: a topic of 100 bytes 0.11 us
+/// more than one of one, of 10,000 3.7 to 8.1).
+const TOPIC_BYTE: f64 = 0.5e-9;
+const TOPIC_FIRST_BYTE: f64 = 0.61e-9;
+
+/// What copying `bytes` bytes costs ([`MESSAGE_BYTE`])
+fn bytes_price(bytes: usize, copies: f64) -> f64 {
+    bytes as f64 * MESSAGE_BYTE * copies + bytes.min(1000) as f64 * MESSAGE_FIRST_BYTE
+}
 
 /// The copy part of SendMessage's price ([`MESSAGE_ARGUMENTS`] and after) for its copied arguments
 fn message_price(sent: &[Value]) -> f64 {
     use super::bindable::{Copied, Key, Sent};
     fn walk(sent: &Sent, tables: &mut u32) -> f64 {
         match sent {
-            Sent::Value(LuaValue::String(text)) => text.as_bytes().len() as f64 * MESSAGE_BYTE,
+            Sent::Value(LuaValue::String(text)) => bytes_price(text.as_bytes().len(), 1.0),
             Sent::Value(_) => 0.0,
-            Sent::Buffer(bytes) => bytes.len() as f64 * MESSAGE_BYTE,
+            Sent::Buffer(bytes) => bytes_price(bytes.len(), 1.0),
             Sent::Table(entries) => {
                 *tables += 1;
                 let mut price = MESSAGE_TABLE;
@@ -477,7 +494,7 @@ fn message_price(sent: &[Value]) -> f64 {
     let mut price = MESSAGE_ARGUMENTS + sent.len() as f64 * MESSAGE_ARGUMENT;
     for value in sent {
         price += match value {
-            Value::String(text) => text.as_bytes().len() as f64 * MESSAGE_BYTE,
+            Value::String(text) => bytes_price(text.as_bytes().len(), 2.0),
             Value::Lua(held) => match &**held {
                 LuaValue::UserData(userdata) => userdata.borrow::<Copied>().map(|copied| walk(&copied.0, &mut tables)).unwrap_or(0.0),
                 _ => 0.0,
@@ -511,7 +528,7 @@ fn send_message(lua: &Lua, engine: &Rc<Engine>, id: InstanceId, args: &Args) -> 
     if !crate::services::in_data_model(&engine.state.borrow(), id) {
         return raise("Actor:SendMessage may only be called on Actors attached to the DataModel.");
     }
-    let price = message_price(&sent);
+    let price = message_price(&sent) + topic.len() as f64 * TOPIC_BYTE + topic.len().min(1000) as f64 * TOPIC_FIRST_BYTE;
     if price > 0.0 {
         engine.state.borrow().sched.charge(price);
         crate::boundary::add_cost(price);

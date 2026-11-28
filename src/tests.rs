@@ -7489,7 +7489,9 @@ fn actor_messages_reach_their_bindings_where_a_client_runs_them() {
 }
 
 /// SendMessage costs a client its copy (actors.rs MESSAGE_ARGUMENTS and after; a 0.747 playing client): one number 81 ns over none,
-/// a table of ten numbers 384, a dictionary of ten 1,056.
+/// a table of ten numbers 384, a dictionary of ten 1,056; a string's bytes copied twice and a buffer's once, 0.033 ns a byte and 0.13
+/// more for each of the first 1,000 (100,000 bytes 6.97 us and 3.3 more than a number), the topic's 0.5 ns a byte and 0.61 more for
+/// each of the first 1,000 (10,000 bytes 5.7 us more than four). ree charged every string's and buffer's byte 0.073 ns, a topic's none.
 #[test]
 fn a_message_costs_its_copy_as_a_client_pays_it() {
     let (lua, engine) = start_with(Options { mode: "play".into(), ..Options::default() });
@@ -7517,6 +7519,16 @@ fn a_message_costs_its_copy_as_a_client_pays_it() {
         assert(One > 70 and One < 95, "one number: " .. One)
         assert(Table > 340 and Table < 430, "a table of ten: " .. Table)
         assert(Dictionary > 950 and Dictionary < 1150, "a dictionary of ten: " .. Dictionary)
+        local Long, Buffer, Topic = string.rep("x", 100000), buffer.create(100000), string.rep("t", 10000)
+        local Held, OneHeld = { Long }, { 1 }
+        local String = Per(function(N) for _ = 1, N do Actor:SendMessage("None", Long) end end) - One
+        local Bytes = Per(function(N) for _ = 1, N do Actor:SendMessage("None", Buffer) end end) - One
+        local Nested = Per(function(N) for _ = 1, N do Actor:SendMessage("None", Held) end end) - Per(function(N) for _ = 1, N do Actor:SendMessage("None", OneHeld) end end)
+        local Named = Per(function(N) for _ = 1, N do Actor:SendMessage(Topic) end end)
+        assert(String > 6500 and String < 7000, "a string of 100,000 bytes: " .. String)
+        assert(Bytes > 3300 and Bytes < 3600, "a buffer of 100,000 bytes: " .. Bytes)
+        assert(Nested > 3300 and Nested < 3600, "a string of 100,000 bytes in a table: " .. Nested)
+        assert(Named > 5400 and Named < 5800, "a topic of 10,000 bytes: " .. Named)
         print("ok")
         "#,
     );
