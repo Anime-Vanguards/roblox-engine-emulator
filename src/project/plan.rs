@@ -1163,6 +1163,44 @@ impl ModelPlan {
         result
     }
 
+    /// Gives `target` the values of the plan's one root: its properties over the target's (one the root lacks is kept), its
+    /// attributes and tags when it has any, its Source in memory. The target keeps its class, name, children and identity, and
+    /// no event fires: what a Rojo meta file sets on the instance its file or directory made (project.rs apply_meta).
+    pub fn merge_root_into(&self, state: &mut State, reflection: &Reflection, target: InstanceId) {
+        debug_assert_eq!(self.root_count(), 1);
+        let mut texts = Texts::default();
+        let node = &self.nodes[0];
+        let extra = self.extra(node).copied().unwrap_or_default();
+        let values: Vec<(NameId, Value)> = self.props[node.props.range()]
+            .iter()
+            .filter(|prop| prop.value & NODE_REF == 0 && prop.name != K::Name as NameId)
+            .map(|prop| (prop.name, self.value(reflection, &mut texts, prop.value)))
+            .collect();
+        for (name, value) in values {
+            core::raw_set_silent(state, reflection, target, name, value);
+        }
+        let attributes: Vec<(Str, Value)> = self.attributes[extra.attributes.range()]
+            .iter()
+            .filter_map(|attribute| match attribute.get() {
+                Some(PlanAttribute::Value(value)) => Some((texts.get(self, attribute.name), plan_value(self, reflection, &mut texts, &value))),
+                _ => None,
+            })
+            .collect();
+        if !attributes.is_empty() {
+            state.dom.at_mut(target).attributes = attributes.into();
+        }
+        let tags: Vec<Str> = self.tags[extra.tags.range()].iter().map(|&tag| texts.get(self, tag)).collect();
+        if !tags.is_empty() {
+            for tag in &tags {
+                services::note_tag(state, target, tag);
+            }
+            state.dom.at_mut(target).tags = tags.into();
+        }
+        if let Some(code) = extra.code() {
+            state.dom.at_mut(target).set_source(Some(Rc::from(self.bytes(code))));
+        }
+    }
+
     /// How many roots the plan has (a manifest bundle as uploaded has one: the instance the game
     /// installs at its path).
     pub fn root_count(&self) -> usize {

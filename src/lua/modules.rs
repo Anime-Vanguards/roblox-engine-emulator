@@ -151,12 +151,17 @@ fn compile_std_cached(store: Option<&store::Store>, source: &[u8]) -> Option<Sto
     Some(StoredBytes::owned(arc))
 }
 
+/// What [`parse_bjson`] says of a JSON module that runs the source Rojo writes for it, not its value
+/// ([`crate::project::data_files::json_module`]: a string holding NUL, or deep nesting, which a client's compiler refuses)
+pub(crate) const JSON_RUNS_SOURCE: &str = "the module runs the source Rojo writes for it";
+
 fn parse_bjson_cached(store: Option<&store::Store>, source: &[u8]) -> Result<StoredBytes, String> {
     let key = store::key_for(store::KIND_BINARY_JSON, source);
     if let Some(found) = store.and_then(|s| s.get(&key)).filter(|b| store::validate_bjson(b)) {
         return Ok(found);
     }
-    let parsed = serde_json::from_slice::<serde_json::Value>(source).map_err(|error| error.to_string())?;
+    // (read as `rojo build` 7.6.1 reads a JSON module: lenient JSONC, strict JSON as serde_json reads it)
+    let parsed = crate::project::data_files::json_module(source)?.ok_or_else(|| JSON_RUNS_SOURCE.to_string())?;
     let encoded = store::encode_bjson(&parsed);
     let arc: std::sync::Arc<[u8]> = std::sync::Arc::from(encoded.into_boxed_slice());
     if let Some(store) = store {
@@ -1550,7 +1555,7 @@ pub fn parse_json(engine: &Engine, path: &str) -> Result<std::sync::Arc<serde_js
             let value = read_file_opts(engine, path, false)
                 .map(|(bytes, _)| bytes)
                 .map_err(|error| error.to_string())
-                .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).map_err(|error| error.to_string()))?;
+                .and_then(|bytes| crate::project::data_files::read_json(&bytes))?;
             let cached = crate::alloc::long_lived(|| std::sync::Arc::new(value));
             let stamp = crate::files::Stamp { len: 0, modified: 0, directory: false };
             if let Ok(mut entries) = global_cache.write() {
@@ -1572,7 +1577,7 @@ pub fn parse_json(engine: &Engine, path: &str) -> Result<std::sync::Arc<serde_js
             let value = read_file_opts(engine, path, false)
                 .map(|(bytes, _)| bytes)
                 .map_err(|error| error.to_string())
-                .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).map_err(|error| error.to_string()))?;
+                .and_then(|bytes| crate::project::data_files::read_json(&bytes))?;
             let cached = crate::alloc::long_lived(|| std::sync::Arc::new(value));
             if let Ok(mut entries) = global_cache.write() {
                 crate::alloc::long_lived(|| entries.insert(path.to_string(), (stamp, cached.clone())));
@@ -1584,7 +1589,7 @@ pub fn parse_json(engine: &Engine, path: &str) -> Result<std::sync::Arc<serde_js
     let value = read_file_opts(engine, path, false)
         .map(|(bytes, _)| bytes)
         .map_err(|error| error.to_string())
-        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).map_err(|error| error.to_string()))?;
+        .and_then(|bytes| crate::project::data_files::read_json(&bytes))?;
     let cached = std::sync::Arc::new(value);
     engine.modules.borrow_mut().json_cache.insert(path.to_string(), cached.clone());
     Ok(cached)
@@ -1661,7 +1666,17 @@ pub(crate) fn load_json_loadmodule(
     let name = engine.state.borrow().dom.full_name(&engine.reflection, module);
     let bjson = match parse_bjson(engine, path) {
         Ok(value) => value,
-        Err(message) => return Ok(Err(format!("{name}: invalid JSON module ({message})"))),
+        Err(message) if message == JSON_RUNS_SOURCE => {
+            let source = match json_source_instead(engine, module, path) {
+                Ok(source) => source,
+                Err(message) => return Ok(Err(invalid_json_module(&name, &message))),
+            };
+            return Ok(match compile_for_loadmodule(lua, engine, module, &source) {
+                Ok(function) => Ok((function, noop_cleanup(lua, engine)?)),
+                Err(error) => Err(crate::scheduler::error_message(&error)),
+            });
+        }
+        Err(message) => return Ok(Err(invalid_json_module(&name, &message))),
     };
     let bjson_ptr = bjson.ptr_id();
     let cached_template = engine
@@ -1742,6 +1757,23 @@ pub fn json_wrapper_bytecode() -> &'static [u8] {
                 .expect("json wrapper bytecode")
         })
     })
+}
+
+/// The error a require of a JSON module that does not read raises: the reason `rojo build` refuses it
+pub(crate) fn invalid_json_module(name: &str, reason: &str) -> String {
+    format!("{name}: invalid JSON module (File contains malformed JSON: {reason}; Rojo refuses the build)")
+}
+
+/// The source Rojo writes for a JSON module that runs it ([`JSON_RUNS_SOURCE`]), which the module keeps from now on: its
+/// Source, and no longer a JSON module
+fn json_source_instead(engine: &Engine, module: InstanceId, path: &str) -> Result<Rc<[u8]>, String> {
+    let bytes = read_file_opts(engine, path, false).map(|(bytes, _)| bytes).map_err(|error| error.to_string())?;
+    let source: Rc<[u8]> = Rc::from(crate::project::data_files::json_module_source(&bytes)?.into_bytes());
+    let mut state = engine.state.borrow_mut();
+    let instance = state.dom.at_mut(module);
+    instance.set_source(Some(source.clone()));
+    instance.set_flag(flags::JSON_MODULE, false);
+    Ok(source)
 }
 
 /// A JSON module's value (Rojo `.json`): the file decoded, a new value each time.
@@ -1903,7 +1935,9 @@ pub fn require_begin(lua: &Lua, engine: &Rc<Engine>, (target, caller, vm): (LuaV
     if let Some(path) = &path {
         engine.modules.borrow_mut().files.insert(path.to_string());
     }
-    if let (true, Some(path)) = (json, &path) {
+    // (a JSON module that runs the source Rojo writes for it takes that source here, and loads below as a script would)
+    let runs_source = json && path.as_ref().is_some_and(|path| matches!(parse_bjson(engine, path), Err(message) if message == JSON_RUNS_SOURCE));
+    if let (true, false, Some(path)) = (json, runs_source, &path) {
         let decoded = decode_json(lua, engine, path);
         let mut refs = engine.modules.borrow_mut();
         return match decoded {
@@ -1915,9 +1949,16 @@ pub fn require_begin(lua: &Lua, engine: &Rc<Engine>, (target, caller, vm): (LuaV
                 refs.records.insert((vm, module), Record { status: Status::Error, ..Record::loading() });
                 drop(refs);
                 let name = engine.state.borrow().dom.full_name(&engine.reflection, module);
-                error_result(lua, format!("{name}: invalid JSON module ({message})"), 0)
+                error_result(lua, invalid_json_module(&name, &message), 0)
             }
         };
+    }
+    if let (true, Some(path)) = (runs_source, &path) {
+        if let Err(message) = json_source_instead(engine, module, path) {
+            let name = engine.state.borrow().dom.full_name(&engine.reflection, module);
+            engine.modules.borrow_mut().records.insert((vm, module), Record { status: Status::Error, ..Record::loading() });
+            return error_result(lua, invalid_json_module(&name, &message), 0);
+        }
     }
 
     // File-backed modules with no in-memory override borrow the shared `Arc<[u8]>` source and

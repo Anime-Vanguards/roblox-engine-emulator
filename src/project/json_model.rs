@@ -31,31 +31,39 @@ use serde::Deserialize;
 
 use crate::Reflection;
 
+// (fields in Rojo's order and of its types: one of another type is refused alike, the first in order first)
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct JsonModel {
+    #[serde(rename = "$schema")]
+    #[allow(dead_code)]
+    schema: Option<String>,
     #[serde(alias = "Name")]
     name: Option<String>,
     #[serde(alias = "ClassName")]
     class_name: String,
+    #[allow(dead_code)]
+    id: Option<String>,
     #[serde(alias = "Children", default)]
     children: Vec<JsonModel>,
     #[serde(alias = "Properties", default)]
-    properties: FxHashMap<String, Unresolved>,
+    properties: FxHashMap<String, UnresolvedValue>,
     #[serde(default)]
-    attributes: FxHashMap<String, Unresolved>,
+    attributes: FxHashMap<String, UnresolvedValue>,
 }
 
-/// A value as written: explicit (rbx-dom's tagged form) or one whose type the property decides.
+/// A value as written: explicit (rbx-dom's tagged form) or one whose type the property decides. (Named as Rojo's
+/// resolution.rs names it, which serde's "data did not match any variant of untagged enum UnresolvedValue" says.)
 #[derive(Deserialize)]
 #[serde(untagged)]
-enum Unresolved {
+enum UnresolvedValue {
     Explicit(Variant),
     Implicit(Implicit),
 }
 
-/// The shapes an implicit value can take, tried in Rojo's order (its AmbiguousValue).
-#[derive(Deserialize)]
+/// The shapes an implicit value can take, tried in Rojo's order (its AmbiguousValue, whose variant names its Debug form
+/// prints in "Cannot unambiguously resolve the value Array2([1.0, 2.0])").
+#[derive(Deserialize, Debug)]
 #[serde(untagged)]
 enum Implicit {
     Bool(bool),
@@ -84,20 +92,23 @@ impl Implicit {
             Implicit::Array3(_) => "an array of three numbers",
             Implicit::Array4(_) => "an array of four numbers",
             Implicit::Array12(_) => "an array of twelve numbers",
-            Implicit::Attributes(_) => "an object of attributes",
-            Implicit::Font(_) => "a Font object",
-            Implicit::MaterialColors(_) => "a MaterialColors object",
+            Implicit::Attributes(_) => "an object containing attributes",
+            Implicit::Font(_) => "an object describing a Font",
+            Implicit::MaterialColors(_) => "an object describing MaterialColors",
         }
     }
 
-    /// The value of `class_name.property` this stands for, by the property's type.
+    /// The value of `class_name.property` this stands for, by the property's type (its errors in Rojo's words).
     fn resolve(self, class_name: &str, property: &str) -> Result<Variant, String> {
-        match property_type(class_name, property).ok_or_else(|| format!("unknown property {class_name}.{property} (an explicit value names its type)"))? {
-            PropertyType::Enum(enum_name) => match self {
-                Implicit::String(item) => enum_item_value(&enum_name, &item).map(|value| Enum::from_u32(value).into()).ok_or_else(|| format!("{class_name}.{property}: {item} is not an item of Enum.{enum_name}")),
-                other => Err(format!("{class_name}.{property} takes the name of an Enum.{enum_name} item, not {}", other.describe())),
-            },
-            PropertyType::Unknown => Err(format!("{class_name}.{property}: a type this reader does not know")),
+        match property_type(class_name, property).ok_or_else(|| format!("Unknown property {class_name}.{property}"))? {
+            PropertyType::Enum(enum_name) => {
+                let wrong = |what: &str| format!("Invalid value for property {class_name}.{property}. Got {what} but expected a member of the {enum_name} enum such as {}", enum_examples(&enum_name));
+                match self {
+                    Implicit::String(item) => enum_item_value(&enum_name, &item).map(|value| Enum::from_u32(value).into()).ok_or_else(|| wrong(&item)),
+                    other => Err(wrong(other.describe())),
+                }
+            }
+            PropertyType::Unknown => Err(format!("Unknown data type for property {class_name}.{property}")),
             PropertyType::Value(kind) => match (kind, self) {
                 (VariantType::Bool, Implicit::Bool(value)) => Ok(value.into()),
                 (VariantType::Float32, Implicit::Number(value)) => Ok((value as f32).into()),
@@ -119,7 +130,8 @@ impl Implicit {
                 (VariantType::Attributes, Implicit::Attributes(value)) => Ok(value.into()),
                 (VariantType::Font, Implicit::Font(value)) => Ok(value.into()),
                 (VariantType::MaterialColors, Implicit::MaterialColors(value)) => Ok(value.into()),
-                (kind, other) => Err(format!("{class_name}.{property} takes a {kind:?}, not {}", other.describe())),
+                (VariantType::Ref, Implicit::String(_)) => Err(format!("Cannot resolve Ref properties as a String.Use an attribute named `Rojo_Target_{property}")),
+                (kind, other) => Err(format!("Wrong type of value for property {class_name}.{property}. Expected {kind:?}, got {}", other.describe())),
             },
         }
     }
@@ -177,22 +189,38 @@ fn enum_item_value(enum_name: &str, item: &str) -> Option<u32> {
     database.enums.get(enum_name)?.items.get(item).copied()
 }
 
-impl Unresolved {
+/// Rojo's list of an enum's items in an error (nonexhaustive_list over rbx-dom's items in byte order): the first nine, then
+/// "or <the last>" for up to eight items, "or <n> more" past that
+fn enum_examples(enum_name: &str) -> String {
+    let mut items: Vec<&str> = rbx_reflection_database::get().ok().and_then(|database| database.enums.get(enum_name)).map(|descriptor| descriptor.items.keys().map(|item| item.as_ref()).collect()).unwrap_or_default();
+    items.sort();
+    let Some(last) = items.last() else { return String::new() };
+    let shown = (items.len() - 1).min(9);
+    let mut text: String = items[..shown].iter().map(|item| format!("{item}, ")).collect();
+    if items.len() > 8 {
+        text.push_str(&format!("or {} more", items.len() - shown));
+    } else {
+        text.push_str(&format!("or {last}"));
+    }
+    text
+}
+
+impl UnresolvedValue {
     fn resolve(self, class_name: &str, property: &str) -> Result<Variant, String> {
         match self {
-            Unresolved::Explicit(value) => Ok(value),
-            Unresolved::Implicit(value) => value.resolve(class_name, property),
+            UnresolvedValue::Explicit(value) => Ok(value),
+            UnresolvedValue::Implicit(value) => value.resolve(class_name, property),
         }
     }
 
-    /// An attribute's value: explicit, or a string, a number (Float64) or a bool.
-    fn resolve_attribute(self, name: &str) -> Result<Variant, String> {
+    /// An attribute's value: explicit, or a string, a number (Float64) or a bool (Rojo's resolve_unambiguous).
+    fn resolve_attribute(self) -> Result<Variant, String> {
         match self {
-            Unresolved::Explicit(value) => Ok(value),
-            Unresolved::Implicit(Implicit::Bool(value)) => Ok(value.into()),
-            Unresolved::Implicit(Implicit::Number(value)) => Ok(value.into()),
-            Unresolved::Implicit(Implicit::String(value)) => Ok(value.into()),
-            Unresolved::Implicit(other) => Err(format!("attribute {name}: {} needs its type named", other.describe())),
+            UnresolvedValue::Explicit(value) => Ok(value),
+            UnresolvedValue::Implicit(Implicit::Bool(value)) => Ok(value.into()),
+            UnresolvedValue::Implicit(Implicit::Number(value)) => Ok(value.into()),
+            UnresolvedValue::Implicit(Implicit::String(value)) => Ok(value.into()),
+            UnresolvedValue::Implicit(other) => Err(format!("Cannot unambiguously resolve the value {other:?}")),
         }
     }
 }
@@ -201,18 +229,18 @@ impl Unresolved {
 fn build(model: JsonModel, name: String) -> Result<InstanceBuilder, String> {
     let JsonModel { class_name, children, properties, attributes, .. } = model;
     let mut builder = InstanceBuilder::new(class_name.as_str()).with_name(name);
-    let mut properties: Vec<(String, Unresolved)> = properties.into_iter().collect();
+    let mut properties: Vec<(String, UnresolvedValue)> = properties.into_iter().collect();
     crate::sort::by(&mut properties, |(a, _), (b, _)| a.cmp(b));
     for (property, value) in properties {
         let value = value.resolve(&class_name, &property)?;
         builder.add_property(property.as_str(), value);
     }
     if !attributes.is_empty() {
-        let mut attributes: Vec<(String, Unresolved)> = attributes.into_iter().collect();
+        let mut attributes: Vec<(String, UnresolvedValue)> = attributes.into_iter().collect();
         crate::sort::by(&mut attributes, |(a, _), (b, _)| a.cmp(b));
         let mut list = Attributes::new();
         for (attribute, value) in attributes {
-            let value = value.resolve_attribute(&attribute)?;
+            let value = value.resolve_attribute()?;
             list.insert(attribute, value);
         }
         builder.add_property("Attributes", list);
@@ -225,20 +253,119 @@ fn build(model: JsonModel, name: String) -> Result<InstanceBuilder, String> {
 }
 
 /// A `.model.json` file's instance tree (its top instance named `name`) as a decoded model whose root
-/// holds it; None for a file of white space alone.
+/// holds it; None for a file of white space alone. Read as Rojo reads it (lenient JSON, data_files.rs: a byte order mark is
+/// refused, as `rojo build` 7.6.1 refuses it), its errors in Rojo's words.
 pub fn decode(bytes: &[u8], name: &str) -> Result<Option<WeakDom>, String> {
-    let text = std::str::from_utf8(bytes).map_err(|_| "not UTF-8".to_string())?;
-    // (a byte order mark, as some Windows editors write one, is not part of the JSON)
-    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+    let text = std::str::from_utf8(bytes).map_err(|_| "File was not valid UTF-8".to_string())?;
     if text.trim().is_empty() {
         return Ok(None);
     }
-    let model: JsonModel = serde_json::from_str(text).map_err(|error| format!("not a JSON model: {error}"))?;
-    let top = build(model, name.to_string())?;
+    let model: JsonModel = super::data_files::read_json_as(text.as_bytes()).map_err(|error| format!("File is not a valid JSON model ({error})"))?;
+    let top = build(model, name.to_string()).map_err(|error| format!("Could not load JSON model ({error})"))?;
+    written(top).map(Some)
+}
+
+/// One instance tree as `rojo build` writes it into a place: through rbx_binary and back, as a decoded model whose root
+/// holds it
+fn written(top: InstanceBuilder) -> Result<WeakDom, String> {
     let mut dom = WeakDom::new(InstanceBuilder::new("DataModel"));
     let top = dom.insert(dom.root_ref(), top);
     let mut file = Vec::new();
     rbx_binary::to_writer(&mut file, &dom, &[top]).map_err(|error| error.to_string())?;
     // (bytes written just above: never an archive, so nothing to note)
-    super::decode_model(&file).map(|(dom, _)| Some(dom))
+    super::decode_model(&file).map(|(dom, _)| dom)
+}
+
+/// Rojo's meta file beside a file (`x.meta.json`, its AdjacentMetadata): `className` is no field of it and, like any other
+/// unknown field, is ignored. `$schema`, `id` and `ignoreUnknownInstances` change nothing a build makes.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+struct AdjacentMetadata {
+    #[serde(rename = "$schema")]
+    schema: Option<String>,
+    id: Option<String>,
+    ignore_unknown_instances: Option<bool>,
+    #[serde(default)]
+    properties: FxHashMap<String, UnresolvedValue>,
+    #[serde(default)]
+    attributes: FxHashMap<String, UnresolvedValue>,
+}
+
+/// A directory's `init.meta.json` (Rojo's DirectoryMetadata): the same and `className`
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+struct DirectoryMetadata {
+    #[serde(rename = "$schema")]
+    schema: Option<String>,
+    id: Option<String>,
+    ignore_unknown_instances: Option<bool>,
+    #[serde(default)]
+    properties: FxHashMap<String, UnresolvedValue>,
+    #[serde(default)]
+    attributes: FxHashMap<String, UnresolvedValue>,
+    class_name: Option<String>,
+}
+
+/// A meta file's values, read as Rojo reads it (lenient JSON, data_files.rs)
+pub(crate) struct Meta {
+    pub class_name: Option<String>,
+    properties: Vec<(String, UnresolvedValue)>,
+    attributes: Vec<(String, UnresolvedValue)>,
+}
+
+/// Why a meta file's values were not applied: Rojo refuses the build in each case
+pub(crate) enum MetaError {
+    /// A property that does not resolve (Rojo: "error applying meta file <path>", then this)
+    Property(String),
+    /// An attribute that does not (Rojo says this alone)
+    Attribute(String),
+    /// The instance does not write (rbx_binary's error)
+    Write(String),
+}
+
+impl Meta {
+    /// A meta file's bytes; `directory` for an init.meta.json. Err: why Rojo refuses it ("JSONC parse error (...)", "File
+    /// contains no JSON value", "Invalid JSON structure (...)"), which Rojo prefixes with "File contained malformed
+    /// .meta.json data" (or "init.meta.json") and the file.
+    pub(crate) fn read(bytes: &[u8], directory: bool) -> Result<Meta, String> {
+        let (class_name, properties, attributes) = if directory {
+            let meta: DirectoryMetadata = super::data_files::read_json_as(bytes)?;
+            (meta.class_name, meta.properties, meta.attributes)
+        } else {
+            let meta: AdjacentMetadata = super::data_files::read_json_as(bytes)?;
+            (None, meta.properties, meta.attributes)
+        };
+        // (Rojo drains hash maps, in no order: in name order here, so the first error is always the same one)
+        let mut properties: Vec<(String, UnresolvedValue)> = properties.into_iter().collect();
+        crate::sort::by(&mut properties, |(a, _), (b, _)| a.cmp(b));
+        let mut attributes: Vec<(String, UnresolvedValue)> = attributes.into_iter().collect();
+        crate::sort::by(&mut attributes, |(a, _), (b, _)| a.cmp(b));
+        Ok(Meta { class_name, properties, attributes })
+    }
+
+    /// Whether it sets no value
+    pub(crate) fn is_empty(&self) -> bool {
+        self.properties.is_empty() && self.attributes.is_empty()
+    }
+
+    /// Its values on an instance of class `class_name` named `name`, as `rojo build` writes them (resolved by the class's
+    /// property types, then through rbx_binary): a decoded model whose root holds that one instance. Its attributes replace
+    /// a property `Attributes` it also gives, as Rojo inserts them after the properties.
+    pub(crate) fn model(self, class_name: &str, name: &str) -> Result<WeakDom, MetaError> {
+        let mut builder = InstanceBuilder::new(class_name).with_name(name);
+        for (property, value) in self.properties {
+            let value = value.resolve(class_name, &property).map_err(MetaError::Property)?;
+            builder.add_property(property.as_str(), value);
+        }
+        if !self.attributes.is_empty() {
+            let mut list = Attributes::new();
+            for (attribute, value) in self.attributes {
+                list.insert(attribute, value.resolve_attribute().map_err(MetaError::Attribute)?);
+            }
+            builder.add_property("Attributes", list);
+        }
+        written(builder).map_err(MetaError::Write)
+    }
 }

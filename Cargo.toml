@@ -80,6 +80,13 @@ ror-mesh = { git = "https://github.com/Anime-Vanguards/roblox-object-renderer", 
 # (project::decode_model): ror's reader, from the same commit as ror-mesh. Not optional: rbx_binary reads an archive's
 # stored scene with every value kept outside it dropped and no error, so a build without it would run scripts empty.
 ror-archive = { git = "https://github.com/Anime-Vanguards/roblox-object-renderer", rev = "36dac94d178130c05dd4b5e95aea69009609c9e6" }
+# A project's data files read with the readers `rojo build` 7.6.1 uses (its Cargo.lock), so their edge cases read as in a
+# place it built (src/project/data_files.rs): JSON as lenient JSONC (modules, models, meta and project files), TOML and
+# YAML modules. (yaml-rust2 0.10.3 does not build without its default `encoding` feature, which adds encoding_rs for a byte
+# decoder neither Rojo nor ree calls.)
+jsonc-parser = { version = "=0.27.0", features = ["serde"] }
+toml = "=0.5.11"
+yaml-rust2 = "=0.10.3"
 # EncodingService (src/services/encoding.rs): the versions rbx_binary and its dependencies build already
 zstd = "=0.13.3"
 base64 = "=0.13.1"

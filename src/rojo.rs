@@ -221,7 +221,9 @@ pub fn resolve(base: &Path, path: &str) -> PathBuf {
 fn read_project(file: &Path) -> Result<Node, String> {
     // (a run prepared ahead checks the project files it read: record/prepare.rs)
     crate::files::note(file);
-    let text = std::fs::read_to_string(file).map_err(|error| format!("{}: {error}", file.display()))?;
+    let bytes = std::fs::read(file).map_err(|error| format!("{}: {error}", file.display()))?;
+    // (read as `rojo build` reads a project file, lenient JSONC (project/data_files.rs), its tree in the file's order)
+    let text = crate::project::data_files::read_json_text(&bytes).map_err(|error| format!("{}: not a valid Rojo project ({error})", file.display()))?;
     serde_json::from_str::<Node>(&text).map_err(|error| format!("{}: {error}", file.display()))
 }
 
@@ -515,6 +517,25 @@ mod tests {
         // Every $path, also the missing ones (optional too), with whether it exists
         let mapped: Vec<(String, bool)> = mappings(&dir.join("default.project.json")).unwrap().into_iter().map(|(at, _, exists)| (at, exists)).collect();
         assert_eq!(mapped.iter().filter(|(_, exists)| !exists).map(|(at, _)| at.as_str()).collect::<Vec<_>>(), ["ServerStorage/Gone"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A project file is read as `rojo build` 7.6.1 reads it, as lenient JSONC (comments, unquoted keys, single quotes,
+    /// trailing commas), its tree still in the file's order; one jsonc-parser refuses says why
+    #[test]
+    fn a_project_file_reads_as_jsonc_in_file_order() {
+        let dir = temp_dir("jsonc");
+        write(&dir.join("src/b.luau"), "return 1");
+        write(&dir.join("src/a.luau"), "return 2");
+        write(
+            &dir.join("default.project.json"),
+            "{\n\t// a project with comments\n\tname: 'game',\n\ttree: {\"$className\": 'DataModel',\n\t\tReplicatedStorage: {\"Zed\": {\"$path\": 'src/b.luau',}, Alpha: {\"$path\": \"src/a.luau\"},},\n\t},\n}",
+        );
+        let made = mounts(&dir.join("default.project.json"), None, &mut Vec::new()).unwrap();
+        assert_eq!(made.iter().map(|mount| mount.path.as_str()).collect::<Vec<_>>(), ["ReplicatedStorage/Zed", "ReplicatedStorage/Alpha"]);
+        write(&dir.join("bad.project.json"), "{\"name\": \"bad\", \"tree\": {\"a\": NaN}}");
+        let error = mounts(&dir.join("bad.project.json"), None, &mut Vec::new()).unwrap_err();
+        assert!(error.ends_with("bad.project.json: not a valid Rojo project (JSONC parse error (Unexpected token on line 1 column 31))"), "{error}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

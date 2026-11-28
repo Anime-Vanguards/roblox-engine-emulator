@@ -20,6 +20,7 @@ use super::{
     value::{Str, Value},
 };
 
+pub(crate) mod data_files;
 pub mod json_model;
 mod localization_csv;
 #[cfg(feature = "bundles")]
@@ -777,7 +778,7 @@ fn batch_read_json(path: &str) -> Option<std::sync::Arc<serde_json::Value>> {
     }
     let parsed = std::fs::read(path)
         .ok()
-        .and_then(|bytes| crate::alloc::long_lived(|| serde_json::from_slice::<serde_json::Value>(&bytes).ok().map(Arc::new)));
+        .and_then(|bytes| crate::alloc::long_lived(|| data_files::read_json(&bytes).ok().map(Arc::new)));
     crate::alloc::long_lived(|| {
         map.lock().unwrap_or_else(|e| e.into_inner()).insert(path.to_string(), parsed.clone());
     });
@@ -805,7 +806,7 @@ fn kept_read_json(path: &str) -> Option<std::sync::Arc<serde_json::Value>> {
     };
     let parsed = std::fs::read(path)
         .ok()
-        .and_then(|bytes| crate::alloc::long_lived(|| serde_json::from_slice::<serde_json::Value>(&bytes).ok().map(Arc::new)));
+        .and_then(|bytes| crate::alloc::long_lived(|| data_files::read_json(&bytes).ok().map(Arc::new)));
     if let Some(value) = parsed {
         // Only cache a successful parse whose file stamp did not change while reading.
         if crate::files::stamp(file_path) == Some(stamp_before) {
@@ -822,6 +823,8 @@ fn kept_read_json(path: &str) -> Option<std::sync::Arc<serde_json::Value>> {
     None
 }
 
+/// A JSON file of the project's (a project file, ree's own settings), read as Rojo reads its JSON files (lenient JSONC,
+/// data_files.rs; strict JSON reads as serde_json reads it); None when it does not read
 fn read_json(path: &str) -> Option<std::sync::Arc<serde_json::Value>> {
     if crate::lua::modules::is_batch_frozen() {
         crate::files::note(Path::new(path));
@@ -831,7 +834,7 @@ fn read_json(path: &str) -> Option<std::sync::Arc<serde_json::Value>> {
         return kept_read_json(path);
     }
     crate::files::note(Path::new(path));
-    serde_json::from_slice(&std::fs::read(path).ok()?).ok().map(std::sync::Arc::new)
+    data_files::read_json(&std::fs::read(path).ok()?).ok().map(std::sync::Arc::new)
 }
 
 /// A project's places, at its folder: `{"environments": [{"name": "<Place>", "projectFile":
@@ -1293,6 +1296,14 @@ struct ScanNode {
     unlisted: bool,
     /// Approximate instance count in this subtree (used to pre-reserve the DOM slot arena).
     approx_instances: usize,
+    /// Whether an entry is named as a meta file (`*.meta.json`, in any case): only then does a file entry look for the meta
+    /// file beside it ([`adjacent_meta_file`])
+    meta_files: bool,
+}
+
+/// Whether a directory's entries name a meta file ([`ScanNode::meta_files`])
+fn has_meta_files(entries: &[String]) -> bool {
+    entries.iter().any(|entry| ends_with_ignore_ascii_case(entry, ".meta.json"))
 }
 
 /// The directory Git keeps a repository's own data in. Rojo builds it as any folder (`rojo build` 7.6.1 and 7.7.0-rc.1: a
@@ -1393,7 +1404,8 @@ fn scan_below(path: String, up: Option<&Above>) -> ScanNode {
     }
     if candidates.is_empty() {
         let approx_instances = entries.len();
-        return ScanNode { path, entries, stamps, dirs: FxHashMap::default(), loops: Vec::new(), linked: has_symlink, unlisted: false, approx_instances };
+        let meta_files = has_meta_files(&entries);
+        return ScanNode { path, entries, stamps, dirs: FxHashMap::default(), loops: Vec::new(), linked: has_symlink, unlisted: false, approx_instances, meta_files };
     }
     let here = Above::new(&path, up);
     let visit = |index: usize| -> Option<(String, Result<ScanNode, String>)> {
@@ -1412,7 +1424,7 @@ fn scan_below(path: String, up: Option<&Above>) -> ScanNode {
             return None;
         }
         if entry == GIT_DIRECTORY {
-            return Some((entry.clone(), Ok(ScanNode { path: child, entries: Vec::new(), stamps: Vec::new(), dirs: FxHashMap::default(), loops: Vec::new(), linked: false, unlisted: true, approx_instances: 1 })));
+            return Some((entry.clone(), Ok(ScanNode { path: child, entries: Vec::new(), stamps: Vec::new(), dirs: FxHashMap::default(), loops: Vec::new(), linked: false, unlisted: true, approx_instances: 1, meta_files: false })));
         }
         let via_link = !kind.is_some_and(|kind| !kind.is_symlink());
         if let Some(above) = via_link.then(|| here.looped_by(Path::new(&child))).flatten() {
@@ -1439,7 +1451,8 @@ fn scan_below(path: String, up: Option<&Above>) -> ScanNode {
     }
     let linked = has_symlink || dirs.values().any(|dir| dir.linked);
     let approx_instances = entries.len() + dirs.values().map(|d| d.approx_instances).sum::<usize>();
-    ScanNode { path, entries, stamps, dirs, loops, linked, unlisted: false, approx_instances }
+    let meta_files = has_meta_files(&entries);
+    ScanNode { path, entries, stamps, dirs, loops, linked, unlisted: false, approx_instances, meta_files }
 }
 
 #[test]
@@ -2022,10 +2035,10 @@ fn mount_plain_directory_as(
         }
     }
     let meta_file = meta_entry.map(|file| format!("{full_path}/{file}"));
-    let meta = meta_file.as_deref().and_then(read_json);
+    let meta = meta_file.as_deref().and_then(|file| read_meta(engine, file, true));
     // (a class the engine's reflection does not have: `rojo build` 7.6.1 builds an instance of that class name, which ree
     // cannot make; a service's class, such as Workspace, both make, as a child like any other)
-    let meta_class = meta.as_ref().and_then(|m| m.get("className")).and_then(|c| c.as_str()).filter(|class_name| {
+    let meta_class = meta.as_ref().and_then(|m| m.class_name.as_deref()).filter(|class_name| {
         let known = reflection.class_id(class_name).is_some();
         if !known {
             engine.warn(format!("{}: className {class_name} is no class ree knows (Rojo builds an instance of that class name); mounted as a Folder", meta_file.as_deref().unwrap_or_default()));
@@ -2038,7 +2051,10 @@ fn mount_plain_directory_as(
     });
     // (Rojo looks for init.csv after the init scripts)
     let table = csv_entry.filter(|_| init.is_none()).and_then(|file| localization_contents(engine, &format!("{full_path}/{file}"), mount));
-    if let (Some(meta_class), Some(file), true) = (meta_class, &meta_file, init.is_some() || table.is_some()) {
+    // (Rojo applies the className first: refused there, the meta file's values are not applied either)
+    let made_by_file = init.is_some() || table.is_some();
+    let class_refused = meta_class.is_some() && made_by_file;
+    if let (Some(meta_class), Some(file), true) = (meta_class, &meta_file, class_refused) {
         let kind = if init.is_some() { "script" } else { "LocalizationTable" };
         engine.warn(format!("{file}: className in init.meta.json can only be specified if the affected directory would turn into a Folder instance (Rojo refuses the build); the directory is its init file's {kind}, not a {meta_class}"));
     }
@@ -2068,8 +2084,86 @@ fn mount_plain_directory_as(
         }
         child
     };
+    // Rojo makes an init script or init.csv as the file it is, named by the directory, so the meta file beside such a file
+    // is `<directory>.meta.json` inside the directory (its own name, whatever a project node calls it); then init.meta.json
+    // (`rojo build` 7.6.1: `d/init.luau` with `d/d.meta.json`)
+    if made_by_file {
+        let own_name = full_path.trim_end_matches(['/', '\\']).rsplit(['/', '\\']).next().unwrap_or(name);
+        if let Some(adjacent) = adjacent_meta_file(Some(node), full_path, own_name) {
+            if let Some(adjacent_meta) = read_meta(engine, &adjacent, false) {
+                apply_meta(engine, child, adjacent_meta, &adjacent);
+            }
+        }
+    }
+    if let (Some(meta), Some(file), false) = (meta, &meta_file, class_refused) {
+        apply_meta(engine, child, meta, file);
+    }
     mount_directory(engine, node, child, mount, relative);
     child
+}
+
+/// The meta file Rojo reads for the instance a file entry makes: `<name>.meta.json` in the file's `directory` (`name`: the
+/// instance name the file's rule gives, before a project node renames it; `.server.luau` is "" and reads `.meta.json`), opened
+/// by path as Rojo opens it, so the file system's case rule decides (`up.meta.json` for `Up.luau` on NTFS). `folder`: the
+/// directory's listing, when the caller has it. None when there is none.
+fn adjacent_meta_file(folder: Option<&ScanNode>, directory: &str, name: &str) -> Option<String> {
+    if folder.is_some_and(|folder| !folder.meta_files) {
+        return None;
+    }
+    let wanted = format!("{name}.meta.json");
+    match folder {
+        Some(folder) => folder.entries.iter().find(|entry| opens_as(entry, &wanted) && !folder.dirs.contains_key(*entry)).map(|entry| format!("{directory}/{entry}")),
+        None => {
+            let path = format!("{directory}/{wanted}");
+            Path::new(&path).is_file().then_some(path)
+        }
+    }
+}
+
+/// A meta file read as Rojo reads it (`directory`: an init.meta.json, which may name a class); None, reported, for one Rojo
+/// refuses ("File contained malformed .meta.json data")
+fn read_meta(engine: &Engine, path: &str, directory: bool) -> Option<json_model::Meta> {
+    crate::files::note(Path::new(path));
+    let read = std::fs::read(path).map_err(|error| error.to_string()).and_then(|bytes| json_model::Meta::read(&bytes, directory));
+    match read {
+        Ok(meta) => Some(meta),
+        Err(problem) => {
+            let kind = if directory { "init.meta.json" } else { ".meta.json" };
+            engine.warn(format!("{path}: File contained malformed {kind} data ({problem}; Rojo refuses the build); not applied"));
+            None
+        }
+    }
+}
+
+/// Gives `target`, the instance a file or directory made, the properties and attributes of its meta file `path` (Rojo's
+/// AdjacentMetadata / DirectoryMetadata apply_properties: resolved by the target's class, as `rojo build` 7.6.1 writes them).
+/// One Rojo refuses ("error applying meta file", an attribute it can't resolve) is reported and not applied.
+fn apply_meta(engine: &Engine, target: InstanceId, meta: json_model::Meta, path: &str) {
+    if meta.is_empty() {
+        return;
+    }
+    let (class_name, name) = {
+        let state = engine.state.borrow();
+        let instance = state.dom.at(target);
+        (engine.reflection.class(instance.class).name.to_string(), String::from_utf8_lossy(instance.name.as_bytes()).into_owned())
+    };
+    let problem = match meta.model(&class_name, &name) {
+        Ok(dom) => {
+            let plan = ModelPlan::new(&engine.reflection, &dom, dom.root().children());
+            let mut state = engine.state.borrow_mut();
+            plan.merge_root_into(&mut state, &engine.reflection, target);
+            // (a meta file's Source is the module's, over the file it came from: a JSON module that has one is a script)
+            let instance = state.dom.at_mut(target);
+            if instance.source().is_some() {
+                instance.set_flag(flags::JSON_MODULE, false);
+            }
+            return;
+        }
+        Err(json_model::MetaError::Property(problem)) => format!("error applying meta file ({problem}; Rojo refuses the build)"),
+        Err(json_model::MetaError::Attribute(problem)) => format!("{problem} (Rojo refuses the build)"),
+        Err(json_model::MetaError::Write(problem)) => problem,
+    };
+    engine.warn(format!("{path}: {problem}; not applied"));
 }
 
 /// The name Rojo gives the instance of a file a rule without a suffix of its own takes (`.txt`, `.rbxm`, `.rbxmx`): the file's
@@ -2083,9 +2177,9 @@ fn file_stem(file_name: &str) -> &str {
 
 /// A file entry of a mounted directory (`file_name` its name on disk; `name` overrides the instance name; `folder`: the listing
 /// holding it, when the caller has it) by Rojo's sync rules, each taking its suffix in lower case alone: scripts by suffix,
-/// project files, JSON models, JSON modules, localization tables, text files, models. Other files are ignored, but for those a
-/// rule of Rojo's takes and ree does not read (`.toml`, `.yaml`, `.yml`), which are reported. The instance it mounted (a model
-/// file's top instance named `name`), if any.
+/// project files, JSON models, JSON modules, localization tables, text files, models, TOML and YAML modules, then the meta file
+/// beside it ([`adjacent_meta_file`]). Other files are ignored. The instance it mounted (a model file's top instance named
+/// `name`), if any.
 #[allow(clippy::too_many_arguments)]
 fn mount_file(
     engine: &Engine,
@@ -2097,6 +2191,31 @@ fn mount_file(
     parent_index: Option<&mut ChildIndex>,
     folder: Option<&ScanNode>,
 ) -> Option<InstanceId> {
+    let made = mount_file_rule(engine, full_path, file_name, name, instance, mount, parent_index, folder)?;
+    // (Rojo's rules for scripts, JSON modules, text files, localization tables, TOML and YAML each read the meta file beside
+    // the file; project files and models read none)
+    if let (Some(rule_name), Some(separator)) = (made.1, full_path.rfind(['/', '\\'])) {
+        if let Some(meta_path) = adjacent_meta_file(folder, &full_path[..separator], rule_name) {
+            if let Some(meta) = read_meta(engine, &meta_path, false) {
+                apply_meta(engine, made.0, meta, &meta_path);
+            }
+        }
+    }
+    Some(made.0)
+}
+
+/// [`mount_file`]'s rules: the instance the file made, and the name its rule gave it when the rule reads a meta file
+#[allow(clippy::too_many_arguments)]
+fn mount_file_rule<'a>(
+    engine: &Engine,
+    full_path: &str,
+    file_name: &'a str,
+    name: Option<&str>,
+    instance: InstanceId,
+    mount: &mut MountCounts,
+    parent_index: Option<&mut ChildIndex>,
+    folder: Option<&ScanNode>,
+) -> Option<(InstanceId, Option<&'a str>)> {
     let reflection = &engine.reflection;
     if let Some((script_name, class_name, run_context)) = script_info(file_name) {
         let mut state = engine.state.borrow_mut();
@@ -2116,7 +2235,7 @@ fn mount_file(
                 core::raw_set_silent(&mut state, reflection, child, property, Value::EnumItem(item));
             }
         }
-        Some(child)
+        Some((child, Some(script_name)))
     } else if file_name.ends_with(".project.json") {
         // Rojo's project rule: a project file beside other files is its project's tree
         let listed_folder;
@@ -2129,7 +2248,7 @@ fn mount_file(
                 &*listed_folder
             }
         };
-        mount_project_file(engine, folder, full_path, file_name, name, instance, mount, parent_index)
+        mount_project_file(engine, folder, full_path, file_name, name, instance, mount, parent_index).map(|made| (made, None))
     } else if file_name.ends_with(".txt") {
         // Rojo's text file: a StringValue named by the file's stem holding the file's text as it is (its line endings and a
         // byte order mark kept). Rojo refuses a file that is not UTF-8 (`rojo build` 7.6.1: "File was not valid UTF-8").
@@ -2151,11 +2270,11 @@ fn mount_file(
         if reflection.is_a(state.dom.at(child).class, "StringValue") {
             core::raw_set_silent(&mut state, reflection, child, K::Value as NameId, Value::String(Str::from(text.as_str())));
         }
-        Some(child)
+        Some((child, Some(file_stem(file_name))))
     } else if file_name.ends_with(".model.json") {
         // Rojo's JSON model (project/json_model.rs): one instance, named after the file
         match mounted_plan(engine, full_path) {
-            Some(plan) => instantiate_model(engine, &plan, name, instance, parent_index),
+            Some(plan) => instantiate_model(engine, &plan, name, instance, parent_index).map(|made| (made, None)),
             None => {
                 mount.skipped += 1;
                 None
@@ -2163,7 +2282,8 @@ fn mount_file(
         }
     } else if file_name.ends_with(".json") && !file_name.ends_with(".meta.json") {
         // JSON modules (Rojo / JSON-backed data) return the decoded value; read on require
-        let module_name = name.unwrap_or(&file_name[..file_name.len() - 5]);
+        let rule_name = &file_name[..file_name.len() - 5];
+        let module_name = name.unwrap_or(rule_name);
         let mut state = engine.state.borrow_mut();
         let child = ensure_child_indexed(&mut state, reflection, instance, module_name, "ModuleScript", mount, parent_index);
         if is_a(reflection, state.dom.at(child).class, "LuaSourceContainer") {
@@ -2172,14 +2292,14 @@ fn mount_file(
             instance.set_source(None);
             instance.set_flag(flags::JSON_MODULE, true);
         }
-        Some(child)
+        Some((child, Some(rule_name)))
     } else if file_name.ends_with(".csv") {
         // Rojo's localization table (localization_csv.rs), named by the file's stem
         let contents = localization_contents(engine, full_path, mount)?;
         let mut state = engine.state.borrow_mut();
         let child = ensure_child_indexed(&mut state, reflection, instance, name.unwrap_or(file_stem(file_name)), "LocalizationTable", mount, parent_index);
         set_localization_contents(&mut state, reflection, child, contents);
-        Some(child)
+        Some((child, Some(file_stem(file_name))))
     } else if file_name.ends_with(".rbxm") || file_name.ends_with(".rbxmx") {
         // One top instance, named by the file's stem as Rojo names it. Rojo refuses the build for a model with none or more
         // (`rojo build` 7.6.1 and 7.7.0: "Rojo currently only supports model files with one top-level instance.").
@@ -2189,14 +2309,35 @@ fn mount_file(
             mount.skipped += 1;
             return None;
         }
-        instantiate_model(engine, &plan, Some(name.unwrap_or(file_stem(file_name))), instance, parent_index)
-    } else {
-        // Rojo's rules for data files ree has no parser for: each makes a ModuleScript of the file's data in Rojo
-        let format = [(".toml", "TOML"), (".yaml", "YAML"), (".yml", "YAML")].into_iter().find(|(suffix, _)| file_name.ends_with(suffix));
-        if let Some((_, format)) = format {
-            engine.warn(format!("{full_path}: a {format} file, which Rojo builds as a ModuleScript of its data; ree reads no {format}; not mounted"));
-            mount.skipped += 1;
+        instantiate_model(engine, &plan, Some(name.unwrap_or(file_stem(file_name))), instance, parent_index).map(|made| (made, None))
+    } else if let Some(toml) = [(".toml", true), (".yaml", false), (".yml", false)].into_iter().find_map(|(suffix, toml)| file_name.ends_with(suffix).then_some(toml)) {
+        // Rojo's TOML and YAML modules: a ModuleScript named by the file's stem whose source returns the file's data, the source
+        // Rojo writes (data_files.rs); one Rojo refuses is reported and not mounted
+        let source = std::fs::read(full_path).map_err(|error| error.to_string()).and_then(|bytes| if toml { data_files::toml_module_source(&bytes) } else { data_files::yaml_module_source(&bytes) });
+        let source = match source {
+            Ok(source) => source,
+            Err(problem) => {
+                let problem = match (toml, data_files::is_too_deep(&problem)) {
+                    (_, true) => problem,
+                    (true, false) => format!("File contains malformed TOML ({problem}; Rojo refuses the build)"),
+                    (false, false) if problem.contains("Rojo crashes") => problem,
+                    (false, false) => format!("{problem} (Rojo refuses the build)"),
+                };
+                engine.warn(format!("{full_path}: {problem}; not mounted"));
+                mount.skipped += 1;
+                return None;
+            }
+        };
+        let mut state = engine.state.borrow_mut();
+        let child = ensure_child_indexed(&mut state, reflection, instance, name.unwrap_or(file_stem(file_name)), "ModuleScript", mount, parent_index);
+        if is_a(reflection, state.dom.at(child).class, "LuaSourceContainer") {
+            let instance = state.dom.at_mut(child);
+            instance.set_source_path(None);
+            instance.set_source(Some(Rc::from(source.into_bytes())));
+            instance.set_flag(flags::JSON_MODULE, false);
         }
+        Some((child, Some(file_stem(file_name))))
+    } else {
         None
     }
 }

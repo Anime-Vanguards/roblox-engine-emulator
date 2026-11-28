@@ -2646,10 +2646,21 @@ fn mount_and_list(tag: &str, files: &[(&str, &[u8])], dirs: &[&str]) -> (Vec<Str
         local HttpService = game:GetService("HttpService")
         local function show(child)
             local text = child.ClassName .. " " .. string.format("%q", child.Name)
+            local names = {}
+            for name in child:GetAttributes() do
+                table.insert(names, name)
+            end
+            table.sort(names)
+            for _, name in names do
+                text ..= " @" .. name .. "=" .. tostring(child:GetAttribute(name))
+            end
+            if child:IsA("BaseScript") and child.Disabled then
+                text ..= " Disabled"
+            end
             if child:IsA("StringValue") then
                 text ..= ' = "' .. child.Value .. '"'
             elseif child:IsA("LocalizationTable") then
-                text ..= " " .. HttpService:JSONEncode(child:GetEntries())
+                text ..= (if child.SourceLocaleId == "en-us" then "" else " " .. child.SourceLocaleId) .. " " .. HttpService:JSONEncode(child:GetEntries())
             elseif child.ClassName == "Script" then
                 text ..= " " .. child.RunContext.Name
             elseif child:IsA("ModuleScript") then
@@ -2740,7 +2751,7 @@ fn suffixes_and_init_files_follow_rojos_case_rules() {
 /// `init.csv` directory, found whatever its case where the file system ignores it), `.plugin.luau` Scripts with RunContext
 /// Plugin, project files beside other files as their trees (a `$className` over a `$path`'s Folder), and what Rojo refuses (a
 /// model of two top instances or none, a CSV of uneven records, a file that is no project, an init.meta.json className beside
-/// an init script) reported and not mounted, as are `.toml` files, which ree has no parser for.
+/// an init script) reported and not mounted. (`.toml` files: rojo_data_and_meta_files_mount_as_rojo_builds_them)
 #[test]
 fn rojo_sync_rules_mount_as_rojo_builds_them() {
     let csv = b"Key,Source,Context,Example,en,es\nHello,Hello,,,Hello,Hola\nBye,Goodbye,ctx,an example,Bye,Adios\n";
@@ -2787,7 +2798,7 @@ fn rojo_sync_rules_mount_as_rojo_builds_them() {
     ]
     .map(str::to_string)
     .into_iter()
-    .chain([format!(r#"  LocalizationTable "plain" {entries}"#), r#"Folder "data""#.into(), r#"Folder "inits""#.into()])
+    .chain([format!(r#"  LocalizationTable "plain" {entries}"#), r#"Folder "data""#.into(), r#"  ModuleScript "x" -> {"a":1}"#.into(), r#"Folder "inits""#.into()])
     .collect();
     if cfg!(any(windows, target_os = "macos")) {
         expected.extend([
@@ -2818,11 +2829,73 @@ fn rojo_sync_rules_mount_as_rojo_builds_them() {
     assert_eq!(tree, expected);
     assert_eq!(reported, [
         "warn: <root>/A/csv/ragged.csv: not a valid LocalizationTable CSV file (CSV error: record 1 (line: 2, byte: 14): found record with 2 fields, but the previous record has 3 fields; Rojo refuses the build); not mounted",
-        "warn: <root>/A/data/x.toml: a TOML file, which Rojo builds as a ModuleScript of its data; ree reads no TOML; not mounted",
         "warn: <root>/A/inits/meta/init.meta.json: className in init.meta.json can only be specified if the affected directory would turn into a Folder instance (Rojo refuses the build); the directory is its init file's script, not a Configuration",
         "warn: <root>/A/models/two.rbxmx: Rojo currently only supports model files with one top-level instance (this one has 2); not mounted",
         "warn: <root>/A/models/zero.rbxmx: Rojo currently only supports model files with one top-level instance (this one has 0); not mounted",
         "warn: <root>/A/proj/bad.project.json: not a valid Rojo project (JSON with a \"tree\" object; Rojo refuses the build); not mounted",
+    ]);
+}
+
+/// Rojo's data files and meta files, as `rojo build` 7.6.1 builds them (project/data_files.rs, json_model.rs's meta files): TOML
+/// and YAML modules return their data from the source Rojo writes; JSON modules, models and project files read as lenient
+/// JSONC, and a JSON module holding NUL runs Rojo's source, which no client compiles; `x.meta.json` gives the instance `x.*`
+/// made its properties and attributes, a directory's init.meta.json its own, and `<dir>.meta.json` beside an init script is
+/// that script's, before init.meta.json (whose attributes replace its whole set, as Rojo's do); what Rojo refuses is
+/// reported in its words, the file not mounted or the meta file not applied.
+#[test]
+fn rojo_data_and_meta_files_mount_as_rojo_builds_them() {
+    let files: &[(&str, &[u8])] = &[
+        ("A/data/t.toml", b"b = [1, 2.5]\na = { \"end\" = 1 }\n"),
+        ("A/data/y.yaml", b"z: 1\nlist: [x, y]\n"),
+        ("A/data/bad.toml", b"a = 9223372036854775808\n"),
+        ("A/data/multi.yaml", b"a: 1\n---\nb: 2\n"),
+        ("A/data/c.json", b"// c\n{a: 1, 'b': [1, 2,],}"),
+        ("A/data/nul.json", br#"{"a": "x\u0000y"}"#),
+        ("A/data/m.model.json", b"{className: 'Configuration', /* c */}"),
+        ("A/data/p.project.json", b"{name: \"P\", tree: {\"$className\": \"Model\",},}"),
+        ("A/meta/s.server.luau", b"-- s"),
+        ("A/meta/s.meta.json", br#"{ "properties": { "Disabled": true }, "attributes": { "n": 1 } }"#),
+        ("A/meta/t.txt", b"text"),
+        ("A/meta/t.meta.json", br#"{ "properties": { "Value": "meta" } }"#),
+        ("A/meta/loc.csv", b"Key,Source,en\nK,s,x\n"),
+        ("A/meta/loc.meta.json", br#"{ "properties": { "SourceLocaleId": "es-es" } }"#),
+        ("A/meta/tm.toml", b"a = 1\n"),
+        ("A/meta/tm.meta.json", b"{ attributes: { toml: true, }, } // lenient too"),
+        ("A/meta/bad.luau", b"return 'bad'"),
+        ("A/meta/bad.meta.json", br#"{ "properties": { "Disabled": true } }"#),
+        ("A/meta/d/init.luau", b"return 'd'"),
+        ("A/meta/d/d.meta.json", br#"{ "attributes": { "quirk": true } }"#),
+        ("A/meta/d/init.meta.json", br#"{ "attributes": { "dir": 2 } }"#),
+        ("A/meta/e/init.luau", b"return 'e'"),
+        ("A/meta/e/e.meta.json", br#"{ "attributes": { "quirk": true } }"#),
+        ("A/meta/f/init.meta.json", br#"{ "attributes": { "folder": true } }"#),
+        ("A/meta/f/k.luau", b"return 'k'"),
+    ];
+    let (tree, reported) = mount_and_list("data-meta", files, &[]);
+    assert_eq!(tree, [
+        r#"Folder "data""#,
+        r#"  Configuration "m""#,
+        r#"  Model "P""#,
+        r#"  ModuleScript "c" -> {"a":1,"b":[1,2]}"#,
+        r#"  ModuleScript "nul" -> Requested module experienced an error while loading"#,
+        r#"  ModuleScript "t" -> {"a":{"end":1},"b":[1,2.5]}"#,
+        r#"  ModuleScript "y" -> {"list":["x","y"],"z":1}"#,
+        r#"Folder "meta""#,
+        r#"  Folder "f" @folder=true"#,
+        r#"    ModuleScript "k" -> k"#,
+        r#"  LocalizationTable "loc" es-es [{"Key":"K","Values":{"en":"x"},"Example":"","Context":"","Source":"s"}]"#,
+        r#"  ModuleScript "bad" -> bad"#,
+        r#"  ModuleScript "d" @dir=2 -> d"#,
+        r#"  ModuleScript "e" @quirk=true -> e"#,
+        r#"  ModuleScript "tm" @toml=true -> {"a":1}"#,
+        r#"  Script "s" @n=1 Disabled Legacy"#,
+        r#"  StringValue "t" = "meta""#,
+    ]);
+    assert_eq!(reported, [
+        "error: ReplicatedStorage.A.data.nul:2: Malformed string; did you forget to finish it?",
+        "warn: <root>/A/data/bad.toml: File contains malformed TOML (invalid number at line 1 column 5; Rojo refuses the build); not mounted",
+        "warn: <root>/A/data/multi.yaml: Rojo does not currently support multiple documents in a YAML file (Rojo refuses the build); not mounted",
+        "warn: <root>/A/meta/bad.meta.json: error applying meta file (Unknown property ModuleScript.Disabled; Rojo refuses the build); not applied",
     ]);
 }
 
@@ -3051,7 +3124,7 @@ fn rojo_json_models_mount_as_their_instances() {
     "#);
     assert!(output.iter().all(|line| !line.starts_with("error")), "{output:?}");
     let reported: Vec<&String> = output.iter().filter(|line| line.contains("Broken.model.json")).collect();
-    assert!(reported.len() == 1 && reported[0].contains("unknown property Part.NotAProperty"), "{output:?}");
+    assert!(reported.len() == 1 && reported[0].contains("Unknown property Part.NotAProperty"), "{output:?}");
     drop(lua);
     let _ = std::fs::remove_dir_all(&dir);
 }

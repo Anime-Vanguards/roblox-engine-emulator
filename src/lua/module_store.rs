@@ -40,7 +40,9 @@ use crate::project::plan::Mapping;
 
 pub(crate) const KIND_STD_BYTECODE: u8 = 1;
 pub(crate) const KIND_LOADMODULE_BYTECODE: u8 = 2;
-pub(crate) const KIND_BINARY_JSON: u8 = 3;
+/// 4: a JSON module read as `rojo build` 7.6.1 reads it (project/data_files.rs: lenient JSONC, and a surrogate escape, a NUL
+/// or deep nesting no longer read as strict JSON's value), so no entry 3, of strict JSON, is read again
+pub(crate) const KIND_BINARY_JSON: u8 = 4;
 
 const PACK_MAGIC: &[u8; 8] = b"REEMPK01";
 /// 2: each record carries its payload's [`payload_check`]
