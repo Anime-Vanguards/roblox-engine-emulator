@@ -33,6 +33,9 @@
 //!   does not records.
 //! - The ScreenGuis the local player's PlayerGui shows are kept in the scene's `PlayerGui` (ror draws
 //!   them over the finished image), hidden by Enabled off while they are not there.
+//! - The local player is kept as the DataModel holds it, a Player in the scene's Players service `~Players`, its
+//!   Character the copy of the model it names (none when it names nothing, or a model that never entered the world),
+//!   and `set` actions where Character names another: the viewer a client measures name tags from.
 //! - Prints, warnings, errors and sound plays go to the event log with their times; the CFrame and
 //!   field of view of the camera the frame is drawn from (the CurrentCamera) when they change to the
 //!   camera track.
@@ -201,6 +204,9 @@ const CLOUDS: &str = "Workspace.Terrain.Clouds";
 /// The scene's PlayerGui, holding the ScreenGuis the local player's PlayerGui shows (ror draws them on
 /// the screen; their paths read as Roblox names them).
 const PLAYER_GUI: &str = "PlayerGui";
+/// The scene's Players service, holding the local player (a Player named as it is) whose Character names its character's copy
+/// ([`Inner::characters`]); the playback's target for its Character is `~Players.<name>`.
+const PLAYERS: &str = "~Players";
 
 /// How an instance is hidden and shown.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -403,6 +409,13 @@ struct Inner {
     /// The ViewportFrame records each camera is the CurrentCamera of (their CameraCFrame and
     /// CameraFieldOfView follow it; a window's is skewed every frame to look through its face)
     viewports: FxHashMap<InstanceId, Vec<usize>>,
+    /// The local player, once a sample found one, and its name then
+    local_player: Option<(InstanceId, String)>,
+    /// What the local player's Character names, from the first sample with a local player on: (frame, the record of the model it
+    /// names, none when it names nothing or a model the scene does not hold), at each frame it changes
+    characters: Vec<(u32, Option<usize>)>,
+    /// Player.Character's name id
+    character_name: Option<NameId>,
 }
 
 /// Records the Workspace of one engine (create it before the run builds anything, then call
@@ -415,8 +428,10 @@ impl Recorder {
     /// Installs the recorder's hooks on `engine` (property writes, world events).
     pub fn install(engine: &Rc<Engine>, fps: f64) -> Recorder {
         let mut state = Inner { fps, ..Default::default() };
-        // (a world root named PlayerGui is renamed rather than mixed with the scene's PlayerGui)
+        // (a world root named PlayerGui is renamed rather than mixed with the scene's PlayerGui; so is one named as its Players)
         state.names.entry(None).or_default().used.insert(PLAYER_GUI.to_string());
+        state.names.entry(None).or_default().used.insert(PLAYERS.to_string());
+        state.character_name = engine.reflection.name_id("Character");
         for property in ["Transparency", "Enabled", "Visible", "CameraCFrame", "CameraFieldOfView"] {
             if let Some(name) = engine.reflection.name_id(property) {
                 state.property_names.insert(name, property.to_string());
@@ -1647,6 +1662,22 @@ fn sample(inner: &mut Inner, engine: &Rc<Engine>) {
         inner.adornee_written = false;
     }
     crate::timing::time("frames: sample: changes", || sample_changes(inner, &state, engine, lighting));
+    local_character(inner, &state, world.local_player);
+}
+
+/// The local player's Character as the frame leaves it ([`Inner::characters`]): the record of the model it names, which this
+/// frame's walk made when the model entered the world in it.
+fn local_character(inner: &mut Inner, state: &State, player: Option<InstanceId>) {
+    let (Some(player), Some(name)) = (player, inner.character_name) else { return };
+    if inner.local_player.is_none() {
+        let Some(instance) = state.dom.get(player) else { return };
+        inner.local_player = Some((player, instance.name.to_str_lossy().into_owned()));
+    }
+    let character = state.dom.raw_get(player, name).and_then(Value::as_instance).and_then(|model| inner.by_id.get(&model).copied());
+    if inner.characters.last().is_none_or(|&(_, last)| last != character) {
+        let frame = inner.frame;
+        inner.characters.push((frame, character));
+    }
 }
 
 /// The place's own look leaving Lighting and coming back: a sky, atmosphere or post effect the
@@ -2136,6 +2167,13 @@ fn scene(inner: &Inner) -> Result<Vec<u8>, String> {
             }
         }
     }
+    // the local player, as the DataModel holds it: its Character the first sample's (the playback sets the later ones)
+    if let Some((_, name)) = &inner.local_player {
+        let players = dom.insert(root, InstanceBuilder::new("Players").with_name(PLAYERS));
+        roots.push(players);
+        let character = inner.characters.first().and_then(|&(_, record)| record).map_or_else(dom::Ref::none, |index| refs[index]);
+        dom.insert(players, InstanceBuilder::new("Player").with_name(name.as_str()).with_property("Character", Variant::Ref(character)));
+    }
     let mut bytes = Vec::with_capacity(inner.records.len().saturating_mul(128));
     rbx_binary::to_writer(&mut bytes, &dom, &roots).map_err(|e| format!("scene.rbxm: {e}"))?;
     Ok(bytes)
@@ -2451,8 +2489,9 @@ fn playback(inner: &Inner) -> Playback {
                 }
             }
         }
-        // each burst where its emitter was at the call (ror places it there: a script moving an attachment
-        // between Emit calls in one frame leaves a burst at each place, where the frame's motion has one)
+        // each burst with where its emitter was at the call (a client spawns it from where the emitter is at the frame's particle
+        // step, after the frame's render-step bindings, which ror reads at the action's time; a burst after the frame's render
+        // carries the next frame's time, as the sample after it is that frame's: docs/engine.md "Recorder")
         for (frame, count, from) in &record.emits {
             let count = count.round();
             if count > 0.0 {
@@ -2509,6 +2548,15 @@ fn playback(inner: &Inner) -> Playback {
     for (frame, class, shown) in &inner.stage {
         let at = time_of(inner, *frame);
         actions.push((at, serialize_element(&StageAction { at, class, parent: if *shown { "Lighting" } else { "" }, target: "Lighting" })));
+    }
+    // the local player's Character naming another model: the path of its copy, or none
+    if let Some((_, name)) = &inner.local_player {
+        let target = join(Some(PLAYERS), name);
+        for &(frame, record) in inner.characters.iter().skip(1) {
+            let at = time_of(inner, frame);
+            let named: Option<&str> = record.map(|index| inner.records[index].path.as_str());
+            actions.push((at, serialize_element(&SetAction { at, set: SingleField("Character", &named), target: &target })));
+        }
     }
     // a part that stays put under a part that moves stays put (ror carries what is under a moving part);
     // an attachment or a bone (an Attachment) is never pinned: it goes where its part goes

@@ -854,9 +854,11 @@ fn a_spooled_run_prints_what_a_kept_one_prints() {
 fn a_timing_check_probes_faster_and_slower_clients() {
     let root = std::env::temp_dir().join(format!("ree-record-probes-test-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
     std::fs::create_dir_all(root.join("none")).unwrap();
+    // (the harnesses apart from the recordings: a harness's folder is mounted, and a recording's scene.rbxm in it with it)
+    std::fs::create_dir_all(root.join("harness")).unwrap();
     let host = crate::launch::Host::default();
     let record = |harness: &str, name: &str, timing: bool| {
-        let path = root.join(format!("{name}.luau"));
+        let path = root.join("harness").join(format!("{name}.luau"));
         std::fs::write(&path, harness).unwrap();
         let out = root.join(name);
         let mut args: Vec<String> = ["--harness", &path.to_string_lossy(), "--out", &out.to_string_lossy(), "--roots", &root.join("none").to_string_lossy(), "--seconds", "0.1", "--fps", "60"].iter().map(|s| s.to_string()).collect();
@@ -904,8 +906,10 @@ fn a_timing_check_probes_faster_and_slower_clients() {
 fn a_timing_check_says_whether_a_recording_hinges_on_sub_frame_timing() {
     let root = std::env::temp_dir().join(format!("ree-record-timing-test-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
     std::fs::create_dir_all(root.join("none")).unwrap();
+    // (the harnesses apart from the recordings: a harness's folder is mounted, and a recording's scene.rbxm in it with it)
+    std::fs::create_dir_all(root.join("harness")).unwrap();
     let write = |name: &str, body: &str| {
-        let path = root.join(name);
+        let path = root.join("harness").join(name);
         std::fs::write(&path, body).unwrap();
         path
     };
@@ -2171,7 +2175,8 @@ fn a_scene_of_clones_is_the_same_bytes_each_time() {
     let first = scene();
     assert_eq!(first, scene(), "the same scene bytes");
     let dom = rbx_binary::from_reader(first.as_slice()).expect("scene.rbxm");
-    let ids: std::collections::HashSet<String> = dom.root().children().iter().map(|r| format!("{:?}", dom.get_by_ref(*r).unwrap().properties.get(&"UniqueId".into()))).collect();
+    // (the copies: the scene's roots but its Players, which holds the local player)
+    let ids: std::collections::HashSet<String> = dom.root().children().iter().map(|r| dom.get_by_ref(*r).unwrap()).filter(|root| root.class != "Players").map(|root| format!("{:?}", root.properties.get(&"UniqueId".into()))).collect();
     assert_eq!(ids.len(), 3, "each copy has its own UniqueId: {ids:?}");
 }
 
@@ -2296,11 +2301,11 @@ fn a_part_physics_moves_marks_where_its_motion_turns_physical() {
     assert!(steered[0].get("physicsFrom").is_none(), "a steered fall marked physical: {}", steered[0]);
 }
 
-/// `Emit` spawns its particles at once, where the emitter is at the call: an attachment moved to four
-/// corners in one frame, emitting after each move, leaves four bursts at four corners (an effect that
-/// locks its rectangle does so), and a part resized and moved between two emits leaves each
-/// burst over the part as it was then. The frame's motion holds only the last place: each emit carries
-/// its own.
+/// Each `emit` action carries where its emitter was at the call (`cframe`, `partSize`): an attachment moved to four corners in
+/// one frame, emitting after each move, records four bursts at four corners, and a part resized and moved between two emits
+/// records each over the part as it was then. The frame's motion holds only the last place. (A client spawns all of a frame's
+/// bursts from where the emitter is at the frame's particle step, ror P20; ror reads that from the recording at the action's
+/// time.)
 #[test]
 fn each_emit_leaves_from_where_its_emitter_was_at_the_call() {
     let (playback, _, _, summary) = record(
@@ -3168,3 +3173,145 @@ fn playback_json_is_compact_and_lossless() {
     assert_eq!(raw, compact, "playback.json must match compact serde_json::to_vec bytes");
     assert!(raw.len() * 2 < pretty.len(), "compact playback.json ({} B) should be <50% of pretty ({} B)", raw.len(), pretty.len());
 }
+
+/// The local player is in the scene as the DataModel holds it (REC-LOCAL-CHARACTER: ror measures name tags from the local
+/// character, takes its Humanoid's NameOcclusion and never shows its own name): a Player named as the local player in the
+/// scene's Players service `~Players`, its Character the copy of the model it names at the first frame, and a `set` of
+/// Character on `~Players.<name>` (the path of the model's copy, or null) at each frame it names another: a second rig, a model
+/// that never entered the world (none: the scene holds no copy), nothing, the first again.
+#[test]
+fn the_local_players_character_is_kept_as_the_data_model_holds_it() {
+    let (playback, _, scene, _) = record(
+        r#"
+        local Me = game:GetService("Players").LocalPlayer
+        local function Rig(Name, X)
+            local Model = Instance.new("Model")
+            Model.Name = Name
+            local Head = Instance.new("Part")
+            Head.Name = "Head"
+            Head.Anchored = true
+            Head.CFrame = CFrame.new(X, 5, 0)
+            Head.Parent = Model
+            Instance.new("Humanoid").Parent = Model
+            Model.Parent = workspace
+            return Model
+        end
+        local First = Rig("First", 0)
+        local Second = Rig("Second", 10)
+        local Elsewhere = Instance.new("Model")
+        Elsewhere.Name = "Elsewhere"
+        Me.Character = First
+        task.delay(0.05, function() Me.Character = Second end)
+        task.delay(0.1, function() Me.Character = Elsewhere end)
+        task.delay(0.15, function() Me.Character = nil end)
+        task.delay(0.2, function() Me.Character = First end)
+        "#,
+        20,
+    );
+    let players = instance(&scene, &["~Players"]);
+    assert_eq!(players.class, "Players");
+    let player = scene.get_by_ref(players.children()[0]).unwrap();
+    assert_eq!((player.class.as_str(), players.children().len()), ("Player", 1));
+    let first = instance(&scene, &["First"]).referent();
+    assert_eq!(player.properties.get(&rbx_dom_weak::ustr("Character")), Some(&Variant::Ref(first)), "the first frame's character");
+    let target = format!("~Players.{}", player.name);
+    let sets: Vec<(f64, Json)> = find(&playback["actions"], |a| a["target"] == target.as_str()).iter().map(|a| (a["at"].as_f64().unwrap(), a["set"]["Character"].clone())).collect();
+    let names: Vec<Json> = sets.iter().map(|(_, named)| named.clone()).collect();
+    assert_eq!(names, [Json::from("Second"), Json::Null, Json::from("First")], "{sets:?}");
+    assert!(sets.windows(2).all(|pair| pair[0].0 < pair[1].0), "{sets:?}");
+    // (a model the world never held names nothing the scene has, as nil does: one set for both)
+    assert!((sets[1].0 - 0.1).abs() < 0.02 && (sets[2].0 - 0.2).abs() < 0.02, "{sets:?}");
+}
+
+/// A server's recording has no local player, so no Players either.
+#[test]
+fn a_recording_without_a_local_player_holds_no_players() {
+    let options = Options { mode: "play".into(), run_context: crate::RunContext::Server, local_player: false, ..Options::default() };
+    let (_, _, scene, _, _) = record_options(options, r#"local Part = Instance.new("Part") Part.Parent = workspace"#, 2, false, &[]);
+    assert!(scene.root().children().iter().all(|&child| scene.get_by_ref(child).unwrap().class != "Players"));
+}
+
+/// Which frame a burst or a write made after the render belongs to (REC-EMIT-AFTER-RENDER; measured by ror P20 on roblox-sim's
+/// rendered 0.747 client on its exact frame clock, four sessions): a client spawns an Emit's particles at the frame's particle
+/// step, after its render-step bindings, so an Emit in a binding leaves in that frame and one after the frame's render (a
+/// Heartbeat handler) in the next, from where that frame's bindings put the emitter; a write in Heartbeat is drawn in the next
+/// frame too. ree steps a frame's Heartbeat before its render step and samples after the render step, so both carry the next
+/// frame's time: a First binding writes the frame's count into Marker, and the playback stamps each with the frame whose count
+/// it holds.
+#[test]
+fn a_burst_or_a_write_after_the_render_belongs_to_the_next_frame() {
+    let (playback, _, _, _) = record(
+        r#"
+        local RunService = game:GetService("RunService")
+        local function Block(Name, X)
+            local Part = Instance.new("Part")
+            Part.Name = Name
+            Part.Anchored = true
+            Part.Size = Vector3.new(1, 1, 1)
+            Part.CFrame = CFrame.new(X, 0, 0)
+            Part.Parent = workspace
+            return Part
+        end
+        local Marker = Block("Marker", 0)
+        local Late = Block("Late", 10)
+        local Bound = Block("Bound", 20)
+        local Plate = Block("Plate", 30)
+        for _, Holder in { Late, Bound } do
+            local Emitter = Instance.new("ParticleEmitter")
+            Emitter.Rate = 0
+            Emitter.Parent = Holder
+        end
+        local Frame = 0
+        local Due = {}
+        RunService:BindToRenderStep("First", Enum.RenderPriority.First.Value, function()
+            Frame += 1
+            Marker.Size = Vector3.new(Frame, 1, 1)
+        end)
+        RunService:BindToRenderStep("Last", Enum.RenderPriority.Last.Value + 2, function()
+            local Run = Due[Frame]
+            Due[Frame] = nil
+            if Run then Run() end
+        end)
+        local Heard
+        Heard = RunService.Heartbeat:Connect(function()
+            if Frame >= 5 then
+                Heard:Disconnect()
+                Late.ParticleEmitter:Emit(1)
+                Plate.Transparency = 0.5
+                Due[Frame + 1] = function() Late.CFrame = CFrame.new(10, 5, 0) end
+            end
+        end)
+        Due[8] = function()
+            Bound.ParticleEmitter:Emit(1)
+            local Moved
+            Moved = RunService.Heartbeat:Connect(function()
+                Moved:Disconnect()
+                Bound.CFrame = CFrame.new(20, 5, 0)
+            end)
+        end
+        "#,
+        14,
+    );
+    // the recorded time of the frame whose First binding wrote `count`
+    let marker = find(&playback["tweens"], |t| t["target"] == "Marker");
+    let keys = marker[0]["keys"].as_array().unwrap();
+    let frame_at = |count: f64| -> f64 {
+        let size = |key: &Json| key["value"][0].as_f64().unwrap();
+        // (keys a straight line reproduces are dropped: the frame lies on the segment)
+        let pair = keys.windows(2).find(|pair| size(&pair[0]) <= count && count <= size(&pair[1])).unwrap_or_else(|| panic!("{count} in {keys:?}"));
+        let (a, b) = (pair[0]["at"].as_f64().unwrap(), pair[1]["at"].as_f64().unwrap());
+        a + (b - a) * (count - size(&pair[0])) / (size(&pair[1]) - size(&pair[0]))
+    };
+    let at = |target: &str, test: &dyn Fn(&Json) -> bool| -> f64 {
+        let found = find(&playback["actions"], |a| a["target"] == target && test(a));
+        assert_eq!(found.len(), 1, "{target}: {}", playback["actions"]);
+        found[0]["at"].as_f64().unwrap()
+    };
+    let close = |a: f64, b: f64| (a - b).abs() < 1e-4;
+    // after frame 5's render: frame 6's
+    assert!(close(at("Late.ParticleEmitter", &|a| a["emit"].is_number()), frame_at(6.0)), "{}", playback["actions"]);
+    assert!(close(at("Plate", &|a| a["set"]["Transparency"].is_number()), frame_at(6.0)), "{}", playback["actions"]);
+    // in frame 8's binding: frame 8's
+    assert!(close(at("Bound.ParticleEmitter", &|a| a["emit"].is_number()), frame_at(8.0)), "{}", playback["actions"]);
+}
+
