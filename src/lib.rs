@@ -861,6 +861,8 @@ pub struct State {
     pub collection: services::CollectionState,
     /// Roblox's top bar on a playing client that has one (services/mod.rs TopBar)
     pub topbar: services::TopBar,
+    /// A client's core GUI switches (services/mod.rs CoreGuiSwitches)
+    pub core_gui: services::CoreGuiSwitches,
     /// Rigid assemblies: the joint index and pending joint work (world::joints)
     pub joints: world::joints::Joints,
     /// Free fall: the unanchored parts in the Workspace and their velocities (world::gravity)
@@ -990,6 +992,7 @@ impl Engine {
                 project: Default::default(),
                 collection: Default::default(),
                 topbar: Default::default(),
+                core_gui: Default::default(),
                 joints: Default::default(),
                 gravity: Default::default(),
                 cameras: Default::default(),

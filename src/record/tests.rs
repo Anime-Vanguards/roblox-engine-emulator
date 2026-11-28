@@ -3,7 +3,7 @@
 
 use mlua::prelude::*;
 use rbx_dom_weak::types::Variant;
-use serde_json::{Map, Value as Json};
+use serde_json::{Map, Value as Json, json};
 
 use super::Recorder;
 use crate::{
@@ -91,6 +91,10 @@ fn record_prepared_dyn(options: Options, source: &str, frames: u32, walk_always:
         crate::instance::create_named(&mut state, &engine.reflection, class, "Harness")
     };
     let env = engine_lua::modules::environment(&lua, &engine, script).expect("environment");
+    // (a play run's harness Context.Join and Context.Leave: record/run.rs)
+    if engine.options.mode == "play" {
+        env.set("Context", crate::record::run::players_context(&lua, &engine)).expect("Context");
+    }
     let function = lua.load(source).set_name("=Harness").set_environment(env).into_function().expect("compile");
     let call = engine_lua::globals::call(&lua, &engine, function, LuaMultiValue::new()).expect("call");
     if let CallOutcome::Failed(message, _) = call.outcome().unwrap() {
@@ -410,7 +414,8 @@ fn terrain_cloud_writes_play_on_the_stages_clouds() {
     assert_eq!(keys[0]["value"], serde_json::json!({ "initial": true }), "{keys:?}");
     assert!(keys[0]["at"].as_f64().unwrap() > 0.0, "{keys:?}");
     assert!((keys.last().unwrap()["value"].as_f64().unwrap() - 0.2).abs() < 1e-5, "{keys:?}");
-    assert!(find(&playback["actions"], |a| a["target"] != "Workspace.Terrain.Clouds").is_empty(), "the stray Clouds plays nothing: {}", playback["actions"]);
+    // (but the local player's DisplayName, set at frame 0)
+    assert!(find(&playback["actions"], |a| a["target"] != "Workspace.Terrain.Clouds" && a["target"] != "~Players.Player").is_empty(), "the stray Clouds plays nothing: {}", playback["actions"]);
     assert!(scene.descendants().all(|instance| instance.class != "Clouds"), "no Clouds is recorded as an instance");
     assert!(summary["unsupported"].as_array().unwrap().is_empty(), "{summary}");
 
@@ -2175,8 +2180,8 @@ fn a_scene_of_clones_is_the_same_bytes_each_time() {
     let first = scene();
     assert_eq!(first, scene(), "the same scene bytes");
     let dom = rbx_binary::from_reader(first.as_slice()).expect("scene.rbxm");
-    // (the copies: the scene's roots but its Players, which holds the local player)
-    let ids: std::collections::HashSet<String> = dom.root().children().iter().map(|r| dom.get_by_ref(*r).unwrap()).filter(|root| root.class != "Players").map(|root| format!("{:?}", root.properties.get(&"UniqueId".into()))).collect();
+    // (the copies: the scene's roots but its Players, which holds the local player, and its StarterGui, the core GUI switches)
+    let ids: std::collections::HashSet<String> = dom.root().children().iter().map(|r| dom.get_by_ref(*r).unwrap()).filter(|root| !matches!(root.class.as_str(), "Players" | "StarterGui")).map(|root| format!("{:?}", root.properties.get(&"UniqueId".into()))).collect();
     assert_eq!(ids.len(), 3, "each copy has its own UniqueId: {ids:?}");
 }
 
@@ -3214,7 +3219,7 @@ fn the_local_players_character_is_kept_as_the_data_model_holds_it() {
     let first = instance(&scene, &["First"]).referent();
     assert_eq!(player.properties.get(&rbx_dom_weak::ustr("Character")), Some(&Variant::Ref(first)), "the first frame's character");
     let target = format!("~Players.{}", player.name);
-    let sets: Vec<(f64, Json)> = find(&playback["actions"], |a| a["target"] == target.as_str()).iter().map(|a| (a["at"].as_f64().unwrap(), a["set"]["Character"].clone())).collect();
+    let sets: Vec<(f64, Json)> = find(&playback["actions"], |a| a["target"] == target.as_str() && a["set"].get("Character").is_some()).iter().map(|a| (a["at"].as_f64().unwrap(), a["set"]["Character"].clone())).collect();
     let names: Vec<Json> = sets.iter().map(|(_, named)| named.clone()).collect();
     assert_eq!(names, [Json::from("Second"), Json::Null, Json::from("First")], "{sets:?}");
     assert!(sets.windows(2).all(|pair| pair[0].0 < pair[1].0), "{sets:?}");
@@ -3222,13 +3227,173 @@ fn the_local_players_character_is_kept_as_the_data_model_holds_it() {
     assert!((sets[1].0 - 0.1).abs() < 0.02 && (sets[2].0 - 0.2).abs() < 0.02, "{sets:?}");
 }
 
-/// A server's recording has no local player, so no Players either.
+/// A server's recording has no local player, so no Players, Teams or switches either, whoever joins.
 #[test]
 fn a_recording_without_a_local_player_holds_no_players() {
     let options = Options { mode: "play".into(), run_context: crate::RunContext::Server, local_player: false, ..Options::default() };
-    let (_, _, scene, _, _) = record_options(options, r#"local Part = Instance.new("Part") Part.Parent = workspace"#, 2, false, &[]);
-    assert!(scene.root().children().iter().all(|&child| scene.get_by_ref(child).unwrap().class != "Players"));
+    let source = r#"local Part = Instance.new("Part") Part.Parent = workspace local Team = Instance.new("Team") Team.Parent = game:GetService("Teams") Context.Join()"#;
+    let (_, _, scene, _, _) = record_options(options, source, 2, false, &[]);
+    assert!(scene.root().children().iter().all(|&child| !matches!(scene.get_by_ref(child).unwrap().class.as_str(), "Players" | "Teams" | "StarterGui")));
 }
+
+/// A client's recording keeps what Roblox's own GUI shows over its frames (REC-COREGUI, REC-HUMANOID-HEALTH): the core GUI
+/// switches as the scene StarterGui `~StarterGui`'s booleans (each CoreGuiType but All, and TopbarEnabled, which SetCore sets
+/// only from a boolean: measured in 0.747 clients running their core scripts) with a `set` where one turns; the local player's
+/// DisplayName (a `set` at its first frame: files keep none) and its `leaderstats` with the stats its player list shows (an
+/// ObjectValue is not one), their Value followed; and a Humanoid's Health as Studio saves it (Health_XML) and followed.
+#[test]
+fn a_clients_recording_keeps_its_core_gui_state() {
+    let (playback, _, scene, summary) = record(
+        r#"
+        local Players = game:GetService("Players")
+        local StarterGui = game:GetService("StarterGui")
+        local Me = Players.LocalPlayer
+        local Rig = Instance.new("Model")
+        Rig.Name = "Rig"
+        local Head = Instance.new("Part")
+        Head.Name = "Head"
+        Head.Anchored = true
+        Head.Parent = Rig
+        local Humanoid = Instance.new("Humanoid")
+        Humanoid.Parent = Rig
+        Rig.Parent = workspace
+        Me.Character = Rig
+        Humanoid.Health = 80
+        local Stats = Instance.new("Folder")
+        Stats.Name = "leaderstats"
+        local Coins = Instance.new("IntValue")
+        Coins.Name = "Coins"
+        Coins.Value = 5
+        Coins.Parent = Stats
+        local Kind = Instance.new("ObjectValue")
+        Kind.Name = "Kind"
+        Kind.Parent = Stats
+        Stats.Parent = Me
+        StarterGui:SetCoreGuiEnabled(Enum.CoreGuiType.Chat, false)
+        task.delay(0.05, function()
+            Humanoid.Health = 40
+            Coins.Value = 12
+            StarterGui:SetCoreGuiEnabled(Enum.CoreGuiType.PlayerList, false)
+            StarterGui:SetCore("TopbarEnabled", false)
+        end)
+        task.delay(0.1, function()
+            local Gems = Instance.new("NumberValue")
+            Gems.Name = "Gems"
+            Gems.Value = 1.5
+            Gems.Parent = Stats
+            StarterGui:SetCoreGuiEnabled(Enum.CoreGuiType.All, true)
+            StarterGui:SetCore("TopbarEnabled", 1)
+        end)
+        "#,
+        12,
+    );
+    let switches = instance(&scene, &["~StarterGui"]);
+    assert_eq!(switches.class, "StarterGui");
+    let switch = |name: &str| switches.properties.get(&rbx_dom_weak::ustr(name)).cloned();
+    assert_eq!((switch("Chat"), switch("PlayerList"), switch("Health"), switch("TopbarEnabled")), (Some(Variant::Bool(false)), Some(Variant::Bool(true)), Some(Variant::Bool(true)), Some(Variant::Bool(true))));
+    assert!(switch("All").is_none() && switch("Backpack") == Some(Variant::Bool(true)), "{:?}", switches.properties);
+    let sets = |target: &str| -> Vec<(f64, String, Json)> {
+        find(&playback["actions"], |a| a["target"] == target && a.get("set").is_some())
+            .iter()
+            .flat_map(|a| a["set"].as_object().unwrap().iter().map(|(k, v)| (a["at"].as_f64().unwrap(), k.clone(), v.clone())))
+            .collect()
+    };
+    let turned: Vec<(String, Json)> = sets("~StarterGui").into_iter().map(|(_, name, value)| (name, value)).collect();
+    assert_eq!(turned, [("PlayerList".to_string(), json!(false)), ("TopbarEnabled".to_string(), json!(false)), ("PlayerList".to_string(), json!(true)), ("Chat".to_string(), json!(true))], "{turned:?}");
+    let player = instance(&scene, &["~Players", "Player"]);
+    assert_eq!(player.properties.get(&rbx_dom_weak::ustr("Character")), Some(&Variant::Ref(instance(&scene, &["Rig"]).referent())));
+    assert_eq!(sets("~Players.Player"), [(0.0, "DisplayName".to_string(), json!("Player"))]);
+    let stats = instance(&scene, &["~Players", "Player", "leaderstats"]);
+    let names: Vec<&str> = stats.children().iter().map(|&child| scene.get_by_ref(child).unwrap().name.as_str()).collect();
+    assert_eq!(names, ["Coins", "Gems"], "an ObjectValue is no stat the list shows");
+    assert_eq!(instance(&scene, &["~Players", "Player", "leaderstats", "Coins"]).properties.get(&rbx_dom_weak::ustr("Value")), Some(&Variant::Int64(5)));
+    let coins = sets("~Players.Player.leaderstats.Coins");
+    assert!(coins.len() == 1 && coins[0].2 == json!(12.0) && (coins[0].0 - 0.05).abs() < 0.02, "{coins:?}");
+    let gems: Vec<(f64, String)> = find(&playback["actions"], |a| a["target"] == "~Players.Player.leaderstats.Gems" && a.get("parent").is_some()).iter().map(|a| (a["at"].as_f64().unwrap(), a["parent"].as_str().unwrap().to_string())).collect();
+    assert!(gems.len() == 2 && gems[0] == (0.0, String::new()) && gems[1].1 == "~Players.Player.leaderstats" && (gems[1].0 - 0.1).abs() < 0.02, "{gems:?}");
+    let humanoid = instance(&scene, &["Rig", "Humanoid"]);
+    assert_eq!(humanoid.properties.get(&rbx_dom_weak::ustr("Health_XML")), Some(&Variant::Float32(80.0)), "the live Health, as Studio saves it");
+    let health = sets("Rig.Humanoid");
+    assert!(health.len() == 1 && health[0].1 == "Health" && health[0].2 == json!(40.0) && (health[0].0 - 0.05).abs() < 0.02, "{health:?}");
+    assert_eq!(summary["instances"], json!(3), "the players and their stats are not counted as instances drawn");
+}
+
+/// A client's recording keeps every player its Players service holds, as the local one (REC-OTHER-PLAYERS): the local player
+/// first, the others in the service's order, each with its DisplayName, its Character, its Team (the copy of the team in the
+/// scene's Teams `~Teams`) and its stats, a player coming later or leaving parented into and out of `~Players`, a `set` of Team
+/// where it names another.
+#[test]
+fn a_clients_recording_keeps_the_other_players_and_their_teams() {
+    let (playback, _, scene, _) = record(
+        r#"
+        local Players = game:GetService("Players")
+        local Teams = game:GetService("Teams")
+        local Me = Players.LocalPlayer
+        local function Team(Name, Colour)
+            local Team = Instance.new("Team")
+            Team.Name = Name
+            Team.TeamColor = BrickColor.new(Colour)
+            Team.AutoAssignable = false
+            Team.Parent = Teams
+            return Team
+        end
+        local function Rig(Name, X)
+            local Model = Instance.new("Model")
+            Model.Name = Name
+            local Head = Instance.new("Part")
+            Head.Name = "Head"
+            Head.Anchored = true
+            Head.CFrame = CFrame.new(X, 5, 0)
+            Head.Parent = Model
+            Instance.new("Humanoid").Parent = Model
+            Model.Parent = workspace
+            return Model
+        end
+        local Red, Blue = Team("Red", "Bright red"), Team("Blue", "Bright blue")
+        Me.Team = Red
+        Me.Character = Rig("Mine", 0)
+        local Other
+        task.delay(0.05, function()
+            Other = Context.Join({ identity = { name = "Other", displayName = "Someone" } })
+            Other.Character = Rig("Theirs", 10)
+            Other.Team = Blue
+            local Stats = Instance.new("Folder")
+            Stats.Name = "leaderstats"
+            local Kills = Instance.new("IntValue")
+            Kills.Name = "Kills"
+            Kills.Value = 3
+            Kills.Parent = Stats
+            Stats.Parent = Other
+        end)
+        task.delay(0.1, function() Other.Team = Red end)
+        task.delay(0.15, function() Context.Leave(Other) end)
+        "#,
+        15,
+    );
+    let players = instance(&scene, &["~Players"]);
+    let order: Vec<&str> = players.children().iter().map(|&child| scene.get_by_ref(child).unwrap().name.as_str()).collect();
+    assert_eq!(order, ["Player", "Other"], "the local player first");
+    let teams = instance(&scene, &["~Teams"]);
+    assert_eq!(teams.class, "Teams");
+    let red = instance(&scene, &["~Teams", "Red"]);
+    assert_eq!((red.class.as_str(), red.properties.get(&rbx_dom_weak::ustr("TeamColor"))), ("Team", Some(&Variant::BrickColor(rbx_dom_weak::types::BrickColor::BrightRed))));
+    let reference = |path: &[&str], name: &str| instance(&scene, path).properties.get(&rbx_dom_weak::ustr(name)).cloned();
+    assert_eq!(reference(&["~Players", "Player"], "Team"), Some(Variant::Ref(red.referent())));
+    assert_eq!(reference(&["~Players", "Player"], "Character"), Some(Variant::Ref(instance(&scene, &["Mine"]).referent())));
+    assert_eq!(reference(&["~Players", "Other"], "Character"), Some(Variant::Ref(instance(&scene, &["Theirs"]).referent())));
+    assert_eq!(reference(&["~Players", "Other"], "Team"), Some(Variant::Ref(instance(&scene, &["~Teams", "Blue"]).referent())));
+    assert_eq!(reference(&["~Players", "Other"], "Neutral"), Some(Variant::Bool(false)));
+    assert_eq!(instance(&scene, &["~Players", "Other", "leaderstats", "Kills"]).properties.get(&rbx_dom_weak::ustr("Value")), Some(&Variant::Int64(3)));
+    let actions = find(&playback["actions"], |a| a["target"] == "~Players.Other");
+    let at = |a: &&Json| a["at"].as_f64().unwrap();
+    let parents: Vec<(f64, &str)> = actions.iter().filter(|a| a.get("parent").is_some()).map(|a| (at(a), a["parent"].as_str().unwrap())).collect();
+    assert!(parents.len() == 3 && parents[0] == (0.0, "") && parents[1].1 == "~Players" && parents[2].1.is_empty(), "{parents:?}");
+    assert!((parents[1].0 - 0.05).abs() < 0.02 && parents[2].0 > 0.14, "{parents:?}");
+    let named = |property: &str| -> Vec<(f64, Json)> { actions.iter().filter_map(|a| a["set"].get(property).map(|value| (at(a), value.clone()))).collect() };
+    assert!(matches!(&named("DisplayName")[..], [(t, name)] if (t - 0.05).abs() < 0.02 && name == "Someone"), "{:?}", named("DisplayName"));
+    assert!(matches!(&named("Team")[..], [(t, team)] if (t - 0.1).abs() < 0.02 && team == "~Teams.Red"), "{:?}", named("Team"));
+}
+
 
 /// Which frame a burst or a write made after the render belongs to (REC-EMIT-AFTER-RENDER; measured by ror P20 on roblox-sim's
 /// rendered 0.747 client on its exact frame clock, four sessions): a client spawns an Emit's particles at the frame's particle

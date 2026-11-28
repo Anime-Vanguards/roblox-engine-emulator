@@ -1241,6 +1241,10 @@
 			"why": "the sim's clients run no core scripts, so every GetCore raises \"has not been registered by the CoreScripts\" there; ree answers the names Roblox's StarterGui documentation lists as a client with its core scripts does (services/mod.rs GET_CORE)"
 		},
 		{
+			"line": "GetCore TopbarEnabled error GetCore: TopbarEnabled has not been registered by the CoreScripts ",
+			"why": "the sim's clients run no core scripts, so every GetCore raises \"has not been registered by the CoreScripts\" there; a client running its core scripts answers TopbarEnabled, a boolean that SetCore(\"TopbarEnabled\", true or false) sets (measured with roblox-sim --core-scripts StarterScript, package R1), as ree does (services/mod.rs GET_CORE)"
+		},
+		{
 			"line": "SetCore ChatActive error SetCore: ChatActive has not been registered by the CoreScripts ",
 			"why": "the sim's clients run no core scripts, so every SetCore raises \"has not been registered by the CoreScripts\" there; ree takes the names Roblox's StarterGui documentation lists as a client with its core scripts does (services/mod.rs SET_CORE) and reports itself"
 		},

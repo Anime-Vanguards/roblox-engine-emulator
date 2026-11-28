@@ -291,7 +291,7 @@ fn a_loopback_run_lists_both_sides() {
 		local Humanoid = Instance.new("Humanoid")
 		Humanoid:TakeDamage(1)
 		Humanoid:TakeDamage(2)
-		game:GetService("StarterGui"):SetCore("TopbarEnabled", false)
+		game:GetService("StarterGui"):SetCore("ChatActive", false)
 	end,
 }
 "#,

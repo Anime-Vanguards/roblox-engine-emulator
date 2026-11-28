@@ -256,8 +256,8 @@ When running via `--service`, the client enforces wall-clock and parent watches;
 ## What a recording holds (`ree record`)
 
 `ree record` writes:
-- `scene.rbxm`: every instance that ever entered `Workspace` (in its initial state, hidden before entry and after removal), and in a client's recording the local player: `~Players`, a Players service holding a Player whose `Character` names its character's copy.
-- `playback.json`: compact `ror`-compatible timeline—appearances/removals, `set` actions, keyed tweens, motion tracks, `Emit(n)`/`Clear()` (including emitter world CFrame at emit time; an `Emit` after a frame's render carries the next frame's time, as a client spawns it then), reparents, post-spawn instance references (the local player's `Character` among them), and `Lighting` changes.
+- `scene.rbxm`: every instance that ever entered `Workspace` (in its initial state, hidden before entry and after removal), and in a client's recording its players, teams and core GUI switches: `~Players`, a Players service holding each Player (the local player first) with its `Character`, `Team` and `leaderstats`; `~Teams`, a Teams service holding the teams; `~StarterGui`, a StarterGui whose boolean properties are the `SetCoreGuiEnabled` switches and `TopbarEnabled`.
+- `playback.json`: compact `ror`-compatible timeline—appearances/removals, `set` actions, keyed tweens, motion tracks, `Emit(n)`/`Clear()` (including emitter world CFrame at emit time; an `Emit` after a frame's render carries the next frame's time, as a client spawns it then), reparents, post-spawn instance references (the players' `Character` and `Team` among them), the players' `DisplayName`, the core GUI switches, and `Lighting` changes.
 - `events.json`: timestamped prints, warnings, errors, and sound plays/stops (loopback runs tag each line with `side`).
 - `camera.json`: camera keyframes.
 - `summary.json`: run summary (also printed to stdout, with a short `ree: record ...` line on stderr).

@@ -1403,6 +1403,29 @@ fn install_run_service(engine: &Rc<Engine>, behaviors: &mut Behaviors, reflectio
     }
 }
 
+/// A playing client's core GUI switches, what Roblox's own GUI shows (StarterGui:SetCoreGuiEnabled, SetCore("TopbarEnabled")): the
+/// script-visible answers (GetCoreGuiEnabled, GetCore) and what the recorder keeps of them (record/mod.rs `~StarterGui`). Every
+/// CoreGuiType starts enabled and so does the top bar.
+#[derive(Default)]
+pub struct CoreGuiSwitches {
+    /// The CoreGuiTypes turned off
+    disabled: rustc_hash::FxHashSet<crate::reflection::EnumItemId>,
+    /// SetCore("TopbarEnabled", false) turned the top bar's player list off
+    topbar_off: bool,
+}
+
+impl CoreGuiSwitches {
+    /// Whether a CoreGuiType (not All) is enabled
+    pub fn enabled(&self, item: crate::reflection::EnumItemId) -> bool {
+        !self.disabled.contains(&item)
+    }
+
+    /// GetCore("TopbarEnabled")
+    pub fn topbar_enabled(&self) -> bool {
+        !self.topbar_off
+    }
+}
+
 /// Roblox's top bar on a playing client whose client profile gives it one (`device.topbarInset` above 0; Studio's edit mode and a
 /// server have none): where the band right of its buttons starts, GuiService.TopbarInset's `Min.X` and GetInsetArea's
 /// TopbarSafeInsets. Beside the menu button (44 px at x 16) the Unibar holds the menu and chat buttons and the band starts at 164 GUI
@@ -1802,11 +1825,12 @@ const SET_CORE: &[&str] = &[
     "CoreGuiChatConnections", "ChatWindowSize", "ChatWindowPosition", "ChatBarDisabled",
 ];
 /// The settings GetCore reads on a client (Roblox's StarterGui documentation; VRRotationIntensity only with VR on, which no
-/// client profile here turns on). Any other raises "GetCore: <name> has not been registered by the CoreScripts" (measured likewise).
+/// client profile here turns on; TopbarEnabled measured in 0.747 clients running their core scripts: a boolean, true at the
+/// start). Any other raises "GetCore: <name> has not been registered by the CoreScripts" (measured likewise).
 const GET_CORE: &[&str] = &[
     "PointsNotificationsActive", "BadgesNotificationsActive", "AvatarContextMenuEnabled", "ChatActive", "ChatWindowSize", "ChatWindowPosition",
     "ChatBarDisabled", "GetBlockedUserIds", "PlayerBlockedEvent", "PlayerUnblockedEvent", "PlayerMutedEvent", "PlayerUnmutedEvent",
-    "PlayerFriendedEvent", "PlayerUnfriendedEvent", "DevConsoleVisible",
+    "PlayerFriendedEvent", "PlayerUnfriendedEvent", "DevConsoleVisible", "TopbarEnabled",
 ];
 
 /// A script value's name in "Unable to cast X to Y" as a method's argument cast writes it: "double", "bool", "Array" or
@@ -1856,8 +1880,8 @@ fn install_starter_actions_debris_sound(behaviors: &mut Behaviors, reflection: &
     // StarterGui / ContextActionService / Debris / Sound
     if let Some(starter) = class(reflection, "StarterGui") {
         let server = options.server();
-        // (Roblox's own UI is not emulated: SetCore of a name the core scripts register reports itself; GetCore keeps its first
-        // answers. A server's SetCore warns "StarterGui:SetCore must be called from a local script." and does nothing: measured,
+        // (Roblox's own UI is not emulated: SetCore of a name the core scripts register reports itself, but TopbarEnabled, which
+        // the engine keeps for GetCore and the recorder; GetCore keeps its first answers. A server's SetCore warns "StarterGui:SetCore must be called from a local script." and does nothing: measured,
         // 0.747, tools/parity/probes/service_answers.luau)
         if let Some(n) = name(reflection, "SetCore") {
             behaviors.add_method(starter, n, strings(FIRST, method(move |lua, engine, _, args| {
@@ -1868,6 +1892,15 @@ fn install_starter_actions_debris_sound(behaviors: &mut Behaviors, reflection: &
                 }
                 if !SET_CORE.contains(&name.as_str()) {
                     return raise(format!("SetCore: {name} has not been registered by the CoreScripts"));
+                }
+                // (the top bar's player list: `true` shows it, `false` hides it, and any other value, nil and none too, changes
+                // nothing and raises nothing; GetCore reads it back, a boolean. Measured in 0.747 clients running their core
+                // scripts, two sessions alike. The recorder keeps it for ror: record/mod.rs `~StarterGui`)
+                if name == "TopbarEnabled" {
+                    if let LuaValue::Boolean(on) = args.get(2) {
+                        engine.state.borrow_mut().core_gui.topbar_off = !*on;
+                    }
+                    return Ok(none());
                 }
                 engine.missing(Some(lua), "StarterGui", "SetCore");
                 Ok(none())
@@ -1891,6 +1924,9 @@ fn install_starter_actions_debris_sound(behaviors: &mut Behaviors, reflection: &
                         return Ok(values([LuaValue::Table(list)]));
                     }
                 }
+                if !server && name == "TopbarEnabled" {
+                    return Ok(values([LuaValue::Boolean(engine.state.borrow().core_gui.topbar_enabled())]));
+                }
                 let active = matches!(name.as_str(), "ChatActive" | "PointsNotificationsActive" | "BadgesNotificationsActive");
                 Ok(values([if active { LuaValue::Boolean(true) } else { LuaValue::Nil }]))
             })));
@@ -1901,10 +1937,8 @@ fn install_starter_actions_debris_sound(behaviors: &mut Behaviors, reflection: &
         // number is whether it is not 0), then the type ("Unable to cast double to CoreGuiType" for a number no item has, "...
         // Material to CoreGuiType" for another enum's item, an item's name or number taken). A server casts them, then warns
         // "StarterGui:SetCoreGuiEnabled must be called from a local script." and changes nothing, and GetCoreGuiEnabled warns the
-        // same and answers false.
-        let disabled: Rc<RefCell<rustc_hash::FxHashSet<crate::reflection::EnumItemId>>> = Rc::default();
+        // same and answers false. (The switches are the engine state's, CoreGuiSwitches, which the recorder keeps.)
         if let Some(n) = name(reflection, "SetCoreGuiEnabled") {
-            let disabled = disabled.clone();
             behaviors.add_method(starter, n, method(move |lua, engine, _, args| {
                 let enabled = bool_param(engine, args.get(2), 2)?;
                 let item = enum_param(lua, engine, args.get(1), 1, "CoreGuiType")?;
@@ -1912,7 +1946,8 @@ fn install_starter_actions_debris_sound(behaviors: &mut Behaviors, reflection: &
                     engine.output("warn", "StarterGui:SetCoreGuiEnabled must be called from a local script.", None);
                     return Ok(none());
                 }
-                let mut disabled = disabled.borrow_mut();
+                let mut state = engine.state.borrow_mut();
+                let disabled = &mut state.core_gui.disabled;
                 if engine.reflection.enum_item_info(item).name.as_ref() == "All" {
                     disabled.clear();
                     if !enabled {
@@ -1926,7 +1961,7 @@ fn install_starter_actions_debris_sound(behaviors: &mut Behaviors, reflection: &
                 }
                 // (the top bar's chat button follows Chat: TopBar)
                 let chat = engine.reflection.enum_item("CoreGuiType", "Chat").is_none_or(|chat| !disabled.contains(&chat));
-                drop(disabled);
+                drop(state);
                 note_chat(engine, chat);
                 Ok(none())
             }));
@@ -1938,7 +1973,8 @@ fn install_starter_actions_debris_sound(behaviors: &mut Behaviors, reflection: &
                     engine.output("warn", "StarterGui:GetCoreGuiEnabled must be called from a local script.", None);
                     return Ok(values([LuaValue::Boolean(false)]));
                 }
-                let disabled = disabled.borrow();
+                let state = engine.state.borrow();
+                let disabled = &state.core_gui.disabled;
                 let on = if engine.reflection.enum_item_info(item).name.as_ref() == "All" { disabled.is_empty() } else { !disabled.contains(&item) };
                 Ok(values([LuaValue::Boolean(on)]))
             }));

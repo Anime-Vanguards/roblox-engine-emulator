@@ -33,9 +33,19 @@
 //!   does not records.
 //! - The ScreenGuis the local player's PlayerGui shows are kept in the scene's `PlayerGui` (ror draws
 //!   them over the finished image), hidden by Enabled off while they are not there.
-//! - The local player is kept as the DataModel holds it, a Player in the scene's Players service `~Players`, its
-//!   Character the copy of the model it names (none when it names nothing, or a model that never entered the world),
-//!   and `set` actions where Character names another: the viewer a client measures name tags from.
+//! - A client's players are kept as the DataModel holds them, Players in the scene's Players service `~Players`, the local
+//!   player first (the viewer a client measures name tags from), then the others in the Players service's order: each with
+//!   its TeamColor and Neutral, its DisplayName (a `set` at the frame it appears: files keep none), its Character and Team
+//!   the copies of the model and the team they name (none when they name nothing, or something that never entered the
+//!   scene), and `set` actions where those name another. Under each Player, what the player list shows of it: its
+//!   `leaderstats` and the stats in it (IntValue, NumberValue, StringValue, BoolValue, IntConstrainedValue and
+//!   DoubleConstrainedValue), their Value followed. The Teams service's Teams are kept in the scene's Teams `~Teams`. A
+//!   player, team or stat that comes later or leaves is parented into and out of its place. A server's recording keeps none.
+//! - A client's core GUI switches are the boolean properties of the scene's StarterGui `~StarterGui`, one per CoreGuiType
+//!   but All (StarterGui:SetCoreGuiEnabled) and `TopbarEnabled` (SetCore), `set` at each frame they change: what of
+//!   Roblox's own GUI (the top bar, the player list, the health bar) a client draws over the frame.
+//! - A Humanoid's Health is in the scene file as Studio saves it (Health_XML), and its Health and MaxHealth, as the name
+//!   tags' and the health bar's other properties, are followed.
 //! - Prints, warnings, errors and sound plays go to the event log with their times; the CFrame and
 //!   field of view of the camera the frame is drawn from (the CurrentCamera) when they change to the
 //!   camera track.
@@ -119,7 +129,19 @@ const VISUAL: &[(&str, &[(&str, Track)])] = {
         ("SpotLight", &[("Angle", Plain), ("Face", Plain)]),
         ("SurfaceLight", &[("Angle", Plain), ("Face", Plain)]),
         ("Highlight", &[("Enabled", Enabled), ("FillColor", Plain), ("FillTransparency", Plain), ("OutlineColor", Plain), ("OutlineTransparency", Plain), ("DepthMode", Plain)]),
-        ("Humanoid", &[("RigType", Plain), ("DisplayDistanceType", Plain), ("NameDisplayDistance", Plain)]),
+        ("Humanoid", &[
+            ("RigType", Plain), ("DisplayDistanceType", Plain), ("NameDisplayDistance", Plain), ("HealthDisplayDistance", Plain),
+            ("HealthDisplayType", Plain), ("NameOcclusion", Plain), ("DisplayName", Plain), ("Health", Plain), ("MaxHealth", Plain),
+        ]),
+        // a client's players and teams (`~Players`, `~Teams`) and its players' stats
+        ("Player", &[("DisplayName", Plain), ("TeamColor", Plain), ("Neutral", Plain)]),
+        ("Team", &[("TeamColor", Plain)]),
+        ("IntValue", &[("Value", Plain)]),
+        ("NumberValue", &[("Value", Plain)]),
+        ("StringValue", &[("Value", Plain)]),
+        ("BoolValue", &[("Value", Plain)]),
+        ("IntConstrainedValue", &[("Value", Plain)]),
+        ("DoubleConstrainedValue", &[("Value", Plain)]),
         ("Attachment", &[("CFrame", Attachment)]),
         ("Bone", &[("Transform", Attachment)]),
         ("Fire", &[("Enabled", Enabled), ("Size", Plain), ("Heat", Plain), ("Color", Plain), ("SecondaryColor", Plain), ("TimeScale", TimeScale)]),
@@ -204,9 +226,21 @@ const CLOUDS: &str = "Workspace.Terrain.Clouds";
 /// The scene's PlayerGui, holding the ScreenGuis the local player's PlayerGui shows (ror draws them on
 /// the screen; their paths read as Roblox names them).
 const PLAYER_GUI: &str = "PlayerGui";
-/// The scene's Players service, holding the local player (a Player named as it is) whose Character names its character's copy
-/// ([`Inner::characters`]); the playback's target for its Character is `~Players.<name>`.
+/// The scene's Players service, holding a client's players (the local player first: [`Inner::players`]); the playback's target
+/// for a player's Character, Team and DisplayName is `~Players.<name>`.
 const PLAYERS: &str = "~Players";
+/// The scene's Teams service, holding the Teams service's Teams (what a player's Team names).
+const TEAMS: &str = "~Teams";
+/// The scene's StarterGui, holding a client's core GUI switches as boolean properties ([`Inner::core_gui`]).
+const STARTER_GUI: &str = "~StarterGui";
+/// What of a player's `leaderstats` (its first child of that name, whatever its class) the player list shows: its children of
+/// these classes, neither ObjectValue, Color3Value, Vector3Value, CFrameValue, BrickColorValue, RayValue nor anything inside a
+/// child (measured in 0.747 clients running their core scripts, two sessions alike; a stat keeps the name it had when it came,
+/// as the list does).
+const STATS: &[&str] = &["IntValue", "NumberValue", "StringValue", "BoolValue", "IntConstrainedValue", "DoubleConstrainedValue"];
+/// A player's references the recorder follows itself at each sample ([`PlayerTrack`]), as they may name what enters the
+/// scene later
+const PLAYER_REFS: [&str; 2] = ["Character", "Team"];
 
 /// How an instance is hidden and shown.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -274,6 +308,16 @@ struct Record {
     screen: bool,
     /// An Attachment or Bone: placed by its parent's motion, never given a still track
     attachment: bool,
+    /// Kept under one of the scene's own services ([`PLAYERS`], [`TEAMS`]): a player, a team or a player's stat, which leaves by
+    /// being parented out
+    holder: Option<&'static str>,
+}
+
+/// A kept player ([`Inner::players`]): its record and, from the sample it appeared on, the records of what its [`PLAYER_REFS`] name
+/// (none when nothing the scene holds) at each frame one changes.
+struct PlayerTrack {
+    record: usize,
+    refs: [Vec<(u32, Option<usize>)>; 2],
 }
 
 /// A sound that started or stopped.
@@ -409,13 +453,19 @@ struct Inner {
     /// The ViewportFrame records each camera is the CurrentCamera of (their CameraCFrame and
     /// CameraFieldOfView follow it; a window's is skewed every frame to look through its face)
     viewports: FxHashMap<InstanceId, Vec<usize>>,
-    /// The local player, once a sample found one, and its name then
-    local_player: Option<(InstanceId, String)>,
-    /// What the local player's Character names, from the first sample with a local player on: (frame, the record of the model it
-    /// names, none when it names nothing or a model the scene does not hold), at each frame it changes
-    characters: Vec<(u32, Option<usize>)>,
-    /// Player.Character's name id
-    character_name: Option<NameId>,
+    /// Whether the run is a client's (it has a local player): only a client's recording keeps players, teams and switches
+    client: bool,
+    /// The Players service's Players and the Teams service's Teams the last walk found, by the scene service keeping them
+    held: FxHashMap<InstanceId, &'static str>,
+    /// The kept players, the local player's first, in the order they appeared
+    players: Vec<PlayerTrack>,
+    /// [`PLAYER_REFS`]' name ids
+    player_refs: [Option<NameId>; 2],
+    /// The core GUI switches at each sample they changed: (frame, whether each of [`Inner::core_gui_items`] is enabled,
+    /// TopbarEnabled)
+    core_gui: Vec<(u32, Vec<bool>, bool)>,
+    /// The CoreGuiType items the switches are kept for (All left out: it turns them all on or off)
+    core_gui_items: Vec<(crate::reflection::EnumItemId, String)>,
 }
 
 /// Records the Workspace of one engine (create it before the run builds anything, then call
@@ -431,7 +481,19 @@ impl Recorder {
         // (a world root named PlayerGui is renamed rather than mixed with the scene's PlayerGui; so is one named as its Players)
         state.names.entry(None).or_default().used.insert(PLAYER_GUI.to_string());
         state.names.entry(None).or_default().used.insert(PLAYERS.to_string());
-        state.character_name = engine.reflection.name_id("Character");
+        state.names.entry(None).or_default().used.insert(TEAMS.to_string());
+        state.names.entry(None).or_default().used.insert(STARTER_GUI.to_string());
+        state.client = engine.world().local_player.is_some();
+        state.player_refs = PLAYER_REFS.map(|name| engine.reflection.name_id(name));
+        for (name, property) in PLAYER_REFS.iter().zip(state.player_refs) {
+            if let Some(property) = property {
+                state.property_names.insert(property, name.to_string());
+            }
+        }
+        if let Some(id) = engine.reflection.enum_id("CoreGuiType") {
+            let reflection = &engine.reflection;
+            state.core_gui_items = reflection.enums[id as usize].items.iter().map(|&item| (item, reflection.enum_item_info(item).name.to_string())).filter(|(_, name)| name != "All").collect();
+        }
         for property in ["Transparency", "Enabled", "Visible", "CameraCFrame", "CameraFieldOfView"] {
             if let Some(name) = engine.reflection.name_id(property) {
                 state.property_names.insert(name, property.to_string());
@@ -819,8 +881,9 @@ fn reference_names(inner: &mut Inner, engine: &Engine, class: ClassId) -> Arc<[N
         return found.clone();
     }
     let mut names: Vec<NameId> = Vec::new();
+    let player = class_name(engine, class) == "Player";
     for (property, data_type) in encode::serialized_properties(class_name(engine, class)) {
-        if !matches!(data_type, rbx_reflection::DataType::Value(dom::VariantType::Ref)) || matches!(&*property, "Parent") {
+        if !matches!(data_type, rbx_reflection::DataType::Value(dom::VariantType::Ref)) || matches!(&*property, "Parent") || (player && PLAYER_REFS.contains(&&*property)) {
             continue;
         }
         if let Some(name) = engine.reflection.name_id(&property) {
@@ -1095,13 +1158,25 @@ fn snapshot_plan(inner: &mut Inner, engine: &Engine, class: ClassId) -> Arc<Snap
     let mut serialized = Vec::new();
     let mut serialized_names: FxHashSet<&str> = FxHashSet::default();
     for (property, data_type) in encode::serialized_properties(class_name) {
-        if reserved(&property) {
+        // (a player's Character and Team: written from what the recorder follows, PlayerTrack)
+        if reserved(&property) || (class_name == "Player" && PLAYER_REFS.contains(&&*property)) {
             continue;
         }
-        let Some(name) = engine.reflection.name_id(&property) else { continue };
         // a view whose value lives in another property: UICorner's CornerRadius reads TopLeftRadius
-        // (services/mod.rs, measured)
-        let stored = if class_name == "UICorner" && &*property == "CornerRadius" { K::TopLeftRadius as NameId } else { name };
+        // (services/mod.rs, measured); a Humanoid's Health is saved as Health_XML, as Studio saves it
+        let own = engine.reflection.name_id(&property);
+        let stored = match (class_name, &*property) {
+            ("UICorner", "CornerRadius") => K::TopLeftRadius as NameId,
+            (_, "Health_XML") => match engine.reflection.name_id("Health") {
+                Some(health) => health,
+                None => continue,
+            },
+            _ => match own {
+                Some(name) => name,
+                None => continue,
+            },
+        };
+        let name = own.unwrap_or(stored);
         let sibling = engine.reflection.content_sibling(class, name);
         let is_ref = matches!(data_type, rbx_reflection::DataType::Value(dom::VariantType::Ref));
         let dom_name = ustr(&property);
@@ -1348,7 +1423,7 @@ fn parent_slot(inner: &Inner, state: &State, engine: &Engine, id: InstanceId) ->
     if let Some(adornee) = inner.adorned.get(&id) {
         return inner.by_id.get(adornee).map(|&index| (Some(index), inner.records[index].lighting_child));
     }
-    if inner.screens.contains_key(&id) {
+    if inner.screens.contains_key(&id) || inner.held.contains_key(&id) {
         return Some((None, false));
     }
     let parent = placed_parent(state, engine, id)?;
@@ -1420,10 +1495,15 @@ fn appear(inner: &mut Inner, state: &State, engine: &Engine, id: InstanceId, par
     let name = state.dom.at(id).name.to_str_lossy().into_owned();
     let lighting_root = lighting && parent.is_none();
     let screen = parent.is_none() && inner.screens.contains_key(&id);
+    // (a player, a team or a stat: kept under the scene's Players or Teams)
+    let held_root = if parent.is_none() { inner.held.get(&id).copied() } else { None };
+    let holder = held_root.or_else(|| parent.and_then(|p| inner.records[p].holder));
     let unique = if lighting_root {
         unique_name(inner, Some(usize::MAX), &name)
     } else if screen {
         unique_name(inner, Some(usize::MAX - 1), &name)
+    } else if let Some(root) = held_root {
+        unique_name(inner, Some(if root == PLAYERS { usize::MAX - 2 } else { usize::MAX - 3 }), &name)
     } else {
         unique_name(inner, parent, &name)
     };
@@ -1431,13 +1511,21 @@ fn appear(inner: &mut Inner, state: &State, engine: &Engine, id: InstanceId, par
         join(Some(LIGHTING_FOLDER), &unique)
     } else if screen {
         join(Some(PLAYER_GUI), &unique)
+    } else if let Some(root) = held_root {
+        join(Some(root), &unique)
     } else {
         join(parent.map(|p| inner.records[p].path.as_str()), &unique)
     };
     let plan = snapshot_plan(inner, engine, class);
     let (properties, references) = snapshot(state, engine, id, &plan);
     let refs = reference_names(inner, engine, class).iter().map(|&name| (name, state.dom.raw_get(id, name).and_then(Value::as_instance))).collect();
-    let visibility = if lighting_root { Visibility::Lighting } else { plan.visibility };
+    let visibility = if lighting_root {
+        Visibility::Lighting
+    } else if holder.is_some() {
+        Visibility::Detach
+    } else {
+        plan.visibility
+    };
     let visibility = if visibility == Visibility::Transparency && is_glass(state, engine, id) { Visibility::Detach } else { visibility };
     let is_part = plan.is_part;
     let is_attachment = plan.is_attachment;
@@ -1466,10 +1554,17 @@ fn appear(inner: &mut Inner, state: &State, engine: &Engine, id: InstanceId, par
         physics_steered: false,
         parents: Vec::new(),
         parent_id: drawn_parent(inner, state, engine, id),
-        home: if screen { PLAYER_GUI.to_string() } else { parent.map(|p| inner.records[p].path.clone()).unwrap_or_default() },
+        home: if screen {
+            PLAYER_GUI.to_string()
+        } else if let Some(root) = held_root {
+            root.to_string()
+        } else {
+            parent.map(|p| inner.records[p].path.clone()).unwrap_or_default()
+        },
         lighting_child: lighting,
         screen,
         attachment: is_attachment,
+        holder,
     };
     if rest.is_some_and(|r| !finite_affine(&r)) {
         inner.warnings.push(format!("{} appeared at a NaN or infinite CFrame: it is drawn where it next moves", record.path));
@@ -1521,6 +1616,15 @@ fn appear(inner: &mut Inner, state: &State, engine: &Engine, id: InstanceId, par
             record.file.insert(prop.file_key, value);
         }
     }
+    // a player's DisplayName is set by the playback at the frame it appears: the scene file keeps none (rbx-dom does not
+    // serialize it)
+    let player = held_root == Some(PLAYERS);
+    if player && let Some(display) = engine.reflection.name_id("DisplayName") {
+        record.file.remove(&display);
+        if let Some(value) = state.dom.raw_get(id, display).and_then(|raw| to_json(engine, raw)) {
+            change(&mut record, display, Track::Plain, value, frame);
+        }
+    }
     // hidden in the file until it appears, then shown by the playback (a Lighting child is kept in the
     // file's ~Lighting folder, so the playback moves it into Lighting even from the first frame)
     if frame > 0 || matches!(record.visibility, Visibility::Lighting) {
@@ -1541,6 +1645,9 @@ fn appear(inner: &mut Inner, state: &State, engine: &Engine, id: InstanceId, par
     let index = inner.records.len();
     inner.records.push(record);
     inner.by_id.insert(id, index);
+    if player {
+        inner.players.push(PlayerTrack { record: index, refs: Default::default() });
+    }
     index
 }
 
@@ -1662,21 +1769,45 @@ fn sample(inner: &mut Inner, engine: &Rc<Engine>) {
         inner.adornee_written = false;
     }
     crate::timing::time("frames: sample: changes", || sample_changes(inner, &state, engine, lighting));
-    local_character(inner, &state, world.local_player);
+    if inner.client {
+        player_references(inner, &state);
+        core_gui_switches(inner, &state);
+    }
 }
 
-/// The local player's Character as the frame leaves it ([`Inner::characters`]): the record of the model it names, which this
-/// frame's walk made when the model entered the world in it.
-fn local_character(inner: &mut Inner, state: &State, player: Option<InstanceId>) {
-    let (Some(player), Some(name)) = (player, inner.character_name) else { return };
-    if inner.local_player.is_none() {
-        let Some(instance) = state.dom.get(player) else { return };
-        inner.local_player = Some((player, instance.name.to_str_lossy().into_owned()));
+/// What each kept player's Character and Team name as the frame leaves them ([`PlayerTrack`]): the records of the model and the
+/// team, which this frame's walk made when they entered the scene in it.
+fn player_references(inner: &mut Inner, state: &State) {
+    let frame = inner.frame;
+    for slot in 0..inner.players.len() {
+        let record = inner.players[slot].record;
+        if !inner.present.get(record).copied().unwrap_or(false) {
+            continue;
+        }
+        let id = inner.records[record].id;
+        for which in 0..PLAYER_REFS.len() {
+            let Some(name) = inner.player_refs[which] else { continue };
+            let named = state.dom.raw_get(id, name).and_then(Value::as_instance).and_then(|target| inner.by_id.get(&target).copied());
+            let list = &mut inner.players[slot].refs[which];
+            if list.last().is_none_or(|&(_, last)| last != named) {
+                list.push((frame, named));
+            }
+        }
     }
-    let character = state.dom.raw_get(player, name).and_then(Value::as_instance).and_then(|model| inner.by_id.get(&model).copied());
-    if inner.characters.last().is_none_or(|&(_, last)| last != character) {
+}
+
+/// The core GUI switches as the frame leaves them ([`Inner::core_gui`]), kept when they changed.
+fn core_gui_switches(inner: &mut Inner, state: &State) {
+    let switches = &state.core_gui;
+    let topbar = switches.topbar_enabled();
+    let changed = match inner.core_gui.last() {
+        None => true,
+        Some((_, last, last_topbar)) => *last_topbar != topbar || inner.core_gui_items.iter().zip(last).any(|((item, _), &on)| switches.enabled(*item) != on),
+    };
+    if changed {
+        let enabled = inner.core_gui_items.iter().map(|(item, _)| switches.enabled(*item)).collect();
         let frame = inner.frame;
-        inner.characters.push((frame, character));
+        inner.core_gui.push((frame, enabled, topbar));
     }
 }
 
@@ -1808,6 +1939,11 @@ fn walk_world(inner: &mut Inner, state: &State, engine: &Rc<Engine>, lighting: O
             stack.extend(state.dom.children_of(id).iter().rev().copied());
         }
     }
+    // a client's players, the local player first, with the stats its player list shows, and the teams
+    inner.held.clear();
+    if inner.client {
+        walk_players(inner, state, engine, &mut now);
+    }
     inner.walks += 1;
     let walk = inner.walks;
     let mut found: Vec<usize> = Vec::with_capacity(inner.present_list.len() + 16);
@@ -1830,7 +1966,14 @@ fn walk_world(inner: &mut Inner, state: &State, engine: &Rc<Engine>, lighting: O
                 let current_parent = drawn_parent(inner, state, engine, id);
                 if inner.records[index].parent_id != current_parent && !in_lighting {
                     let screen = parent.is_none() && inner.screens.contains_key(&id);
-                    let path = if screen { PLAYER_GUI.to_string() } else { parent.map(|p| inner.records[p].path.clone()).unwrap_or_default() };
+                    let held = parent.is_none().then(|| inner.held.get(&id).copied()).flatten();
+                    let path = if screen {
+                        PLAYER_GUI.to_string()
+                    } else if let Some(holder) = held {
+                        holder.to_string()
+                    } else {
+                        parent.map(|p| inner.records[p].path.clone()).unwrap_or_default()
+                    };
                     inner.records[index].parents.push((frame, parent, path.clone()));
                     inner.records[index].parent_id = current_parent;
                     inner.records[index].home = path;
@@ -1857,6 +2000,34 @@ fn walk_world(inner: &mut Inner, state: &State, engine: &Rc<Engine>, lighting: O
     }
     inner.present_list = found;
     inner.walk_buffer = now;
+}
+
+/// The Players service's Players (the local player first), each one's `leaderstats` and the [`STATS`] in it, and the Teams
+/// service's Teams, onto the walk's list; the Players and Teams into [`Inner::held`].
+fn walk_players(inner: &mut Inner, state: &State, engine: &Rc<Engine>, now: &mut Vec<InstanceId>) {
+    let world = engine.world();
+    if let Some(players) = super::services::find_service(engine, world.game, "Players") {
+        let mut list: Vec<InstanceId> = state.dom.children_of(players).iter().copied().filter(|&child| is_a(engine, state.dom.at(child).class, "Player")).collect();
+        if let Some(at) = world.local_player.and_then(|local| list.iter().position(|&player| player == local)) {
+            let local = list.remove(at);
+            list.insert(0, local);
+        }
+        for player in list {
+            inner.held.insert(player, PLAYERS);
+            now.push(player);
+            let Some(stats) = state.dom.children_of(player).iter().copied().find(|&child| state.dom.at(child).name.as_bytes() == b"leaderstats") else { continue };
+            now.push(stats);
+            now.extend(state.dom.children_of(stats).iter().copied().filter(|&child| STATS.contains(&class_name(engine, state.dom.at(child).class))));
+        }
+    }
+    if let Some(teams) = super::services::find_service(engine, world.game, "Teams") {
+        for &team in state.dom.children_of(teams) {
+            if is_a(engine, state.dom.at(team).class, "Team") {
+                inner.held.insert(team, TEAMS);
+                now.push(team);
+            }
+        }
+    }
 }
 
 /// Record `index` is in the world at walk `walk` (once per walk).
@@ -2099,6 +2270,7 @@ fn stage_record(id: InstanceId, class: ClassId, class_name: &str, path: &str) ->
         lighting_child: false,
         screen: false,
         attachment: false,
+        holder: None,
     }
 }
 
@@ -2115,6 +2287,7 @@ fn scene(inner: &Inner) -> Result<Vec<u8>, String> {
     let mut refs: Vec<dom::Ref> = Vec::with_capacity(inner.records.len());
     let mut lighting_folder: Option<dom::Ref> = None;
     let mut player_gui: Option<dom::Ref> = None;
+    let mut held_folders: [Option<dom::Ref>; 2] = [None, None];
     let mut roots: Vec<dom::Ref> = Vec::new();
     let mut unique_ids: FxHashSet<dom::UniqueId> = FxHashSet::default();
     let mut next_index = 0u32;
@@ -2132,6 +2305,14 @@ fn scene(inner: &Inner) -> Result<Vec<u8>, String> {
                 roots.push(gui);
                 gui
             }),
+            None if record.holder.is_some() => {
+                let (slot, class, name) = if record.holder == Some(PLAYERS) { (0, "Players", PLAYERS) } else { (1, "Teams", TEAMS) };
+                *held_folders[slot].get_or_insert_with(|| {
+                    let folder = dom.insert(root, InstanceBuilder::new(class).with_name(name));
+                    roots.push(folder);
+                    folder
+                })
+            }
             None => root,
         };
         let builder = InstanceBuilder::new(record.class_name.as_str())
@@ -2167,12 +2348,19 @@ fn scene(inner: &Inner) -> Result<Vec<u8>, String> {
             }
         }
     }
-    // the local player, as the DataModel holds it: its Character the first sample's (the playback sets the later ones)
-    if let Some((_, name)) = &inner.local_player {
-        let players = dom.insert(root, InstanceBuilder::new("Players").with_name(PLAYERS));
-        roots.push(players);
-        let character = inner.characters.first().and_then(|&(_, record)| record).map_or_else(dom::Ref::none, |index| refs[index]);
-        dom.insert(players, InstanceBuilder::new("Player").with_name(name.as_str()).with_property("Character", Variant::Ref(character)));
+    // the players' Character and Team: what they named when the player appeared (the playback sets the later ones)
+    for track in &inner.players {
+        for (which, name) in PLAYER_REFS.iter().enumerate() {
+            let named = track.refs[which].first().and_then(|&(_, record)| record).map_or_else(dom::Ref::none, |index| refs[index]);
+            if let Some(instance) = dom.get_by_ref_mut(refs[track.record]) {
+                instance.properties.insert(ustr(name), Variant::Ref(named));
+            }
+        }
+    }
+    // the core GUI switches as the first sample found them
+    if let Some((_, enabled, topbar)) = inner.core_gui.first() {
+        let switches = inner.core_gui_items.iter().zip(enabled).map(|((_, name), &on)| (ustr(name), Variant::Bool(on))).chain([(ustr("TopbarEnabled"), Variant::Bool(*topbar))]);
+        roots.push(dom.insert(root, InstanceBuilder::new("StarterGui").with_name(STARTER_GUI).with_properties(switches)));
     }
     let mut bytes = Vec::with_capacity(inner.records.len().saturating_mul(128));
     rbx_binary::to_writer(&mut bytes, &dom, &roots).map_err(|e| format!("scene.rbxm: {e}"))?;
@@ -2549,13 +2737,28 @@ fn playback(inner: &Inner) -> Playback {
         let at = time_of(inner, *frame);
         actions.push((at, serialize_element(&StageAction { at, class, parent: if *shown { "Lighting" } else { "" }, target: "Lighting" })));
     }
-    // the local player's Character naming another model: the path of its copy, or none
-    if let Some((_, name)) = &inner.local_player {
-        let target = join(Some(PLAYERS), name);
-        for &(frame, record) in inner.characters.iter().skip(1) {
-            let at = time_of(inner, frame);
-            let named: Option<&str> = record.map(|index| inner.records[index].path.as_str());
-            actions.push((at, serialize_element(&SetAction { at, set: SingleField("Character", &named), target: &target })));
+    // a player's Character or Team naming another: the path of its copy, or none
+    for track in &inner.players {
+        let target = inner.records[track.record].path.as_str();
+        for (which, property) in PLAYER_REFS.iter().enumerate() {
+            for &(frame, record) in track.refs[which].iter().skip(1) {
+                let at = time_of(inner, frame);
+                let named: Option<&str> = record.map(|index| inner.records[index].path.as_str());
+                actions.push((at, serialize_element(&SetAction { at, set: SingleField(property, &named), target })));
+            }
+        }
+    }
+    // a core GUI switch turned: each one that changed
+    for pair in inner.core_gui.windows(2) {
+        let ((_, before, topbar_before), (frame, now, topbar)) = (&pair[0], &pair[1]);
+        let at = time_of(inner, *frame);
+        for (((_, name), was), is) in inner.core_gui_items.iter().zip(before).zip(now) {
+            if was != is {
+                actions.push((at, serialize_element(&SetAction { at, set: SingleField(name, is), target: STARTER_GUI })));
+            }
+        }
+        if topbar_before != topbar {
+            actions.push((at, serialize_element(&SetAction { at, set: SingleField("TopbarEnabled", topbar), target: STARTER_GUI })));
         }
     }
     // a part that stays put under a part that moves stays put (ror carries what is under a moving part);
@@ -2620,7 +2823,8 @@ fn summary(inner: &Inner, (errors, warns): (usize, usize), playback: &Playback, 
         Some((_, c)) => *c += count,
         None => activity.push((frame, count)),
     };
-    for record in &inner.records {
+    // (the players, teams and stats a client's recording keeps are no instances drawn: a summary counts the world's)
+    for record in inner.records.iter().filter(|record| record.holder.is_none()) {
         if record.appear > 0 {
             bump(record.appear, 1);
         }
@@ -2637,7 +2841,7 @@ fn summary(inner: &Inner, (errors, warns): (usize, usize), playback: &Playback, 
     extra.insert("frames".into(), json!(inner.frame + 1));
     extra.insert("fps".into(), json!(inner.fps));
     extra.insert("duration".into(), json!(time_of(inner, inner.frame)));
-    extra.insert("instances".into(), json!(inner.records.len()));
+    extra.insert("instances".into(), json!(inner.records.iter().filter(|record| record.holder.is_none()).count()));
     extra.insert("actions".into(), json!(count("actions")));
     extra.insert("tweens".into(), json!(count("tweens")));
     extra.insert("motion".into(), json!(count("motion")));
