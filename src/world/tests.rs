@@ -4961,7 +4961,8 @@ fn a_write_that_changes_several_links_pays_for_each_and_each_piece() {
     let free_out = LINK_FRAME + LINK_CHANGED + n as f64 * piece + (n - 1) as f64 * LINK_PIECE + more + listed;
     // (taken in, each link is a joint looked at and a link made beyond the joints looked at alike with the welds disabled)
     let free_in = n as f64 * (JOINT_LOOKED_AT + JOINT_LINKED) + LINK_CHANGED + LINK_REJOINED + more + (n - 1) as f64 * LINK_PIECE;
-    let free_again = LINK_CHANGED + more + (n - 1) as f64 * LINK_PIECE + listed;
+    // (split off again: a later split of an assembly the frame changed before, the frame's second: LINK_SPLIT_AGAIN)
+    let free_again = LINK_CHANGED + LINK_SPLIT_AGAIN + more + (n - 1) as f64 * LINK_PIECE + listed;
     let fixed_out = LINK_CHANGED + more + listed;
     let fixed_in = n as f64 * (JOINT_LOOKED_AT + JOINT_LINKED) + LINK_CHANGED + more;
     let one_out = LINK_FRAME + LINK_CHANGED + link_assembly(n + 1, false, 0) + more + n as f64 * (JOINT_TAKEN_OUT + JOINT_LIST_LEFT) + link_cycles(n, true);
@@ -5782,19 +5783,21 @@ fn a_parallel_weld_re_pointed_costs_what_disabling_it_costs() {
 /// welded to 100 parts, two leaves' welds disabled and enabled again in turn in a frame, the second disable costs LINK_SPLIT_AGAIN
 /// more than the last enable and the first enable LINK_REJOINED more; with another hub's weld disabled first in the frame, the first
 /// hub's disable costs LINK_SPLIT_AGAIN more than it costs at a frame's start and its enable LINK_REJOINED more than the other hub's
-/// enable after it. Each cost LINK_CHANGED alone (Studio 0.747: 4.0 to 8.7 us and 7.6 to 14.4, where the others cost 1.8 to 2.9).
+/// enable after it. The last enable of each, a link started again in an assembly the frame changed before, costs
+/// LINK_REJOINED_LATER more than LINK_CHANGED (Studio 0.747: 4.0 to 8.7 us and 7.6 to 14.4, where the others cost 1.8 to 3.6).
 #[test]
 fn a_frames_first_rejoin_and_second_split_cost_more() {
     let (lua, engine) = start_play();
     crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
     let (again, rejoined, frame) = (crate::cost::LINK_SPLIT_AGAIN, crate::cost::LINK_REJOINED, crate::cost::LINK_FRAME);
+    let later = crate::cost::LINK_REJOINED_LATER;
     run(
         &lua,
         &engine,
         &format!(
             r#"
         workspace.Gravity = 0
-        local AGAIN, REJOINED, FRAME = {again:e}, {rejoined:e}, {frame:e}
+        local AGAIN, REJOINED, FRAME, LATER = {again:e}, {rejoined:e}, {frame:e}, {later:e}
         local function Part(Anchored)
             local P = Instance.new("Part")
             P.Anchored, P.CanCollide, P.CFrame = Anchored, false, CFrame.new(0, 300, 0)
@@ -5845,10 +5848,10 @@ fn a_frames_first_rejoin_and_second_split_cost_more() {
             local Rejoin = Spend(function() A[1].Enabled = true end)
             local Other = Spend(function() B[1].Enabled = true end)
             if Round == 2 then
-                Is("the second disable", Off2 - On2, AGAIN)
-                Is("the first enable", On1 - On2, REJOINED)
+                Is("the second disable", Off2 - On2, AGAIN - LATER)
+                Is("the first enable", On1 - On2, REJOINED - LATER)
                 Is("a disable after another hub's", Second - (First - FRAME), AGAIN)
-                Is("its enable", Rejoin - Other, REJOINED)
+                Is("its enable", Rejoin - Other, REJOINED - LATER)
             end
         end
         "#
@@ -12391,3 +12394,92 @@ fn the_grids_units_follow_the_assemblies_through_random_rounds() {
         }
     }
 }
+
+/// Later changes of an assembly the frame changed before cost what a playing client spends on them (I-LEFT-4; cost.rs
+/// LINK_SPLIT_LATER and after; roblox-sim 0.747, four sessions, anchored hubs of 4 to 1,000 leaves and free ones of 10 to 1,000):
+/// after another assembly's weld enabled first in the frame and a leaf's weld disabled, a second leaf's disabled costs
+/// LINK_SPLIT_AGAIN more, a third's LINK_SPLIT_THIRD and a fourth's LINK_SPLIT_LATER, the first leaf's enabled again
+/// LINK_REJOINED_AFTER_JOIN, the second's LINK_REJOINED_LATER, and a leaf whose weld was disabled a frame before enabled
+/// LINK_JOINED_LATER and its own assembly's price; a leaf anchored after that splits it off as its weld does, and unanchored joins
+/// it again. ree charged the later splits and starts LINK_CHANGED alone (a client's 3.5 to 6.2 us and 2.1 to 7.9 where ree read
+/// 2.37 and 2.05 to 3.65).
+#[test]
+fn later_changes_of_an_assembly_changed_in_the_frame_cost_more() {
+    let (lua, engine) = start_play();
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    use crate::cost::*;
+    let joined = link_assembly(1, false, 0);
+    run(
+        &lua,
+        &engine,
+        &format!(
+            r#"
+        workspace.Gravity = 0
+        local AGAIN, THIRD, LATER, AFTER, REJOINED, JOINED, OWN = {again:e}, {third:e}, {later:e}, {after:e}, {rejoined:e}, {joined_later:e}, {joined:e}
+        local function Part(Anchored, X)
+            local P = Instance.new("Part")
+            P.Anchored, P.CanCollide, P.CFrame = Anchored, false, CFrame.new(X, 300, 0)
+            P.Parent = workspace
+            return P
+        end
+        local Hub, W = Part(true, 0), {{}}
+        for I = 1, 6 do
+            local Weld = Instance.new("Weld")
+            Weld.Part0, Weld.Part1, Weld.C0 = Hub, Part(false, I * 2), CFrame.new(I * 2, 0, 0)
+            Weld.Parent = Weld.Part1
+            W[I] = Weld
+        end
+        local SacA, SacB = Part(true, 100), Part(false, 102)
+        local Sac = Instance.new("Weld")
+        Sac.Part0, Sac.Part1, Sac.C0, Sac.Enabled = SacA, SacB, CFrame.new(2, 0, 0), false
+        Sac.Parent = SacB
+        -- (a lone part's Anchored written first in the frame: the member's first write in a frame costs more, cost.rs FIRST_WRITE)
+        local Spare = Part(false, 200)
+        local function Spend(F)
+            local Start = os.clock()
+            F()
+            return os.clock() - Start
+        end
+        local function Is(Name, Got, Want)
+            assert(math.abs(Got - Want) < 1e-9, `{{Name}}: {{Got * 1e6}} us more, where {{Want * 1e6}}`)
+        end
+        for Round = 1, 2 do
+            Sac.Enabled = false
+            for I = 1, 6 do W[I].Enabled = I ~= 5 W[I].Part1.Anchored = false end
+            task.wait()
+            task.wait()
+            for I = 1, 6 do local _ = W[I].Enabled, W[I].Part1.Anchored end
+            Sac.Enabled = true
+            Spare.Anchored = not Spare.Anchored
+            local Off1 = Spend(function() W[1].Enabled = false end)
+            local Off2 = Spend(function() W[2].Enabled = false end)
+            local Off3 = Spend(function() W[3].Enabled = false end)
+            local Off4 = Spend(function() W[4].Enabled = false end)
+            local On1 = Spend(function() W[1].Enabled = true end)
+            local On2 = Spend(function() W[2].Enabled = true end)
+            local New = Spend(function() W[5].Enabled = true end)
+            local On3 = Spend(function() W[3].Enabled = true end)
+            local Anchor = Spend(function() W[6].Part1.Anchored = true end)
+            local Unanchor = Spend(function() W[6].Part1.Anchored = false end)
+            if Round == 2 then
+                Is("a second leaf off", Off2 - On3, AGAIN - REJOINED)
+                Is("a third", Off3 - On3, THIRD - REJOINED)
+                Is("a fourth", Off4 - On3, LATER - REJOINED)
+                Is("the first back", On1 - On3, AFTER - REJOINED)
+                Is("the second back", On2 - On3, 0)
+                Is("a leaf apart a frame enabled", New - On3, JOINED + OWN - REJOINED)
+                -- (an Anchored write is no Enabled write: the two are compared with each other only; the frame's fifth split)
+                Is("a leaf anchored, then unanchored", Anchor - Unanchor, LATER - REJOINED)
+            end
+        end
+        "#,
+            again = LINK_SPLIT_AGAIN,
+            third = LINK_SPLIT_THIRD,
+            later = LINK_SPLIT_LATER,
+            after = LINK_REJOINED_AFTER_JOIN,
+            rejoined = LINK_REJOINED_LATER,
+            joined_later = LINK_JOINED_LATER,
+        ),
+    );
+}
+

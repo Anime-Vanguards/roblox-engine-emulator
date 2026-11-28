@@ -4138,13 +4138,20 @@ fn charge_link(state: &mut State, reflection: &Reflection, setup: &Setup, parts:
         work += crate::cost::LINK_FRAME;
     }
     let joints = &mut state.joints;
+    // (a later change of an assembly the frame changed before: its parts were marked, all of them, or for a join some; cost.rs
+    // LINK_SPLIT_LATER, LINK_REJOINED_LATER, LINK_JOINED_LATER)
+    let marked = parts.iter().filter(|part| joints.marked.contains_key(part)).count();
+    let later = !first && marked > 0;
     if ends {
+        let later = later && marked == parts.len();
         if flat && !first && joints.splits == 0 {
             work += crate::cost::LINK_SPLIT_FIRST;
-        } else if flat && joints.splits == 1 && joints.joins == 0 {
+        } else if flat && joints.splits == 1 && (joints.joins == 0 || later) {
             work += crate::cost::LINK_SPLIT_AGAIN;
-        } else if flat && joints.splits == 2 && joints.joins == 0 {
+        } else if flat && joints.splits == 2 && (joints.joins == 0 || later) {
             work += crate::cost::LINK_SPLIT_THIRD;
+        } else if flat && later {
+            work += crate::cost::LINK_SPLIT_LATER;
         }
         joints.splits += 1;
     }
@@ -4154,6 +4161,8 @@ fn charge_link(state: &mut State, reflection: &Reflection, setup: &Setup, parts:
                 work += if joints.joins == 0 { crate::cost::LINK_REJOINED } else { crate::cost::LINK_REJOINED_AFTER_JOIN };
             }
             joints.rejoined = true;
+        } else if flat && later {
+            work += if marked == parts.len() { crate::cost::LINK_REJOINED_LATER } else { crate::cost::LINK_JOINED_LATER };
         }
         joints.joins += 1;
     }
@@ -4351,6 +4360,11 @@ fn reanchored_parts(state: &State, setup: &Setup, found: &Component, part: Insta
 /// size) changes no other part's root: in a settled component it alone is placed, when unanchored, and no tree is worked out.
 fn reanchored(state: &mut State, reflection: &Reflection, hooks: &Hooks, setup: &Setup, part: InstanceId, before: Option<Rc<Assemblies>>, settled: bool) {
     let found = component(state, reflection, setup, part);
+    // (a part whose links all go to one anchored part: anchored, it leaves that part's assembly for one of its own, as a split does;
+    // unanchored, it joins it. Read from its links, as kept or walked alike)
+    let leaf = found.as_ref().is_some_and(|found| one_anchored_neighbour(state, setup, found, part));
+    let fixed = anchored(state, setup, part);
+    let change = Change { ends: leaf && fixed, starts: leaf && !fixed, ..Change::default() };
     if let Some(found) = &found
         && settled
         && leaf_reanchored(state, reflection, hooks, setup, found, part)
@@ -4362,7 +4376,7 @@ fn reanchored(state: &mut State, reflection: &Reflection, hooks: &Hooks, setup: 
             crate::boundary::add_cost(work);
         }
         let parts = reanchored_parts(state, setup, found, part);
-        charge_link(state, reflection, setup, &parts, Change::default());
+        charge_link(state, reflection, setup, &parts, change);
         return;
     }
     let before = before.or_else(|| found.as_ref().map(|found| assemblies_of(state, reflection, setup, found, part, Some(part), false)));
@@ -4370,7 +4384,7 @@ fn reanchored(state: &mut State, reflection: &Reflection, hooks: &Hooks, setup: 
     match &found {
         Some(found) => {
             let parts = reanchored_parts(state, setup, found, part);
-            charge_link(state, reflection, setup, &parts, Change::default());
+            charge_link(state, reflection, setup, &parts, change);
         }
         None => lone_reanchored(state, reflection, setup, part),
     }
@@ -4410,6 +4424,14 @@ fn lone_reanchored(state: &mut State, reflection: &Reflection, setup: &Setup, pa
 /// part's root (anchored, the part is an assembly of its own, nothing hanging from it; unanchored, it hangs from that part alone), so
 /// the part, unanchored, is placed where its first joint in that part's list puts it from that part, as settling the component
 /// would, and nothing else moves. False (nothing done) for any other part.
+/// Whether every link of `part` in `found` goes to one other part, which is anchored (a leaf of an anchored part).
+fn one_anchored_neighbour(state: &State, setup: &Setup, found: &Component, part: InstanceId) -> bool {
+    let links = found.links.borrow();
+    let Some(list) = links.get(&part) else { return false };
+    let Some(&(_, neighbour)) = list.first() else { return false };
+    neighbour != part && list.iter().all(|&(_, other)| other == neighbour) && anchored(state, setup, neighbour)
+}
+
 fn leaf_reanchored(state: &mut State, reflection: &Reflection, hooks: &Hooks, setup: &Setup, found: &Rc<Component>, part: InstanceId) -> bool {
     let (joint, neighbour) = {
         let links = found.links.borrow();

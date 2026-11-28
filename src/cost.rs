@@ -1998,6 +1998,24 @@ pub const LINK_SPLIT_AGAIN: f64 = 2.6e-6;
 /// each disabled in turn and then a second of the first 5.3, at 10,000 9.9): [`LINK_SPLIT_THIRD`]. Fitted: x0.98 for the pairs, x0.87 at
 /// 1,000; at 10,000 x0.46 (that change of a hub changed before another's costs a client more with its size).
 pub const LINK_SPLIT_THIRD: f64 = 2.0e-6;
+/// A later change of an assembly the frame changed before (its parts marked: world/joints.rs charge_link) costs a client more by its
+/// kind, whatever the assembly's size (roblox-sim 0.747, a headless playing client, four sessions of 9-sample medians, the geometric
+/// mean of their medians; an anchored hub of 4, 10, 100 and 1,000 leaves and a free one of 10, 100 and 1,000, a leaf's weld
+/// disabled, enabled, parented out or back or the leaf anchored, in turn in one frame after another assembly's first change):
+/// - a split: the frame's second and third that end a link cost [`LINK_SPLIT_AGAIN`] and [`LINK_SPLIT_THIRD`] more also after a
+///   link started, when they split an assembly the frame changed before (a second leaf's weld disabled 4.4 to 6.2 us, a third 3.8 to
+///   4.9, where ree charged 2.37), and each later one [`LINK_SPLIT_LATER`] (a fourth 3.5 to 5.3);
+/// - a link started again within the assembly (both its parts marked: a leaf's weld enabled after it and another were disabled in
+///   the frame), past the frame's first such [`LINK_REJOINED`]: [`LINK_REJOINED_LATER`] (2.1 to 3.6 us, ree 2.05; a weld parented
+///   back 4.1 to 5.8, ree 3.71);
+/// - a link that joins a part the frame had not changed to an assembly it had (a leaf whose weld was disabled a frame before enabled
+///   after another's): [`LINK_JOINED_LATER`] (4.9 to 7.9 us, ree 3.65).
+/// A leaf's Anchored write (all its links to one anchored part: world/joints.rs leaf_reanchored) splits it off as a weld does, and
+/// unanchored joins it (a second leaf anchored 4.6 to 5.5 us, ree 2.45; the first unanchored again 4.7 to 5.7, ree 2.08; the second
+/// 2.8 to 3.2).
+pub const LINK_SPLIT_LATER: f64 = 1.6e-6;
+pub const LINK_REJOINED_LATER: f64 = 0.85e-6;
+pub const LINK_JOINED_LATER: f64 = 2.1e-6;
 pub const LINK_SPLIT_FIRST: f64 = 8e-6;
 pub const LINK_FRAME: f64 = 34e-6;
 /// What the first link change of an assembly in a frame costs (2026-11-25, the same client, two or three sessions, the geometric mean
