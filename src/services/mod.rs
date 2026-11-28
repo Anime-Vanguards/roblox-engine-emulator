@@ -472,8 +472,8 @@ fn vector2(lua: &Lua, x: f64, y: f64) -> LuaResult<LuaValue> {
 /// Services Roblox keeps for its own scripts: a script's `game:GetService` answers nil for them, with no error (Studio 0.747,
 /// a play session's client and server at script identity 2 and a client at identity 4, the command bar's:
 /// tools/parity/probes/core_services.luau). At identity 2 CoreGui, StudioService and ScriptEditorService are nil as well, and a
-/// server refuses NetworkClient; ree answers those as identity 4 does, since edit-mode code that Studio runs as a plugin
-/// parents its previews to CoreGui.
+/// server refuses NetworkClient; the edit run context answers those as identity 4 does, since edit-mode code that Studio runs as a
+/// plugin parents its previews to CoreGui (a play run's scripts get nil for them: [`HIDDEN_SERVICES`]).
 pub const ROBLOX_ONLY_SERVICES: &[&str] = &[
     "AppStorageService",
     "CSGDictionaryService",
@@ -488,9 +488,9 @@ pub const ROBLOX_ONLY_SERVICES: &[&str] = &[
 /// making nothing (measured, roblox-sim 0.747, script identity 2: GetService, FindService, FindFirstChildOfClass and an index of
 /// every service class data/reflection.json, data/reflection-security.json and rbx-dom's database name, two sessions each side;
 /// tools/parity/probes/service_access.luau): the services Roblox keeps for its own scripts, Studio and plugins, whatever their
-/// permits say. A client also answers nil for ClusterPacketCache, a server's. Sorted (binary search). CoreGui is nil to a game
-/// script as well, but ree answers it: rur's story host mounts its stories in CoreGui. The edit run context (a plugin's code) keeps
-/// what it had: [`ROBLOX_ONLY_SERVICES`] nil, the rest made.
+/// permits say, CoreGui among them. A client also answers nil for ClusterPacketCache, a server's. Sorted (binary search). The edit
+/// run context (a plugin's code) keeps what it had: [`ROBLOX_ONLY_SERVICES`] nil, the rest made (CoreGui too: rur mounts an
+/// edit run's stories there, and a play run's in the local player's PlayerGui).
 pub const HIDDEN_SERVICES: &[&str] = &[
     "AccountService", "AchievementService", "ActivityHistoryEventService", "AnimatedImageService",
     "AnimationFromVideoCreatorStudioService", "AnnotationsService", "AppAgeSignalsService", "AppLifecycleObserverService",
@@ -499,7 +499,7 @@ pub const HIDDEN_SERVICES: &[&str] = &[
     "AvatarImportService", "AvatarSettings", "BackendReplicatedStorage", "BackendServerScriptService", "BackendServerStorage",
     "BranchService", "BugReporterService", "CSGDictionaryService", "CacheableContentProvider", "CallingService", "CalloutService",
     "ChangeHistoryStreamingService", "ClientStorageService", "CloudCRUDService", "CloudClientService", "CloudExecutionService",
-    "CollaboratorsService", "ConfigureServerService", "ConnectivityService", "ControllerService", "CorePackages",
+    "CollaboratorsService", "ConfigureServerService", "ConnectivityService", "ControllerService", "CoreGui", "CorePackages",
     "CoreScriptDebuggingManagerHelper", "CoreScriptSyncService", "CreationDBService", "CrossDMScriptChangeListener",
     "DebuggablePluginWatcher", "DebuggerConnectionManager", "DebuggerManager", "DebuggerUIService", "DeferredAssetManagerService",
     "DesignFoundationsService", "DeviceDisplayService", "DeviceIdService", "DraftsService", "DraggerService", "EditableService",
@@ -537,7 +537,7 @@ pub const HIDDEN_SERVICES: &[&str] = &[
 /// Of [`HIDDEN_SERVICES`], those an index of the DataModel (`game.CorePackages`) reads as nil, where any other name no child
 /// has raises "is not a valid member of DataModel" (measured likewise; a server also reads InternalMessagingService so). Sorted.
 const HIDDEN_CHILDREN: &[&str] = &[
-    "AppStorageService", "AvatarChatService", "AvatarSettings", "CSGDictionaryService", "CorePackages", "EditableService",
+    "AppStorageService", "AvatarChatService", "AvatarSettings", "CSGDictionaryService", "CoreGui", "CorePackages", "EditableService",
     "ExperienceAuthService", "HeatmapService", "LodDataService", "NonReplicatedCSGDictionaryService", "PlaceSettings",
     "PlaceStatsService", "PlatformLibraries", "PlayerEmulatorService", "PlayerHydrationService", "RobloxReplicatedStorage",
     "RobloxServerStorage", "RuntimeContentService", "RuntimeScriptService", "SafetyService", "SlimAnimationReplicationService",

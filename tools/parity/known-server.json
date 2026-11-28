@@ -77,12 +77,6 @@
 			"why": "CollectionService:GetAllTags lists a client's tags in an order of its own (neither added nor sorted: q-m,q-c,q-a,q-B,q-x for q-m,q-c,q-x,q-a,q-B added); ree lists them in the order they were added"
 		}
 	],
-	"core_services": [
-		{
-			"line": "CoreGui get nil",
-			"why": "a game script gets nil for CoreGui, but rur's story host mounts its stories in game:GetService(\"CoreGui\"), so ree answers it in every run context (services/mod.rs HIDDEN_SERVICES)"
-		}
-	],
 	"editable_image_draw": [
 		{
 			"line": "t-rot45 3",
@@ -855,12 +849,6 @@
 		{
 			"line": "Player error The current thread cannot create 'Player' (lacking capability WritePlayer)",
 			"why": "a game script may not make a Player (WritePlayer), but ree's harnesses and tests make the players of a run with Instance.new (a Player parented to Players joins): instance.rs NEW_PERMITS"
-		}
-	],
-	"service_access": [
-		{
-			"line": "CoreGui | nil | nil | nil | nil | nil",
-			"why": "a game script gets nil for CoreGui, but rur's story host mounts its stories in game:GetService(\"CoreGui\"), so ree answers it in every run context (services/mod.rs HIDDEN_SERVICES)"
 		}
 	]
 }

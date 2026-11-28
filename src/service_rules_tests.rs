@@ -136,6 +136,21 @@ fn a_game_script_gets_the_services_a_client_gives_it() {
     assert_eq!(edit, ["inst StudioService/StudioService"]);
 }
 
+/// CoreGui is nil to a playing client's and a server's game script every way it can look (GetService, FindService, an index,
+/// FindFirstChildOfClass, GetChildren), and a play run makes none; a plugin's code, the edit run context, gets it. ree answered it
+/// in a play run too while rur's story host mounted play-mode stories there (rur H1 moved them to the local player's PlayerGui).
+#[test]
+fn coregui_is_nil_to_a_game_script_and_there_for_a_plugin() {
+    let source = format!(
+        "{TRY}\nlocal Listed = false\nfor _, Each in game:GetChildren() do if Each.ClassName == 'CoreGui' then Listed = true end end\n\
+         print(try(game.GetService, game, 'CoreGui'), try(game.FindService, game, 'CoreGui'), try(function() return (game :: any).CoreGui end), try(game.FindFirstChildOfClass, game, 'CoreGui'), Listed)"
+    );
+    for options in [play(), server()] {
+        assert_eq!(printed(options, &source, 0.1), ["ok nil ok nil ok nil ok nil false"]);
+    }
+    assert_eq!(printed(Options::default(), &source, 0.1), ["inst CoreGui/CoreGui inst CoreGui/CoreGui inst CoreGui/CoreGui inst CoreGui/CoreGui true"]);
+}
+
 /// A TextChannelWindow takes scripts and three UI objects as children only; a Faces or an Axes property takes its own type only.
 #[test]
 fn a_text_channel_window_takes_few_children_and_faces_properties_cast() {

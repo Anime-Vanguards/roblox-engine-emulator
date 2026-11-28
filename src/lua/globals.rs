@@ -1051,6 +1051,11 @@ pub fn start(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     // The host's record of the mouse, which Player:GetMouse()'s PlayerMouse reads (world/mouse.rs)
     let mouse = crate::world::mouse::record(lua, engine)?;
     for name in START_SERVICES {
+        // (a play run's game scripts have no CoreGui: not made, an index, FindFirstChildOfClass and GetChildren find none, as a
+        // client's do; engine code that needs it makes it: services/mod.rs HIDDEN_SERVICES)
+        if *name == "CoreGui" && !engine.options.edit_mode() {
+            continue;
+        }
         services::get_service(engine, game, name).map_err(flow_error)?;
     }
     instance::lock(lua, engine, game)?;
