@@ -690,11 +690,9 @@ pub(crate) fn start(args: &RecordArgs, host: &Host, listings: bool) -> Result<(E
     crate::luau_profile::install(&emulator.lua);
     // Roblox's script execution timeout (watchdog.rs): a script that never yields errors instead of spinning for good
     let limit = crate::watchdog::script_timeout_seconds(args.script_timeout);
-    let backstop = match args.max_wall_seconds.filter(|&cap| cap > 0.0 && limit > 0.0) {
-        Some(cap) => crate::watchdog::HOST_BACKSTOP.min(cap / limit),
-        None => crate::watchdog::HOST_BACKSTOP,
-    };
-    let timeout = crate::watchdog::ScriptTimeout::install_with(&emulator.lua, &emulator.engine, limit, crate::watchdog::stop_after(args.script_timeouts), backstop);
+    // (the thread's CPU time past HOST_BACKSTOP times the limit fires it too, and wall time past the run's cap)
+    let wall_cap = args.max_wall_seconds.filter(|&cap| cap > 0.0).unwrap_or(f64::INFINITY);
+    let timeout = crate::watchdog::ScriptTimeout::install_with(&emulator.lua, &emulator.engine, limit, crate::watchdog::stop_after(args.script_timeouts), crate::watchdog::HOST_BACKSTOP, wall_cap);
     emulator.engine.state.borrow_mut().sched.timeout = timeout;
     Ok((emulator, history))
 }
@@ -721,12 +719,10 @@ fn start_loopback(args: &RecordArgs, host: &Host, options: &crate::Options, spec
     })?;
     crate::luau_profile::install(&client.lua);
     let (server_lua, server) = client.engine.peer_server().ok_or("not a loopback client")?;
-    let backstop = match args.max_wall_seconds.filter(|&cap| cap > 0.0 && limit > 0.0) {
-        Some(cap) => crate::watchdog::HOST_BACKSTOP.min(cap / limit),
-        None => crate::watchdog::HOST_BACKSTOP,
-    };
+    // (the thread's CPU time past HOST_BACKSTOP times the limit fires it too, and wall time past the run's cap)
+    let wall_cap = args.max_wall_seconds.filter(|&cap| cap > 0.0).unwrap_or(f64::INFINITY);
     for (lua, engine) in [(&server_lua, &server), (&*client.lua, &client.engine)] {
-        let timeout = crate::watchdog::ScriptTimeout::install_with(lua, engine, limit, crate::watchdog::stop_after(args.script_timeouts), backstop);
+        let timeout = crate::watchdog::ScriptTimeout::install_with(lua, engine, limit, crate::watchdog::stop_after(args.script_timeouts), crate::watchdog::HOST_BACKSTOP, wall_cap);
         engine.state.borrow_mut().sched.timeout = timeout;
     }
     Ok(client)

@@ -8,8 +8,9 @@
 //!   next safepoint in a script's own code, and again at every later one until it yields or ends, so a `pcall` cannot
 //!   swallow it. The seconds are the work clock's (what the VM's instructions, calls and allocations and the engine calls a
 //!   script makes cost Studio: cost.rs), not the virtual clock's, so the timeout fires with `REE_FROZEN_CLOCK=1` too and does
-//!   not depend on how busy the machine is; host time past [`HOST_BACKSTOP`] times the limit also fires it (work the clock
-//!   does not count: natively compiled code, the engine's own Luau). Roblox goes on after a timeout; a run stops after [`DEFAULT_STOP_AFTER`] of them
+//!   not depend on how busy the machine is; the run thread's own CPU time past [`HOST_BACKSTOP`] times the limit also fires it
+//!   (work the clock does not count: natively compiled code, the engine's own Luau), and so does wall time past a run's
+//!   wall-clock cap. Roblox goes on after a timeout; a run stops after [`DEFAULT_STOP_AFTER`] of them
 //!   ([`ScriptTimeout::stopped`]: every script safepoint raises, the frame loop ends the run, exit [`EXIT_SCRIPT_TIMEOUTS`]),
 //!   because a script that never yields is usually resumed again each frame.
 //! - [`cap_run`]: a wall-clock cap per process, from `--seconds` with a generous margin; ree exits with [`EXIT_CAP`].
@@ -27,7 +28,10 @@
 //! at the same safepoint in every run of a script, with a profile's interrupt or without, once its resumption has run past
 //! the limit (never before), and a single call that takes the resumption past it is followed by the timeout at the next
 //! safepoint, as a client's script that ran too long in one call is (roblox-sim, Studio 0.747). Every [`HOST_LOOK_EVERY`]th
-//! safepoint looks at host time alone, for natively compiled code, which moves no counts.
+//! safepoint looks at host time alone, for natively compiled code, which moves no counts. Host time is the thread's CPU time
+//! ([`thread_cpu_seconds`]), not the wall clock's: a thread that waits for a CPU while other processes run (a CI runner's 4
+//! CPUs shared by 20 busy threads) does no work in that time, and a backstop on wall time cut 0.25 s busy jobs of the
+//! parity probe `timeout_points` under a 0.3 s limit that the work clock lets finish (6 x 0.3 s of wall time passed first).
 
 use std::{
     cell::Cell,
@@ -57,7 +61,8 @@ pub const POINT_TIMEOUT_MESSAGE: &str = "Script timeout: exhausted allowed execu
 pub const DEFAULT_SCRIPT_TIMEOUT: f64 = 10.0;
 
 /// Host time that fires the timeout as well, in multiples of the limit: a loop the work clock prices below its host cost
-/// still ends (a mutated effect script rebuilt NumberSequences at ~10 host seconds a work second; natively compiled code)
+/// still ends (a mutated effect script rebuilt NumberSequences at ~10 host seconds a work second; natively compiled code).
+/// It is the run thread's CPU time ([`thread_cpu_seconds`]), so time the thread waits for a CPU on a busy machine never counts.
 pub const HOST_BACKSTOP: f64 = 6.0;
 
 /// The exit code of a run that reached its wall-clock cap (GNU timeout's)
@@ -137,8 +142,10 @@ pub struct Watch {
     slot: Mutex<()>,
     /// Seconds of the work clock a resumption may run without yielding
     limit: f64,
-    /// Host time that fires the timeout too, in multiples of the limit ([`HOST_BACKSTOP`])
+    /// The thread's CPU time that fires the timeout too, in multiples of the limit ([`HOST_BACKSTOP`])
     backstop: f64,
+    /// Wall time that fires it too, in seconds: the run's wall-clock cap (infinite: none)
+    wall_cap: f64,
     /// Script timeouts after which the process exits (0: never)
     stop_after: u32,
     /// Script timeouts so far
@@ -178,7 +185,9 @@ struct Timing {
     serial: u64,
     epoch: u64,
     work: f64,
+    /// The wall clock and the thread's CPU seconds ([`thread_cpu_seconds`]) at the first look
     host: Option<Instant>,
+    cpu: f64,
     /// The resumption has had its timeout (later raises are the same timeout's)
     raised: bool,
     /// The work its resumption point began with, when it runs in one ([`point`])
@@ -206,7 +215,7 @@ struct Looked {
 thread_local! {
     /// Safepoints the check has seen on this thread ([`HOST_LOOK_EVERY`])
     static SAFEPOINTS: Cell<u32> = const { Cell::new(0) };
-    static TIMING: Cell<Timing> = const { Cell::new(Timing { serial: 0, epoch: 0, work: 0.0, host: None, raised: false, point: None, by_point: false }) };
+    static TIMING: Cell<Timing> = const { Cell::new(Timing { serial: 0, epoch: 0, work: 0.0, host: None, cpu: 0.0, raised: false, point: None, by_point: false }) };
     static LOOKED: Cell<Looked> = const { Cell::new(Looked { counters: 0, steps: 0, calls: 0, units: 0, engine: 0, armings: 0, work: std::ptr::null(), drained: std::ptr::null() }) };
     /// How many VMs on this thread want the check to look at every safepoint (a timeout is due, or a run stops)
     static EAGER_COUNT: Cell<u32> = const { Cell::new(0) };
@@ -273,12 +282,13 @@ impl ScriptTimeout {
     /// [`ScriptTimeout::stopped`]). The engine's scheduler must hold the result ([`crate::scheduler::Scheduler`]'s
     /// `timeout`), and [`ScriptTimeout::detach`] must run before the VM is dropped ([`crate::Emulator`] does).
     pub fn install(lua: &mlua::Lua, engine: &crate::Engine, limit: f64, stop_after: u32) -> Option<ScriptTimeout> {
-        Self::install_with(lua, engine, limit, stop_after, HOST_BACKSTOP)
+        Self::install_with(lua, engine, limit, stop_after, HOST_BACKSTOP, f64::INFINITY)
     }
 
-    /// [`ScriptTimeout::install`] with host time past `backstop` times the limit firing the timeout too (infinite: only the work
-    /// clock fires it, as a test that weighs work exactly needs on a busy machine)
-    pub(crate) fn install_with(lua: &mlua::Lua, engine: &crate::Engine, limit: f64, stop_after: u32, backstop: f64) -> Option<ScriptTimeout> {
+    /// [`ScriptTimeout::install`] with the thread's CPU time past `backstop` times the limit firing the timeout too (infinite:
+    /// only the work clock fires it, as a test that weighs work exactly needs), and wall time past `wall_cap` seconds (a run's
+    /// wall-clock cap, `--max-wall-seconds`, so a single non-yielding frame cannot outlast it; infinite: none)
+    pub(crate) fn install_with(lua: &mlua::Lua, engine: &crate::Engine, limit: f64, stop_after: u32, backstop: f64, wall_cap: f64) -> Option<ScriptTimeout> {
         if !(limit > 0.0 && limit.is_finite()) {
             return None;
         }
@@ -305,6 +315,7 @@ impl ScriptTimeout {
             slot: Mutex::new(()),
             limit,
             backstop,
+            wall_cap,
             stop_after,
             timeouts: AtomicU32::new(0),
             host_timeouts: AtomicU32::new(0),
@@ -372,7 +383,8 @@ impl ScriptTimeout {
         self.0.timeouts.load(Ordering::Relaxed)
     }
 
-    /// Those of them host time fired alone, past [`HOST_BACKSTOP`] times the limit with the work clock short of it
+    /// Those of them host time fired alone, past [`HOST_BACKSTOP`] times the limit of the thread's CPU time (or the run's
+    /// wall-clock cap) with the work clock short of it
     pub fn host_timeouts(&self) -> u32 {
         self.0.host_timeouts.load(Ordering::Relaxed)
     }
@@ -697,7 +709,7 @@ pub unsafe fn check(state: *mut lua_State) {
         // and is weighed at once (a long call at its start is followed by the timeout at the first safepoint after it)
         let start = start_work(callbacks, due).unwrap_or_else(|| work(state));
         let point = point_work(callbacks, watch.point_epoch.load(Ordering::Acquire));
-        timing = Timing { serial: watch.serial, epoch: due, work: start, host: Some(Instant::now()), raised: false, point, by_point: false };
+        timing = Timing { serial: watch.serial, epoch: due, work: start, host: Some(Instant::now()), cpu: thread_cpu_seconds().unwrap_or(0.0), raised: false, point, by_point: false };
         TIMING.with(|cell| cell.set(timing));
         // (an earlier resumption's timeout, due or raised, left the check looking at every safepoint)
         set_eager(&watch, false);
@@ -708,7 +720,7 @@ pub unsafe fn check(state: *mut lua_State) {
         let now = if full { Some(work(state)) } else { None };
         let over_work = now.is_some_and(|now| now - timing.work >= watch.limit);
         let over_point = !over_work && now.is_some_and(|now| timing.point.is_some_and(|point| now - point >= watch.limit));
-        let over_host = timing.host.is_some_and(|host| host.elapsed().as_secs_f64() >= watch.limit * watch.backstop);
+        let over_host = timing.host.is_some_and(|host| over_host(&watch, host.elapsed().as_secs_f64(), timing.cpu));
         if !(over_work || over_point || over_host) {
             return;
         }
@@ -831,6 +843,55 @@ fn script_stack(state: *mut lua_State) -> String {
 /// What the VM's own script work has cost so far, in Studio seconds (cost.rs `luau`)
 fn work(state: *mut lua_State) -> f64 {
     unsafe { crate::cost::luau(&*crate::cost::lua_workcounters(state)) }
+}
+
+/// Whether host time fires `watch`'s timeout, `wall` seconds after the check's first look, when the thread had `cpu` seconds of
+/// CPU time: the thread's CPU time since then past [`HOST_BACKSTOP`] times the limit (read only once the wall clock is that far:
+/// a thread runs no longer than the wall clock, and the read is a system call), or the wall clock past the run's cap. Where the
+/// thread's CPU time cannot be read, the wall clock stands in for it.
+fn over_host(watch: &Watch, wall: f64, cpu: f64) -> bool {
+    let backstop = watch.limit * watch.backstop;
+    wall >= watch.wall_cap || (wall >= backstop && thread_cpu_seconds().is_none_or(|now| now - cpu >= backstop))
+}
+
+/// The calling thread's CPU time so far, user and kernel, in seconds (Windows: GetThreadTimes, counted in the system timer's
+/// ticks; Linux and macOS: CLOCK_THREAD_CPUTIME_ID); `None` where it cannot be read
+pub fn thread_cpu_seconds() -> Option<f64> {
+    #[cfg(windows)]
+    unsafe {
+        unsafe extern "system" {
+            fn GetCurrentThread() -> *mut std::ffi::c_void;
+            // (FILETIMEs as u64, as profiler/cpu.rs declares GetProcessTimes)
+            fn GetThreadTimes(thread: *mut std::ffi::c_void, creation: *mut u64, exit: *mut u64, kernel: *mut u64, user: *mut u64) -> i32;
+        }
+        let (mut creation, mut exit, mut kernel, mut user) = (0u64, 0u64, 0u64, 0u64);
+        if GetThreadTimes(GetCurrentThread(), &mut creation, &mut exit, &mut kernel, &mut user) != 0 {
+            return Some((kernel + user) as f64 * 1e-7);
+        }
+        return None;
+    }
+    #[cfg(all(target_pointer_width = "64", any(target_os = "linux", target_os = "macos")))]
+    unsafe {
+        #[repr(C)]
+        struct Timespec {
+            seconds: i64,
+            nanoseconds: std::ffi::c_long,
+        }
+        unsafe extern "C" {
+            fn clock_gettime(clock: c_int, time: *mut Timespec) -> c_int;
+        }
+        #[cfg(target_os = "linux")]
+        const CLOCK_THREAD_CPUTIME_ID: c_int = 3;
+        #[cfg(target_os = "macos")]
+        const CLOCK_THREAD_CPUTIME_ID: c_int = 16;
+        let mut time = Timespec { seconds: 0, nanoseconds: 0 };
+        if clock_gettime(CLOCK_THREAD_CPUTIME_ID, &mut time) == 0 {
+            return Some(time.seconds as f64 + time.nanoseconds as f64 * 1e-9);
+        }
+        return None;
+    }
+    #[allow(unreachable_code)]
+    None
 }
 
 /// Whether the running function is the engine's own Luau (`=rur.*` chunks): Roblox's timeout never fires inside the engine,
@@ -1138,16 +1199,16 @@ mod tests {
     };
 
     fn start(limit: f64, stop_after: u32) -> (Lua, Rc<Engine>, ScriptTimeout) {
-        start_with(limit, stop_after, super::HOST_BACKSTOP)
+        start_with(limit, stop_after, super::HOST_BACKSTOP, f64::INFINITY)
     }
 
     /// [`start`] with only the work clock firing the timeout, on interpreted scripts: a test that weighs work exactly, which a
     /// busy machine's host time must not decide
     fn start_exact(limit: f64) -> (Lua, Rc<Engine>, ScriptTimeout) {
-        start_with(limit, 0, f64::INFINITY)
+        start_with(limit, 0, f64::INFINITY, f64::INFINITY)
     }
 
-    fn start_with(limit: f64, stop_after: u32, backstop: f64) -> (Lua, Rc<Engine>, ScriptTimeout) {
+    fn start_with(limit: f64, stop_after: u32, backstop: f64, wall_cap: f64) -> (Lua, Rc<Engine>, ScriptTimeout) {
         let engine = Engine::new(Options::default()).expect("engine");
         let lua = Lua::new();
         engine_lua::start(&lua, &engine).expect("start");
@@ -1156,7 +1217,7 @@ mod tests {
             // charges them; natively compiled, a loop's work is not counted and only host time ends it)
             engine_lua::modules::interpret_all(&lua, &engine);
         }
-        let timeout = ScriptTimeout::install_with(&lua, &engine, limit, stop_after, backstop).expect("a timeout");
+        let timeout = ScriptTimeout::install_with(&lua, &engine, limit, stop_after, backstop, wall_cap).expect("a timeout");
         engine.state.borrow_mut().sched.timeout = Some(timeout.clone());
         (lua, engine, timeout)
     }
@@ -1416,6 +1477,49 @@ mod tests {
         timeout.detach();
     }
 
+    /// A script that waits in `shared.Sleep(seconds)`: its thread runs nothing for that long, as a thread on a busy machine that
+    /// waits for a CPU while other processes run
+    fn sleeper(lua: &Lua, engine: &Rc<Engine>) {
+        let sleep = lua.create_function(|_, seconds: f64| {
+            std::thread::sleep(std::time::Duration::from_secs_f64(seconds));
+            Ok(())
+        });
+        shared(engine).set("Sleep", sleep.expect("function")).expect("shared.Sleep");
+    }
+
+    /// Armed in a first wait (a tick of the watchdog's, 5 ms at this limit, passes in it) and looked at in the loop after it,
+    /// then 0.3 s of waiting and a loop that looks again: 2.5 times the host backstop's 6 x 0.02 s of wall time, and a work
+    /// clock far short of the limit (interpreted: the loops' steps are counted)
+    const WAITS: &str = "shared.Sleep(0.05) for i = 1, 5000 do end shared.Sleep(0.3) for i = 1, 5000 do end";
+
+    /// The host backstop counts the thread's CPU time: time the thread waits does not fire it. On wall time, the parity probe
+    /// timeout_points' 0.25 s busy jobs under a 0.3 s limit were cut on a loaded CI runner (6 x 0.3 s of wall time passed before
+    /// the job's 0.25 s of the work clock), where a client lets them finish. A loop that spins on (natively compiled, which the
+    /// work clock does not count) is still ended by it: a_script_that_never_yields_errors_with_robloxs_timeout_and_a_pcall_does_not_keep_it_running.
+    #[test]
+    fn time_a_thread_waits_does_not_fire_the_host_backstop() {
+        let (lua, engine, timeout) = start(0.02, 0);
+        engine_lua::modules::interpret_all(&lua, &engine);
+        sleeper(&lua, &engine);
+        let outcome = call(&lua, &engine, WAITS);
+        assert_eq!(outcome, "finished");
+        assert_eq!(timeout.timeouts(), 0);
+        timeout.detach();
+    }
+
+    /// A run's wall-clock cap (`--max-wall-seconds`) fires the timeout on wall time, waiting included, so a single non-yielding
+    /// frame cannot outlast it
+    #[test]
+    fn a_wall_clock_cap_fires_the_timeout_on_wall_time() {
+        let (lua, engine, timeout) = start_with(0.02, 0, super::HOST_BACKSTOP, 0.12);
+        engine_lua::modules::interpret_all(&lua, &engine);
+        sleeper(&lua, &engine);
+        let outcome = call(&lua, &engine, WAITS);
+        assert!(timed_out(&outcome), "{outcome}");
+        assert_eq!((timeout.timeouts(), timeout.host_timeouts()), (1, 1));
+        timeout.detach();
+    }
+
     /// A service worker runs VM after VM on one thread, and the allocator often gives a later VM an earlier one's callbacks
     #[test]
     fn a_later_vm_on_the_thread_is_timed_from_its_own_resumption() {
@@ -1430,7 +1534,7 @@ mod tests {
             // the thread's timing as it stands two minutes after the earlier VM's resumption, which had this one's epoch
             super::TIMING.with(|cell| {
                 let timing = cell.get();
-                cell.set(super::Timing { host: timing.host.map(|host| host.checked_sub(std::time::Duration::from_secs(120)).unwrap_or(host)), ..timing });
+                cell.set(super::Timing { host: timing.host.map(|host| host.checked_sub(std::time::Duration::from_secs(120)).unwrap_or(host)), cpu: timing.cpu - 120.0, ..timing });
             });
             let outcome = call(&lua, &engine, long);
             timeout.detach();
