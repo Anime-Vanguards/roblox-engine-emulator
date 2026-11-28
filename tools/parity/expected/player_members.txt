@@ -1,0 +1,46 @@
+# engine: Roblox Studio 0.747.0.7471481, a headless playing client (script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-28
+player true
+read AgeChecked ok EnumItem Enum.AgeCheckStatus.Unchecked
+lower AgeChecked ok EnumItem Enum.AgeCheckStatus.Unchecked
+signal AgeChecked ok RBXScriptSignal
+write AgeChecked error The current thread cannot write 'AgeChecked' (lacking capability RobloxEngine) ok EnumItem Enum.AgeCheckStatus.Unchecked
+write table AgeChecked error The current thread cannot write 'AgeChecked' (lacking capability RobloxEngine)
+write string AgeChecked error The current thread cannot write 'AgeChecked' (lacking capability RobloxEngine)
+modified AgeChecked ok false
+reset AgeChecked error The current thread cannot call ResetPropertyToDefault() on Player.AgeChecked (lacking capability RobloxEngine)
+read DeviceTrustLevel ok EnumItem Enum.PlayerDeviceTrustLevel.Pending
+lower DeviceTrustLevel ok EnumItem Enum.PlayerDeviceTrustLevel.Pending
+signal DeviceTrustLevel ok RBXScriptSignal
+write DeviceTrustLevel error Unable to assign property DeviceTrustLevel. Property is read only ok EnumItem Enum.PlayerDeviceTrustLevel.Pending
+write table DeviceTrustLevel error Unable to assign property DeviceTrustLevel. EnumItem, number, or string expected, got table
+write string DeviceTrustLevel error Unable to assign property DeviceTrustLevel. Invalid value "x" for enum PlayerDeviceTrustLevel
+modified DeviceTrustLevel error Invalid argument to IsPropertyModified(): Player.DeviceTrustLevel is read-only
+reset DeviceTrustLevel error Invalid argument to ResetPropertyToDefault(): Player.DeviceTrustLevel is read-only
+read FrustumStreaming ok EnumItem Enum.FrustumStreamingMode.Default
+lower FrustumStreaming ok EnumItem Enum.FrustumStreamingMode.Default
+signal FrustumStreaming ok RBXScriptSignal
+write FrustumStreaming ok  ok EnumItem Enum.FrustumStreamingMode.Enabled
+write table FrustumStreaming error Unable to assign property FrustumStreaming. EnumItem, number, or string expected, got table
+write string FrustumStreaming error Unable to assign property FrustumStreaming. Invalid value "x" for enum FrustumStreamingMode
+modified FrustumStreaming ok false
+reset FrustumStreaming error Variant cast failed
+read HasRobloxSubscription ok boolean false
+lower HasRobloxSubscription ok boolean false
+signal HasRobloxSubscription ok RBXScriptSignal
+write HasRobloxSubscription error The current thread cannot write 'HasRobloxSubscription' (lacking capability RobloxEngine) ok boolean false
+write table HasRobloxSubscription error The current thread cannot write 'HasRobloxSubscription' (lacking capability RobloxEngine)
+write string HasRobloxSubscription error The current thread cannot write 'HasRobloxSubscription' (lacking capability RobloxEngine)
+modified HasRobloxSubscription ok false
+reset HasRobloxSubscription error The current thread cannot call ResetPropertyToDefault() on Player.HasRobloxSubscription (lacking capability RobloxEngine)
+read User ok User U1.AQAAAAAAAAAAAAAAAAAAAAA
+lower User ok User U1.AQAAAAAAAAAAAAAAAAAAAAA
+signal User ok RBXScriptSignal
+write table User error The current thread cannot write 'User' (lacking capability RobloxEngine)
+write string User error The current thread cannot write 'User' (lacking capability RobloxEngine)
+modified User ok false
+reset User error The current thread cannot call ResetPropertyToDefault() on Player.User (lacking capability RobloxEngine)
+frustum items ok Enum.FrustumStreamingMode.Disabled | Enum.FrustumStreamingMode.Automatic | Enum.FrustumStreamingMode.Default | Enum.FrustumStreamingMode.Enabled | Enum.FrustumStreamingMode.Disabled | Unable to assign property FrustumStreaming. Invalid value 7 for enum FrustumStreamingMode
+user members ok UserId=UserId is not a valid member of User Name=Name is not a valid member of User DisplayName=DisplayName is not a valid member of User Id=number 0 ClassName=ClassName is not a valid member of User
+user equal ok true
+changed FrustumStreaming FrustumStreaming FrustumStreaming FrustumStreaming FrustumStreaming FrustumStreaming FrustumStreaming

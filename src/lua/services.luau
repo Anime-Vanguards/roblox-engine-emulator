@@ -3063,4 +3063,31 @@ R.OnImageClone(function(Original, Copy)
 	R.ShowsImage(Copy)
 end)
 
+-- Player.User: what a client signed in to no account reads for every player, its own and the others' (typeof User, its text below,
+-- Id 0, any other key "X is not a valid member of User"; each read a value of its own, equal to every other: measured, roblox-sim
+-- 0.747, a client and a server, tools/parity/probes/player_members.luau, loopback/player_user.luau). A signed-in client's is that
+-- account's, not measured.
+local function UserIndex(_, Key)
+	if Key == "Id" then
+		return 0
+	end
+	error(`{tostring(Key)} is not a valid member of User`, 0)
+end
+local function UserText()
+	return "U1.AQAAAAAAAAAAAAAAAAAAAAA"
+end
+local function UserEqual()
+	return true
+end
+Getter("Player", "User", function()
+	local User = newproxy(true)
+	local Meta = getmetatable(User)
+	Meta.__index = UserIndex
+	Meta.__tostring = UserText
+	Meta.__eq = UserEqual
+	Meta.__metatable = "The metatable is locked"
+	R.Register(User, "User")
+	return User
+end)
+
 return true

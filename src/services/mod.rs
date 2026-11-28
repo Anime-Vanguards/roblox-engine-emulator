@@ -1536,7 +1536,18 @@ fn install_gui_and_input(behaviors: &mut Behaviors, reflection: &Reflection, opt
     // (the device and the player's settings are the client profile's: client_profile.rs)
     let device = options.profile.device.clone();
     let settings = options.profile.settings.clone();
+    // (VoiceChatInternal.VoiceChatState refuses a game script's read in words of its own, without a position, and a write as read only
+    // after the value's cast: measured, roblox-sim 0.747, a client and a server, tools/parity/probes/player_members.luau)
+    if let (Some(voice), Some(n)) = (class(reflection, "VoiceChatInternal"), name(reflection, "VoiceChatState")) {
+        behaviors.add_getter(voice, n, getter(|_, _, _| raise("VoiceChatInternal API security check failed")));
+    }
     if let Some(gui) = class(reflection, "GuiService") {
+        // (CoreGuiNavigationEnabled reads true, and a write of any value, nil included, raises nothing and changes nothing, firing
+        // nothing: measured, roblox-sim 0.747, a client and a server, tools/parity/probes/player_members.luau)
+        if let Some(n) = name(reflection, "CoreGuiNavigationEnabled") {
+            behaviors.add_getter(gui, n, getter(|_, _, _| Ok(LuaValue::Boolean(true))));
+            behaviors.add_setter(gui, n, Rc::new(|_, _, _, _| Ok(())));
+        }
         let inset = device.topbar_inset();
         if let Some(n) = name(reflection, "GetGuiInset") {
             behaviors.add_method(gui, n, method(move |lua, _, _, _| Ok(values([vector2(lua, 0.0, inset)?, vector2(lua, 0.0, 0.0)?]))));

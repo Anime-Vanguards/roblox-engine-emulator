@@ -44,8 +44,8 @@ pub enum WriteGate {
 ///   Source in a play run is the command bar's (identity 4: the parity probes captured so) and ree's own tests, which make scripts at
 ///   run time;
 /// - GuiService.CoreGuiNavigationEnabled reads and writes for a game script though its Read permit names RobloxScript, and
-///   VoiceChatInternal.VoiceChatState refuses a read with "VoiceChatInternal API security check failed" and a write as read only:
-///   ree has neither property (no member).
+///   VoiceChatInternal.VoiceChatState refuses a read with "VoiceChatInternal API security check failed" and a write as read only: their
+///   own behaviours say so (reflection.rs PROPERTY_SUPPLEMENT, services/mod.rs install_gui_and_input).
 const OPEN_PROPERTIES: &[(&str, &str)] =
     &[("Script", "Source"), ("ModuleScript", "Source"), ("GuiService", "CoreGuiNavigationEnabled"), ("VoiceChatInternal", "VoiceChatState")];
 

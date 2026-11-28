@@ -2003,11 +2003,14 @@ fn install_base(behaviors: &mut Behaviors, reflection: &crate::Reflection) {
     }));
     behaviors.add_method(base, K::IsPropertyModified as NameId, strings(NAME, method(|_, engine, id, args| {
         let name = property_name_arg(engine, id, args, "IsPropertyModified")?;
-        let modified = engine.state.borrow().dom.at(id).stored(name).is_some();
+        let modified = engine.state.borrow().dom.at(id).stored(name).is_some() && !no_default(engine, id, name);
         Ok(values([LuaValue::Boolean(modified)]))
     })));
     behaviors.add_method(base, K::ResetPropertyToDefault as NameId, strings(NAME, method(|_, engine, id, args| {
         let name = property_name_arg(engine, id, args, "ResetPropertyToDefault")?;
+        if no_default(engine, id, name) {
+            return raise("Variant cast failed");
+        }
         let hooks = engine.hooks.borrow();
         let mut state = engine.state.borrow_mut();
         if state.dom.at_mut(id).unstore(name).is_some() {
@@ -2031,6 +2034,12 @@ fn install_base(behaviors: &mut Behaviors, reflection: &crate::Reflection) {
             None => LuaValue::Nil,
         }]))
     })));
+}
+
+/// Properties a client keeps no default of: IsPropertyModified answers false whatever was written, and ResetPropertyToDefault raises
+/// "Variant cast failed" (measured, roblox-sim 0.747, a client's and a server's player: tools/parity/probes/player_members.luau)
+fn no_default(engine: &Engine, id: InstanceId, name: NameId) -> bool {
+    engine.reflection.name(name) == "FrustumStreaming" && engine.reflection.is_a(engine.state.borrow().dom.at(id).class, "Player")
 }
 
 /// A deferred resumption of `thread` with `args` (task.defer, module waiters).

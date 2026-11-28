@@ -152,3 +152,28 @@ fn a_text_channel_window_takes_few_children_and_faces_properties_cast() {
         ]
     );
 }
+
+/// The Player members a game script reads that rbx-dom lacks, CoreGuiNavigationEnabled (true, writes ignored) and VoiceChatState
+/// (its own security error); ree raised "is not a valid member" for each.
+#[test]
+fn players_read_the_members_a_client_gives_them() {
+    let source = format!(
+        "{TRY}\nlocal P = game:GetService('Players').LocalPlayer\n\
+         print(P.AgeChecked, P.DeviceTrustLevel, P.FrustumStreaming, P.HasRobloxSubscription, typeof(P.User), tostring(P.User), P.User.Id, P.User == P.User, rawequal(P.User, P.User))\n\
+         print(try(function() (P :: any).AgeChecked = Enum.AgeCheckStatus.Checked end), try(function() (P :: any).DeviceTrustLevel = Enum.PlayerDeviceTrustLevel.Full end), try(function() P.FrustumStreaming = Enum.FrustumStreamingMode.Enabled end), P.FrustumStreaming, P:IsPropertyModified('FrustumStreaming'), try(P.ResetPropertyToDefault, P, 'FrustumStreaming'))\n\
+         local G = game:GetService('GuiService')\n\
+         print(try(function() (G :: any).CoreGuiNavigationEnabled = false end), (G :: any).CoreGuiNavigationEnabled)\n\
+         local V = game:GetService('VoiceChatInternal')\n\
+         print(try(function() return (V :: any).VoiceChatState end), try(function() (V :: any).VoiceChatState = Enum.VoiceChatState.Idle end))"
+    );
+    let lines = printed(play(), &source, 0.1);
+    assert_eq!(
+        lines,
+        [
+            "Enum.AgeCheckStatus.Unchecked Enum.PlayerDeviceTrustLevel.Pending Enum.FrustumStreamingMode.Default false User U1.AQAAAAAAAAAAAAAAAAAAAAA 0 true false",
+            "error The current thread cannot write 'AgeChecked' (lacking capability RobloxEngine) error Unable to assign property DeviceTrustLevel. Property is read only ok nil Enum.FrustumStreamingMode.Enabled false error Variant cast failed",
+            "ok nil true",
+            "error VoiceChatInternal API security check failed error Unable to assign property VoiceChatState. Property is read only",
+        ]
+    );
+}

@@ -545,9 +545,19 @@ const EVENT_SUPPLEMENT: &[(&str, &[&str])] = &[
 ];
 
 // Defaults of classes only rbx-dom describes, where it records none: a player starts neutral, on no team (Neutral true,
-// TeamColor White, measured in a 0.747 play session: services/teams.rs)
-fn default_supplement() -> [(&'static str, &'static str, Variant); 2] {
-    [("Player", "Neutral", Variant::Bool(true)), ("Player", "TeamColor", Variant::BrickColor(rbx_dom_weak::types::BrickColor::White))]
+// TeamColor White, measured in a 0.747 play session: services/teams.rs), and reads AgeChecked Unchecked, DeviceTrustLevel Pending,
+// FrustumStreaming Default and HasRobloxSubscription false (a 0.747 client's and server's player of an offline session:
+// tools/parity/probes/player_members.luau)
+fn default_supplement() -> [(&'static str, &'static str, Variant); 6] {
+    let first = || Variant::Enum(rbx_dom_weak::types::Enum::from_u32(0));
+    [
+        ("Player", "Neutral", Variant::Bool(true)),
+        ("Player", "TeamColor", Variant::BrickColor(rbx_dom_weak::types::BrickColor::White)),
+        ("Player", "AgeChecked", first()),
+        ("Player", "DeviceTrustLevel", first()),
+        ("Player", "FrustumStreaming", first()),
+        ("Player", "HasRobloxSubscription", Variant::Bool(false)),
+    ]
 }
 
 // Methods of classes only rbx-dom describes (it lists properties alone): UserGameSettings's, which
@@ -592,7 +602,22 @@ const PROPERTY_SUPPLEMENT: &[(&str, &str, &str, &str, bool, bool)] = &[
     ("Players", "UseStrafingAnimations", "boolean", "bool", true, true),
     ("StarterPlayer", "CreateDefaultPlayerModule", "boolean", "bool", true, true),
     ("Model", "LevelOfDetail", "EnumItem", "ModelLevelOfDetail", true, true),
+    // Player members rbx-dom 700 lacks that a game script reads (data/reflection-security.json's types and permits; values and writes
+    // measured, roblox-sim 0.747, a client's and a server's player: tools/parity/probes/player_members.luau), GuiService's
+    // CoreGuiNavigationEnabled and VoiceChatInternal's VoiceChatState, which the dump leaves out of a game script's view (their
+    // behaviours: services/mod.rs install_gui_and_input)
+    ("Player", "AgeChecked", "EnumItem", "AgeCheckStatus", true, false),
+    ("Player", "DeviceTrustLevel", "EnumItem", "PlayerDeviceTrustLevel", true, false),
+    ("Player", "FrustumStreaming", "EnumItem", "FrustumStreamingMode", true, false),
+    ("Player", "HasRobloxSubscription", "boolean", "bool", true, false),
+    ("Player", "User", "User", "User", true, false),
+    ("GuiService", "CoreGuiNavigationEnabled", "boolean", "bool", true, false),
+    ("VoiceChatInternal", "VoiceChatState", "EnumItem", "VoiceChatState", true, false),
 ];
+
+/// Of [`PROPERTY_SUPPLEMENT`], the read-only ones (no Write permit: "Unable to assign property DeviceTrustLevel. Property is read
+/// only", after the value's cast)
+const READ_ONLY_SUPPLEMENT: &[(&str, &str)] = &[("Player", "DeviceTrustLevel"), ("VoiceChatInternal", "VoiceChatState")];
 
 /// Properties a game script may neither read nor write: (class, name, the capability it lacks). A playing client and a
 /// server's game script (script identity 2, Studio 0.746) raise "The current thread cannot read 'StreamingMinRadius' (lacking
@@ -1154,7 +1179,8 @@ impl Reflection {
                 if !known {
                     // an enum property names its enum where the others name their engine type
                     let (engine_type, enum_name) = if *script_type == "EnumItem" { ("Enum", Some(*engine_type)) } else { (*engine_type, None) };
-                    let index = self.add_property(name, script_type, engine_type, enum_name, false, *scriptable, *serialized, id, MemberOrigin::Engine);
+                    let read_only = READ_ONLY_SUPPLEMENT.contains(&(*class, *name));
+                    let index = self.add_property(name, script_type, engine_type, enum_name, read_only, *scriptable, *serialized, id, MemberOrigin::Engine);
                     self.classes[id as usize].own_properties.push(index);
                 }
             }
