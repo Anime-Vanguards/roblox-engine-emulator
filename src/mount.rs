@@ -181,6 +181,8 @@ pub(crate) fn begin_project_with_prescan(
     }
 
     mounting.phase(engine, "snapshots");
+    // (a directory several of these mount lists their entries as one listing would: project::merge_listed)
+    project::begin_root_listings(engine);
     for root in &spec.roots {
         prescan.mount(engine, root);
         mounting.phase(engine, &format!("mount {root}"));
@@ -192,11 +194,15 @@ pub(crate) fn begin_project_with_prescan(
             engine.warn(format!("{missing}; not mounted"));
         }
         for mount in &tree.mounts {
-            project::mount_at(engine, mount)?;
+            if let Err(error) = project::mount_at(engine, mount) {
+                project::end_root_listings(engine);
+                return Err(error);
+            }
         }
         mounting.phase(engine, &format!("mount {}", tree.file.display()));
     }
     prescan.mount_data(engine, &place_roots);
+    project::end_root_listings(engine);
     mounting.phase(engine, "data roots");
     if engine.options.server() {
         project::apply_studio_names(engine, &place_roots);

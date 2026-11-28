@@ -120,8 +120,8 @@ fn a_rojo_project_mounts_its_tree_where_rojo_puts_it() {
         "print: maybe nil nil",
         "print: server Folder Script",
         "print: client StarterPlayerScripts Folder LocalScript",
-        // (in file order; the harness's own folder after them)
-        "print: order Shared,Lib,Inner,Remotes,Prop,RURFixtures",
+        // (by name, as Rojo orders a project node's children; the harness's own folder after them)
+        "print: order Inner,Lib,Prop,Remotes,Shared,RURFixtures",
     ] {
         assert!(lines.iter().any(|line| line == wanted), "{wanted}: {lines:?}");
     }

@@ -77,6 +77,46 @@ pub struct ProjectState {
     /// The directory listings the mount made, kept when a prepared run will check them again
     /// (record/prepare.rs: Some before the mount)
     pub listings: Option<Vec<Listing>>,
+    /// While roots mount over one another ([`begin_root_listings`]): the children each directory's listings made, by the
+    /// names of the entries that made them, so that a later root's entries take their places among an earlier root's
+    listed: Option<Box<RootListings>>,
+}
+
+/// The children the listings of the directories made while roots mount over one another ([`begin_root_listings`]), by the
+/// names of the entries that made them, in Rojo's order ([`sort_listing`]). Kept in one arena, so that a directory's listing
+/// allocates nothing of its own: a project of two roots lists thousands of directories, nearly all of them once.
+#[derive(Default)]
+struct RootListings {
+    /// Every listing's entries, by its number
+    listings: Vec<std::sync::Arc<[String]>>,
+    /// (listing, entry index, child): each directory's run in Rojo's order
+    made: Vec<(u32, u32, InstanceId)>,
+    /// Each directory's run of `made` (start, length)
+    runs: FxHashMap<InstanceId, (u32, u32)>,
+    /// Lists for a directory's entries while it mounts, one for each directory being mounted on the way down
+    spare: Vec<Vec<(u32, InstanceId)>>,
+}
+
+impl RootListings {
+    fn name(&self, (listing, index, _): (u32, u32, InstanceId)) -> &str {
+        &self.listings[listing as usize][index as usize]
+    }
+}
+
+/// From here to [`end_root_listings`], directories several roots mount (layout roots, a Rojo project file's tree, data
+/// roots) list their children as one listing of all their entries would, in Rojo's order ([`merge_listed`])
+pub fn begin_root_listings(engine: &Engine) {
+    let listings = RootListings { runs: FxHashMap::with_capacity_and_hasher(4096, Default::default()), made: Vec::with_capacity(16384), listings: Vec::with_capacity(4096), spare: Vec::new() };
+    engine.state.borrow_mut().project.listed = Some(Box::new(listings));
+}
+
+/// Ends [`begin_root_listings`]: later mounts (`--mount`, project nodes) put their instances after what is there
+pub fn end_root_listings(engine: &Engine) {
+    let listed = engine.state.borrow_mut().project.listed.take();
+    // (freed on the pool: the mount goes on meanwhile)
+    if let Some(listed) = listed {
+        rayon::spawn(move || drop(listed));
+    }
 }
 
 /// A directory tree as a mount listed it: what a later [`Listing::unchanged`] compares the directory
@@ -1282,7 +1322,8 @@ pub fn project_setting(roots: &[String], key: &str) -> Option<serde_json::Value>
 #[derive(Clone)]
 struct ScanNode {
     path: String,
-    entries: Vec<String>,
+    /// In Rojo's order ([`sort_listing`]); shared with what a mount keeps of it ([`RootListings`])
+    entries: std::sync::Arc<[String]>,
     /// The entries' stamps from the listing, when a process keeps compiled modules (they check
     /// a module file is unchanged without a query per file)
     stamps: Vec<Option<crate::files::Stamp>>,
@@ -1304,6 +1345,25 @@ struct ScanNode {
 /// Whether a directory's entries name a meta file ([`ScanNode::meta_files`])
 fn has_meta_files(entries: &[String]) -> bool {
     entries.iter().any(|entry| ends_with_ignore_ascii_case(entry, ".meta.json"))
+}
+
+/// A directory's entries (with their kinds and, when kept, their stamps) in the order Rojo mounts them: memofs sorts a
+/// listing by file name, which compares code points (UTF-8 bytes; a name's case first: `Bar.server.luau` before `bar.luau`,
+/// U+FF61 before U+1F600), so a directory's children come in the order of the names of the entries that made them, not of
+/// their instance names (`a-b.luau`, `a.b.luau`, `a.luau`, `a.server.luau`, `a_b.luau`; `zz.project.json` named "AAA" among
+/// the z's). `rojo build` 7.6.1 and 7.7.0 on Windows; NTFS lists names by their UTF-16 code units with case folded.
+fn sort_listing(entries: &mut Vec<String>, kinds: &mut Vec<Option<std::fs::FileType>>, stamps: &mut Vec<Option<crate::files::Stamp>>) {
+    if entries.is_sorted() {
+        return;
+    }
+    let mut order: Vec<u32> = (0..entries.len() as u32).collect();
+    order.sort_unstable_by(|&a, &b| entries[a as usize].cmp(&entries[b as usize]));
+    let mut names: Vec<Option<String>> = std::mem::take(entries).into_iter().map(Some).collect();
+    *entries = order.iter().map(|&index| names[index as usize].take().unwrap_or_default()).collect();
+    *kinds = order.iter().map(|&index| kinds[index as usize]).collect();
+    if !stamps.is_empty() {
+        *stamps = order.iter().map(|&index| stamps[index as usize]).collect();
+    }
 }
 
 /// The directory Git keeps a repository's own data in. Rojo builds it as any folder (`rojo build` 7.6.1 and 7.7.0-rc.1: a
@@ -1386,6 +1446,7 @@ fn scan_below(path: String, up: Option<&Above>) -> ScanNode {
             stamps.clear();
         }
     }
+    sort_listing(&mut entries, &mut kinds, &mut stamps);
     let mut has_symlink = false;
     // Pre-filter candidate subdirectories without rayon overhead on leaf directories (the common case).
     let mut candidates: Vec<usize> = Vec::new();
@@ -1405,7 +1466,7 @@ fn scan_below(path: String, up: Option<&Above>) -> ScanNode {
     if candidates.is_empty() {
         let approx_instances = entries.len();
         let meta_files = has_meta_files(&entries);
-        return ScanNode { path, entries, stamps, dirs: FxHashMap::default(), loops: Vec::new(), linked: has_symlink, unlisted: false, approx_instances, meta_files };
+        return ScanNode { path, entries: entries.into(), stamps, dirs: FxHashMap::default(), loops: Vec::new(), linked: has_symlink, unlisted: false, approx_instances, meta_files };
     }
     let here = Above::new(&path, up);
     let visit = |index: usize| -> Option<(String, Result<ScanNode, String>)> {
@@ -1424,7 +1485,7 @@ fn scan_below(path: String, up: Option<&Above>) -> ScanNode {
             return None;
         }
         if entry == GIT_DIRECTORY {
-            return Some((entry.clone(), Ok(ScanNode { path: child, entries: Vec::new(), stamps: Vec::new(), dirs: FxHashMap::default(), loops: Vec::new(), linked: false, unlisted: true, approx_instances: 1, meta_files: false })));
+            return Some((entry.clone(), Ok(ScanNode { path: child, entries: Vec::new().into(), stamps: Vec::new(), dirs: FxHashMap::default(), loops: Vec::new(), linked: false, unlisted: true, approx_instances: 1, meta_files: false })));
         }
         let via_link = !kind.is_some_and(|kind| !kind.is_symlink());
         if let Some(above) = via_link.then(|| here.looped_by(Path::new(&child))).flatten() {
@@ -1452,7 +1513,7 @@ fn scan_below(path: String, up: Option<&Above>) -> ScanNode {
     let linked = has_symlink || dirs.values().any(|dir| dir.linked);
     let approx_instances = entries.len() + dirs.values().map(|d| d.approx_instances).sum::<usize>();
     let meta_files = has_meta_files(&entries);
-    ScanNode { path, entries, stamps, dirs, loops, linked, unlisted: false, approx_instances, meta_files }
+    ScanNode { path, entries: entries.into(), stamps, dirs, loops, linked, unlisted: false, approx_instances, meta_files }
 }
 
 #[test]
@@ -1465,7 +1526,7 @@ fn a_scan_lists_dot_directories_but_not_what_a_git_directory_below_holds() {
     }
     let path = root.to_string_lossy().replace('\\', "/");
     let node = scan(path.clone());
-    assert_eq!(node.dirs.get(".hidden").map(|dir| dir.entries.clone()), Some(vec!["value.luau".to_string()]));
+    assert_eq!(node.dirs.get(".hidden").map(|dir| dir.entries.to_vec()), Some(vec!["value.luau".to_string()]));
     assert_eq!(node.dirs.get(".git").map(|git| (git.entries.len(), git.dirs.len())), Some((0, 0)), "nothing below a .git is listed");
     // (a .git mounted itself is listed: its mount names it)
     assert!(scan(format!("{path}/.git")).dirs.contains_key("objects"));
@@ -1632,7 +1693,7 @@ mod kept_listing {
         let path = root.to_string_lossy().replace('\\', "/");
         std::fs::create_dir_all(root.join("Folder")).unwrap();
         std::fs::write(root.join("Folder/a.luau"), "return 1").unwrap();
-        let names = |node: &ScanNode| node.dirs["Folder"].entries.clone();
+        let names = |node: &ScanNode| node.dirs["Folder"].entries.to_vec();
         assert_eq!(names(&listed(path.clone())), ["a.luau"]);
         assert_eq!(names(&listed(path.clone())), ["a.luau"]);
         std::fs::write(root.join("Folder/b.luau"), "return 2").unwrap();
@@ -1695,6 +1756,8 @@ impl std::hash::Hash for ChildKey {
 struct ChildIndex {
     by_name: Option<FxHashMap<ChildKey, InstanceId>>,
     claimed: FxHashSet<InstanceId>,
+    /// The children an entry's script replaced, each with its replacement (old, new)
+    replaced: Vec<(InstanceId, InstanceId)>,
 }
 
 impl ChildIndex {
@@ -1707,7 +1770,7 @@ impl ChildIndex {
             }
             by_name
         });
-        ChildIndex { by_name, claimed: FxHashSet::default() }
+        ChildIndex { by_name, claimed: FxHashSet::default(), replaced: Vec::new() }
     }
 
     /// The child named `name` an entry of this listing mounts into: the first such child no earlier entry made or took
@@ -1725,6 +1788,9 @@ impl ChildIndex {
     /// `id` is the child an entry made or took, named `name`; `replaced`: the child it took the place of
     fn claim(&mut self, name: Str, id: InstanceId, replaced: Option<InstanceId>) {
         self.claimed.insert(id);
+        if let Some(old) = replaced {
+            self.replaced.push((old, id));
+        }
         if let Some(by_name) = &mut self.by_name {
             match by_name.get_mut(name.as_bytes()) {
                 Some(first) if Some(*first) == replaced => *first = id,
@@ -1789,15 +1855,21 @@ fn ensure_child_indexed(
     child
 }
 
+/// A scanned directory's entries mounted as the children of `instance`, in the listing's order ([`sort_listing`]).
 fn mount_directory(engine: &Engine, node: &ScanNode, instance: InstanceId, mount: &mut MountCounts, relative: &str) {
     let has_loops = !node.loops.is_empty();
     let has_dirs = !node.dirs.is_empty();
     let mut child_index = Some(ChildIndex::new(&engine.state.borrow(), instance, node.entries.len()));
+    // (while roots mount over one another: the child each entry made or took, [`merge_listed`])
+    let mut made = match engine.state.borrow_mut().project.listed.as_mut() {
+        Some(listed) => Some(listed.spare.pop().unwrap_or_default()),
+        None => None,
+    };
     let mut full_path = String::with_capacity(node.path.len() + 64);
     full_path.push_str(&node.path);
     full_path.push('/');
     let prefix_len = full_path.len();
-    for entry in &node.entries {
+    for (index, entry) in node.entries.iter().enumerate() {
         if has_loops {
             if let Some((_, above)) = node.loops.iter().find(|(name, _)| name == entry) {
                 engine.warn(format!("{}/{entry}: a link back to {above}, which would hold itself; not mounted", node.path));
@@ -1807,15 +1879,16 @@ fn mount_directory(engine: &Engine, node: &ScanNode, instance: InstanceId, mount
         if has_dirs {
             if let Some(child_node) = node.dirs.get(entry) {
                 let child_relative = if relative.is_empty() { entry.clone() } else { format!("{relative}/{entry}") };
-                match nested_project(engine, child_node) {
+                let child = match nested_project(engine, child_node) {
                     // Named by the project's `name`, else by its directory (Rojo's src/project.rs, Project::set_file_name)
                     Some(project) => {
                         let name = project.get("name").and_then(serde_json::Value::as_str).unwrap_or(entry);
-                        mount_nested_project(engine, child_node, &project, instance, name, mount, &child_relative, child_index.as_mut());
+                        mount_nested_project(engine, child_node, &project, instance, name, mount, &child_relative, child_index.as_mut())
                     }
-                    None => {
-                        mount_plain_directory_as(engine, child_node, instance, entry, mount, &child_relative, child_index.as_mut());
-                    }
+                    None => mount_plain_directory_as(engine, child_node, instance, entry, mount, &child_relative, child_index.as_mut()),
+                };
+                if let Some(made) = made.as_mut() {
+                    made.push((index as u32, child));
                 }
                 continue;
             }
@@ -1827,7 +1900,69 @@ fn mount_directory(engine: &Engine, node: &ScanNode, instance: InstanceId, mount
         }
         full_path.truncate(prefix_len);
         full_path.push_str(entry);
-        mount_file(engine, &full_path, entry, None, instance, mount, child_index.as_mut(), Some(node));
+        let child = mount_file(engine, &full_path, entry, None, instance, mount, child_index.as_mut(), Some(node));
+        if let (Some(made), Some(child)) = (made.as_mut(), child) {
+            made.push((index as u32, child));
+        }
+    }
+    if let Some(mut made) = made {
+        if !made.is_empty() {
+            let replaced = child_index.map(|index| index.replaced).unwrap_or_default();
+            merge_listed(engine, node, instance, &made, &replaced);
+        }
+        made.clear();
+        if let Some(listed) = engine.state.borrow_mut().project.listed.as_mut() {
+            listed.spare.push(made);
+        }
+    }
+}
+
+/// While roots mount over one another ([`begin_root_listings`]): the children the entries of `node` made or took below
+/// `instance` (`made`: each with its entry's index) take their places among those an earlier root's listing of the same
+/// directory made there, as one listing of both roots' entries would order them ([`sort_listing`]; the earlier root's first
+/// where two names are the same, and a child two entries share where the first of them puts it). Children nothing listed
+/// made (a snapshot's, a Studio name's) keep their places. `replaced`: earlier children a script of this listing replaced.
+fn merge_listed(engine: &Engine, node: &ScanNode, instance: InstanceId, made: &[(u32, InstanceId)], replaced: &[(InstanceId, InstanceId)]) {
+    let mut state = engine.state.borrow_mut();
+    let state = &mut *state;
+    let Some(listed) = state.project.listed.as_deref_mut() else { return };
+    let listing = listed.listings.len() as u32;
+    listed.listings.push(node.entries.clone());
+    let start = listed.made.len();
+    let Some((earlier, length)) = listed.runs.get(&instance).copied() else {
+        listed.made.extend(made.iter().map(|&(index, child)| (listing, index, child)));
+        listed.runs.insert(instance, (start as u32, made.len() as u32));
+        return;
+    };
+    // (the merged run goes after everything: the earlier one is left unused)
+    let (earlier, length) = (earlier as usize, length as usize);
+    let (mut a, mut b) = (0, 0);
+    while a < length || b < made.len() {
+        if b >= made.len() || (a < length && listed.name(listed.made[earlier + a]) <= node.entries[made[b].0 as usize].as_str()) {
+            let (old_listing, index, mut child) = listed.made[earlier + a];
+            if let Some(&(_, new)) = replaced.iter().find(|(old, _)| *old == child) {
+                child = new;
+            }
+            listed.made.push((old_listing, index, child));
+            a += 1;
+        } else {
+            listed.made.push((listing, made[b].0, made[b].1));
+            b += 1;
+        }
+    }
+    listed.runs.insert(instance, (start as u32, (length + made.len()) as u32));
+    let merged = &listed.made[start..];
+    // (each child once, where its first entry puts it, and only those still below `instance`)
+    let mut seen: FxHashSet<InstanceId> = FxHashSet::default();
+    let order: Vec<InstanceId> = merged.iter().map(|&(_, _, child)| child).filter(|&child| state.dom.get(child).is_some_and(|it| it.parent == Some(instance)) && seen.insert(child)).collect();
+    let current: Vec<InstanceId> = state.dom.at(instance).children.iter().copied().collect();
+    let mut next = order.iter();
+    let reordered: Vec<InstanceId> = current.iter().map(|&child| if seen.contains(&child) { *next.next().unwrap_or(&child) } else { child }).collect();
+    if reordered != current {
+        state.dom.reorder_children(instance, &reordered);
+        let parent = state.dom.at_mut(instance);
+        parent.child_version = parent.child_version.wrapping_add(1);
+        state.dom.structure_version += 1;
     }
 }
 
@@ -2685,6 +2820,8 @@ fn scan_layout_root_uncached(root: &str, reflection: &Reflection) -> Vec<(String
             }
         }
     }
+    // (in Rojo's order, as a DataModel tree's services are: a service the mount makes is the DataModel's next child)
+    services_found.sort_unstable();
     if services_found.len() > 1 && !crate::lua::modules::is_batch_frozen() {
         use rayon::prelude::*;
         services_found.into_par_iter().map(|name| {
@@ -2779,6 +2916,7 @@ fn scan_layout_root_early(root: &str) -> Vec<EarlyEntry> {
             }
         }
     }
+    dirs.sort_unstable();
     let common_count = dirs.iter().filter(|(_, c)| *c).count();
     if common_count > 1 && !crate::lua::modules::is_batch_frozen() {
         use rayon::prelude::*;

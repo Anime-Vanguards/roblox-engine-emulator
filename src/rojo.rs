@@ -88,8 +88,8 @@ pub fn missing_path(file: &Path, at: &str, source: &Path) -> String {
     format!("{name} maps {} to {}, which doesn't exist{advice}", dotted(at), shown(source, dir))
 }
 
-/// A JSON value with its objects' keys in file order (serde_json's own map sorts them, and the mount order is the
-/// order instances are created in, which `GetChildren` shows)
+/// A JSON value with its objects' keys in file order (a repeated key keeps its first place; [`Node::children`] lists a
+/// node's children in Rojo's order)
 enum Node {
     Object(Vec<(String, Node)>),
     String(String),
@@ -160,13 +160,17 @@ impl Node {
         }
     }
 
-    /// The children a tree node names: its keys without `$`, with object values
-    fn children(&self) -> impl Iterator<Item = (&String, &Node)> {
+    /// The children a tree node names: its keys without `$`, with object values, in Rojo's order: a project node keeps its
+    /// children by name (Rojo's ProjectNode `children` is a BTreeMap: byte by byte, `1n`, `ANode`, `_n`, `zNode`; `rojo build`
+    /// 7.6.1 and 7.7.0), after what its `$path` makes
+    fn children(&self) -> Vec<(&String, &Node)> {
         let entries: &[(String, Node)] = match self {
             Node::Object(entries) => entries,
             _ => &[],
         };
-        entries.iter().filter(|(name, value)| !name.starts_with('$') && matches!(value, Node::Object(_))).map(|(name, value)| (name, value))
+        let mut children: Vec<(&String, &Node)> = entries.iter().filter(|(name, value)| !name.starts_with('$') && matches!(value, Node::Object(_))).map(|(name, value)| (name, value)).collect();
+        children.sort_by(|a, b| a.0.cmp(b.0));
+        children
     }
 }
 
@@ -222,7 +226,7 @@ fn read_project(file: &Path) -> Result<Node, String> {
     // (a run prepared ahead checks the project files it read: record/prepare.rs)
     crate::files::note(file);
     let bytes = std::fs::read(file).map_err(|error| format!("{}: {error}", file.display()))?;
-    // (read as `rojo build` reads a project file, lenient JSONC (project/data_files.rs), its tree in the file's order)
+    // (read as `rojo build` reads a project file, lenient JSONC (project/data_files.rs))
     let text = crate::project::data_files::read_json_text(&bytes).map_err(|error| format!("{}: not a valid Rojo project ({error})", file.display()))?;
     serde_json::from_str::<Node>(&text).map_err(|error| format!("{}: {error}", file.display()))
 }
@@ -232,7 +236,7 @@ fn is_service(name: &str) -> bool {
     name.starts_with(|c: char| c.is_ascii_uppercase())
 }
 
-/// The mounts of a project file, in the order cli/rojo.mjs gives them. `at` is `--rojo-at Service/Name` (for a tree
+/// The mounts of a project file, in the order Rojo builds its tree ([`Node::children`]). `at` is `--rojo-at Service/Name` (for a tree
 /// that is not a DataModel). A non-optional `$path` that is missing is skipped and reported in `warnings`
 /// ([`missing_path`]; the caller adds its name in front).
 pub fn mounts(project_file: &Path, at: Option<&str>, warnings: &mut Vec<String>) -> Result<Vec<Mount>, String> {
@@ -432,7 +436,7 @@ impl Walk<'_> {
 }
 
 /// A Rojo project file read for a run (`--rojo <file>`, [`crate::launch::prepare`]): the mounts its tree comes to, in
-/// file order, as the engine applies them, and what to say about the `$path`s it maps that don't exist. The mount
+/// Rojo's order, as the engine applies them, and what to say about the `$path`s it maps that don't exist. The mount
 /// ([`crate::mount::begin_project`]) applies them where `--roots` folders mount.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Tree {
@@ -480,10 +484,11 @@ mod tests {
         std::fs::write(path, text).unwrap();
     }
 
-    /// A DataModel tree mounts its `$path`s at their instance paths in file order, `$className` nodes without a path
-    /// as instances, nested projects in place; missing paths are skipped (reported unless optional)
+    /// A DataModel tree mounts its `$path`s at their instance paths in Rojo's order (a node's children by name, byte by
+    /// byte), `$className` nodes without a path as instances, nested projects in place; missing paths are skipped (reported
+    /// unless optional)
     #[test]
-    fn a_datamodel_tree_becomes_mounts_in_file_order() {
+    fn a_datamodel_tree_becomes_mounts_in_rojos_order() {
         let dir = temp_dir("datamodel");
         write(&dir.join("src/shared/init.luau"), "return {}");
         write(&dir.join("Packages/Fusion.luau"), "return {}");
@@ -505,15 +510,15 @@ mod tests {
         assert_eq!(
             listed,
             vec![
-                (false, "ReplicatedStorage/Shared", "src/shared".into()),
-                (false, "ReplicatedStorage/Packages", "Packages".into()),
                 (false, "ReplicatedStorage/Inner", "nested/lib".into()),
+                (false, "ReplicatedStorage/Packages", "Packages".into()),
                 (true, "ReplicatedStorage/Remotes", "Folder".into()),
+                (false, "ReplicatedStorage/Shared", "src/shared".into()),
             ]
         );
         assert_eq!(warnings, ["default.project.json maps ServerStorage.Gone to missing, which doesn't exist"]);
-        assert_eq!(mounted_list(&mounts), "ReplicatedStorage.Shared, ReplicatedStorage.Packages, ReplicatedStorage.Inner");
-        assert_eq!(mounts[3].arguments(), [String::from("--instance"), "ReplicatedStorage/Remotes=Folder".into()]);
+        assert_eq!(mounted_list(&mounts), "ReplicatedStorage.Inner, ReplicatedStorage.Packages, ReplicatedStorage.Shared");
+        assert_eq!(mounts[2].arguments(), [String::from("--instance"), "ReplicatedStorage/Remotes=Folder".into()]);
         // Every $path, also the missing ones (optional too), with whether it exists
         let mapped: Vec<(String, bool)> = mappings(&dir.join("default.project.json")).unwrap().into_iter().map(|(at, _, exists)| (at, exists)).collect();
         assert_eq!(mapped.iter().filter(|(_, exists)| !exists).map(|(at, _)| at.as_str()).collect::<Vec<_>>(), ["ServerStorage/Gone"]);
@@ -521,9 +526,9 @@ mod tests {
     }
 
     /// A project file is read as `rojo build` 7.6.1 reads it, as lenient JSONC (comments, unquoted keys, single quotes,
-    /// trailing commas), its tree still in the file's order; one jsonc-parser refuses says why
+    /// trailing commas), its node children then in Rojo's order; one jsonc-parser refuses says why
     #[test]
-    fn a_project_file_reads_as_jsonc_in_file_order() {
+    fn a_project_file_reads_as_jsonc() {
         let dir = temp_dir("jsonc");
         write(&dir.join("src/b.luau"), "return 1");
         write(&dir.join("src/a.luau"), "return 2");
@@ -532,7 +537,7 @@ mod tests {
             "{\n\t// a project with comments\n\tname: 'game',\n\ttree: {\"$className\": 'DataModel',\n\t\tReplicatedStorage: {\"Zed\": {\"$path\": 'src/b.luau',}, Alpha: {\"$path\": \"src/a.luau\"},},\n\t},\n}",
         );
         let made = mounts(&dir.join("default.project.json"), None, &mut Vec::new()).unwrap();
-        assert_eq!(made.iter().map(|mount| mount.path.as_str()).collect::<Vec<_>>(), ["ReplicatedStorage/Zed", "ReplicatedStorage/Alpha"]);
+        assert_eq!(made.iter().map(|mount| mount.path.as_str()).collect::<Vec<_>>(), ["ReplicatedStorage/Alpha", "ReplicatedStorage/Zed"]);
         write(&dir.join("bad.project.json"), "{\"name\": \"bad\", \"tree\": {\"a\": NaN}}");
         let error = mounts(&dir.join("bad.project.json"), None, &mut Vec::new()).unwrap_err();
         assert!(error.ends_with("bad.project.json: not a valid Rojo project (JSONC parse error (Unexpected token on line 1 column 31))"), "{error}");
@@ -642,8 +647,8 @@ mod tests {
 
     /// A tree whose root is a `$path` to a DataModel project, with a service beside it (a code project and a world synced
     /// on its own, combined by a root project), is that DataModel tree with the service added, as `rojo build` makes it:
-    /// the referenced project's nodes first, their paths relative to its file, then the root's own, a nested project's
-    /// tree mounting at its node
+    /// the referenced project's nodes first (each node's children by name), their paths relative to its file, then the root's
+    /// own, a nested project's tree mounting at its node
     #[test]
     fn a_root_path_to_a_datamodel_project_is_a_datamodel_tree() {
         let dir = temp_dir("root-path");
@@ -661,8 +666,8 @@ mod tests {
         assert_eq!(
             listed(&dir.join("game.project.json"), &dir),
             [
-                (false, "ReplicatedStorage/Shared".into(), "src/shared".into()),
                 (true, "ReplicatedStorage/Remotes".into(), "Folder".into()),
+                (false, "ReplicatedStorage/Shared".into(), "src/shared".into()),
                 (false, "ServerScriptService/Server".into(), "src/server".into()),
                 (false, "Workspace/Map".into(), "world/map".into()),
             ]

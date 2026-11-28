@@ -2623,6 +2623,82 @@ fn text_files_and_entries_of_one_name_mount_as_rojo_builds_them() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A directory's children mount in Rojo's order, as `rojo build` 7.6.1 and 7.7.0 build them on Windows: memofs sorts a listing
+/// by file name, comparing code points (UTF-8 bytes: case first, `_` after the capitals, U+FF61 before U+1F600, where NTFS's
+/// own listing ignores case and orders by UTF-16), so the names of the entries order the children, not their instance names
+/// (`a-b.luau`, `a.b.luau`, `a.luau`, `a.server.luau`; `zz.project.json` named "AAA" among the z's). Two layout roots over one
+/// another list a directory both have as one listing of both roots' entries would (the union Rojo builds of one folder
+/// holding both), the later root's entries among the earlier root's.
+#[test]
+fn children_mount_in_rojos_order() {
+    let dir = std::env::temp_dir().join(format!("ree-child-order-test-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let files: &[(&str, &str)] = &[
+        ("A/ReplicatedStorage/Top.luau", "return 1"),
+        ("A/ReplicatedStorage/order/apple.luau", "return 1"),
+        ("A/ReplicatedStorage/order/Bar.server.luau", "print(1)"),
+        ("A/ReplicatedStorage/order/Zed.luau", "return 1"),
+        ("A/ReplicatedStorage/order/_u.luau", "return 1"),
+        ("A/ReplicatedStorage/order/~t.luau", "return 1"),
+        ("A/ReplicatedStorage/order/10.luau", "return 1"),
+        ("A/ReplicatedStorage/order/9.luau", "return 1"),
+        ("A/ReplicatedStorage/order/a-b.luau", "return 1"),
+        ("A/ReplicatedStorage/order/a.luau", "return 1"),
+        ("A/ReplicatedStorage/order/a.b.luau", "return 1"),
+        ("A/ReplicatedStorage/order/a_b.luau", "return 1"),
+        ("A/ReplicatedStorage/order/a.server.luau", "print(1)"),
+        ("A/ReplicatedStorage/order/\u{e9}.luau", "return 1"),
+        ("A/ReplicatedStorage/order/\u{ff61}.luau", "return 1"),
+        ("A/ReplicatedStorage/order/\u{1f600}.luau", "return 1"),
+        ("A/ReplicatedStorage/order/a/x.luau", "return 1"),
+        ("A/ReplicatedStorage/order/x.txt", "x"),
+        ("A/ReplicatedStorage/order/zz.project.json", r#"{ "name": "AAA", "tree": { "$className": "Configuration" } }"#),
+        ("B/ReplicatedStorage/Mid.luau", "return 1"),
+        ("B/ReplicatedStorage/order/Zz.luau", "return 1"),
+        ("B/ReplicatedStorage/order/b.luau", "return 1"),
+        ("B/ReplicatedStorage/order/a/w.luau", "return 1"),
+    ];
+    for (relative, text) in files {
+        let file = dir.join(relative);
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(file, text).unwrap();
+    }
+    let root = |name: &str| dir.join(name).to_string_lossy().replace('\\', "/");
+    let engine = Engine::new(Options::default()).expect("engine");
+    let lua = Lua::new();
+    let spec = super::mount::ProjectSpec { roots: vec![root("A"), root("B")], ..Default::default() };
+    super::mount::mount_project(&lua, &engine, &spec, std::time::Instant::now()).expect("mount");
+    let output = run(
+        &lua,
+        &engine,
+        r#"
+        local function list(instance)
+            local names = {}
+            for _, child in instance:GetChildren() do
+                table.insert(names, child.ClassName .. " " .. child.Name)
+            end
+            print(table.concat(names, " | "))
+        end
+        local RS = game:GetService("ReplicatedStorage")
+        list(RS)
+        list(RS.order)
+        list(RS.order:FindFirstChildOfClass("Folder"))
+        "#,
+    );
+    drop(lua);
+    let _ = std::fs::remove_dir_all(&dir);
+    let printed: Vec<&str> = output.iter().filter_map(|line| line.strip_prefix("print: ")).collect();
+    assert_eq!(
+        printed,
+        [
+            "ModuleScript Mid | ModuleScript Top | Folder order",
+            "ModuleScript 10 | ModuleScript 9 | Script Bar | ModuleScript Zed | ModuleScript Zz | ModuleScript _u | Folder a | ModuleScript a-b | ModuleScript a.b | ModuleScript a | Script a | ModuleScript a_b | ModuleScript apple | ModuleScript b | StringValue x | Configuration AAA | ModuleScript ~t | ModuleScript \u{e9} | ModuleScript \u{ff61} | ModuleScript \u{1f600}",
+            "ModuleScript w | ModuleScript x",
+        ],
+        "{output:?}"
+    );
+}
+
 /// `files` (and the empty directories `dirs`) written to a fresh folder, mounted at ReplicatedStorage/A, and listed: each
 /// instance's line (class, name, a StringValue's value, a LocalizationTable's entries, a Script's RunContext, a module's
 /// answer) with each folder's lines sorted, then the run's warnings and errors, sorted, with the folder spelled `<root>`
