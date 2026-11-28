@@ -33,14 +33,6 @@
 		{
 			"line": "pairs joined Y2 root=X2 linear=0 -2.24999976 -2 angular=0 0 0.75 velocity=0 -1.5 -2 rotvelocity=0 0 0.75",
 			"why": "a weld joining two assemblies of two parts each: a client sums the joined centre of mass in an order of its own (the two small parts first, then the large ones), a float step off ree, which sums them in its walk from the root, so the centre velocity reads a float step apart (the centre-precision measure entry, ASM-WELD-PRECISION)"
-		},
-		{
-			"line": "split own Z root=Z linear=1 0 -4 angular=0 1 0 velocity=1 0 -4 rotvelocity=0 1 0",
-			"why": "a client keeps in a part's body the motion a script's read of its Velocity or RotVelocity works out (here the reads before the split), so the piece split off reads it; ree keeps a part's body from velocity writes, simulation steps and joins alone (no hook on a property's read)"
-		},
-		{
-			"line": "split read Z root=Z linear=1 0 -4 angular=0 1 0 velocity=1 0 -4 rotvelocity=0 1 0",
-			"why": "a client keeps in a part's body the motion a script's read of its Velocity or RotVelocity works out (here the reads before the split), so the piece split off reads it; ree keeps a part's body from velocity writes, simulation steps and joins alone (no hook on a property's read)"
 		}
 	],
 	"camera_float_steps": [

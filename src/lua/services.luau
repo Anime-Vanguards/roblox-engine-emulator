@@ -233,7 +233,7 @@ local function GetBoundingBoxInner(Self)
 end
 
 Method("PVInstance", "GetPivot", Priced(function(Self)
-	Charge(Cost.ModelQuery)
+	Charge(Cost.ModelQuery) R.Placed(Self) -- (a part's pivot, a model's PrimaryPart's, is a placed read: world/gravity.rs placed_read)
 	return GetPivotInner(Self)
 end))
 -- A non-part PVInstance's stored pivot: a model's WorldPivotData, any other's the emulator's own.

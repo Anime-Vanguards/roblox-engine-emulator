@@ -171,6 +171,9 @@ struct Member {
     /// The name its value is kept under: the key's own, or for a deprecated lower-case property the property it
     /// stands for (`brickColor` -> BrickColor, Engine::member_name)
     name: NameId,
+    /// A BasePart's read of where it is or how it moves (CFrame, Position, Orientation, Velocity, RotVelocity,
+    /// AssemblyAngularVelocity): a client works the part out again and keeps its motion (world/gravity.rs placed_read)
+    placed: bool,
 }
 
 fn base_method(name: NameId) -> Option<Base> {
@@ -206,9 +209,10 @@ fn compute_member(engine: &Engine, class: ClassId, key: NameId) -> Member {
     let base_class = reflection.class_id("Instance").expect("Instance class");
     // (a deprecated lower-case property is the property it stands for: its value, setter and Changed)
     let name = engine.member_name(class, key);
-    let mut member = Member { read: Read::Slow, write: Write::Slow, call: Call::NotMethod, index_fn: 0, call_fn: 0, cost: crate::cost::method(reflection.name(name)) as f32, name };
+    let mut member = Member { read: Read::Slow, write: Write::Slow, call: Call::NotMethod, index_fn: 0, call_fn: 0, cost: crate::cost::method(reflection.name(name)) as f32, name, placed: false };
     match engine.resolve_member(class, name) {
         Resolved::Property { property, getter, setter, write } => {
+            member.placed = crate::world::gravity::placed_member(engine, class, name);
             let behaviors = engine.behaviors.borrow();
             let base_getter = |n: K| {
                 name == n as NameId
@@ -362,6 +366,7 @@ const EMPTY_MEMBER: Member = Member {
     call_fn: 0,
     cost: 0.0,
     name: 0,
+    placed: false,
 };
 
 #[inline]
@@ -1333,7 +1338,7 @@ unsafe fn index_fast(state: *mut ffi::lua_State) -> Out {
         let mut name = name;
         let mut read = match name {
             Some(name) => api.member(class, name),
-            None => Member { read: Read::Child, write: Write::Slow, call: Call::NotMethod, index_fn: 0, call_fn: 0, cost: 0.0, name: 0 },
+            None => Member { read: Read::Child, write: Write::Slow, call: Call::NotMethod, index_fn: 0, call_fn: 0, cost: 0.0, name: 0, placed: false },
         };
         // A key that names no member and no child reads the member it names with its first letter upper-cased
         // (`part.anchored`, instance.rs `get`): only after the child lookup has missed, so exact names never pay for it
@@ -1366,6 +1371,11 @@ unsafe fn index_fast(state: *mut ffi::lua_State) -> Out {
             api.charge(first);
         }
         api.cross(crate::boundary::Kind::Get, class, name, matches!(read.read, Read::Child), id, cost + lower_first + first, true);
+        // (a part's place or motion: a client works it out again where its assembly moved, keeping its motion: world/gravity.rs)
+        if read.placed {
+            let walk = crate::world::gravity::placed_read(&mut engine.state.borrow_mut(), &engine.reflection, id);
+            read_extra(api, walk);
+        }
         match read.read {
             Read::Plain => {
                 let name = read.name;

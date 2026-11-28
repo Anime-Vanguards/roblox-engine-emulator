@@ -737,6 +737,15 @@ pub fn load(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     // R.TopbarStart: where the top bar's band right of Roblox's buttons starts now (services/mod.rs TopBar; 0 without the bar)
     let e = engine.clone();
     r.set("TopbarStart", super::lua_fn(lua, move |_, ()| Ok(e.state.borrow().topbar.start))?)?;
+    // R.Placed(instance): GetPivot reads where a part (a Model's PrimaryPart) is (world/gravity.rs placed_read)
+    let e = engine.clone();
+    r.set(
+        "Placed",
+        super::lua_fn(lua, move |_, target: LuaValue| {
+            crate::world::gravity::pivot_read(&e, instance_of(&target)?);
+            Ok(())
+        })?,
+    )?;
     let options = lua.create_table()?;
     let device = &engine.options.profile.device;
     options.set("TopbarInset", device.topbar_inset())?;

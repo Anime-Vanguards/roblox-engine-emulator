@@ -425,6 +425,13 @@ fn create(lua: &Lua, engine: &Rc<Engine>, tweens: &Shared, args: &super::Args) -
         };
         properties.push(Property { name: info.name, goal, kind, script_type_name: info.script_type_name.to_string(), number });
     }
+    // (a tween made on a part's place or motion reads it, as a script's read does: world/gravity.rs placed_read; measured for Velocity)
+    if let Some(target) = target {
+        let class = engine.state.borrow().dom.at(target).class;
+        if properties.iter().any(|property| crate::world::gravity::placed_member(engine, class, property.name)) {
+            crate::world::gravity::placed_read_charged(engine, target);
+        }
+    }
     let data = {
         let info = info_ud.borrow::<LTweenInfo>()?;
         TweenData {

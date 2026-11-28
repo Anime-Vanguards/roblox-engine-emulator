@@ -1199,6 +1199,11 @@ pub fn clone(engine: &Engine, id: InstanceId) -> Option<InstanceId> {
     // (state an instance keeps outside its properties, copied with no borrow of the engine's state held: a WorldModel's
     // collision groups)
     if let Some(pairs) = pairs {
+        // (a clone reads where each part is and how it moves, as a script's read does: world/gravity.rs placed_read)
+        for &(source, _) in &pairs {
+            crate::world::gravity::placed_read_charged(engine, source);
+        }
+        crate::world::gravity::cloned(engine, &pairs);
         crate::services::physics::cloned(engine, &pairs);
         // (an EditableImage a property of the template shows, which the copy shows too)
         if let Err(error) = super::stubs::image_cloned(engine, &pairs) {

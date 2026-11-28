@@ -1,0 +1,61 @@
+# engine: Roblox Studio 0.747.0.7471481, the server of a headless play session (a Script in ServerScriptService, script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-28
+read none Z root=Z linear=0 0 0 angular=0 0 0 velocity=0 0 0 rotvelocity=0 0 0
+read velocity Z root=Z linear=1 0 -4 angular=0 1 0 velocity=1 0 -4 rotvelocity=0 1 0
+read rotvelocity Z root=Z linear=1 0 -4 angular=0 1 0 velocity=1 0 -4 rotvelocity=0 1 0
+read angular Z root=Z linear=1 0 -4 angular=0 1 0 velocity=1 0 -4 rotvelocity=0 1 0
+read cframe Z root=Z linear=1 0 -4 angular=0 1 0 velocity=1 0 -4 rotvelocity=0 1 0
+read position Z root=Z linear=1 0 -4 angular=0 1 0 velocity=1 0 -4 rotvelocity=0 1 0
+read orientation Z root=Z linear=1 0 -4 angular=0 1 0 velocity=1 0 -4 rotvelocity=0 1 0
+read rotation Z root=Z linear=1 0 -4 angular=0 1 0 velocity=1 0 -4 rotvelocity=0 1 0
+read pivot Z root=Z linear=1 0 -4 angular=0 1 0 velocity=1 0 -4 rotvelocity=0 1 0
+read index Z root=Z linear=1 0 -4 angular=0 1 0 velocity=1 0 -4 rotvelocity=0 1 0
+read clone Z root=Z linear=1 0 -4 angular=0 1 0 velocity=1 0 -4 rotvelocity=0 1 0
+read linear Z root=Z linear=0 0 0 angular=0 0 0 velocity=0 0 0 rotvelocity=0 0 0
+read centre Z root=Z linear=0 0 0 angular=0 0 0 velocity=0 0 0 rotvelocity=0 0 0
+read mass Z root=Z linear=0 0 0 angular=0 0 0 velocity=0 0 0 rotvelocity=0 0 0
+read rootpart Z root=Z linear=0 0 0 angular=0 0 0 velocity=0 0 0 rotvelocity=0 0 0
+read size Z root=Z linear=0 0 0 angular=0 0 0 velocity=0 0 0 rotvelocity=0 0 0
+read anchored Z root=Z linear=0 0 0 angular=0 0 0 velocity=0 0 0 rotvelocity=0 0 0
+read atposition Z root=Z linear=0 0 0 angular=0 0 0 velocity=0 0 0 rotvelocity=0 0 0
+read signal Z root=Z linear=0 0 0 angular=0 0 0 velocity=0 0 0 rotvelocity=0 0 0
+path none Y root=Y linear=0 0 0 angular=0 0 0 velocity=0 0 0 rotvelocity=0 0 0
+path none Z root=Y linear=0 0 0 angular=0 0 0 velocity=0 0 0 rotvelocity=0 0 0
+path leaf Y root=Y linear=1 0 -2.45714283 angular=0 1 0 velocity=1 0 -2 rotvelocity=0 1 0
+path leaf Z root=Y linear=1 0 -2.45714283 angular=0 1 0 velocity=1 0 -4 rotvelocity=0 1 0
+path mid Y root=Y linear=1 0 -2.45714283 angular=0 1 0 velocity=1 0 -2 rotvelocity=0 1 0
+path mid Z root=Y linear=1 0 -2.45714283 angular=0 1 0 velocity=1 0 -4 rotvelocity=0 1 0
+path mid-leafsplit Z root=Z linear=0 0 0 angular=0 0 0 velocity=0 0 0 rotvelocity=0 0 0
+beside W root=W linear=0 0 0 angular=0 0 0 velocity=0 0 0 rotvelocity=0 0 0
+zero none Z root=Z linear=0 -1 0 angular=0.5 0 0 velocity=0 -1 0 rotvelocity=0.5 0 0
+zero read Z root=Z linear=0 0 0 angular=0 0 0 velocity=0 0 0 rotvelocity=0 0 0
+zeropath free none Y root=Y linear=0 -1 0 angular=0.5 0 0 velocity=0 -1 0 rotvelocity=0.5 0 0
+zeropath free none Z root=Y linear=0 -1 0 angular=0.5 0 0 velocity=0 -1 0 rotvelocity=0.5 0 0
+zeropath free leaf Y root=Y linear=0 0 0 angular=0 0 0 velocity=0 0 0 rotvelocity=0 0 0
+zeropath free leaf Z root=Y linear=0 0 0 angular=0 0 0 velocity=0 0 0 rotvelocity=0 0 0
+zeropath anchored none Y root=Y linear=0 -1 0 angular=0.5 0 0 velocity=0 -1 0 rotvelocity=0.5 0 0
+zeropath anchored none Z root=Y linear=0 -1 0 angular=0.5 0 0 velocity=0 -1 0 rotvelocity=0.5 0 0
+zeropath anchored leaf Y root=Y linear=0 0 0 angular=0 0 0 velocity=0 0 0 rotvelocity=0 0 0
+zeropath anchored leaf Z root=Y linear=0 0 0 angular=0 0 0 velocity=0 0 0 rotvelocity=0 0 0
+when read-write Z root=Z linear=1 0 -4 angular=0 1 0 velocity=1 0 -4 rotvelocity=0 1 0
+when write-read Z root=Z linear=0 0 5 angular=0 0 0 velocity=0 0 5 rotvelocity=0 0 0
+when read-write-read Z root=Z linear=0 0 5 angular=0 0 0 velocity=0 0 5 rotvelocity=0 0 0
+when read-write-readmid Z root=Z linear=1 0 -4 angular=0 1 0 velocity=1 0 -4 rotvelocity=0 1 0
+conveyor none Y root=Y velocity=0 0 0 rotvelocity=0 0 0
+conveyor read Y root=Y velocity=1 0 -2 rotvelocity=0 0.5 0
+conveyor frame Y root=Y velocity=1 0 -2 rotvelocity=0 0.5 0
+reroot anchor none X root=Z velocity=0 0 0 rotvelocity=0 0 0
+reroot anchor none Z root=Z velocity=0 0 0 rotvelocity=0 0 0
+reroot anchor read X root=Z velocity=1 0 0 rotvelocity=0 1 0
+reroot anchor read Z root=Z velocity=1 0 -4 rotvelocity=0 1 0
+reroot priority none X root=Z velocity=0 0 0 rotvelocity=0 0 0
+reroot priority none Z root=Z velocity=0 0 0 rotvelocity=0 0 0
+reroot priority read X root=Z velocity=1 0 0 rotvelocity=0 1 0
+reroot priority read Z root=Z velocity=1 0 -4 rotvelocity=0 1 0
+model pivot Z root=Z linear=1 0 -4 angular=0 1 0 velocity=1 0 -4 rotvelocity=0 1 0
+tween create Z root=Z linear=1 0 -4 angular=0 1 0 velocity=1 0 -4 rotvelocity=0 1 0
+tween play Z root=Z linear=1 0 -4 angular=0 1 0 velocity=1 0 -4 rotvelocity=0 1 0
+clone values 1 0 -4 0 1 0
+clone C root=C linear=1 0 -4 angular=0 1 0 velocity=1 0 -4 rotvelocity=0 1 0
+outside none Z root=Z linear=0 0 0 angular=0 0 0 velocity=0 0 0 rotvelocity=0 0 0
+outside read Z root=Z linear=0 0 0 angular=0 0 0 velocity=0 0 0 rotvelocity=0 0 0

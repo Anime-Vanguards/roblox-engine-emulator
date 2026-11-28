@@ -2181,6 +2181,31 @@ pub const BODY_REBUILT_PART: f64 = 0.08e-6;
 /// at 3,000 and 45.9 at 10,000 (AssemblyAngularVelocity 4.84 and 43.9), beyond the 0.45 to 0.57 of a part with none; welded to N
 /// anchored parts, the same as none.
 pub const ASSEMBLY_VELOCITY_PART: f64 = 4.5e-9;
+/// What a client spends working a part out again at a placed read (where it is or how it moves: world/gravity.rs placed_read), for the
+/// parts above it on its path from the root that were not worked out since its assembly moved: each of the first 9 [`PLACED_WALK_NEAR`],
+/// of the next 90 [`PLACED_WALK_MID`], of the rest [`PLACED_WALK_FAR`]. A headless 0.747 playing client (roblox-sim), a chain of N
+/// welded parts flying free, the first read of the last part's Velocity, RotVelocity, AssemblyAngularVelocity, Position, CFrame,
+/// Orientation or GetPivot in a frame after the step, each row the median of 11 frames, five sessions (the median over them, and the
+/// range): 1.1 us (0.7 to 1.7) at N = 1, a cold part's first read (ree's first-touch prices), 3.1 (2.4 to 3.7) at 10, 8.9 (7.0 to 19.1)
+/// at 100, 64.7 (43 to 90) at 1,000, 174.5 (138 to 298) at 3,000; read part way first, the rest of the path after it (a chain of
+/// 1,000 read at its middle 38 to 44 us, then its end 26 to 34). The read after it 0.0 to 0.8 us; AssemblyLinearVelocity,
+/// AssemblyCenterOfMass, Size and the root's CFrame walk nothing.
+pub const PLACED_WALK_NEAR: f64 = 0.22e-6;
+pub const PLACED_WALK_MID: f64 = 0.064e-6;
+pub const PLACED_WALK_FAR: f64 = 0.058e-6;
+/// The walk after a velocity write to the root changed the assembly's motion alone (its places already worked out in the frame), of
+/// [`placed_walk`]'s: a free chain's 0.4 (a chain of 100 read after its first read and a write 3.0 to 3.4 us, of 1,000 22.4 to 22.7),
+/// an anchored chain's 1.3 (14 to 19, 72 to 73; one moving already 8 to 10, 58 to 73).
+pub const MOTION_WALK_FREE: f64 = 0.4;
+pub const MOTION_WALK_ANCHORED: f64 = 1.3;
+
+/// [`PLACED_WALK_NEAR`]'s walk over `ancestors` parts above the one read.
+pub fn placed_walk(ancestors: usize) -> f64 {
+    let near = ancestors.min(9);
+    let mid = ancestors.saturating_sub(9).min(90);
+    let far = ancestors.saturating_sub(99);
+    near as f64 * PLACED_WALK_NEAR + mid as f64 * PLACED_WALK_MID + far as f64 * PLACED_WALK_FAR
+}
 /// An ancestor IsDescendantOf, IsAncestorOf and the FindFirstAncestor finds look at, beyond [`method`]'s price for the call: the same
 /// client called them on a Part at the bottom of a chain of D Folders in the Workspace (os.clock around 5 to 20,000 calls, the median of
 /// 15, less an empty loop): 0.046 to 0.075 us a call at D = 1 and 10, 0.12 to 0.16 at 100, 1.13 to 1.34 at 1,000, 5.1 to 6.4 at 4,000,

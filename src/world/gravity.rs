@@ -134,7 +134,16 @@ pub struct Gravity {
     bodies: FxHashMap<InstanceId, (Vec3, Vec3)>,
     /// The parts whose velocities, spin or body are not all zero (world/joints.rs `motion` follows whether there is any)
     moving: FxHashSet<InstanceId>,
+    /// The parts a client works out again at the next read of where one is or how it moves ([`placed_read`]), and why: [`STALE_STEP`]
+    /// (a simulation step moved its assembly), [`STALE_MOTION`] (a velocity write, a join, a split or a re-root changed its assembly's
+    /// motion, so its body may not hold it)
+    stale: FxHashMap<InstanceId, u8>,
 }
+
+/// A part a simulation step moved: its place and motion are worked out again at its next placed read ([`Gravity::stale`])
+const STALE_STEP: u8 = 1;
+/// A part whose assembly's motion changed: its next placed read keeps the root's motion in its body ([`Gravity::stale`])
+const STALE_MOTION: u8 = 2;
 
 impl Gravity {
     /// Whether physics has moved a part.
@@ -244,6 +253,7 @@ pub fn install(engine: &Rc<Engine>) {
         gravity.impulses.remove(&id);
         gravity.added.retain(|&focus| focus != id);
         gravity.bodies.remove(&id);
+        gravity.stale.remove(&id);
         if gravity.moving.remove(&id) {
             state.joints.motion = !state.gravity.moving.is_empty();
         }
@@ -428,6 +438,9 @@ pub fn step(engine: &Engine, delta: f64) {
                 note(&mut state, reflection, &setup, node);
             }
         }
+    }
+    if delta > 0.0 && !state.gravity.bodies.is_empty() {
+        hold_anchored(&mut state, reflection, &setup);
     }
     if state.gravity.loose.is_empty() || delta <= 0.0 {
         return;
@@ -724,6 +737,8 @@ fn write_motion(state: &mut State, setup: &Setup, parts: &[InstanceId], offset: 
         } else {
             state.gravity.moving.insert(part);
         }
+        // (its assembly's motion changed: a client works it out again at the part's next placed read, keeping it in its body)
+        *state.gravity.stale.entry(part).or_default() |= STALE_MOTION;
     }
     state.joints.motion = !state.gravity.moving.is_empty();
 }
@@ -732,22 +747,158 @@ fn write_motion(state: &mut State, setup: &Setup, parts: &[InstanceId], offset: 
 /// of each part from the root down to that end (`path`, the root first: world/joints.rs root_path), from the root's motion as it is now
 /// (Studio 0.747, a playing client and its server: a chain welded on a part at a time to a moving part, then a part of it anchored or
 /// split off, reads the motion the join left in it, and a part beyond that end none; a later write to the root leaves it as the join
-/// left it; tools/parity/probes/assembly_motion.luau). A script's read of a part's Velocity or RotVelocity keeps its motion in its
-/// body the same way on a client, which is not modelled (ree has no hook on a property's read).
+/// left it; tools/parity/probes/assembly_motion.luau). A script's read of where a part is or how it moves keeps its motion in its
+/// body the same way ([`placed_read`]).
 pub(crate) fn hold_path(state: &mut State, path: &[InstanceId]) {
     let Some(setup) = state.gravity.setup.clone() else { return };
     let Some((&root, rest)) = path.split_first() else { return };
+    hold(state, &setup, root, rest);
+}
+
+/// Each of `parts` (of `root`'s assembly) keeps in its body the motion the root's body gives it, the velocity at its own position and
+/// the spin ([`hold_path`]); they are worked out ([`Gravity::stale`]), the root with them.
+fn hold(state: &mut State, setup: &Setup, root: InstanceId, parts: &[InstanceId]) {
     let (at_root, spin) = state.gravity.bodies.get(&root).copied().unwrap_or((Vec3::ZERO, Vec3::ZERO));
     let position = |state: &State, part: InstanceId| Vec3::from(frame::affine_of(state.dom.raw_get(part, setup.cframe)).translation);
     let root_at = position(state, root);
-    for &part in rest {
+    state.gravity.stale.remove(&root);
+    for &part in parts {
         let own = at_root + spin.cross(position(state, part) - root_at);
         set_body(state, part, own, spin);
         if state.gravity.bodies.contains_key(&part) {
             state.gravity.moving.insert(part);
         }
+        state.gravity.stale.remove(&part);
     }
     state.joints.motion = !state.gravity.moving.is_empty();
+}
+
+/// A simulation step: an anchored assembly that moves (an anchored root a script gave a velocity, as a conveyor) keeps its root's
+/// motion in each of its parts' bodies, as a client's step does (Studio 0.747, a playing client and its server: a part welded to an
+/// anchored part moving at 1 stud/s and split off in the next frame reads the motion, with no read in between, where one split off in
+/// the frame of the weld reads none; tools/parity/probes/assembly_reads.luau). Nothing is left for a later read to work out (a client's
+/// first read of such a part in the frame costs what an anchored still one's does).
+fn hold_anchored(state: &mut State, reflection: &Reflection, setup: &Setup) {
+    let mut roots: Vec<InstanceId> = state
+        .gravity
+        .bodies
+        .keys()
+        .copied()
+        .filter(|&part| state.dom.get(part).is_some() && state.dom.boolean(part, setup.anchored) == Some(true) && in_workspace(state, reflection, setup, part))
+        .collect();
+    roots.sort_unstable();
+    for root in roots {
+        let parts = joints::assembly_parts(state, reflection, root);
+        if parts.len() > 1 && parts[0] == root {
+            hold(state, setup, root, &parts[1..]);
+        }
+    }
+}
+
+/// A Clone made `pairs` (each template instance and its copy): each copied part's body holds the motion its copied Velocity and
+/// RotVelocity hold, as a client's copy does (Studio 0.747, a playing client and its server: a clone of a part of a moving assembly,
+/// put in the Workspace alone, reads its own Velocity as its AssemblyLinearVelocity, not the template's assembly's;
+/// tools/parity/probes/assembly_reads.luau). The assembly it forms on entering a world reads its root's ([`assemblies_changed`]).
+pub(crate) fn cloned(engine: &Engine, pairs: &[(InstanceId, InstanceId)]) {
+    let mut state = engine.state.borrow_mut();
+    let Some(setup) = state.gravity.setup.clone() else { return };
+    let vector = |state: &State, part: InstanceId, name: Option<NameId>| name.and_then(|name| state.dom.raw_get(part, name)).and_then(frame::vector_of).unwrap_or(Vec3::ZERO);
+    for &(_, copy) in pairs {
+        if state.dom.get(copy).is_none() || !engine.reflection.class(state.dom.at(copy).class).is_a(setup.base_part) {
+            continue;
+        }
+        let (velocity, spin) = (vector(&state, copy, Some(setup.velocity)), vector(&state, copy, setup.rot_velocity));
+        if velocity != Vec3::ZERO || spin != Vec3::ZERO {
+            set_body(&mut state, copy, velocity, spin);
+            state.gravity.moving.insert(copy);
+            state.joints.motion = true;
+        }
+    }
+}
+
+/// Whether a script's read of `class`'s property `name` is a placed read ([`placed_read`]): a BasePart's CFrame, Position,
+/// Orientation, Rotation, Velocity, RotVelocity or AssemblyAngularVelocity (lua/raw.rs compute_member, once per member).
+pub(crate) fn placed_member(engine: &Engine, class: ClassId, name: NameId) -> bool {
+    let reflection = &engine.reflection;
+    reflection.class_id("BasePart").is_some_and(|base_part| reflection.class(class).is_a(base_part))
+        && matches!(&*reflection.name(name), "CFrame" | "Position" | "Orientation" | "Rotation" | "Velocity" | "RotVelocity" | "AssemblyAngularVelocity")
+}
+
+/// GetPivot's placed read ([`placed_read`]): a part's own, a Model's PrimaryPart's (measured likewise; what a Model without one reads
+/// of its parts is not).
+pub(crate) fn pivot_read(engine: &Engine, id: InstanceId) {
+    let part = {
+        let state = engine.state.borrow();
+        let primary = state.gravity.setup.as_ref().and_then(|setup| setup.primary_part);
+        match primary.filter(|_| state.dom.get(id).is_some()).and_then(|name| state.dom.raw_get(id, name)) {
+            Some(Value::Instance(part)) => *part,
+            _ => id,
+        }
+    };
+    placed_read_charged(engine, part);
+}
+
+/// [`placed_read`] for a part `id` the engine reads as a client would read it (Clone's source parts, a tween's target, GetPivot),
+/// charged to the work clock; nothing for an instance that is no BasePart.
+pub(crate) fn placed_read_charged(engine: &Engine, id: InstanceId) {
+    let mut state = engine.state.borrow_mut();
+    let Some(setup) = state.gravity.setup.clone() else { return };
+    if state.gravity.stale.is_empty() || state.dom.get(id).is_none() || !engine.reflection.class(state.dom.at(id).class).is_a(setup.base_part) {
+        return;
+    }
+    let walk = placed_read(&mut state, &engine.reflection, id);
+    if walk > 0.0 {
+        // (GetPivot's Luau prices its own call, muted: the walk is charged beside its price)
+        if state.sched.is_muted() {
+            state.sched.charge_priced(walk);
+        } else {
+            state.sched.charge(walk);
+            crate::boundary::add_cost(walk);
+        }
+    }
+}
+
+/// A script read where `part` is or how it moves (BasePart.CFrame, Position, Orientation, Velocity, RotVelocity,
+/// AssemblyAngularVelocity or GetPivot; a Clone of it, a tween made on one of them): what a client spends working the part out again,
+/// and its motion kept in the body of each part on its path from the root (Studio 0.747, a playing client and its server alike,
+/// tools/parity/probes/assembly_reads.luau). AssemblyLinearVelocity, AssemblyCenterOfMass, AssemblyMass, AssemblyRootPart, Size,
+/// GetVelocityAtPosition and a changed-signal connection read neither.
+///
+/// - What is kept: the motion the root's body gives each part on the path (zero included: a part that moved on its own and was welded
+///   to a still assembly reads nothing once a read worked it out), as it is at the read: a later write to the root does not reach it,
+///   a read after the write keeps the new motion. Parts beside the path keep what they held.
+/// - What it costs: a client works out a part again after a simulation step moved its assembly, or a velocity write (or a join, split
+///   or re-root) changed its assembly's motion ([`Gravity::stale`]), at its first such read: from the part up its path to the first part
+///   already worked out. The walk's price is [`crate::cost::placed_walk`] for the parts above the read one; after a motion change alone
+///   (the places still worked out) it is [`crate::cost::MOTION_WALK_FREE`] of that in a free assembly and [`crate::cost::MOTION_WALK_ANCHORED`]
+///   in an anchored one. A second read, a still or anchored assembly's read and any other read pay nothing.
+pub(crate) fn placed_read(state: &mut State, reflection: &Reflection, part: InstanceId) -> f64 {
+    if !state.gravity.stale.contains_key(&part) {
+        return 0.0;
+    }
+    let path = joints::root_path(state, reflection, part);
+    let (mut walked, mut why) = (0usize, 0u8);
+    for at in path.iter().rev() {
+        match state.gravity.stale.remove(at) {
+            Some(bits) => {
+                walked += 1;
+                why |= bits;
+            }
+            None => break,
+        }
+    }
+    let anchored = state.gravity.setup.clone().is_some_and(|setup| state.dom.boolean(path[0], setup.anchored) == Some(true));
+    if why & STALE_MOTION != 0 {
+        hold_path(state, &path);
+    }
+    let walk = crate::cost::placed_walk(walked.saturating_sub(1));
+    if why & STALE_STEP != 0 {
+        walk
+    } else if anchored {
+        walk * crate::cost::MOTION_WALK_ANCHORED
+    } else {
+        walk * crate::cost::MOTION_WALK_FREE
+    }
 }
 
 /// The assemblies a write joined, split or rooted elsewhere (world/joints.rs `regrouped`: the parts whose assembly it may have
@@ -856,6 +1007,8 @@ fn fly(state: &mut State, reflection: &Reflection, hooks: &Hooks, setup: &Setup,
     }
     let omega = if turning.is_some() { spin_at(turn, momentum) } else { Vec3::ZERO };
     let centre = turning.map(|body| body.centre);
+    // (a step that moves the assembly leaves its parts for a client to work out again at their next placed read: placed_read)
+    let moves = moved != Vec3::ZERO || turn != Quat::IDENTITY;
     state.gravity.stepping = true;
     for &other in component {
         let cframe = frame::affine_of(state.dom.raw_get(other, setup.cframe));
@@ -883,6 +1036,11 @@ fn fly(state: &mut State, reflection: &Reflection, hooks: &Hooks, setup: &Setup,
         }
         set_body(state, other, velocity, omega);
         state.gravity.moving.insert(other);
+        if moves {
+            state.gravity.stale.insert(other, STALE_STEP);
+        } else {
+            state.gravity.stale.remove(&other);
+        }
     }
     state.joints.motion = true;
     state.gravity.stepping = false;

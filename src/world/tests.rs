@@ -3622,7 +3622,8 @@ fn an_assembly_reads_its_motion_from_its_roots_body() {
         end
         local Y2, Z2, XY, YZ
         X, Y2, Z2, XY, YZ = Trio()
-        Is("joined", Z2, Vector3.new(1, 0, -4), Vector3.new(0, 1, 0))
+        -- (a read of Z would keep the motion in Z, which it would read split off: a_read_of_where_a_part_is_keeps_its_motion_on_its_path)
+        Is("joined", Y2, Vector3.new(1, 0, -2), Vector3.new(0, 1, 0))
         YZ.Enabled = false
         Is("split off", Z2, Vector3.zero, Vector3.zero)
         assert(Z2.AssemblyLinearVelocity == Vector3.zero, "the piece's centre")
@@ -12483,3 +12484,186 @@ fn later_changes_of_an_assembly_changed_in_the_frame_cost_more() {
     );
 }
 
+
+/// A script's read of where a part is or how it moves keeps its root's motion in the body of each part on the path from the root to
+/// it, zero included, as a client's does (Studio 0.747, a playing client and its server: tools/parity/probes/assembly_reads.luau): a
+/// part split off after such a read reads the motion the read worked out, not what its body held before. AssemblyLinearVelocity
+/// keeps nothing; a clone's parts hold their copied motion; a simulation step keeps an anchored moving assembly's in each part. ree
+/// kept a part's body from writes, steps and joins alone.
+#[test]
+fn a_read_of_where_a_part_is_keeps_its_motion_on_its_path() {
+    let (lua, engine) = start_play();
+    run(
+        &lua,
+        &engine,
+        r#"
+        workspace.Gravity = 0
+        local function Part(Name, X, Size, Anchored)
+            local P = Instance.new("Part")
+            P.Name, P.Size, P.CanCollide, P.Anchored = Name, Size or Vector3.one, false, Anchored == true
+            P.CFrame = CFrame.new(300 + X, 60, 40)
+            P.Parent = workspace
+            return P
+        end
+        local function Weld(A, B)
+            local W = Instance.new("Weld")
+            W.Part0, W.Part1 = A, B
+            W.C0 = A.CFrame:ToObjectSpace(B.CFrame)
+            W.Parent = A
+            return W
+        end
+        local function Is(Case, P, Velocity, Spin)
+            assert(P.Velocity == Velocity and P.RotVelocity == Spin, `{Case}: {P.Name} {P.Velocity} {P.RotVelocity}, the client's {Velocity} {Spin}`)
+        end
+        local Big, Mid = Vector3.new(2, 2, 2), Vector3.new(1.5, 1.5, 1.5)
+        -- X moving alone, then Y and Z welded on: Z split off reads what a read of it kept, nothing without one
+        local function Trio(Read)
+            local X = Part("X", 0, Big)
+            X.AssemblyLinearVelocity, X.AssemblyAngularVelocity = Vector3.new(1, 0, 0), Vector3.new(0, 1, 0)
+            local Y, Z = Part("Y", 2), Part("Z", 4)
+            Weld(X, Y)
+            local YZ = Weld(Y, Z)
+            Read(Z)
+            YZ.Enabled = false
+            return X, Y, Z
+        end
+        for _, Case in {
+            { "velocity", function(Z) local _ = Z.Velocity end, true },
+            { "position", function(Z) local _ = Z.Position end, true },
+            { "rotation", function(Z) local _ = Z.Rotation end, true },
+            { "angular", function(Z) local _ = Z.AssemblyAngularVelocity end, true },
+            { "pivot", function(Z) local _ = Z:GetPivot() end, true },
+            { "clone", function(Z) local _ = Z:Clone() end, true },
+            { "linear", function(Z) local _ = Z.AssemblyLinearVelocity end, false },
+            { "size", function(Z) local _ = Z.Size end, false },
+        } do
+            local X, Y, Z = Trio(Case[2])
+            if Case[3] then
+                Is(Case[1], Z, Vector3.new(1, 0, -4), Vector3.new(0, 1, 0))
+            else
+                Is(Case[1], Z, Vector3.zero, Vector3.zero)
+            end
+            X:Destroy() Y:Destroy() Z:Destroy()
+        end
+        -- the path: Y-Z welded apart, X moved alone then welded to Y; a read of Z keeps the motion in Y too
+        local X, Y, Z = Part("X", 0, Big), Part("Y", 2, Mid), Part("Z", 4)
+        Weld(Y, Z)
+        X.AssemblyLinearVelocity, X.AssemblyAngularVelocity = Vector3.new(1, 0, 0), Vector3.new(0, 1, 0)
+        local XY = Weld(X, Y)
+        local _ = Z.Velocity
+        XY.Enabled = false
+        Is("path", Y, Vector3.new(1, 0, -2), Vector3.new(0, 1, 0))
+        X:Destroy() Y:Destroy() Z:Destroy()
+        -- zero kept: Z moving on its own, welded to a still assembly, then read
+        X, Y, Z = Part("X", 0, Big), Part("Y", 2), Part("Z", 4)
+        Weld(X, Y)
+        Z.AssemblyLinearVelocity, Z.AssemblyAngularVelocity = Vector3.new(0, -1, 0), Vector3.new(0.5, 0, 0)
+        local YZ = Weld(Y, Z)
+        local _ = Z.Velocity
+        YZ.Enabled = false
+        Is("zero", Z, Vector3.zero, Vector3.zero)
+        X:Destroy() Y:Destroy() Z:Destroy()
+        -- a later write to the root does not reach what a read kept
+        X, Y, Z = Part("X", 0, Big), Part("Y", 2), Part("Z", 4)
+        X.AssemblyLinearVelocity, X.AssemblyAngularVelocity = Vector3.new(1, 0, 0), Vector3.new(0, 1, 0)
+        Weld(X, Y)
+        YZ = Weld(Y, Z)
+        local _ = Z.Velocity
+        X.AssemblyLinearVelocity, X.AssemblyAngularVelocity = Vector3.new(0, 0, 5), Vector3.zero
+        YZ.Enabled = false
+        Is("read, then written", Z, Vector3.new(1, 0, -4), Vector3.new(0, 1, 0))
+        X:Destroy() Y:Destroy() Z:Destroy()
+        -- a clone of a moving part, alone in the Workspace, moves as its copied motion says
+        X, Y, Z = Part("X", 0, Big), Part("Y", 2), Part("Z", 4)
+        X.AssemblyLinearVelocity, X.AssemblyAngularVelocity = Vector3.new(1, 0, 0), Vector3.new(0, 1, 0)
+        Weld(X, Y)
+        Weld(Y, Z)
+        local C = Z:Clone()
+        C.Parent = workspace
+        assert(C.AssemblyLinearVelocity == Vector3.new(1, 0, -4), `the clone's own motion {C.AssemblyLinearVelocity}`)
+        X:Destroy() Y:Destroy() Z:Destroy() C:Destroy()
+        -- an anchored root that moves: a step keeps the motion in the part welded to it, with no read
+        X, Y = Part("X", 0, Big, true), Part("Y", 4)
+        X.AssemblyLinearVelocity, X.AssemblyAngularVelocity = Vector3.new(1, 0, 0), Vector3.new(0, 0.5, 0)
+        local XY2 = Weld(X, Y)
+        task.wait()
+        XY2.Enabled = false
+        Is("a conveyor after a step", Y, Vector3.new(1, 0, -2), Vector3.new(0, 0.5, 0))
+        "#,
+    );
+}
+
+/// The first read in a frame of where a part of a moving assembly is (or how it moves) costs what a client spends working it out
+/// again, from the part up its path to the first part already worked out (cost.rs PLACED_WALK_*: a chain of 100 flying free, its last
+/// part's first read in a frame 8.9 us on a 0.747 client (7.0 to 19.1), the read after it 0.1 to 0.8); after a write to the root's velocity
+/// it is walked again at MOTION_WALK_FREE of that. A still chain's read, a second read and an AssemblyLinearVelocity read walk
+/// nothing. ree charged none of it.
+#[test]
+fn a_moving_assemblys_first_placed_read_in_a_frame_walks_its_path() {
+    let (lua, engine) = start_play();
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    use crate::cost::{MOTION_WALK_FREE, placed_walk};
+    run(
+        &lua,
+        &engine,
+        &format!(
+            r#"
+        workspace.Gravity = 0
+        local function Chain(Z, Moving)
+            local Parts = {{}}
+            for I = 1, 100 do
+                local P = Instance.new("Part")
+                P.Size, P.CanCollide = if I == 1 then Vector3.new(4, 4, 4) else Vector3.one, false
+                P.CFrame = CFrame.new(300 + I * 1.5, 60, Z)
+                P.Parent = workspace
+                if I > 1 then
+                    local W = Instance.new("Weld")
+                    W.Part0, W.Part1, W.C0 = Parts[I - 1], P, Parts[I - 1].CFrame:ToObjectSpace(P.CFrame)
+                    W.Parent = P
+                end
+                Parts[I] = P
+            end
+            if Moving then
+                Parts[1].AssemblyLinearVelocity = Vector3.new(0.5, 0, 0)
+            end
+            return Parts
+        end
+        local Moving, Still = Chain(40, true), Chain(-40, false)
+        task.wait()
+        task.wait()
+        local function Spend(F)
+            local Start = os.clock()
+            F()
+            return os.clock() - Start
+        end
+        local function Is(Name, Got, Want)
+            -- (within 5 ns: the first touch of one part or another differs by a few)
+            assert(math.abs(Got - Want) < 5e-9, `{{Name}}: {{Got * 1e6}} us more, where {{Want * 1e6}}`)
+        end
+        local Leaf, StillLeaf = Moving[100], Still[100]
+        -- (the parts and members touched first, so their first-touch prices fall outside the spans)
+        local _ = Leaf.Size, StillLeaf.Size, Still[1].Velocity, Still[1].Position, Still[1].CFrame, Leaf.AssemblyLinearVelocity
+        local First = Spend(function() local _ = Leaf.Velocity end)
+        local Second = Spend(function() local _ = Leaf.Velocity end)
+        Is("the first read walks 99 parts", First - Second, {walk:e})
+        Is("a still chain's read", Spend(function() local _ = StillLeaf.Velocity end) - Spend(function() local _ = StillLeaf.Velocity end), 0)
+        Moving[1].AssemblyLinearVelocity = Vector3.new(0.25, 0, 0)
+        local Linear = Spend(function() local _ = Leaf.AssemblyLinearVelocity end)
+        Is("AssemblyLinearVelocity walks nothing", Linear - Spend(function() local _ = Leaf.AssemblyLinearVelocity end), 0)
+        local Again = Spend(function() local _ = Leaf.Position end)
+        Is("a write's walk", Again - Spend(function() local _ = Leaf.Position end), {write:e})
+        task.wait()
+        local _ = Leaf.Size, Moving[50].Size, Still[1].CFrame
+        local Mid = Spend(function() local _ = Moving[50].CFrame end)
+        local Rest = Spend(function() local _ = Leaf.CFrame end)
+        local After = Spend(function() local _ = Leaf.CFrame end)
+        Is("the middle first", Mid - After, {mid:e})
+        Is("then the rest", Rest - After, {rest:e})
+        "#,
+            walk = placed_walk(99),
+            write = placed_walk(99) * MOTION_WALK_FREE,
+            mid = placed_walk(49),
+            rest = placed_walk(49),
+        ),
+    );
+}
