@@ -16519,3 +16519,91 @@ fn image_properties_read_an_editable_images_content_back() {
         "#,
     );
 }
+
+/// A game script's access to a property whose Read permit needs a capability it lacks raises naming that capability, before a child of
+/// the property's name is looked for and before a written value is cast (reflection.rs CAPABILITY_PROPERTIES; measured, roblox-sim
+/// 0.747, a client and a server: tools/parity/probes/capability_properties.luau, capability_property_names.luau): a write names the
+/// Read permit's capability whatever the Write permit needs, a property it reads whose Write permit needs one refuses a write naming
+/// that, and a property with no permit is no member. ree answered "is not a valid member" for the first, and "Property is read only"
+/// for the second.
+#[test]
+fn hidden_properties_refuse_a_game_script_as_a_client_does() {
+    let (lua, engine) = start_with(Options { mode: "play".into(), ..Options::default() });
+    run(
+        &lua,
+        &engine,
+        r##"
+        local function problem(Function)
+            local Ok, Problem = pcall(Function)
+            assert(not Ok, "it raised")
+            return Problem
+        end
+        local Folder = Instance.new("Folder")
+        local Child = Instance.new("Folder")
+        Child.Name = "DataCost"
+        Child.Parent = Folder
+        local Read = "The current thread cannot read 'DataCost' (lacking capability LocalUser)"
+        assert(problem(function() return Folder.DataCost end) == Read, "read")
+        assert(problem(function() return Folder.dataCost end) == Read, "a lower-case first letter")
+        assert(problem(function() Folder.DataCost = 1 end) == "The current thread cannot write 'DataCost' (lacking capability LocalUser)", "write")
+        assert(problem(function() Folder.UniqueId = {} end) == "The current thread cannot write 'UniqueId' (lacking capability RobloxScript)", "the Read permit's")
+        assert(problem(function() return Folder.RobloxLocked end) == "The current thread cannot read 'RobloxLocked' (lacking capability Plugin)", "Plugin")
+        local Emitter = Instance.new("AudioEmitter")
+        assert(problem(function() return Emitter.AngleAttenuation end) == "The current thread cannot read 'AngleAttenuation' (lacking capability RobloxEngine)", "RobloxEngine")
+        local Lighting = game:GetService("Lighting")
+        assert(problem(function() Lighting.LightingStyle = {} end) == "The current thread cannot write 'LightingStyle' (lacking capability PluginOrOpenCloud)", "a listed property's write")
+        assert(problem(function() game:GetService("HttpService").HttpEnabled = true end) == "The current thread cannot write 'HttpEnabled' (lacking capability LocalUser)", "HttpEnabled")
+        assert(problem(function() Instance.new("AudioPlayer").IsPlaying = true end) == "The current thread cannot write 'IsPlaying' (lacking capability RobloxEngine)", "IsPlaying")
+        assert(typeof(Lighting.LightingStyle) == "EnumItem", "a listed property reads")
+        -- no permit at all: no member, and its name finds a child
+        local Tags = Instance.new("Folder")
+        Tags.Name = "Tags"
+        Tags.Parent = Folder
+        assert(Folder.Tags == Tags, "a child")
+        assert(problem(function() return Instance.new("Folder").Tags end) == "Tags is not a valid member of Folder \"Folder\"", "no member")
+        assert(problem(function() Folder:GetPropertyChangedSignal("Tags") end) == "Tags is not a scriptable property.", "not scriptable")
+        -- the property-name methods
+        assert(problem(function() Folder:GetPropertyChangedSignal("DataCost") end) == Read, "signal")
+        assert(problem(function() Folder:IsPropertyModified("DataCost") end) == "Invalid argument to IsPropertyModified(): Folder.DataCost is read-only", "modified, read only first")
+        assert(problem(function() Folder:IsPropertyModified("RobloxLocked") end) == "The current thread cannot call IsPropertyModified() on Folder.RobloxLocked (lacking capability Plugin)", "modified")
+        assert(problem(function() Folder:ResetPropertyToDefault("DataCost") end) == "The current thread cannot call ResetPropertyToDefault() on Folder.DataCost (lacking capability LocalUser)", "reset")
+        assert(problem(function() game:GetService("Chat"):ResetPropertyToDefault("LoadDefaultChat") end) == "The current thread cannot call ResetPropertyToDefault() on Chat.LoadDefaultChat (lacking capability PluginOrOpenCloud)", "reset, the Write permit's")
+        assert(game:GetService("Chat"):IsPropertyModified("LoadDefaultChat") == false, "modified, a listed property")
+        assert(problem(function() Folder:GetStyled("DataCost") end) == "The current thread cannot call GetStyled() on 'DataCost' (lacking capability LocalUser)", "styled")
+        assert(problem(function() Emitter:IsPropertyModified("AngleAttenuation") end) == "Invalid argument to IsPropertyModified(): Class AudioEmitter has no property named `AngleAttenuation`", "no script type")
+        assert(problem(function() Folder:IsPropertyModified("ClassName") end) == "Invalid argument to IsPropertyModified(): Folder.ClassName is read-only", "a read-only property")
+        assert(problem(function() Folder:ResetPropertyToDefault("ClassName") end) == "Invalid argument to ResetPropertyToDefault(): Folder.ClassName is read-only", "reset of a read-only property")
+        -- a read-only property's write casts the value first
+        assert(problem(function() Folder.ClassName = {} end) == "Unable to assign property ClassName. string expected, got table", "cast first")
+        assert(problem(function() Folder.ClassName = 5 end) == "Unable to assign property ClassName. Property is read only", "then read only")
+        assert(problem(function() Instance.new("Frame").AbsoluteSize = 5 end) == "Unable to assign property AbsoluteSize. Vector2 expected, got number", "a Vector2")
+        assert(problem(function() Instance.new("Part").AssemblyMass = "x" end) == "Unable to assign property AssemblyMass. Property is read only", "a number takes any value")
+        "##,
+    );
+}
+
+/// The edit run context, where ree runs a plugin's code, holds a plugin's capabilities (services/reflection_data.rs PLUGIN_CAPS): it
+/// writes what a game script's view reads as read only and Plugin or PluginOrOpenCloud gate (Lighting.LightingStyle), and is refused
+/// what needs LocalUser, RobloxScript or RobloxEngine.
+#[test]
+fn the_edit_run_context_holds_a_plugins_capabilities() {
+    let (lua, engine) = start();
+    run(
+        &lua,
+        &engine,
+        r##"
+        local Lighting = game:GetService("Lighting")
+        Lighting.LightingStyle = Enum.LightingStyle.Realistic
+        assert(Lighting.LightingStyle == Enum.LightingStyle.Realistic, "a plugin writes LightingStyle")
+        Instance.new("Script").RunContext = Enum.RunContext.Client
+        local Ok, Problem = pcall(function() return Instance.new("Folder").DataCost end)
+        assert(not Ok and Problem == "The current thread cannot read 'DataCost' (lacking capability LocalUser)", Problem)
+        Ok, Problem = pcall(function() game:GetService("HttpService").HttpEnabled = true end)
+        assert(not Ok and Problem == "The current thread cannot write 'HttpEnabled' (lacking capability LocalUser)", Problem)
+        Ok, Problem = pcall(function() return Instance.new("Folder").UniqueId end)
+        assert(not Ok and Problem == "The current thread cannot read 'UniqueId' (lacking capability RobloxScript)", Problem)
+        Ok, Problem = pcall(function() Instance.new("AudioPlayer").IsPlaying = true end)
+        assert(not Ok and Problem == "The current thread cannot write 'IsPlaying' (lacking capability RobloxEngine)", Problem)
+        "##,
+    );
+}

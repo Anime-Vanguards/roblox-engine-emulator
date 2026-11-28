@@ -1446,5 +1446,33 @@
 			"line": "worldaxis e ",
 			"why": "the sign of a zero: an Axis written along or against the SecondaryAxis (a client keeps +0 where ree takes Y = old back x X) and a world-form write through its parent (ree composes with the parent inverse and loses -0) leave the other sign; every value is the client's"
 		}
+	],
+	"capability_properties": [
+		{
+			"line": "GuiService.CoreGuiNavigationEnabled r=ok:boolean",
+			"why": "a client's game script reads and writes it though its Read permit names RobloxScript; ree has no such property (no member: instance.rs OPEN_PROPERTIES)"
+		},
+		{
+			"line": "ModuleScript.Source r=The current thread cannot read 'Source'",
+			"why": "a script's Source reads and writes in a play run: ree runs a run's code at one identity, and the play-run code that writes Source is the identity-4 probes' and ree's tests (instance.rs OPEN_PROPERTIES)"
+		},
+		{
+			"line": "Script.Source r=The current thread cannot read 'Source'",
+			"why": "a script's Source reads and writes in a play run: ree runs a run's code at one identity, and the play-run code that writes Source is the identity-4 probes' and ree's tests (instance.rs OPEN_PROPERTIES)"
+		},
+		{
+			"line": "TextChannelWindow.IsRendering r=",
+			"why": "a client refuses to parent a Folder into a TextChannelWindow (the line has no c= field); ree parents it and reads the property with the child there"
+		},
+		{
+			"line": "VoiceChatInternal.VoiceChatState r=VoiceChatInternal API security check failed",
+			"why": "a client's read raises VoiceChatInternal's own security error and a write is cast, then refused as read only; ree has no such property (no member: instance.rs OPEN_PROPERTIES)"
+		}
+	],
+	"capability_property_names": [
+		{
+			"line": "ResizeableFaces number error Unable to assign property ResizeableFaces. Faces expected, got number",
+			"why": "ree casts no value to Faces (a Faces property takes any value), so a read-only Faces property refuses a number as read only"
+		}
 	]
 }

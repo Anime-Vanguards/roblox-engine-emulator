@@ -372,7 +372,35 @@ pub struct Reflection {
     member_source: DumpSource,
     /// The names a client knows ([`Self::knows_name`]), built on first use
     known_names: OnceLock<FxHashSet<Box<str>>>,
+    /// What a property's Read and Write permits need, by its declaring class ([`CAPABILITY_PROPERTIES`], [`Self::restriction`])
+    restrictions: FxHashMap<(ClassId, NameId), Restriction>,
 }
+
+/// What a property's Read and Write permits need ([`CAPABILITY_PROPERTIES`]): the capabilities of each (services/reflection_data.rs
+/// Caps), None for a permit the property lacks (a property with neither is no member scripts can use), and whether IsPropertyModified,
+/// ResetPropertyToDefault and GetStyled take it for a property: all but a BinaryString (AudioEmitter.AngleAttenuation is none of theirs
+/// where Instance.UniqueId, of a type with no script name either, is refused for its capability; measured).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Restriction {
+    pub read: Option<u64>,
+    pub write: Option<u64>,
+    pub named: bool,
+}
+
+/// The properties whose Read or Write permit needs a capability a game script lacks, and the hidden ones with no permit at all: (the
+/// declaring class, the property, the Read permit's capabilities, the Write permit's (None for no such permit), whether the property-name
+/// methods take it: [`Restriction::named`]), from data/reflection-security.json and data/reflection.json (tools/capability-properties.mjs
+/// writes data/capability-properties.rs). A playing client and a server answer a game script's
+/// access to each as the permits say (measured, roblox-sim 0.747, script identity 2: the 732 properties of 128 classes a game script
+/// reaches of the 1,607 data/reflection-security.json lists, the same on both): a read of one whose Read permit needs a capability it lacks raises
+/// "The current thread cannot read 'DataCost' (lacking capability LocalUser)", before a child of that name is looked for, and
+/// a write "The current thread cannot write 'DataCost' (lacking capability LocalUser)", naming the Read permit's capability
+/// whatever the Write permit needs (UniqueId's needs RobloxEngine and names RobloxScript, the Read's), before the value is cast
+/// and whether or not the property is read only; a property it reads whose Write permit needs one raises
+/// "The current thread cannot write 'LightingStyle' (lacking capability PluginOrOpenCloud)" before the value is cast. A property
+/// with neither permit is no member (`DataModel.ForceR15 is not a valid member`), and its name finds a child.
+/// Engine::resolve_member applies them (instance.rs), and the property-name methods (lua/instance.rs property_name_arg).
+pub const CAPABILITY_PROPERTIES: &[(&str, &str, Option<&str>, Option<&str>, bool)] = include!("../data/capability-properties.rs");
 
 /// Classes rbx-dom's database (Roblox 700) still describes that a 0.747 client no longer has: the database's other classes are
 /// loaded beside the dump's, these not, so GetService, FindService and Instance.new take them for names no class has (a playing
@@ -884,7 +912,40 @@ impl Reflection {
                 reflection.intern(name);
             }
         }
+        // (the capability-gated properties' names, interned after those too: every other id stays)
+        reflection.load_restrictions();
         Ok(reflection)
+    }
+
+    /// [`CAPABILITY_PROPERTIES`] by declaring class, for the classes the database has.
+    #[inline(never)]
+    fn load_restrictions(&mut self) {
+        use crate::services::reflection_data::caps_of;
+        self.restrictions.reserve(CAPABILITY_PROPERTIES.len());
+        for &(class, name, read, write, named) in CAPABILITY_PROPERTIES {
+            let Some(class) = self.class_id(class) else { continue };
+            let name = match self.name_id(name) {
+                Some(id) => id,
+                None => self.intern(name),
+            };
+            self.restrictions.insert((class, name), Restriction { read: read.map(caps_of), write: write.map(caps_of), named });
+        }
+    }
+
+    /// What property `name` of `class` (or of a class it derives from) needs to be read and written ([`CAPABILITY_PROPERTIES`]); None
+    /// for a property whose permits need nothing a game script lacks, and for any other name.
+    pub fn restriction(&self, class: ClassId, name: NameId) -> Option<Restriction> {
+        if self.restrictions.is_empty() {
+            return None;
+        }
+        let mut current = Some(class);
+        while let Some(id) = current {
+            if let Some(restriction) = self.restrictions.get(&(id, name)) {
+                return Some(*restriction);
+            }
+            current = self.classes[id as usize].superclass;
+        }
+        None
     }
 
     /// A database from a ReflectionService dump (the JSON tools/dump-reflection.luau writes) and an
@@ -1735,5 +1796,50 @@ mod tests {
         assert!(!font.items.iter().any(|&item| &*reflection.enum_item_info(item).name == "GothamSemibold"));
         assert_eq!(reflection.enum_item_path(semibold), "Enum.Font.GothamMedium");
         assert!(reflection.font_enum_faces.contains_key("Gotham"));
+    }
+
+    /// data/capability-properties.rs is what data/reflection-security.json and data/reflection.json make (tools/capability-properties.mjs,
+    /// which tools/reflection-security.mjs runs): the properties with a permit needing a capability a game script lacks.
+    #[test]
+    fn capability_properties_are_what_the_security_data_makes() {
+        use crate::services::reflection_data::{SCRIPT_CAPS, caps_of, holds};
+        let security: serde_json::Value = serde_json::from_slice(crate::data::REFLECTION_SECURITY).unwrap();
+        let dump: serde_json::Value = serde_json::from_slice(crate::data::REFLECTION).unwrap();
+        let refusable = |permit: Option<&str>| permit.is_some_and(|permit| !holds(SCRIPT_CAPS, caps_of(permit)));
+        let text = |value: &serde_json::Value| value.as_str().map(str::to_string);
+        let mut made = Vec::new();
+        for class in security["classes"].as_array().unwrap().iter().chain(security["extend"].as_array().unwrap()) {
+            let name = class["name"].as_str().unwrap();
+            for property in class["properties"].as_array().into_iter().flatten() {
+                let (read, write) = (text(&property["permits"]["Read"]), text(&property["permits"]["Write"]));
+                let named = property["type"]["engine"] != "BinaryString";
+                if refusable(read.as_deref()) || refusable(write.as_deref()) || (read.is_none() && write.is_none()) {
+                    made.push((name.to_string(), property["name"].as_str().unwrap().to_string(), read, write, named));
+                }
+            }
+            for (property, permits) in class["permits"]["properties"].as_object().into_iter().flatten() {
+                let Some(write) = text(&permits["Write"]) else { continue };
+                let listed = dump["classes"].as_array().unwrap().iter().find(|c| c["name"] == name).unwrap();
+                let own = listed["properties"].as_array().unwrap().iter().find(|p| p["name"] == property.as_str()).unwrap();
+                let read = text(&own["permits"]["Read"]).or_else(|| text(&permits["Read"]));
+                if refusable(read.as_deref()) || refusable(Some(&write)) {
+                    made.push((name.to_string(), property.clone(), read, Some(write), own["type"]["engine"] != "BinaryString"));
+                }
+            }
+        }
+        made.sort();
+        let table: Vec<_> = CAPABILITY_PROPERTIES.iter().map(|&(c, p, r, w, t)| (c.to_string(), p.to_string(), r.map(str::to_string), w.map(str::to_string), t)).collect();
+        assert_eq!(table, made, "data/capability-properties.rs is stale: run node tools/capability-properties.mjs");
+        // and the database finds each by its class and the class's subclasses
+        let reflection = Reflection::shared().unwrap();
+        let folder = reflection.class_id("Folder").unwrap();
+        let data_cost = reflection.name_id("DataCost").unwrap();
+        assert_eq!(reflection.restriction(folder, data_cost), Some(Restriction { read: Some(caps_of("LocalUser")), write: None, named: true }));
+        let tags = reflection.name_id("Tags").unwrap();
+        assert_eq!(reflection.restriction(folder, tags), Some(Restriction { read: None, write: None, named: true }));
+        let lighting = reflection.class_id("Lighting").unwrap();
+        let style = reflection.name_id("LightingStyle").unwrap();
+        assert_eq!(reflection.restriction(lighting, style).map(|r| r.write), Some(Some(caps_of("PluginOrOpenCloud"))));
+        assert_eq!(reflection.restriction(folder, K::Name as NameId), None);
     }
 }

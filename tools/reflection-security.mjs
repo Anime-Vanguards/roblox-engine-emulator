@@ -17,7 +17,8 @@
 //   need fewer than GetClasses (Player), `visible` for a property with no Read permit (one with a Read permit needs that).
 //
 // It also writes each property's ContentType (`content`) into data/reflection.json, as text at the end of the property's
-// object: every other byte stays.
+// object: every other byte stays, and then data/capability-properties.rs (tools/capability-properties.mjs).
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -167,6 +168,9 @@ if (problems.length) {
 for (const insert of inserts.sort((a, b) => b.at - a.at)) text = text.slice(0, insert.at) + insert.text + text.slice(insert.at);
 if (added) fs.writeFileSync(DUMP, text);
 console.log(`reflection-security: content written for ${added} properties of data/reflection.json (${kept} had it)`);
+// (the capability-gated properties the engine follows come from the two files: data/capability-properties.rs)
+const table = spawnSync(process.execPath, [path.join(ROOT, "tools", "capability-properties.mjs")], { stdio: "inherit" });
+if (table.status !== 0) process.exit(table.status ?? 1);
 
 // For every class object of `classes`, the offset of each of its properties' closing brace.
 function locateProperties(source) {

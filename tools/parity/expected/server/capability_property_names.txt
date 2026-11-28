@@ -1,0 +1,91 @@
+# engine: Roblox Studio 0.747.0.7471481, the server of a headless play session (a Script in ServerScriptService, script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-28
+Folder.DataCost modified error Invalid argument to IsPropertyModified(): Folder.DataCost is read-only
+Folder.DataCost reset error The current thread cannot call ResetPropertyToDefault() on Folder.DataCost (lacking capability LocalUser)
+Folder.DataCost styled error The current thread cannot call GetStyled() on 'DataCost' (lacking capability LocalUser)
+Folder.DataCost signal error The current thread cannot read 'DataCost' (lacking capability LocalUser)
+Folder.RobloxLocked modified error The current thread cannot call IsPropertyModified() on Folder.RobloxLocked (lacking capability Plugin)
+Folder.RobloxLocked reset error The current thread cannot call ResetPropertyToDefault() on Folder.RobloxLocked (lacking capability Plugin)
+Folder.RobloxLocked styled error The current thread cannot call GetStyled() on 'RobloxLocked' (lacking capability Plugin)
+Folder.RobloxLocked signal error The current thread cannot read 'RobloxLocked' (lacking capability Plugin)
+Folder.UniqueId modified error The current thread cannot call IsPropertyModified() on Folder.UniqueId (lacking capability RobloxScript)
+Folder.UniqueId reset error The current thread cannot call ResetPropertyToDefault() on Folder.UniqueId (lacking capability RobloxScript)
+Folder.UniqueId styled error The current thread cannot call GetStyled() on 'UniqueId' (lacking capability RobloxScript)
+Folder.UniqueId signal error The current thread cannot read 'UniqueId' (lacking capability RobloxScript)
+Folder.SourceAssetId modified error The current thread cannot call IsPropertyModified() on Folder.SourceAssetId (lacking capability RobloxScript)
+Folder.SourceAssetId reset error The current thread cannot call ResetPropertyToDefault() on Folder.SourceAssetId (lacking capability RobloxScript)
+Folder.SourceAssetId styled error The current thread cannot call GetStyled() on 'SourceAssetId' (lacking capability RobloxScript)
+Folder.SourceAssetId signal error The current thread cannot read 'SourceAssetId' (lacking capability RobloxScript)
+Folder.Tags modified error Invalid argument to IsPropertyModified(): Class Folder has no property named `Tags`
+Folder.Tags reset error Invalid argument to ResetPropertyToDefault(): Class Folder has no property named `Tags`
+Folder.Tags styled error GetStyled(): No such property named `Tags`
+Folder.Tags signal error Tags is not a scriptable property.
+Folder.Attributes modified error Invalid argument to IsPropertyModified(): Class Folder has no property named `Attributes`
+Folder.Attributes reset error Invalid argument to ResetPropertyToDefault(): Class Folder has no property named `Attributes`
+Folder.Attributes styled error GetStyled(): No such property named `Attributes`
+Folder.Attributes signal error Attributes is not a scriptable property.
+Folder.HistoryId modified error Invalid argument to IsPropertyModified(): Class Folder has no property named `HistoryId`
+Folder.HistoryId reset error Invalid argument to ResetPropertyToDefault(): Class Folder has no property named `HistoryId`
+Folder.HistoryId styled error GetStyled(): No such property named `HistoryId`
+Folder.HistoryId signal error HistoryId is not a scriptable property.
+Folder.ClassName modified error Invalid argument to IsPropertyModified(): Folder.ClassName is read-only
+Folder.ClassName reset error Invalid argument to ResetPropertyToDefault(): Folder.ClassName is read-only
+Folder.ClassName styled ok string
+Folder.ClassName signal ok RBXScriptSignal
+Folder.Name modified ok false
+Folder.Name reset ok 
+Folder.Name styled ok string
+Folder.Name signal ok RBXScriptSignal
+AudioEmitter.AngleAttenuation modified error Invalid argument to IsPropertyModified(): Class AudioEmitter has no property named `AngleAttenuation`
+AudioEmitter.AngleAttenuation reset error Invalid argument to ResetPropertyToDefault(): Class AudioEmitter has no property named `AngleAttenuation`
+AudioEmitter.AngleAttenuation styled error GetStyled(): No such property named `AngleAttenuation`
+AudioEmitter.AngleAttenuation signal error The current thread cannot read 'AngleAttenuation' (lacking capability RobloxEngine)
+Frame.AbsoluteSize modified error Invalid argument to IsPropertyModified(): Frame.AbsoluteSize is read-only
+Frame.AbsoluteSize reset error Invalid argument to ResetPropertyToDefault(): Frame.AbsoluteSize is read-only
+Frame.AbsoluteSize styled ok Vector2
+Frame.AbsoluteSize signal ok RBXScriptSignal
+Frame.ClippedRect modified error Invalid argument to IsPropertyModified(): Frame.ClippedRect is read-only
+Frame.ClippedRect reset error The current thread cannot call ResetPropertyToDefault() on Frame.ClippedRect (lacking capability RobloxScript)
+Frame.ClippedRect styled error The current thread cannot call GetStyled() on 'ClippedRect' (lacking capability RobloxScript)
+Frame.ClippedRect signal error The current thread cannot read 'ClippedRect' (lacking capability RobloxScript)
+Chat.LoadDefaultChat modified ok false
+Chat.LoadDefaultChat reset error The current thread cannot call ResetPropertyToDefault() on Chat.LoadDefaultChat (lacking capability PluginOrOpenCloud)
+Chat.LoadDefaultChat styled ok boolean
+Chat.LoadDefaultChat signal ok RBXScriptSignal
+Chat.IsAutoMigrated modified error The current thread cannot call IsPropertyModified() on Chat.IsAutoMigrated (lacking capability RobloxScript)
+Chat.IsAutoMigrated reset error The current thread cannot call ResetPropertyToDefault() on Chat.IsAutoMigrated (lacking capability RobloxScript)
+Chat.IsAutoMigrated styled error The current thread cannot call GetStyled() on 'IsAutoMigrated' (lacking capability RobloxScript)
+Chat.IsAutoMigrated signal error The current thread cannot read 'IsAutoMigrated' (lacking capability RobloxScript)
+HttpService.HttpEnabled modified ok false
+HttpService.HttpEnabled reset error The current thread cannot call ResetPropertyToDefault() on HttpService.HttpEnabled (lacking capability LocalUser)
+HttpService.HttpEnabled styled ok boolean
+HttpService.HttpEnabled signal ok RBXScriptSignal
+Lighting.LightingStyle modified ok false
+Lighting.LightingStyle reset error The current thread cannot call ResetPropertyToDefault() on Lighting.LightingStyle (lacking capability PluginOrOpenCloud)
+Lighting.LightingStyle styled ok EnumItem
+Lighting.LightingStyle signal ok RBXScriptSignal
+Lighting.Technology modified error The current thread cannot call IsPropertyModified() on Lighting.Technology (lacking capability RobloxScript)
+Lighting.Technology reset error The current thread cannot call ResetPropertyToDefault() on Lighting.Technology (lacking capability RobloxScript)
+Lighting.Technology styled error The current thread cannot call GetStyled() on 'Technology' (lacking capability RobloxScript)
+Lighting.Technology signal error The current thread cannot read 'Technology' (lacking capability RobloxScript)
+lower dataCost error The current thread cannot read 'DataCost' (lacking capability LocalUser)
+lower robloxLocked write error robloxLocked is not a valid member of Folder "Folder"
+call DataCost error DataCost is not a valid member of Folder "Folder"
+call LoadDefaultChat error LoadDefaultChat is not a valid member of Chat "Chat"
+ClassName table error Unable to assign property ClassName. string expected, got table
+ClassName number error Unable to assign property ClassName. Property is read only
+AbsoluteSize table error Unable to assign property AbsoluteSize. Vector2 expected, got table
+AbsoluteSize number error Unable to assign property AbsoluteSize. Vector2 expected, got number
+AbsoluteSize valid error Unable to assign property AbsoluteSize. Property is read only
+AssemblyMass table error Unable to assign property AssemblyMass. Property is read only
+AssemblyMass string error Unable to assign property AssemblyMass. Property is read only
+ResizeableFaces number error Unable to assign property ResizeableFaces. Faces expected, got number
+ResizeIncrement string error Unable to assign property ResizeIncrement. Property is read only
+DistributedGameTime string ok 
+Terrain IsSmooth table error Unable to assign property IsSmooth. Property is read only
+TextBounds table error Unable to assign property TextBounds. Vector2 expected, got table
+AbsoluteSize nil error Unable to assign property AbsoluteSize. Vector2 expected, got nil
+PlaceId string error Unable to assign property PlaceId. Property is read only
+PlaceId table error Unable to assign property PlaceId. Property is read only
+LoadDefaultChat table error The current thread cannot write 'LoadDefaultChat' (lacking capability PluginOrOpenCloud)
+Technology table error The current thread cannot write 'Technology' (lacking capability RobloxScript)

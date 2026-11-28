@@ -16,12 +16,43 @@ use super::{
 /// What a key means on a class (instance.luau ResolveMember), cached per (class, key).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Member {
-    Property { property: Option<u32>, getter: bool, setter: bool },
+    Property { property: Option<u32>, getter: bool, setter: bool, write: WriteGate },
     Method { implemented: bool },
     Event,
     Callback,
+    /// A property whose Read permit needs a capability the running code lacks (reflection.rs CAPABILITY_PROPERTIES): a read and a
+    /// write raise naming it
+    Refused { capability: &'static str },
     None,
 }
+
+/// Whether a property's Write permit lets the running code write it (reflection.rs CAPABILITY_PROPERTIES)
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WriteGate {
+    /// As the property is: writable unless read only
+    Open,
+    /// The permit needs this capability, which the code lacks: a write raises naming it, before the value is cast
+    Refused(&'static str),
+    /// The permit's capabilities are the code's (a plugin's in the edit run context): writable though a game script's view reads it
+    /// as read only (Lighting.LightingStyle)
+    Granted,
+}
+
+/// Properties reflection.rs CAPABILITY_PROPERTIES gates that ree leaves as they were (measured, roblox-sim 0.747, a client and a server):
+/// - a script's Source needs PluginOrOpenCloud to be read or written (a game script's read raises "The current thread cannot read
+///   'Source' (lacking capability PluginOrOpenCloud)"), but ree runs all of a run's code at one identity, and the code that writes
+///   Source in a play run is the command bar's (identity 4: the parity probes captured so) and ree's own tests, which make scripts at
+///   run time;
+/// - GuiService.CoreGuiNavigationEnabled reads and writes for a game script though its Read permit names RobloxScript, and
+///   VoiceChatInternal.VoiceChatState refuses a read with "VoiceChatInternal API security check failed" and a write as read only:
+///   ree has neither property (no member).
+const OPEN_PROPERTIES: &[(&str, &str)] =
+    &[("Script", "Source"), ("ModuleScript", "Source"), ("GuiService", "CoreGuiNavigationEnabled"), ("VoiceChatInternal", "VoiceChatState")];
+
+/// Properties a client refuses a game script's write of with a capability its permits do not name (measured, roblox-sim 0.747, a
+/// client and a server: Player.GameplayPaused, which a game script reads, "The current thread cannot write 'GameplayPaused'
+/// (lacking capability NotAccessible)")
+const NOT_ACCESSIBLE_WRITES: &[(&str, &str)] = &[("Player", "GameplayPaused")];
 
 impl Engine {
     /// ResolveMember: property (reflection), behaviour method, reflected method, event, callback,
@@ -52,6 +83,7 @@ impl Engine {
                 property: Some(property),
                 getter,
                 setter: behaviors.find_setter(reflection, class, name).is_some(),
+                write: WriteGate::Open,
             }
         } else if method {
             Member::Method { implemented: true }
@@ -66,12 +98,57 @@ impl Engine {
                 property: None,
                 getter: true,
                 setter: behaviors.find_setter(reflection, class, name).is_some(),
+                write: WriteGate::Open,
             }
         } else {
             Member::None
         };
+        drop(behaviors);
+        let member = self.gated(class, name, member);
         self.member_cache.borrow_mut().insert((class, name), member);
         member
+    }
+
+    /// The capabilities the running code holds: a game script's in a play run (a client's and a server's alike), a plugin's in the
+    /// edit run context (services/reflection_data.rs)
+    pub fn script_capabilities(&self) -> u64 {
+        if self.options.edit_mode() { crate::services::reflection_data::PLUGIN_CAPS } else { crate::services::reflection_data::SCRIPT_CAPS }
+    }
+
+    /// `member` as the capabilities of the running code leave it (reflection.rs CAPABILITY_PROPERTIES): refused when the property's
+    /// Read permit needs one the code lacks, its writes refused (or granted) by its Write permit.
+    fn gated(&self, class: ClassId, name: NameId, member: Member) -> Member {
+        let reflection = &self.reflection;
+        let declared = |list: &[(&str, &str)]| {
+            list.iter().any(|&(owner, property)| reflection.name(name) == property && reflection.is_a(class, owner))
+        };
+        if let Member::Property { property, getter, setter, .. } = member
+            && declared(NOT_ACCESSIBLE_WRITES)
+        {
+            return Member::Property { property, getter, setter, write: WriteGate::Refused("NotAccessible") };
+        }
+        let Some(restriction) = reflection.restriction(class, name) else { return member };
+        if !matches!(member, Member::Property { .. } | Member::None) || declared(OPEN_PROPERTIES) {
+            return member;
+        }
+        // (a property with no permit is no member scripts can use)
+        if restriction.read.is_none() && restriction.write.is_none() {
+            return if matches!(member, Member::Property { getter: true, .. }) { member } else { Member::None };
+        }
+        let held = self.script_capabilities();
+        let lacking = |need: u64| crate::services::reflection_data::first_lacking(held, need);
+        if let Some(capability) = restriction.read.and_then(lacking) {
+            return Member::Refused { capability };
+        }
+        let Member::Property { property, getter, setter, .. } = member else { return member };
+        let write = match restriction.write {
+            Some(need) => match lacking(need) {
+                Some(capability) => WriteGate::Refused(capability),
+                None => WriteGate::Granted,
+            },
+            None => WriteGate::Open,
+        };
+        Member::Property { property, getter, setter, write }
     }
 
     /// The name a member of `class` keeps its value under: a deprecated lower-case property's is the property it stands for

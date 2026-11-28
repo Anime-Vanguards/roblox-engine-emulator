@@ -13,7 +13,7 @@ use super::{
 use crate::{
     ClassId, Engine, InstanceId, K, NameId, State,
     dom::flags,
-    instance::{self as core, Member},
+    instance::{self as core, Member, WriteGate},
     project,
     scheduler::{self, JobTarget, TimerKind},
     services::{Behaviors, GetterFn, MethodFn, SetterFn, StringParam, strings},
@@ -399,8 +399,20 @@ fn get_member(lua: &Lua, engine: &Rc<Engine>, id: InstanceId, class: ClassId, na
             engine.reflection.name(name),
             class_name(engine, id)
         )),
+        // (the property's own name: reflection.rs CAPABILITY_PROPERTIES)
+        Member::Refused { capability } => refused(engine, "read", name, capability),
         Member::None => return None,
     })
+}
+
+/// A read or a write the running code lacks the capability for (reflection.rs CAPABILITY_PROPERTIES): "The current thread cannot read
+/// 'DataCost' (lacking capability LocalUser)", raised as the engine raises, without a position (measured, roblox-sim 0.747, a
+/// client and a server), and what a client spends on it beside the error's own price (cost.rs CAPABILITY_READ_REFUSED,
+/// CAPABILITY_WRITE_REFUSED)
+fn refused<T>(engine: &Engine, action: &str, name: NameId, capability: &str) -> Result<T, Flow> {
+    let price = if action == "read" { crate::cost::CAPABILITY_READ_REFUSED } else { crate::cost::CAPABILITY_WRITE_REFUSED };
+    charge_work(engine, price);
+    raise(format!("The current thread cannot {action} '{}' (lacking capability {capability})", engine.reflection.name(name)))
 }
 
 /// The error a client raises for a key that names nothing on an instance: no member, no child (and for a method call, no
@@ -471,6 +483,7 @@ pub fn assign(lua: &Lua, engine: &Rc<Engine>, id: InstanceId, key: &LuaValue, va
         (_, Some(name)) => engine.member_name(class, name),
     };
     match member {
+        Member::Refused { capability } | Member::Property { write: WriteGate::Refused(capability), .. } => refused(engine, "write", name, capability),
         Member::Callback => {
             // (a loopback run refuses the other side's callback, and runs the invokes that waited for this one)
             crate::loopback::remotes::setting_callback(engine, name)?;
@@ -492,7 +505,7 @@ pub fn assign(lua: &Lua, engine: &Rc<Engine>, id: InstanceId, key: &LuaValue, va
             }
             return Ok(());
         }
-        Member::Property { property, setter, .. } => {
+        Member::Property { property, setter, write, .. } => {
             if setter {
                 let setter = engine.behaviors.borrow().find_setter(&engine.reflection, class, name).cloned();
                 if let Some(setter) = setter {
@@ -561,7 +574,13 @@ pub fn assign(lua: &Lua, engine: &Rc<Engine>, id: InstanceId, key: &LuaValue, va
                 return raise(format!("Unable to assign property {}. Property is read only", key_text(key)));
             };
             let info = engine.reflection.property(property).clone();
-            if info.read_only {
+            // (a property a game script's view reads as read only that the code's capabilities let it write: a plugin's
+            // Lighting.LightingStyle, reflection.rs CAPABILITY_PROPERTIES)
+            if info.read_only && write != WriteGate::Granted {
+                // (the value is cast first, as for a property it may write: `ClassName = {}` raises "string expected, got table",
+                // `AbsoluteSize = 5` "Vector2 expected, got number", and a value it casts "Property is read only"; a number property
+                // takes any value; measured, roblox-sim 0.747, a client and a server: capability_property_names.luau)
+                convert::coerce(lua, engine, &info, value)?;
                 return raise(format!("Unable to assign property {}. Property is read only", key_text(key)));
             }
             let coerced = convert::coerce(lua, engine, &info, value)?;
@@ -1315,8 +1334,14 @@ pub fn attribute_name_error(name: &[u8]) -> Option<Vec<u8>> {
     Some([b"Attribute name contains illegal character '".as_slice(), &[illegal], b"' (\"", name, b"\")"].concat())
 }
 
-/// A capability-only property `name` of `class` (reflection.rs CAPABILITY_ONLY): the capability a game script lacks for it.
+/// A property `name` of `class` the running code may not read: the capability it lacks (reflection.rs CAPABILITY_PROPERTIES, and
+/// CAPABILITY_ONLY's).
 fn capability_property(engine: &Engine, class: ClassId, name: &[u8]) -> Option<&'static str> {
+    if let Some(id) = engine.reflection.name_id_bytes(name)
+        && let Member::Refused { capability } = engine.resolve_member(class, id)
+    {
+        return Some(capability);
+    }
     crate::reflection::CAPABILITY_ONLY
         .iter()
         .find(|(owner, property, _)| property.as_bytes() == name && engine.reflection.is_a(class, owner))
@@ -1333,13 +1358,52 @@ fn property_name_arg(engine: &Engine, id: InstanceId, args: &Args, method: &str)
     let class = engine.state.borrow().dom.at(id).class;
     let text = args.string(1).map(|s| s.as_bytes().to_vec()).unwrap_or_default();
     let shown = String::from_utf8_lossy(&text);
-    // (the instance's own class, not the declaring one: the Workspace's LevelOfDetail is `Workspace.LevelOfDetail`, measured)
-    if let Some(capability) = capability_property(engine, class, &text) {
-        return raise(if method == "GetStyled" {
+    let class_name = &*engine.reflection.class(class).name;
+    // (a property with a permit a game script lacks, reflection.rs CAPABILITY_PROPERTIES: a BinaryString is none of theirs;
+    // IsPropertyModified refuses a property with no Write permit as read only before it looks at the Read permit's capabilities,
+    // ResetPropertyToDefault names what a write lacks (the Read permit's capability, else the Write permit's) before it refuses a read-only
+    // one, and GetStyled names the Read permit's; measured, roblox-sim 0.747, a client and a server: Instance's DataCost, RobloxLocked,
+    // UniqueId, SourceAssetId and ClassName, GuiBase2d.ClippedRect, Chat.LoadDefaultChat, HttpService.HttpEnabled, Lighting.LightingStyle,
+    // AudioEmitter.AngleAttenuation; tools/parity/probes/capability_property_names.luau)
+    let name = engine.reflection.name_id_bytes(&text);
+    let restriction = name.and_then(|name| engine.reflection.restriction(class, name));
+    let member = name.map(|name| engine.resolve_member(class, name));
+    let unnamed = restriction.is_some_and(|restriction| !restriction.named && (restriction.read.is_some() || restriction.write.is_some()));
+    let read_refused = if unnamed { None } else { capability_property(engine, class, &text) };
+    let write_refused = match member {
+        Some(Member::Property { write: WriteGate::Refused(capability), .. }) => Some(capability),
+        _ => None,
+    };
+    let read_only = !unnamed
+        && match member {
+            Some(Member::Refused { .. }) => restriction.is_some_and(|restriction| restriction.write.is_none()),
+            Some(Member::Property { property: Some(property), setter: false, write: WriteGate::Open, .. }) => engine.reflection.property(property).read_only,
+            _ => false,
+        };
+    let refused = |capability: &str| -> Result<NameId, Flow> {
+        charge_work(engine, crate::cost::CAPABILITY_CALL_REFUSED);
+        raise(if method == "GetStyled" {
             format!("The current thread cannot call GetStyled() on '{shown}' (lacking capability {capability})")
         } else {
-            format!("The current thread cannot call {method}() on {}.{shown} (lacking capability {capability})", engine.reflection.class(class).name)
-        });
+            // (the instance's own class, not the declaring one: the Workspace's LevelOfDetail is `Workspace.LevelOfDetail`, measured)
+            format!("The current thread cannot call {method}() on {class_name}.{shown} (lacking capability {capability})")
+        })
+    };
+    let is_read_only = || raise(format!("Invalid argument to {method}(): {class_name}.{shown} is read-only"));
+    match method {
+        "IsPropertyModified" if read_only => return is_read_only(),
+        "ResetPropertyToDefault" => {
+            if let Some(capability) = read_refused.or(write_refused) {
+                return refused(capability);
+            }
+            if read_only {
+                return is_read_only();
+            }
+        }
+        _ => {}
+    }
+    if let Some(capability) = read_refused {
+        return refused(capability);
     }
     let name = engine.reflection.name_id_bytes(&text).filter(|&name| {
         engine.reflection.class_property(class, name).is_some_and(|property| property.scriptable)
@@ -1814,12 +1878,14 @@ fn install_base(behaviors: &mut Behaviors, reflection: &crate::Reflection) {
         // one with no member of its own too, "Nope is not a valid property name."; measured, Studio 0.747, a client and a server:
         // tools/parity/probes/instance_api_texts.luau)
         if let Some(capability) = capability_property(engine, class, &text) {
+            charge_work(engine, crate::cost::CAPABILITY_READ_REFUSED);
             return raise(format!("The current thread cannot read '{shown}' (lacking capability {capability})"));
         }
         let name = engine.reflection.name_id_bytes(&text);
         let member = name.map_or(Member::None, |name| engine.resolve_member(class, name));
         let (Member::Property { .. }, Some(name)) = (member, name) else {
-            if name.is_some_and(|name| engine.reflection.class_property(class, name).is_some()) {
+            // (and a property a client hides with no permit at all, Instance.Tags: reflection.rs CAPABILITY_PROPERTIES)
+            if name.is_some_and(|name| engine.reflection.class_property(class, name).is_some() || engine.reflection.restriction(class, name).is_some()) {
                 return raise(format!("{shown} is not a scriptable property."));
             }
             return raise(format!("{} is not a valid property name.", key_text(args.get(1))));

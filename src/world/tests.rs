@@ -11039,6 +11039,52 @@ fn script_errors_refused_writes_and_failed_conversions_cost_what_a_client_spends
     }
 }
 
+/// A property access refused for a capability costs what a client spends on it (cost.rs CAPABILITY_READ_REFUSED,
+/// CAPABILITY_WRITE_REFUSED, CAPABILITY_CALL_REFUSED; measured, roblox-sim 0.747, two client and two server sessions): a read 3.68 us
+/// in all, a write 3.91, an IsPropertyModified, ResetPropertyToDefault or GetStyled refusal 4.17-4.27, a GetPropertyChangedSignal
+/// refusal a read's more than an unknown name's. ree charged an unknown member's price for each.
+#[test]
+fn capability_refusals_cost_what_a_client_spends() {
+    let (lua, engine) = start_play();
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    run(
+        &lua,
+        &engine,
+        r##"
+        local Folder = Instance.new("Folder")
+        local Decal = Instance.new("Decal")
+        local None = Content.none
+        local function Cost(Call)
+            pcall(Call)
+            local Start = os.clock()
+            pcall(Call)
+            return os.clock() - Start
+        end
+        local function Extra(Raises, Passes)
+            return Cost(Raises) - Cost(Passes)
+        end
+        local Empty = function() end
+        shared.Refusals = {
+            Read = Extra(function() return Folder.DataCost end, Empty),
+            Write = Extra(function() Folder.RobloxLocked = true end, Empty),
+            Listed = Extra(function() Decal.MetalnessMapContent = None end, Empty),
+            Signal = Extra(function() Folder:GetPropertyChangedSignal("DataCost") end, function() Folder:GetPropertyChangedSignal("Nope") end),
+            Call = Extra(function() Folder:IsPropertyModified("RobloxLocked") end, function() Folder:IsPropertyModified("Nope") end),
+        }
+        "##,
+    );
+    let checks = [
+        ("Read", crate::cost::RAISED + crate::cost::CAPABILITY_READ_REFUSED),
+        ("Write", crate::cost::RAISED + crate::cost::CAPABILITY_WRITE_REFUSED),
+        ("Listed", crate::cost::RAISED + crate::cost::CAPABILITY_WRITE_REFUSED),
+        ("Signal", crate::cost::CAPABILITY_READ_REFUSED),
+        ("Call", crate::cost::CAPABILITY_CALL_REFUSED),
+    ];
+    for (name, price) in checks {
+        run(&lua, &engine, &format!("assert(math.abs(shared.Refusals.{name} - {price:e}) < 0.2e-6, `{name}: {{shared.Refusals.{name}}} s more work, not {price:e}`)"));
+    }
+}
+
 /// A cast asks its filter about each part whose bounds grown by 0.315 studs its path enters before the hit (a wall 0.30 studs behind
 /// the hit, a bar 0.1 studs beside the path), a Raycast once for every 4 studs of path inside them and once more, and a Blockcast
 /// counts what its box meets by the box's own sweep (Studio 0.747, a headless client: walls 200 folders deep behind an Exclude list of

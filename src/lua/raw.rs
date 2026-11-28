@@ -40,7 +40,7 @@ use super::{
 use crate::{
     ClassId, Engine, InstanceId, K, NameId, Reflection, State,
     dom::flags,
-    instance::{self as core, Member as Resolved},
+    instance::{self as core, Member as Resolved, WriteGate},
     reflection::ScriptType,
     value::{Str, Value},
 };
@@ -208,7 +208,7 @@ fn compute_member(engine: &Engine, class: ClassId, key: NameId) -> Member {
     let name = engine.member_name(class, key);
     let mut member = Member { read: Read::Slow, write: Write::Slow, call: Call::NotMethod, index_fn: 0, call_fn: 0, cost: crate::cost::method(reflection.name(name)) as f32, name };
     match engine.resolve_member(class, name) {
-        Resolved::Property { property, getter, setter } => {
+        Resolved::Property { property, getter, setter, write } => {
             let behaviors = engine.behaviors.borrow();
             let base_getter = |n: K| {
                 name == n as NameId
@@ -235,7 +235,10 @@ fn compute_member(engine: &Engine, class: ClassId, key: NameId) -> Member {
                         _ => false,
                     }
             };
-            member.write = if setter {
+            member.write = if !matches!(write, WriteGate::Open) {
+                // (a write its capabilities refuse raises, and one they grant passes a read-only property: lua/instance.rs assign)
+                Write::Slow
+            } else if setter {
                 if base_setter(K::Parent) {
                     Write::Parent
                 } else if base_setter(K::Name) {
@@ -267,6 +270,8 @@ fn compute_member(engine: &Engine, class: ClassId, key: NameId) -> Member {
         }
         Resolved::Event => member.read = Read::Event,
         Resolved::Callback => {}
+        // (a property the code lacks the capability for: its read and write raise, before any child of its name is looked for)
+        Resolved::Refused { .. } => {}
         Resolved::None => member.read = Read::Child,
     }
     member

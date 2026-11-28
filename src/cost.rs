@@ -1307,6 +1307,21 @@ pub const MEMBER_MISSED: f64 = 2.75e-6;
 /// alone (3.15-3.18).
 pub const WRITE_REFUSED: f64 = 1.2e-6;
 pub const WRITE_CAST_REFUSED: f64 = 4.2e-6;
+/// A property access a client refuses for a capability the script lacks (reflection.rs CAPABILITY_PROPERTIES), past [`RAISED`]: a
+/// read 3.68 us in all past an empty pcall ([`CAPABILITY_READ_REFUSED`]), a write 3.91 ([`CAPABILITY_WRITE_REFUSED`]), whatever the
+/// capability, the value written or a child of the property's name (measured, roblox-sim 0.747, two sessions of a client and two of
+/// a server on a loaded machine, each row a ratio to FindFirstChild(nil) timed in the same sample, 3.45 calm: reads of DataCost,
+/// RobloxLocked, UniqueId, AudioEmitter.AngleAttenuation, a shadowed DataCost and Model.LevelOfDetail 1.047-1.093; writes of
+/// RobloxLocked, UniqueId ({}), DataCost, Decal.MetalnessMapContent, AudioPlayer.IsPlaying (true and {}), Humanoid.CollisionType and
+/// Script.RunContext 1.106-1.167; an unknown member's read 0.90 in the same samples). ree charged RAISED (3.4).
+pub const CAPABILITY_READ_REFUSED: f64 = 0.28e-6;
+pub const CAPABILITY_WRITE_REFUSED: f64 = 0.51e-6;
+/// IsPropertyModified, ResetPropertyToDefault and GetStyled refusing a property for a capability the script lacks, past [`RAISED`]: 4.17-4.27
+/// us in all (measured likewise, two client and two server sessions: IsPropertyModified of RobloxLocked and Model.LevelOfDetail 1.202-1.258
+/// of FindFirstChild(nil), ResetPropertyToDefault of DataCost and Chat.LoadDefaultChat 1.209-1.257, GetStyled of DataCost 1.188-1.230,
+/// where their read-only refusals (IsPropertyModified of DataCost and ClassName, ResetPropertyToDefault of ClassName) cost 0.92-1.05, as
+/// [`RAISED`] does). GetPropertyChangedSignal's refusal of DataCost costs 1.161-1.180, a read's ([`CAPABILITY_READ_REFUSED`]).
+pub const CAPABILITY_CALL_REFUSED: f64 = 0.8e-6;
 /// A value a client converts for a script and fails to, raising nothing, past the call (measured as [`SCRIPT_ERROR`], 4.26-5.29 us in
 /// all): a value that is no number nor a numeric string written to a number property, which stores 0 (lua/convert.rs coerce: "x"
 /// for Transparency 4.58-4.99, for an IntValue's Value 4.26-4.53; nil 4.43-5.07, true 4.53-4.88, a function 4.31-4.73; a numeric

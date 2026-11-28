@@ -43,9 +43,23 @@ pub(crate) const UNASSIGNED: Caps = 1 << 8;
 /// AvatarBehavior, every capability but the first five and the last four.
 pub(crate) const SCRIPT_CAPS: Caps = ((1 << 47) - 1) & !((1 << 5) - 1);
 
+/// A plugin's set, what ree's edit run context holds: a game script's and Plugin and PluginOrOpenCloud. A plugin's code (Studio 0.748, edit
+/// mode) is refused what needs RobloxScript, RobloxEngine or LocalUser (reflection.rs CAPABILITY_CALLS). The command bar's identity 4
+/// holds LocalUser too: a playing client's identity-4 job reads DataCost and RobloxLocked, writes Lighting.LightingStyle, and is refused
+/// what needs RobloxScript, RobloxEngine or InternalTest (roblox-sim 0.747, every property data/capability-properties.rs lists that the
+/// job reaches); SecurityCapabilities.fromCurrent() prints a game script's set at identities 2, 4 and 8 alike.
+pub(crate) const PLUGIN_CAPS: Caps = SCRIPT_CAPS | 1 | (1 << 49);
+
 /// Whether `held` holds every capability of `need` (Unassigned is always held)
 pub(crate) fn holds(held: Caps, need: Caps) -> bool {
     need & !(held | UNASSIGNED) == 0
+}
+
+/// The capability of `need` that `held` lacks, the first in [`CAPABILITY_ORDER`] when it lacks several (a client's error names one;
+/// which of several is not measured: no permit a game script can reach needs two it lacks); None when it holds them all.
+pub(crate) fn first_lacking(held: Caps, need: Caps) -> Option<&'static str> {
+    let missing = need & !(held | UNASSIGNED);
+    (missing != 0).then(|| CAPABILITY_ORDER[missing.trailing_zeros() as usize])
 }
 
 /// The set a permit's text names ("Basic | UI"; "" none). A name not in [`CAPABILITY_ORDER`] (the set's other names for two,
@@ -545,6 +559,18 @@ pub(crate) fn build(dump: &'static [u8], security: &'static [u8]) -> Data {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A plugin's set is a game script's with Plugin and PluginOrOpenCloud; a lacking capability is named by the first missing one.
+    #[test]
+    fn a_plugins_capabilities_and_the_one_a_set_lacks() {
+        assert_eq!(PLUGIN_CAPS, SCRIPT_CAPS | caps_of("Plugin | PluginOrOpenCloud"));
+        assert_eq!(first_lacking(SCRIPT_CAPS, caps_of("RobloxScript | AvatarAppearance")), Some("RobloxScript"));
+        assert_eq!(first_lacking(SCRIPT_CAPS, caps_of("Basic | PluginOrOpenCloud")), Some("PluginOrOpenCloud"));
+        assert_eq!(first_lacking(PLUGIN_CAPS, caps_of("Basic | PluginOrOpenCloud")), None);
+        assert_eq!(first_lacking(SCRIPT_CAPS, caps_of("RobloxScript | InternalTest")), Some("RobloxScript"));
+        assert_eq!(first_lacking(SCRIPT_CAPS, caps_of("")), None);
+        assert_eq!(first_lacking(SCRIPT_CAPS, caps_of("Unassigned")), None);
+    }
 
     /// A game script's view of the data (its own set, no Security filter) is data/reflection.json, member for member and permit
     /// for permit: the hidden members data/reflection-security.json adds go in their places without moving another, and the
