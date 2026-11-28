@@ -3,7 +3,11 @@
 //! 4.00 snapshot of it under `<state dir>/editable-meshes/`, written again (named by its content)
 //! before each frame the recorder samples after the mesh changed, so ror draws what the script made
 //! as Roblox shows it: the mesh's own coordinates from the part's origin, scaled by Size / MeshSize
-//! (InitialSize keeps MeshSize: ror scales by it), and skinned by its bones.
+//! (InitialSize keeps MeshSize: ror scales by it), and skinned by its bones. A data-model copy of a mesh
+//! (CreateDataModelContentAsync) is a snapshot of its own under `<state dir>/mesh-copies/`: a 0.747 client
+//! draws a part bound to an EditableMesh without shadows and a part made from such a copy with them
+//! (ror P4: fixtures/texture-alpha.luau, the sun's and shadowed PointLights' shadows), and ror tells the two
+//! apart by the folder.
 //!
 //! Measured in Studio (2026-10-16): ids carry their kind in the high 32 bits (vertex 1, normal 2,
 //! colour 3, uv 4, face 5, bone 6) over a slot from 1; a clone keeps them. A removed element's slot
@@ -1296,12 +1300,22 @@ fn load_asset(_: &Engine, uri: &str) -> Result<Arc<Mesh>, String> {
     Err(format!("{uri}: this build decodes no mesh assets (feature `meshes`)"))
 }
 
-/// Writes `mesh`'s snapshot (named by its content) and returns its path.
+/// The folder of the snapshots MeshParts bound to an EditableMesh show (ror draws them as an EditableMesh: no shadow)
+const BOUND_SNAPSHOTS: &str = "editable-meshes";
+/// The folder of data-model copies' snapshots (CreateDataModelContentAsync: a mesh asset's part, which casts shadows)
+const COPY_SNAPSHOTS: &str = "mesh-copies";
+
+/// Writes the snapshot of a mesh a MeshPart is bound to (named by its content) and returns its path.
 fn snapshot(engine: &Engine, mesh: &Mesh) -> Result<PathBuf, String> {
+    snapshot_in(engine, mesh, BOUND_SNAPSHOTS)
+}
+
+/// Writes `mesh`'s snapshot (named by its content) in the state dir's `folder` and returns its path.
+fn snapshot_in(engine: &Engine, mesh: &Mesh, folder: &str) -> Result<PathBuf, String> {
     let bytes = encode(mesh);
     let mut hasher = FxHasher::default();
     bytes.hash(&mut hasher);
-    let directory = crate::state_dir(&engine.options.repo).join("editable-meshes");
+    let directory = crate::state_dir(&engine.options.repo).join(folder);
     let path = directory.join(format!("{:016x}-{}.mesh", hasher.finish(), bytes.len()));
     if !files::is_file(&path) {
         std::fs::create_dir_all(&directory).map_err(|error| format!("{}: {error}", directory.display()))?;
@@ -1378,8 +1392,9 @@ pub fn flush(engine: &Engine) {
 }
 
 /// AssetService:CreateDataModelContentAsync of an EditableMesh's Content: a FileMesh copy of the mesh as it is now (the
-/// snapshot file, which later edits do not reach), its `file://` URI. A mesh without faces is refused as a 0.747 client
-/// refuses an empty one.
+/// snapshot file, which later edits do not reach), its `file://` URI, in the copies' own folder ([`COPY_SNAPSHOTS`]: a part
+/// made from it is drawn as a mesh asset's, with shadows). A mesh without faces is refused as a 0.747 client refuses an empty
+/// one.
 pub fn data_model_copy(engine: &Engine, id: InstanceId) -> Result<String, String> {
     let ext = extension(engine);
     let meshes = ext.meshes.borrow();
@@ -1387,7 +1402,7 @@ pub fn data_model_copy(engine: &Engine, id: InstanceId) -> Result<String, String
     if mesh.faces.live().next().is_none() {
         return Err("Error creating FileMeshData: Empty Result".into());
     }
-    let path = snapshot(engine, mesh)?;
+    let path = snapshot_in(engine, mesh, COPY_SNAPSHOTS)?;
     Ok(format!("file://{}", path.display()))
 }
 

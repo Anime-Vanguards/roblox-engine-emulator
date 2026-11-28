@@ -5773,6 +5773,38 @@ fn data_model_content_is_a_copy_of_a_mesh() {
     }
 }
 
+/// A data-model copy of a mesh is a snapshot in a folder of its own (REC-EDITABLE-MESH-COPY): a 0.747 client draws a part bound to
+/// an EditableMesh without shadows and one made from CreateDataModelContentAsync's copy with them (ror P4, fixtures/texture-alpha.luau
+/// "sun" em-dmc and "lamps" light-em-dmc), and ror reads a MeshId under `editable-meshes` as a bound EditableMesh. The bound part's
+/// snapshot stays there, the copy's goes to `mesh-copies`, even for the same mesh.
+#[cfg(feature = "meshes")]
+#[test]
+fn a_data_model_copy_of_a_mesh_has_a_folder_of_its_own() {
+    let (lua, engine) = start_with(Options { mode: "play".into(), ..Options::default() });
+    run(
+        &lua,
+        &engine,
+        r#"
+        local AssetService = game:GetService("AssetService")
+        local m = AssetService:CreateEditableMesh()
+        m:AddTriangle(m:AddVertex(Vector3.new(0, 0, 0)), m:AddVertex(Vector3.new(2, 0, 0)), m:AddVertex(Vector3.new(0, 3, 0)))
+        task.spawn(function()
+            local function folder(part)
+                local uri = part.MeshId:gsub("\\", "/")
+                return uri:match("/([%w%-]+)/[^/]+%.mesh$")
+            end
+            local bound = AssetService:CreateMeshPartAsync(Content.fromObject(m))
+            local _, made = AssetService:CreateDataModelContentAsync(Content.fromObject(m))
+            local copied = AssetService:CreateMeshPartAsync(made)
+            print("folders", folder(bound), folder(copied))
+        end)
+        "#,
+    );
+    scheduler::run_until(&lua, &engine, 0.5).unwrap();
+    let lines = lines(&engine);
+    assert!(lines.iter().any(|line| line == "print: folders editable-meshes mesh-copies"), "{lines:?}");
+}
+
 /// The work clock: os.clock advances within a frame by what the engine calls a script makes cost
 /// Studio (crate::cost: Instance.new, a write, entering the DataModel), and a new frame starts at
 /// its own virtual time; a mesh asset's CreateEditableMeshAsync yields (its first fetch 0.55 s).
