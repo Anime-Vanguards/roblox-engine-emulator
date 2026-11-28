@@ -490,8 +490,11 @@ pub fn handler_may_run(state: &mut State, connection: ConnectionId) -> bool {
 pub const HARNESS: u32 = 1 << 31;
 
 /// Whether the running thread `state` is the harness's own code at the run's harness identity ([`HARNESS`])
-pub fn harness_identity(state: *mut mlua::ffi::lua_State) -> bool {
-    // SAFETY: the running thread of the VM
+///
+/// # Safety
+/// `state` must be a live thread of the running VM.
+pub unsafe fn harness_identity(state: *mut mlua::ffi::lua_State) -> bool {
+    // SAFETY: the caller's
     tagged() && unsafe { lua_getthreadowner(state) } == HARNESS
 }
 

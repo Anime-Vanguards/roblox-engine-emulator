@@ -123,8 +123,12 @@ impl Engine {
 
     /// The capabilities of the code the thread `state` runs: [`Engine::script_capabilities`], or the command bar's identity 4's for
     /// the harness's own code in a run at `--identity 4` (scripts.rs HARNESS)
-    pub fn capabilities_of(&self, state: *mut mlua::ffi::lua_State) -> u64 {
-        if self.options.identity == 4 && crate::scripts::harness_identity(state) {
+    ///
+    /// # Safety
+    /// `state` must be a live thread of the running VM.
+    pub unsafe fn capabilities_of(&self, state: *mut mlua::ffi::lua_State) -> u64 {
+        // SAFETY: the caller's
+        if self.options.identity == 4 && unsafe { crate::scripts::harness_identity(state) } {
             crate::services::reflection_data::IDENTITY_4_CAPS
         } else {
             self.script_capabilities()
@@ -133,14 +137,16 @@ impl Engine {
 
     /// [`Engine::capabilities_of`] the running thread of `lua`
     pub fn capabilities(&self, lua: &mlua::Lua) -> u64 {
-        if self.options.identity == 4 { self.capabilities_of(lua.current_thread().state()) } else { self.script_capabilities() }
+        // SAFETY: the running thread of `lua`
+        if self.options.identity == 4 { unsafe { self.capabilities_of(lua.current_thread().state()) } } else { self.script_capabilities() }
     }
 
     /// `name` of `class` as the harness's own code at `--identity 4` sees it where a game script's view ([`Engine::resolve_member`])
     /// refuses it for a capability (a read or a write): resolved anew for identity 4's capabilities (not kept); None for any other
     /// code, or where identity 4 lacks the capability too
     pub fn harness_member(&self, lua: &mlua::Lua, class: ClassId, name: NameId) -> Option<Member> {
-        if self.options.identity != 4 || !crate::scripts::harness_identity(lua.current_thread().state()) {
+        // SAFETY: the running thread of `lua`
+        if self.options.identity != 4 || !unsafe { crate::scripts::harness_identity(lua.current_thread().state()) } {
             return None;
         }
         let name = self.reflection.property_alias(class, name).unwrap_or(name);

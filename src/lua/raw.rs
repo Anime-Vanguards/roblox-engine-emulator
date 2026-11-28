@@ -1131,7 +1131,7 @@ unsafe extern "C-unwind" fn instance_new(state: *mut ffi::lua_State) -> c_int {
             None => String::new(),
         };
         // (a class whose making needs a capability the code lacks, or one a client never makes for a script: instance.rs
-        // new_refusal)
+        // new_refusal; SAFETY: `state` is the running thread that called Instance.new)
         if let Some(message) = core::new_refusal(&class_name, engine.capabilities_of(state), !engine.options.edit_mode()) {
             let error = crate::ScriptError::plain(message);
             return Out::Raise(error.message, error.level);
