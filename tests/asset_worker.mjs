@@ -238,6 +238,23 @@ function removePath(env) {
 	}
 }
 
+// The value of variable `name` in `env`, whatever its spelling there
+function getVariable(env, name) {
+	const key = Object.keys(env).find((key) => key.toUpperCase() === name.toUpperCase());
+	return key === undefined ? undefined : env[key];
+}
+
+// Sets variable `name` in `env` (a plain object) to `value` as a child sees it. Windows names variables in any case and a
+// plain copy of the environment keeps the spelling it had: a shell may spell them `SYSTEMDRIVE` or `Path`, and a key of
+// another case beside it is a second variable, of which the child reads the first in the block's order. So any spelling of
+// the name is removed first.
+function setVariable(env, name, value) {
+	for (const key of Object.keys(env)) {
+		if (key.toUpperCase() === name.toUpperCase()) delete env[key];
+	}
+	env[name] = value;
+}
+
 // Writes a harness in `project` that fetches animation `id` through the worker and returns the `ree` arguments that run it,
 // directly or through the service
 function animationJob(project, id, viaService = false, args = []) {
@@ -517,12 +534,14 @@ if (WINDOWS) {
 				"drive-root": { value: driveRoot, expected: driveRoot },
 				"verbatim-root": { value: path.toNamespacedPath(driveRoot), expected: driveRoot },
 			}[kind];
-			// The explicit state stays in the test folder; these values must only be forwarded to the worker.
-			for (const name of USER_FOLDER_VARIABLES) env[name] = value;
-			env.PATH = [value, env.PATH].join(path.delimiter);
-			env.NODE_PATH = value;
-			env.HOMEDRIVE = drive;
-			env.SystemDrive = drive;
+			// The explicit state stays in the test folder; these values must only be forwarded to the worker. The drive is the
+			// temporary folder's, which need not be the system's, so each variable is set whatever its spelling in the
+			// environment this check inherited (setVariable).
+			for (const name of USER_FOLDER_VARIABLES) setVariable(env, name, value);
+			setVariable(env, "PATH", [value, getVariable(env, "PATH")].join(path.delimiter));
+			setVariable(env, "NODE_PATH", value);
+			setVariable(env, "HOMEDRIVE", drive);
+			setVariable(env, "SystemDrive", drive);
 			env.REE_ASSET_WORKER = path.join(directory, "helpers", WORKER_FILE);
 			fs.mkdirSync(path.join(directory, "root"));
 			await fetchAnimation(ree, directory, 1251);
