@@ -565,6 +565,8 @@ fn notify_changed_hooks(state: &mut State, reflection: &Reflection, hooks: &Hook
     for hook in &hooks.property_changed {
         hook(state, id, name);
     }
+    // (CreateCollection's collections: services/collections.rs)
+    super::services::collections::property_changed(state, reflection, id, name);
     // Rigid assemblies: a part's CFrame moves its assembly, a joint's change settles it
     super::world::joints::property_changed(state, reflection, hooks, id, name, old.as_ref());
     // (what the write did to the spatial grid's units: world/broadphase.rs settle)
@@ -1060,6 +1062,11 @@ fn reparent(
     if let Some(parent) = new_parent {
         // (Studio: every DescendantAdded of the subtree, then any before-child-added setup such as Players.PlayerAdded, then ChildAdded)
         fire_descendant_events(state, &new_chain[..new_chain.len() - kept], id, K::DescendantAdded as NameId);
+        // (CollectionService's added signal for a tagged subtree entering the DataModel comes with them, before ChildAdded: measured,
+        // roblox-sim 0.747, tools/parity/probes/collection_updates.luau)
+        if now_inside && !was_inside {
+            super::services::subtree_moved(state, id, true);
+        }
         for hook in &hooks.before_child_added {
             hook(state, hooks, id, old_parent, parent);
         }
@@ -1072,9 +1079,6 @@ fn reparent(
             && let Some(signal) = existing_event(state, parent, alias)
         {
             fire_measured(state, signal, vec![Value::Instance(id)], SignalKind::ChildAdded);
-        }
-        if now_inside && !was_inside {
-            super::services::subtree_moved(state, id, true);
         }
     }
     fire_ancestry_changed(state, id, new_parent, &old_chain);
@@ -1360,6 +1364,7 @@ pub fn add_tag(state: &mut State, id: InstanceId, tag: Str) {
     state.dom.at_mut(id).tags.push(tag.clone());
     state.dom.bump_version(id);
     super::services::tag_added(state, id, &tag);
+    super::services::collections::tag_changed(state, id);
     log_tag(state, id, &tag);
 }
 
@@ -1380,6 +1385,7 @@ pub fn remove_tag(state: &mut State, id: InstanceId, tag: &Str) {
     tags.remove(index);
     state.dom.bump_version(id);
     super::services::tag_removed(state, id, tag);
+    super::services::collections::tag_changed(state, id);
     log_tag(state, id, tag);
 }
 
@@ -1449,6 +1455,7 @@ pub fn begin_destroy(
 /// tags, as in Studio: CollectionService's removed signals fired when it left the DataModel.)
 pub fn finish_destroy(state: &mut State, id: InstanceId) {
     state.sched.defer(JobTarget::DisconnectAll(id), Vec::new());
+    super::services::collections::destroyed(state, id);
 }
 
 /// Disconnects every signal of an instance (Destroy's deferred cleanup).

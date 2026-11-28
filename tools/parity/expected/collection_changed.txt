@@ -1,0 +1,15 @@
+# engine: Roblox Studio 0.747.0.7471481, a headless playing client (script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-28
+after assigning OnAdded(A) OnAdded(B)
+rename A.Changed(Name) OnChanged(A2,string:Name)
+two writes A.Changed(Transparency) OnChanged(A2,string:Transparency) A.Changed(Transparency) OnChanged(A2,string:Transparency)
+attribute 
+other tag 
+same value 
+child 
+non-member write 
+add then write OnAdded(D2) OnChanged(D2,string:Parent) OnChanged(D2,string:Name)
+write then remove OnRemoved(B2)
+two added OnAdded(E) OnChanged(E,string:Parent) OnAdded(F) OnChanged(F,string:Parent)
+two removed OnRemoved(E) OnRemoved(F)
+probe-error Callback OnAdded already assigned

@@ -1,0 +1,21 @@
+# engine: Roblox Studio 0.747.0.7471481, the server of a headless play session (a Script in ServerScriptService, script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-28
+callback OnAdded ok  error OnAdded is not a valid member of CollectionHandle
+callback OnRemoved ok  error OnRemoved is not a valid member of CollectionHandle
+callback OnInstanceAdded error OnInstanceAdded cannot be assigned to error OnInstanceAdded is not a valid member of CollectionHandle
+callback OnInstanceRemoved error OnInstanceRemoved cannot be assigned to error OnInstanceRemoved is not a valid member of CollectionHandle
+callback OnItemAdded ok  error OnItemAdded is not a valid member of CollectionHandle
+callback OnItemRemoved ok  error OnItemRemoved is not a valid member of CollectionHandle
+callback OnChanged ok  error OnChanged is not a valid member of CollectionHandle
+callback OnCountChanged error OnCountChanged cannot be assigned to error OnCountChanged is not a valid member of CollectionHandle
+callback OnFoo error OnFoo cannot be assigned to error OnFoo is not a valid member of CollectionHandle
+callback On error On cannot be assigned to error On is not a valid member of CollectionHandle
+callback Onadded error Onadded cannot be assigned to error Onadded is not a valid member of CollectionHandle
+callback onAdded error onAdded is not a valid signal name, must start with 'On' error onAdded is not a valid member of CollectionHandle
+callback OnDestroyed error OnDestroyed cannot be assigned to error OnDestroyed is not a valid member of CollectionHandle
+callback OnDestroy error OnDestroy cannot be assigned to error OnDestroy is not a valid member of CollectionHandle
+callback non-function error Expected function, got number error Expected function, got nil
+add now | defer-before | OnAdded,A | OnChanged,A,string:Parent | defer-after
+remove now=0 | OnRemoved,A
+flicker OnAdded,A | OnChanged,A,string:Parent
+destroy OnRemoved,A

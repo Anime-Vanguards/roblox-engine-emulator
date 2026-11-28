@@ -79,6 +79,8 @@ pub enum JobTarget {
     Start(u32),
     /// The connections of a script run that an Enabled false stopped (scripts.rs disconnect_run)
     DisconnectRun(u32),
+    /// A CollectionService collection's update for an instance (services/collections.rs run_job; the job's arguments say which)
+    Collection(InstanceId),
 }
 
 pub struct Job {
@@ -1854,6 +1856,7 @@ fn run_job(lua: &Lua, engine: &Rc<Engine>, job: Job) -> LuaResult<()> {
         }
         JobTarget::Start(key) => crate::scripts::run_start(lua, engine, key)?,
         JobTarget::DisconnectRun(key) => crate::scripts::disconnect_run(&mut engine.state.borrow_mut(), key),
+        JobTarget::Collection(id) => crate::services::collections::run_job(lua, engine, id, &job.args)?,
     }
     Ok(())
 }
@@ -2724,7 +2727,7 @@ pub fn run_until(lua: &Lua, engine: &Rc<Engine>, until: f64) -> LuaResult<()> {
 impl Scheduler {
     pub fn visit_instance_refs(&self, visit: &mut dyn FnMut(InstanceId)) {
         for job in self.deferred.iter().chain(self.held.iter()) {
-            if let JobTarget::DisconnectAll(id) = job.target {
+            if let JobTarget::DisconnectAll(id) | JobTarget::Collection(id) = job.target {
                 visit(id);
             }
             for value in &job.args {

@@ -13410,7 +13410,6 @@ fn methods_new_in_0_747_report_themselves_as_not_emulated() {
         &lua,
         &engine,
         r#"
-        print(game:GetService("CollectionService"):CreateCollection(".Tag", workspace))
         print(game:GetService("RunService"):GetPredictionStatus(workspace))
         local Emitter = Instance.new("ParticleEmitter2D")
         print(Emitter:Emit(3), Emitter:Clear())
@@ -13422,8 +13421,6 @@ fn methods_new_in_0_747_report_themselves_as_not_emulated() {
     assert_eq!(
         output,
         [
-            "missing: CollectionService.CreateCollection is not emulated",
-            "print: ",
             "missing: RunService.GetPredictionStatus is not emulated",
             "print: ",
             "missing: ParticleEmitter2D.Emit is not emulated",
@@ -13439,7 +13436,7 @@ fn methods_new_in_0_747_report_themselves_as_not_emulated() {
     let missing: Vec<String> = engine.state.borrow().output.missing.iter().map(|(name, _)| name.clone()).collect();
     assert_eq!(
         missing,
-        ["CollectionService.CreateCollection", "RunService.GetPredictionStatus", "ParticleEmitter2D.Emit", "ParticleEmitter2D.Clear", "Sound.GetPlaybackState", "TextDocument.ReadAsync"]
+        ["RunService.GetPredictionStatus", "ParticleEmitter2D.Emit", "ParticleEmitter2D.Clear", "Sound.GetPlaybackState", "TextDocument.ReadAsync"]
     );
 }
 

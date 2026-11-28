@@ -177,3 +177,47 @@ fn players_read_the_members_a_client_gives_them() {
         ]
     );
 }
+
+/// A collection counts what its query matched when it was made, takes in what comes to match at the next deferred point (after the
+/// change's own signals for a tag), counts what stops matching no more at once, and raises "Collection does not exist" once
+/// destroyed; its callbacks run as members come and go.
+#[test]
+fn a_collection_follows_its_members_at_deferred_points() {
+    let source = format!(
+        "{TRY}\nlocal CS = game:GetService('CollectionService')\n\
+         local Root = Instance.new('Folder') Root.Parent = workspace\n\
+         local A = Instance.new('Part') A:AddTag('T') A.Parent = Root\n\
+         local H = CS:CreateCollection('.T', Root)\n\
+         local Log = {{}}\n\
+         H.OnAdded = function(I) table.insert(Log, 'added ' .. I.Name) end\n\
+         H.OnRemoved = function(I) table.insert(Log, 'removed ' .. I.Name) end\n\
+         print(typeof(H), tostring(H), H.Query, H.Root == Root, H:GetCount())\n\
+         local B = Instance.new('Part') B.Name = 'B' B.Parent = Root\n\
+         CS:GetInstanceAddedSignal('T'):Connect(function() table.insert(Log, 'signal ' .. H:GetCount()) end)\n\
+         B:AddTag('T')\n\
+         print('tagged', H:GetCount())\n\
+         task.wait()\n\
+         print(table.concat(Log, ', '), H:GetCount(), #CS:GetCollections(B))\n\
+         table.clear(Log)\n\
+         A:RemoveTag('T')\n\
+         print('untagged', H:GetCount())\n\
+         task.wait()\n\
+         print(table.concat(Log, ', '))\n\
+         print(try(function() H.OnAdded = function() end end), try(function() (H :: any).OnFoo = function() end end), try(function() (H :: any).Count = 1 end), try(function() return (H :: any).Count end))\n\
+         H:Destroy()\n\
+         print(try(H.GetCount, H), try(function() return H.Query end), (string.gsub(try(H.GetCount, nil), '^error [^:]*:%d+: ', 'error ')))"
+    );
+    let lines = printed(play(), &source, 0.5);
+    assert_eq!(
+        lines,
+        [
+            "CollectionHandle Collection .T true 1",
+            "tagged 1",
+            "added Part, signal 1, added B 2 1",
+            "untagged 1",
+            "removed Part",
+            "error Callback OnAdded already assigned error OnFoo cannot be assigned to error Expected function, got number error Count is not a valid member of CollectionHandle",
+            "error Collection does not exist error Collection does not exist error invalid argument #1 to 'GetCount' (CollectionHandle expected, got nil)",
+        ]
+    );
+}

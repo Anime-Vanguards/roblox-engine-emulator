@@ -724,6 +724,8 @@ pub fn load(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
             }
         })?,
     )?;
+    // CreateCollection's collections (services/collections.rs)
+    crate::services::collections::install(lua, engine, &r)?;
     let options = lua.create_table()?;
     let device = &engine.options.profile.device;
     options.set("TopbarInset", device.topbar_inset())?;

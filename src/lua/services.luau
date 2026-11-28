@@ -2244,14 +2244,14 @@ R.FetchStatusSignal = function(Id)
 end
 
 -- CollectionService: GetCollection (deprecated for GetTagged) answers an empty list, and GetCollections an instance's
--- collections, none while CreateCollection is not emulated.
+-- collections, the CreateCollection handles it is a member of (R.CollectionHandles: this file's end block).
 Method("CollectionService", "GetCollection", function(_, ...)
 	CastAll({ { "string" } }, ...)
 	return {}
 end)
 Method("CollectionService", "GetCollections", function(_, ...)
 	CastAll({ { "Instance" } }, ...)
-	return {}
+	return R.CollectionHandles((...))
 end)
 
 -- ContextActionService: no tool, so no tool icon; BindActivate binds input, the host's input layer's (it reports itself after its
@@ -3089,5 +3089,102 @@ Getter("Player", "User", function()
 	R.Register(User, "User")
 	return User
 end)
+
+-- CollectionService:CreateCollection(query, root): a CollectionHandle over a QueryDescendants query below root (the Workspace when
+-- root is nil or left out), whose members services/collections.rs keeps. The handle reads typeof CollectionHandle and tostring
+-- Collection; Query and Root are read-only ("Collection.Query is read-only and cannot be written to"), GetCount and Destroy its
+-- methods (on another self "invalid argument #1 to 'GetCount' (CollectionHandle expected, got Instance)" at the caller, none
+-- "missing argument #1 ..."), any other key "X is not a valid member of CollectionHandle", a key that is no string Luau's "invalid
+-- argument #2 (string expected, got number)". A function may be assigned once to OnAdded, OnRemoved, OnChanged, OnItemAdded or
+-- OnItemRemoved ("Callback OnAdded already assigned"); another value raises "Expected function, got number", another name that
+-- starts with On "OnFoo cannot be assigned to", any other "Foo is not a valid signal name, must start with 'On'", and each reads
+-- as no member. After Destroy (or its root's) every member raises "Collection does not exist". The root is cast first ("Unable to
+-- cast value to Object"), then the query ("Argument 1 missing or nil"; a number reads as its text), and a malformed query raises
+-- QueryDescendants' words (measured, roblox-sim 0.747, a client and a server: tools/parity/probes/collection_handles.luau).
+local CollectionIds = setmetatable({}, { __mode = "k" })
+local Collections = {}
+local CollectionCallbacks = { OnAdded = true, OnRemoved = true, OnChanged = true, OnItemAdded = true, OnItemRemoved = true }
+-- (R's collection functions answer a value, or nil and the error, raised here as the engine raises: no position)
+local function Answer(Value, Error)
+	if Error ~= nil then
+		error(Error, 0)
+	end
+	return Value
+end
+local function CollectionSelf(Name, ...)
+	local Id = CollectionIds[(...)]
+	if Id then
+		return Id
+	elseif select("#", ...) == 0 then
+		error(`missing argument #1 to '{Name}' (CollectionHandle expected)`, 3)
+	end
+	error(`invalid argument #1 to '{Name}' (CollectionHandle expected, got {typeof((...))})`, 3)
+end
+local CollectionMethods = {
+	GetCount = function(...)
+		return Answer(R.CollectionCount(CollectionSelf("GetCount", ...)))
+	end,
+	Destroy = function(...)
+		Answer(R.CollectionDestroy(CollectionSelf("Destroy", ...)))
+	end,
+}
+local function NewCollection(Id)
+	local Handle = newproxy(true)
+	local Meta = getmetatable(Handle)
+	local Assigned = {}
+	Meta.__type = "CollectionHandle"
+	Meta.__index = function(_, Key)
+		if type(Key) ~= "string" then
+			error(`invalid argument #2 (string expected, got {typeof(Key)})`, 2)
+		elseif Key == "Query" then
+			return Answer(R.CollectionQuery(Id))
+		elseif Key == "Root" then
+			return Answer(R.CollectionRoot(Id))
+		end
+		local Found = CollectionMethods[Key]
+		if Found == nil then
+			error(`{Key} is not a valid member of CollectionHandle`, 0)
+		end
+		return Found
+	end
+	Meta.__newindex = function(_, Key, Value)
+		if Key == "Query" or Key == "Root" then
+			error(`Collection.{Key} is read-only and cannot be written to`, 0)
+		elseif type(Value) ~= "function" then
+			error(`Expected function, got {typeof(Value)}`, 0)
+		elseif type(Key) ~= "string" or string.sub(Key, 1, 2) ~= "On" then
+			error(`{tostring(Key)} is not a valid signal name, must start with 'On'`, 0)
+		elseif not CollectionCallbacks[Key] then
+			error(`{Key} cannot be assigned to`, 0)
+		elseif Assigned[Key] then
+			error(`Callback {Key} already assigned`, 0)
+		end
+		Answer(R.CollectionCallback(Id, Key, Value))
+		Assigned[Key] = true
+	end
+	Meta.__tostring = function()
+		return "Collection"
+	end
+	Meta.__metatable = "The metatable is locked"
+	R.Register(Handle, "CollectionHandle")
+	CollectionIds[Handle] = Id
+	Collections[Id] = Handle
+	return Handle
+end
+Method("CollectionService", "CreateCollection", function(_, Query, Root)
+	if Root == nil then
+		Root = workspace
+	elseif typeof(Root) ~= "Instance" then
+		error("Unable to cast value to Object", 0)
+	end
+	return NewCollection(Answer(R.CollectionCreate(StringParam.Read(Query, 1), Root)))
+end)
+R.CollectionHandles = function(Instance)
+	local Found = {}
+	for _, Id in Answer(R.CollectionsOf(Instance)) do
+		table.insert(Found, Collections[Id])
+	end
+	return Found
+end
 
 return true

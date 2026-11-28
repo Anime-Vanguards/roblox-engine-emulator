@@ -1,0 +1,17 @@
+# engine: Roblox Studio 0.747.0.7471481, the server of a headless play session (a Script in ServerScriptService, script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-28
+start OnAdded(A)
+member out and back A.Changed(Parent) OnChanged(A,Parent) A.Changed(Parent)
+outsider in, out, in OnAdded(O) OnChanged(O,Parent) O.Changed(Parent) O.Changed(Parent) OnChanged(O,Parent) O.Changed(Parent)
+moves inside OnChanged(A,Parent) A.Changed(Parent) OnChanged(A,Parent) A.Changed(Parent)
+write then out A1.Changed(Name) OnRemoved(A1) A1.Changed(Parent)
+in, write, out, in OnAdded(A2) OnChanged(A2,Parent) A2.Changed(Parent) OnChanged(A2,Name) A2.Changed(Name) A2.Changed(Parent) OnChanged(A2,Parent) A2.Changed(Parent)
+tag off and on, write OnChanged(A3,Name) A3.Changed(Name)
+assign again OnAdded error Callback OnAdded already assigned
+assign again OnRemoved error Callback OnRemoved already assigned
+assign again OnChanged error Callback OnChanged already assigned
+assign again OnItemAdded ok 
+assign item twice error Callback OnItemAdded already assigned
+destroy now OnRemoved(A3) OnRemoved(O)
+assign destroyed error Collection does not exist
+destroy, callback set late second OnRemoved(O) second OnRemoved(A3)

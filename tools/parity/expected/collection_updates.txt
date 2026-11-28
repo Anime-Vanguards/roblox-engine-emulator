@@ -1,0 +1,34 @@
+# engine: Roblox Studio 0.747.0.7471481, a headless playing client (script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-28
+defaults now ok 0 ok 0 ok 0
+defaults deferred ok 0 ok 0 ok 0
+defaults after a wait ok 0 ok 0 ok 0
+own root after a wait ok 0
+workspace tagged now ok 1 ok 1
+workspace tagged after a wait ok 1 ok 1
+write function error Foo is not a valid signal name, must start with 'On' error Foo is not a valid member of CollectionHandle
+write method error GetCount is not a valid signal name, must start with 'On'
+write nil error Expected function, got nil
+order now=0 defer-1=0 tag-handler=1 child-handler=1 defer-2=1
+inner order inner-now=1 tag-handler=2 child-handler=2 inner-defer=2
+tag after parent 2 defer-z=3 3
+move inside 3
+move inside after a wait 3
+clone 3
+clone after a wait 4
+rename order before=0 after=1 1
+rename back 0
+relative > Part ok 3 3
+relative >> Part ok 4 4
+relative Folder > Part ok 1 1
+relative > Folder > Part ok 1 1
+collections order C1,C2,C3
+collections order after destroy C1,C3
+collections after untag C3
+collections after untag and wait C3
+root unparented ok 1
+root unparented after a wait ok 1
+root back ok 1
+root destroyed now ok 0
+root destroyed order before=ok 0 after=error Collection does not exist
+destroyed root ok 0

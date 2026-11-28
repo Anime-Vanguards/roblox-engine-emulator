@@ -2588,6 +2588,7 @@ fn find_garbage(engine: &Engine, api: &Api, state: &State, dead: &[u32], orphans
     }
     let mut referenced = Vec::new();
     state.sched.visit_instance_refs(&mut |id| referenced.push(id));
+    crate::services::collections::visit_instance_refs(&state, &mut |id| referenced.push(id));
     for id in referenced {
         keep(id, &mut candidate_root, &mut pending);
     }

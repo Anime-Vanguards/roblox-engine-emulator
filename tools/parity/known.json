@@ -1435,6 +1435,20 @@
 			"why": "a script's Source reads and writes in a play run: ree runs a run's code at one identity, and the play-run code that writes Source is the identity-4 probes' and ree's tests (instance.rs OPEN_PROPERTIES)"
 		}
 	],
+	"collection_moves": [
+		{
+			"line": "in, write, out, in OnAdded(A2) OnChanged(A2,Parent) A2.Changed(Parent) OnChanged(A2,Name) A2.Changed(Name) A2.Changed(Parent) OnChanged(A2,Parent) A2.Changed(Parent)",
+			"why": "a client delivers OnChanged through a connection the collection makes to the member's Changed as it comes below the root, so it runs before the handlers connected earlier (Roblox's newest-first order); ree's OnChanged follows the change's own handlers (services/collections.rs)"
+		},
+		{
+			"line": "tag off and on, write OnChanged(A3,Name) A3.Changed(Name)",
+			"why": "a client delivers OnChanged through a connection the collection makes to the member's Changed as it comes below the root, so it runs before the handlers connected earlier (Roblox's newest-first order); ree's OnChanged follows the change's own handlers (services/collections.rs)"
+		},
+		{
+			"line": "destroy now OnRemoved(A3) OnRemoved(O)",
+			"why": "the order of Destroy's OnRemoved calls is the client's own (neither the order the members joined nor tree order); ree calls them in the order they joined"
+		}
+	],
 	"instance_new_refusals": [
 		{
 			"line": "Player error The current thread cannot create 'Player' (lacking capability WritePlayer)",

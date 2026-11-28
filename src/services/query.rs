@@ -33,7 +33,7 @@ struct Step {
 }
 
 #[derive(Debug)]
-struct Selector {
+pub(super) struct Selector {
     steps: Vec<Step>,
 }
 
@@ -390,6 +390,79 @@ impl Matcher<'_> {
         }
         Ok(())
     }
+}
+
+/// A collection's query (services/collections.rs): its selectors, an empty one refused as any other malformed query is
+/// ("Expected at least one combinator or a filter", where QueryDescendants answers nothing).
+pub(super) fn parse_collection(text: &[u8]) -> Result<Vec<Selector>, String> {
+    let mut parser = Parser { text, position: 0 };
+    let list = parser.list()?;
+    parser.skip_space();
+    match parser.peek() {
+        None => Ok(list),
+        Some(byte) => Err(format!("Unexpected trailing character: '{}'", byte as char)),
+    }
+}
+
+/// Whether `id` may be one of what `list` matches, by what the instance holds alone (the last step's classes, names and tags; its
+/// property, attribute, :not() and :has() tests and the steps above it taken as passing)
+pub(super) fn may_match(state: &crate::State, reflection: &crate::reflection::Reflection, id: InstanceId, list: &[Selector]) -> bool {
+    let instance = state.dom.at(id);
+    list.iter().any(|selector| {
+        selector.steps.last().is_some_and(|step| {
+            let compound = &step.compound;
+            compound.classes.iter().all(|class| reflection.is_a(instance.class, class))
+                && compound.names.iter().all(|name| instance.name.as_bytes() == name.as_bytes())
+                && compound.tags.iter().all(|tag| instance.tags.iter().any(|held| held.as_bytes() == tag.as_bytes()))
+        })
+    })
+}
+
+/// Whether `id` is one of the instances `scope:QueryDescendants` of `list` answers.
+pub(super) fn matches(lua: &Lua, engine: &Rc<Engine>, id: InstanceId, list: &[Selector], scope: InstanceId) -> LuaResult<bool> {
+    Matcher { lua, engine }.matches_list(id, list, Some(scope))
+}
+
+/// What `scope:QueryDescendants` of `list` answers, each instance once (in the order it first comes), raising as it raises.
+pub(super) fn collect_once(lua: &Lua, engine: &Rc<Engine>, scope: InstanceId, list: &[Selector]) -> Result<Vec<InstanceId>, Flow> {
+    project::materialize_deep(engine, scope);
+    let matcher = Matcher { lua, engine };
+    let mut result = Vec::new();
+    for selector in list {
+        match matcher.collect(scope, std::slice::from_ref(selector), scope, &mut result) {
+            Ok(()) => {}
+            Err(LuaError::RuntimeError(message)) if message.starts_with("Property ") => return raise_plain(message),
+            Err(error) => return Err(error.into()),
+        }
+    }
+    let mut seen = rustc_hash::FxHashSet::default();
+    result.retain(|id| seen.insert(*id));
+    Ok(result)
+}
+
+/// The names `list` compares: whether it has a name filter (#Name), the properties ([Prop]) and the attributes ([$Attribute]) it
+/// reads, in its compounds and their :not() / :has() lists.
+pub(super) fn compared(list: &[Selector]) -> (bool, Vec<String>, Vec<String>) {
+    fn walk(list: &[Selector], names: &mut bool, properties: &mut Vec<String>, attributes: &mut Vec<String>) {
+        for selector in list {
+            for step in &selector.steps {
+                let compound = &step.compound;
+                *names |= !compound.names.is_empty();
+                for (name, attribute, _) in &compound.properties {
+                    let into = if *attribute { &mut *attributes } else { &mut *properties };
+                    if !into.contains(name) {
+                        into.push(name.clone());
+                    }
+                }
+                for inner in compound.not.iter().chain(&compound.has) {
+                    walk(inner, names, properties, attributes);
+                }
+            }
+        }
+    }
+    let (mut names, mut properties, mut attributes) = (false, Vec::new(), Vec::new());
+    walk(list, &mut names, &mut properties, &mut attributes);
+    (names, properties, attributes)
 }
 
 pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {

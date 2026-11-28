@@ -914,6 +914,8 @@ pub fn set_attribute(engine: &Engine, id: InstanceId, name: Str, value: Value) {
                 hook(&mut state, id, &text);
             }
         }
+        // (CreateCollection's collections that compare it: services/collections.rs)
+        crate::services::collections::attribute_changed(&mut state, id, name.as_bytes());
     } else {
         state.sched.charge(crate::cost::ATTRIBUTE_SAME);
     }

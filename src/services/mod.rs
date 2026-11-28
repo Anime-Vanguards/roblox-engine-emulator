@@ -20,6 +20,7 @@ pub mod localization;
 pub mod physics;
 pub(crate) mod players;
 pub mod query;
+pub(crate) mod collections;
 pub(crate) mod reflection_data;
 pub mod reflection_service;
 pub mod settings;
@@ -160,6 +161,8 @@ pub struct CollectionState {
     pub(crate) departures: players::Departures,
     /// CollectionService's class and its TagAdded and TagRemoved events ([`tag_event`])
     service_events: Option<(ClassId, NameId, NameId)>,
+    /// CreateCollection's collections (collections.rs)
+    pub(crate) handles: collections::Collections,
 }
 
 impl CollectionState {
