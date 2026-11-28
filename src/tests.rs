@@ -16829,3 +16829,45 @@ fn bindable_copies_cost_what_a_client_spends_on_them() {
     );
 }
 
+/// A ReflectionService filter costs what a playing 0.747 client spends reading it into the engine at the call, whatever the class
+/// and whether the query answers (cost.rs REFLECTED_FILTER*: GetPropertiesOfClass("CoreGui") refused 0.228 us, with `{}` 0.578,
+/// with an empty Security set 0.752, which ree charged 0.264): `{}`, a Security set, two flags, a string, one no class has.
+#[test]
+fn a_reflection_filter_costs_what_a_client_spends_reading_it() {
+    let (lua, engine) = start();
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    use crate::cost::{REFLECTED_FILTER, REFLECTED_FILTER_CAPS, REFLECTED_FILTER_FIELD, REFLECTED_FILTER_TEXT};
+    run(
+        &lua,
+        &engine,
+        &format!(
+            r#"
+        local RS = game:GetService("ReflectionService")
+        local None, Empty, Flags, Text = {{}}, {{ Security = SecurityCapabilities.new() }}, {{ ExcludeInherited = true, ExcludeDisplay = true }}, {{ Other = "x" }}
+        local function Per(F)
+            F()
+            local Start = os.clock()
+            for _ = 1, 50 do F() end
+            local Middle = os.clock()
+            for _ = 1, 50 do end
+            return ((Middle - Start) - (os.clock() - Middle)) / 50 * 1e6
+        end
+        local function Is(Name, Got, Want)
+            -- (a Security set is read through the prelude's CapabilityMask too: 0.012 us)
+            assert(math.abs(Got - Want) < 0.02, `{{Name}}: {{Got}} us more, where {{Want}}`)
+        end
+        local Plain = Per(function() RS:GetPropertiesOfClass("CoreGui") end)
+        Is("{{}}", Per(function() RS:GetPropertiesOfClass("CoreGui", None) end) - Plain, {none:e})
+        Is("an empty Security set", Per(function() RS:GetPropertiesOfClass("CoreGui", Empty) end) - Plain, {caps:e})
+        Is("two flags", Per(function() RS:GetPropertiesOfClass("CoreGui", Flags) end) - Plain, {flags:e})
+        Is("a string", Per(function() RS:GetPropertiesOfClass("CoreGui", Text) end) - Plain, {text:e})
+        Is("a name no class has", Per(function() RS:GetPropertiesOfClass("NoSuchClass", Empty) end) - Per(function() RS:GetPropertiesOfClass("NoSuchClass") end), {caps:e})
+        "#,
+            none = REFLECTED_FILTER * 1e6,
+            caps = (REFLECTED_FILTER + REFLECTED_FILTER_CAPS) * 1e6,
+            flags = (REFLECTED_FILTER + 2.0 * REFLECTED_FILTER_FIELD) * 1e6,
+            text = (REFLECTED_FILTER + REFLECTED_FILTER_TEXT) * 1e6,
+        ),
+    );
+}
+

@@ -51,7 +51,20 @@ fn cast_name(engine: &Engine, value: &LuaValue) -> String {
 fn dictionary(engine: &Engine, args: &Args, index: usize) -> Result<Option<LuaTable>, Flow> {
     match args.get(index) {
         LuaValue::Nil => Ok(None),
-        LuaValue::Table(table) if table.raw_len() == 0 => Ok(Some(table.clone())),
+        LuaValue::Table(table) if table.raw_len() == 0 => {
+            // (read into the engine whole at the call, whatever the class: cost.rs REFLECTED_FILTER)
+            let mut price = crate::cost::REFLECTED_FILTER;
+            for pair in table.pairs::<LuaValue, LuaValue>() {
+                let (_, value) = pair?;
+                price += match value {
+                    LuaValue::String(_) => crate::cost::REFLECTED_FILTER_TEXT,
+                    LuaValue::UserData(_) => crate::cost::REFLECTED_FILTER_CAPS,
+                    _ => crate::cost::REFLECTED_FILTER_FIELD,
+                };
+            }
+            charge_seconds(engine, price);
+            Ok(Some(table.clone()))
+        }
         other => raise(format!("Unable to cast {} to Dictionary", cast_name(engine, other))),
     }
 }

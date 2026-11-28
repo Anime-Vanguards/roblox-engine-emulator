@@ -1013,6 +1013,18 @@ pub const REFLECTED_PERMIT: f64 = 0.185e-6;
 pub const REFLECTED_MEMBER_DISPLAY: f64 = 0.23e-6;
 pub const REFLECTED_PROPERTY_HIDDEN: f64 = 0.435e-6;
 pub const REFLECTED_MEMBERS_REFUSED: f64 = 0.18e-6;
+/// A filter given to ReflectionService (a ReflectionClassFilter or ReflectionMemberFilter dictionary) is read into the engine at the
+/// call, whatever the class named (one no class has too) and whether the query answers or is refused: the table
+/// [`REFLECTED_FILTER`], each SecurityCapabilities value in it [`REFLECTED_FILTER_CAPS`], each string [`REFLECTED_FILTER_TEXT`], each
+/// other value [`REFLECTED_FILTER_FIELD`]. A playing 0.747 client (roblox-sim, headless, six sessions of 15-sample medians of 200
+/// calls, the gauge-scaled figures): GetPropertiesOfClass("CoreGui") refused 0.228 us, with `{}` 0.578, `{ExcludeInherited = true}`
+/// 0.687, both flags 0.750, `{Other = "x"}` 0.602, `{Security = SecurityCapabilities.new()}` 0.752 (the empty set's refusal ree
+/// charged 0.264), that and both flags 0.960; a name no class has 0.071, with the empty set 0.591; GetClass("Part") 2.57, with `{}`
+/// 2.91, with `{Security = fromCurrent()}` 2.96.
+pub const REFLECTED_FILTER: f64 = 0.35e-6;
+pub const REFLECTED_FILTER_CAPS: f64 = 0.17e-6;
+pub const REFLECTED_FILTER_FIELD: f64 = 0.10e-6;
+pub const REFLECTED_FILTER_TEXT: f64 = 0.025e-6;
 /// A LogService logging call (Output, Info, Warn, Error, Log), whole: the same client, `LogService:Info("L {a}", { a = 1 })` 1.10 us
 /// with the Luau around it (20 calls a sample, the median of 15 samples), the table constructor about 0.1 of that.
 pub const LOG_CALL: f64 = 1.0e-6;
