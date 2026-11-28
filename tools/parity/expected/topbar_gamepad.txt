@@ -1,0 +1,22 @@
+# engine: Roblox Studio 0.747.0.7471481, a rendered 1280 x 720 playing client whose only input is a gamepad, running its core scripts (StarterScript; script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-28
+device true false false Enum.PreferredInput.Gamepad
+start TopbarInset 0,0,1280,58 GetGuiInset 0 58 0 0
+start GetInsetArea None ok 0,-58,1280,662
+start GetInsetArea DeviceSafeInsets ok 0,-58,1280,662
+start GetInsetArea CoreUISafeInsets ok 0,0,1280,662
+start GetInsetArea TopbarSafeInsets ok 0,-58,1280,0
+chat off ok moves  Changed 0
+chat off TopbarInset 0,0,1280,58 GetGuiInset 0 58 0 0
+chat off GetInsetArea None ok 0,-58,1280,662
+chat off GetInsetArea DeviceSafeInsets ok 0,-58,1280,662
+chat off GetInsetArea CoreUISafeInsets ok 0,0,1280,662
+chat off GetInsetArea TopbarSafeInsets ok 0,-58,1280,0
+chat on ok moves  Changed 0
+all off ok moves  Changed 0
+all on ok moves  Changed 0
+end TopbarInset 0,0,1280,58 GetGuiInset 0 58 0 0
+end GetInsetArea None ok 0,-58,1280,662
+end GetInsetArea DeviceSafeInsets ok 0,-58,1280,662
+end GetInsetArea CoreUISafeInsets ok 0,0,1280,662
+end GetInsetArea TopbarSafeInsets ok 0,-58,1280,0

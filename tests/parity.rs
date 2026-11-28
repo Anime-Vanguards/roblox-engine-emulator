@@ -163,6 +163,10 @@ fn probe_job(scratch: &Path, empty: &Path, name: &str, source: &str, server: boo
     if directive("topbar") && !server {
         args.extend(["--client-profile".to_owned(), r#"{"device":{"topbarInset":58,"viewport":[1280,720]}}"#.to_owned()]);
     }
+    // ("topbar=gamepad": the same on a client whose only input is a gamepad: run.mjs TOPBAR_GAMEPAD_PROFILE)
+    if directive("topbar=gamepad") && !server {
+        args.extend(["--client-profile".to_owned(), r#"{"device":{"kind":"gamepad","topbarInset":58,"viewport":[1280,720]}}"#.to_owned()]);
+    }
     serde_json::json!({ "id": name, "args": args })
 }
 

@@ -13,22 +13,22 @@ GetInsetArea of string x error Unable to cast string to ScreenInsets
 GetInsetArea of boolean true error Unable to cast bool to ScreenInsets
 GetInsetArea of table {} error Unable to cast Array to ScreenInsets
 GetInsetArea of nothing error Argument 1 missing or nil
-chat off ok same frame 164,0,1280,58 moves +3=135,0,1280,58 +5=125,0,1280,58 +7=122,0,1280,58 +9=120,0,1280,58 Changed 4
+chat off ok same frame 164,0,1280,58 moves +2=138,0,1280,58 +3=135,0,1280,58 +4=128,0,1280,58 +5=125,0,1280,58 +6=123,0,1280,58 +7=122,0,1280,58 +8=121,0,1280,58 +9=120,0,1280,58 Changed 8
 chat off TopbarInset 120,0,1280,58 GetGuiInset 0 58 0 0
 chat off GetInsetArea None ok 0,-58,1280,662
 chat off GetInsetArea DeviceSafeInsets ok 0,-58,1280,662
 chat off GetInsetArea CoreUISafeInsets ok 0,0,1280,662
 chat off GetInsetArea TopbarSafeInsets ok 120,-58,1280,0
 chat enabled false false
-chat on ok same frame 120,0,1280,58 moves +2=145,0,1280,58 +4=155,0,1280,58 +6=160,0,1280,58 +8=162,0,1280,58 +10=163,0,1280,58 +24=164,0,1280,58 Changed 6
-all off ok same frame 164,0,1280,58 moves +3=135,0,1280,58 +5=125,0,1280,58 +7=122,0,1280,58 +9=120,0,1280,58 Changed 4
-all on ok same frame 120,0,1280,58 moves +2=145,0,1280,58 +4=155,0,1280,58 +6=160,0,1280,58 +8=162,0,1280,58 +10=163,0,1280,58 +24=164,0,1280,58 Changed 6
+chat on ok same frame 120,0,1280,58 moves +2=145,0,1280,58 +3=148,0,1280,58 +4=155,0,1280,58 +5=158,0,1280,58 +6=160,0,1280,58 +7=161,0,1280,58 +8=162,0,1280,58 +9=163,0,1280,58 +23=164,0,1280,58 Changed 9
+all off ok same frame 164,0,1280,58 moves +2=138,0,1280,58 +3=135,0,1280,58 +4=128,0,1280,58 +5=125,0,1280,58 +6=123,0,1280,58 +7=122,0,1280,58 +8=121,0,1280,58 +9=120,0,1280,58 Changed 8
+all on ok same frame 120,0,1280,58 moves +2=145,0,1280,58 +3=148,0,1280,58 +4=155,0,1280,58 +5=158,0,1280,58 +6=160,0,1280,58 +7=161,0,1280,58 +8=162,0,1280,58 +9=163,0,1280,58 +23=164,0,1280,58 Changed 9
 PlayerList off ok same frame 164,0,1280,58 moves  Changed 0
 Health off ok same frame 164,0,1280,58 moves  Changed 0
 Backpack off ok same frame 164,0,1280,58 moves  Changed 0
 EmotesMenu off ok same frame 164,0,1280,58 moves  Changed 0
-chat off, on, off ok same frame 164,0,1280,58 moves +3=135,0,1280,58 +5=125,0,1280,58 +7=122,0,1280,58 +9=120,0,1280,58 Changed 4
-chat on again ok same frame 120,0,1280,58 moves +2=145,0,1280,58 +4=155,0,1280,58 +6=160,0,1280,58 +8=162,0,1280,58 +10=163,0,1280,58 +24=164,0,1280,58 Changed 6
+chat off, on, off ok same frame 164,0,1280,58 moves +2=138,0,1280,58 +3=135,0,1280,58 +4=128,0,1280,58 +5=125,0,1280,58 +6=123,0,1280,58 +7=122,0,1280,58 +8=121,0,1280,58 +9=120,0,1280,58 Changed 8
+chat on again ok same frame 120,0,1280,58 moves +2=145,0,1280,58 +3=148,0,1280,58 +4=155,0,1280,58 +5=158,0,1280,58 +6=160,0,1280,58 +7=161,0,1280,58 +8=162,0,1280,58 +9=163,0,1280,58 +23=164,0,1280,58 Changed 9
 all off, chat on ok same frame 164,0,1280,58 moves  Changed 0
 all on again ok same frame 164,0,1280,58 moves  Changed 0
 topbar off ok same frame 164,0,1280,58 moves  Changed 0

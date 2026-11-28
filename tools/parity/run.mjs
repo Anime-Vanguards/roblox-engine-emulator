@@ -132,6 +132,8 @@ export function serverProbe(name) {
 // ("topbar": a probe of Roblox's top bar, captured on a client running its core scripts with a 58 px inset on a 1280 x 720 screen;
 // ree runs it with a client profile of that device. capture_sim.py runs no core scripts, so --capture leaves it out: README.md)
 export const TOPBAR_PROFILE = JSON.stringify({ device: { topbarInset: 58, viewport: [1280, 720] } });
+// ("topbar=gamepad": the same on a client whose only input is a gamepad)
+export const TOPBAR_GAMEPAD_PROFILE = JSON.stringify({ device: { kind: "gamepad", topbarInset: 58, viewport: [1280, 720] } });
 
 function defaultRee() {
 	const exe = path.join(REPO, "target", "release", process.platform === "win32" ? "ree.exe" : "ree");
@@ -177,7 +179,7 @@ export function runInRee(name, ree, scratch, server = false, realAssets = false)
 	// ("timeout=<seconds>": the script timeout the capture set with ScriptContext:SetTimeout, which a game script may not call;
 	// the run goes on past timeouts, as a client does)
 	if (options.timeout) context.push("--script-timeout", String(options.timeout), "--max-script-timeouts", "0");
-	if (options.topbar && !server) context.push("--client-profile", TOPBAR_PROFILE);
+	if (options.topbar && !server) context.push("--client-profile", options.topbar === "gamepad" ? TOPBAR_GAMEPAD_PROFILE : TOPBAR_PROFILE);
 	// (300 s of the run's clock, the capture's cap on one job: a probe may wait on the engine, ten seconds a translator)
 	const result = spawnSync(ree, ["run", "--harness", harness, "--roots", empty, "--seconds", "300", ...context], {
 		encoding: "utf8", maxBuffer: 256 * 1024 * 1024, windowsHide: true,

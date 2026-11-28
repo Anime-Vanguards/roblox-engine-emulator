@@ -256,14 +256,39 @@ fn the_top_bar_band_follows_chat_in_a_clients_steps() {
         lines,
         [
             "164,0,1280,58 0,-58,1280,662 0,0,1280,662 164,-58,1280,0",
-            "+3=135 +5=125 +7=122 +9=120 4",
+            "+2=138 +3=135 +4=128 +5=125 +6=123 +7=122 +8=121 +9=120 8",
             "120,-58,1280,0",
-            "+2=145 +4=155 +6=160 +8=162 +10=163 +24=164 6",
+            "+2=145 +3=148 +4=155 +5=158 +6=160 +7=161 +8=162 +9=163 +23=164 9",
             " 0",
         ]
     );
     let plain = printed(play(), "local G = game:GetService('GuiService') print(G.TopbarInset, G:GetInsetArea(Enum.ScreenInsets.TopbarSafeInsets))", 0.1);
     assert_eq!(plain, ["0, 0, 0, 0 0, 0, 1920, 1080"]);
+}
+
+/// A gamepad client's bar holds neither the menu button nor the Unibar (TOPBAR-INSET-GAMEPAD, measured in rendered 0.747 clients
+/// running their core scripts: tools/parity/probes/topbar_gamepad.luau): its band starts at 0, TopbarSafeInsets with it, and chat
+/// moves nothing; a gamepad beside a keyboard and a mouse (the preferred input KeyboardAndMouse) keeps a desktop's bar.
+#[test]
+fn a_gamepad_clients_top_bar_has_no_buttons() {
+    let source = r#"
+        local G, SG, RS = game:GetService("GuiService"), game:GetService("StarterGui"), game:GetService("RunService")
+        local function rect(r) return `{r.Min.X},{r.Min.Y},{r.Max.X},{r.Max.Y}` end
+        RS.Heartbeat:Wait()
+        print(rect(G.TopbarInset), rect(G:GetInsetArea(Enum.ScreenInsets.TopbarSafeInsets)), rect(G:GetInsetArea(Enum.ScreenInsets.CoreUISafeInsets)))
+        local Changed = 0
+        G:GetPropertyChangedSignal("TopbarInset"):Connect(function() Changed += 1 end)
+        RS.Heartbeat:Wait()
+        SG:SetCoreGuiEnabled(Enum.CoreGuiType.Chat, false)
+        for _ = 1, 30 do RS.Heartbeat:Wait() end
+        print(rect(G.TopbarInset), Changed)
+    "#;
+    let mut gamepad = topbar();
+    gamepad.profile.device.kind = Some(crate::client_profile::DeviceKind::Gamepad);
+    assert_eq!(printed(gamepad, source, 1.0), ["0,0,1280,58 0,-58,1280,0 0,0,1280,662", "0,0,1280,58 0"]);
+    let mut beside = topbar();
+    beside.profile.device.inputs.gamepad = Some(true);
+    assert_eq!(printed(beside, source, 1.0), ["164,0,1280,58 164,-58,1280,0 0,0,1280,662", "120,0,1280,58 8"]);
 }
 
 /// A collection counts what its query matched when it was made, takes in what comes to match at the next deferred point (after the

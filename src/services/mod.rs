@@ -1410,14 +1410,20 @@ fn install_run_service(engine: &Rc<Engine>, behaviors: &mut Behaviors, reflectio
 /// band starts at 120. No other CoreGuiType moves it, nor SetCore("TopbarEnabled", false), and GetGuiInset stays (0, inset). The bar
 /// reads chat's state a frame after the calls (All off and Chat on in one go leave it as it was; off, on, off move it once) and its
 /// buttons move to their new places over the frames after the call, TopbarInset changing (with Changed and its property signal) at
-/// each step of [`CHAT_OFF_STEPS`] and [`CHAT_ON_STEPS`] (measured, roblox-sim 0.747 clients running their core scripts, rendered
-/// 1280 x 720 desktop and 844 x 390 touch clients, two sessions alike; one touch step fell a frame early:
-/// tools/parity/probes/topbar_inset.luau). A client's bar is built a second or two after it joins, reading (0, 0, width, inset) until
-/// then; ree's is there from the start, and a change of chat before the first frame takes it to its place at once.
+/// each step of [`CHAT_OFF_STEPS`] and [`CHAT_ON_STEPS`], one a frame (measured, roblox-sim 0.747 clients running their core
+/// scripts, rendered 1280 x 720 desktop and 844 x 390 touch clients; four 1280 x 720 sessions alike, a step every frame:
+/// tools/parity/probes/topbar_inset.luau. An earlier capture saw every second step only, as a client drawing its bar every second
+/// frame does). A client whose preferred input is a gamepad (a gamepad its only input) shows neither the menu button nor the
+/// Unibar: its band starts at 0 and chat moves nothing; with a keyboard and a mouse beside the gamepad the bar is a desktop's
+/// (measured likewise, two sessions each: tools/parity/probes/topbar_gamepad.luau). A client's bar is built a second or two after it
+/// joins, reading (0, 0, width, inset) until then; ree's is there from the start, and a change of chat before the first frame takes
+/// it to its place at once.
 #[derive(Default)]
 pub struct TopBar {
     /// Whether the run has the bar
     shown: bool,
+    /// Whether the bar holds Roblox's buttons (none on a gamepad client)
+    buttons: bool,
     /// The band's start now (0 without the bar)
     pub start: f64,
     /// Whether the bar holds chat's button (the place its steps lead to)
@@ -1431,19 +1437,21 @@ pub struct TopBar {
 }
 
 /// The band's start the frames after chat was turned off (frames counted from the call's)
-const CHAT_OFF_STEPS: &[(u64, f64)] = &[(3, 135.0), (5, 125.0), (7, 122.0), (9, 120.0)];
+const CHAT_OFF_STEPS: &[(u64, f64)] = &[(2, 138.0), (3, 135.0), (4, 128.0), (5, 125.0), (6, 123.0), (7, 122.0), (8, 121.0), (9, 120.0)];
 /// ... and after it was turned back on
-const CHAT_ON_STEPS: &[(u64, f64)] = &[(2, 145.0), (4, 155.0), (6, 160.0), (8, 162.0), (10, 163.0), (24, 164.0)];
+const CHAT_ON_STEPS: &[(u64, f64)] = &[(2, 145.0), (3, 148.0), (4, 155.0), (5, 158.0), (6, 160.0), (7, 161.0), (8, 162.0), (9, 163.0), (23, 164.0)];
 const TOPBAR_START: f64 = 164.0;
 const TOPBAR_START_NO_CHAT: f64 = 120.0;
 
 /// Gives a playing client with a top-bar inset its bar ([`TopBar`]) and the frame step that moves its band.
 fn install_topbar(engine: &Rc<Engine>) {
-    if engine.options.server() || engine.options.edit_mode() || engine.options.profile.device.topbar_inset() <= 0.0 {
+    let device = &engine.options.profile.device;
+    if engine.options.server() || engine.options.edit_mode() || device.topbar_inset() <= 0.0 {
         return;
     }
+    let buttons = device.preferred_input() != Some("Gamepad");
     let mut state = engine.state.borrow_mut();
-    state.topbar = TopBar { shown: true, start: TOPBAR_START, chat: true, chat_enabled: true, asked: None, steps: None };
+    state.topbar = TopBar { shown: true, buttons, start: if buttons { TOPBAR_START } else { 0.0 }, chat: true, chat_enabled: true, asked: None, steps: None };
     state.sched.add_hook(Phase::PreRender, Rc::new(|_, engine, _| step_topbar(engine).map_err(|flow| match flow {
         Flow::Fail(error) => error,
         Flow::Error(error) => LuaError::runtime(error.message),
@@ -1456,7 +1464,7 @@ fn note_chat(engine: &Engine, enabled: bool) {
     let mut state = engine.state.borrow_mut();
     let frame = state.sched.frame;
     let bar = &mut state.topbar;
-    if !bar.shown {
+    if !bar.shown || !bar.buttons {
         return;
     }
     bar.chat_enabled = enabled;
