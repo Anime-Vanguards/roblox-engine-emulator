@@ -94,10 +94,7 @@ fn a_server_gives_each_joining_player_the_auto_assignable_team_with_the_fewest_p
 	end)
 	local Joined = {}
 	local function Join()
-		local Player = Instance.new("Player")
-		Player.Name = "P" .. (#Joined + 1)
-		print("before " .. State(Player))
-		Player.Parent = Players
+		local Player = Context.Join({ identity = { name = "P" .. (#Joined + 1) } })
 		print("joining " .. State(Player))
 		table.insert(Joined, Player)
 		task.wait()
@@ -131,7 +128,6 @@ fn a_server_gives_each_joining_player_the_auto_assignable_team_with_the_fewest_p
 "#);
     let lines = printed(&run_ree("spread", &harness, &["--mode", "play", "--run-context", "server"]));
     for wanted in [
-        "before team=nil color=White neutral=true",
         "joining team=Zeta color=Bright blue neutral=false",
         "events Zeta.PlayerAdded P1 / PlayerAdded P1 team=Zeta color=Bright blue neutral=false / Alpha.PlayerAdded P2 / PlayerAdded P2 team=Alpha color=Bright yellow neutral=false / Mid.PlayerAdded P3 / PlayerAdded P3 team=Mid color=Bright red neutral=false / Kappa.PlayerAdded P4 / PlayerAdded P4 team=Kappa color=Lime green neutral=false / Zeta.PlayerAdded P5 / PlayerAdded P5 team=Zeta color=Bright blue neutral=false",
         "zeta out team=nil color=Bright blue neutral=false",
@@ -148,21 +144,17 @@ fn a_server_gives_each_joining_player_the_auto_assignable_team_with_the_fewest_p
 #[test]
 fn a_joining_player_stays_neutral_without_an_auto_assignable_team() {
     let harness = format!("return function(Context)\n{STATE}\n{}\nend\n", r#"
-	local Players = game:GetService("Players")
-	local First = Instance.new("Player")
-	First.Parent = Players
+	local First = Context.Join({ identity = { name = "First" } })
 	task.wait()
 	print("no teams " .. State(First))
 	Make("Fixed", "Bright red", false)
-	local Second = Instance.new("Player")
-	Second.Parent = Players
+	local Second = Context.Join({ identity = { name = "Second" } })
 	task.wait()
 	print("fixed only " .. State(Second))
 	Make("Late", "Lime green", true)
 	task.wait()
 	print("late first " .. State(First))
-	local Third = Instance.new("Player")
-	Third.Parent = Players
+	local Third = Context.Join({ identity = { name = "Third" } })
 	task.wait()
 	print("late third " .. State(Third))
 "#);

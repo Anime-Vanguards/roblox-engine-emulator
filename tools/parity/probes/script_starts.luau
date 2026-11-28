@@ -24,8 +24,8 @@ local HELPER = 'local function L(s) local Log = game:GetService("ReplicatedStora
 -- (a playing session has a player with a character; ree's harness makes them where it has none)
 local player = Players.LocalPlayer or Players:GetPlayers()[1]
 if not player then
-	player = Instance.new("Player")
-	player.Parent = Players
+	-- (ree's server run has none: its harness lets one in, Context.Join; the real engine's job has no Context)
+	player = Context.Join()
 end
 local since = time()
 while not player.Character and time() - since < 5 do

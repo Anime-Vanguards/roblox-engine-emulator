@@ -1014,6 +1014,27 @@ pub fn live_patch(patch: &Json, current: &Json) -> Result<Json, String> {
     Ok(patch.clone())
 }
 
+/// A joining player's profile (Context.Join): who the player is and the answers that are its own (identity, localization.localeId
+/// and countryRegion, policy, ownership, social), checked; else an error naming the first field that is the run's (the device and
+/// settings of its client, LocalizationService's locales, the game and the stores' contents).
+pub fn player_profile(value: &Json) -> Result<ClientProfile, String> {
+    let refuse = |field: &str| -> Result<ClientProfile, String> {
+        Err(format!("{field} is the run's, not a player's (pass it with --client-profile); a player's profile sets identity, localization.localeId and countryRegion, policy, ownership and social"))
+    };
+    for (key, value) in object(value, "the profile")? {
+        match key.as_str() {
+            "$schema" | "identity" | "policy" | "ownership" | "social" => {}
+            "localization" => {
+                if let Some(field) = value.as_object().and_then(|fields| fields.keys().find(|field| !matches!(field.as_str(), "localeId" | "countryRegion"))) {
+                    return refuse(&format!("localization.{field}"));
+                }
+            }
+            other => return refuse(other),
+        }
+    }
+    ClientProfile::from_json(value)
+}
+
 /// `patch` (a table a harness wrote, read as JSON) with each empty object where the format has a list made an empty list:
 /// ownership's lists, social's, and a policy key's value (a Luau table cannot tell `{}` the list from `{}` the object)
 pub fn empty_lists(mut patch: Json) -> Json {

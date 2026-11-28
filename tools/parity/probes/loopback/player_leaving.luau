@@ -4,21 +4,16 @@
 -- and its character hold in the leaving thread and after, the player's Parent locked, the character destroyed a second after
 -- the leave and the Player five, a kicked player staying about a second, an InvokeClient waiting on the player) and that the
 -- client sees the players and characters gone. A game script cannot make a Player, so in the real engine the session's three
--- other clients (they run nothing) are the ones that leave; ree's loopback run has one client, so its server makes the three
--- Players itself, as a harness does.
+-- other clients (they run nothing) are the ones that leave; ree's loopback run has one client, so its server's harness lets the
+-- three in itself (Context.Join; the real engine's job has no Context).
 local Players = game:GetService("Players")
 local Storage = game:GetService("ReplicatedStorage")
 --- server
 local Me = P.player()
 local Leavers = {}
-local Made, First = pcall(Instance.new, "Player")
-if Made then
+if Context then
 	for Index = 1, 3 do
-		local Player = if Index == 1 then First else Instance.new("Player")
-		Player.Name = "Leaver" .. Index
-		Player.UserId = 100 + Index
-		Player.Parent = Players
-		table.insert(Leavers, Player)
+		table.insert(Leavers, Context.Join({ identity = { name = "Leaver" .. Index, userId = 100 + Index } }))
 	end
 else
 	local Deadline = os.clock() + 120

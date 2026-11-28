@@ -6,7 +6,7 @@
 -- negative, the warning past 200 friends), and which calls yield: a player's first question of a kind (its friends, its
 -- online friends) asks the web, and later ones of that kind answer at once. What the web answers (the "web" lines) depends on
 -- the account, and the capture's player is signed in to none. A second player is in the server (the real engine's second
--- client, which runs nothing; ree's server makes it, as a harness does).
+-- client, which runs nothing; ree's server's harness lets it in, Context.Join; the real engine's job has no Context).
 local Players = game:GetService("Players")
 local LogService = game:GetService("LogService")
 local Names = { "IsFriendsWith", "IsFriendsWithAsync", "GetFriendsOnline", "GetFriendsOnlineAsync", "GetFriendsInServerAsync", "GetFriendsInUniverseAsync" }
@@ -171,11 +171,9 @@ local function Run(Me, Other, Client)
 end
 --- server
 local Me = P.player()
-local Made, Second = pcall(Instance.new, "Player")
-if Made then
-	Second.Name = "Second"
-	Second.UserId = 102
-	Second.Parent = Players
+local Second
+if Context then
+	Second = Context.Join({ identity = { name = "Second", userId = 102 } })
 else
 	local Deadline = os.clock() + 60
 	while #Players:GetPlayers() < 2 and os.clock() < Deadline do

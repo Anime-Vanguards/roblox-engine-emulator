@@ -1,13 +1,7 @@
 -- A server's answers for the client profile's player (UserId 5) and another (6), and the stores' starting contents
-return function()
-	local Players = game:GetService("Players")
-	local function Join(Id)
-		local Player = Instance.new("Player")
-		Player.UserId = Id
-		Player.Parent = Players
-		return Player
-	end
-	local Mine, Other = Join(5), Join(6)
+return function(Context)
+	-- (the run's own player, the profile's, and another)
+	local Mine, Other = Context.Join(), Context.Join({ identity = { userId = 6 } })
 	local MS = game:GetService("MarketplaceService")
 	print("owns", MS:UserOwnsGamePassAsync(5, 11), MS:UserOwnsGamePassAsync(6, 11))
 	local PS = game:GetService("PolicyService")

@@ -104,6 +104,28 @@ fn instance_new_refuses_what_a_game_script_may_not_make_and_makes_five_services(
     assert_eq!(edit, ["ok PluginAction"]);
 }
 
+/// A game script cannot make a Player on a client or a server: refused for WritePlayer before the parent argument is looked at,
+/// a copy with Instance.fromExisting too, and Clone answers nil (measured, roblox-sim 0.747, identity 2 and 4:
+/// tools/parity/probes/player_new.luau). ree made one until its harnesses had Context.Join. The edit run context still makes
+/// one (Studio's edit mode is not measured).
+#[test]
+fn a_game_script_cannot_make_a_player() {
+    let refused = "error The current thread cannot create 'Player' (lacking capability WritePlayer)";
+    let source = format!(
+        "{TRY}\nlocal Players = game:GetService('Players')\n\
+         print(try(Instance.new, 'Player'), try(Instance.new, 'Player', Players), try(Instance.new, 'Player', 5), try(Instance.new, 'Player', {{}}), try(Instance.new, 'player'))\n\
+         local Me = Players.LocalPlayer\n\
+         if Me then print(try(Instance.fromExisting, Me), try(Me.Clone, Me)) end"
+    );
+    assert_eq!(
+        printed(play(), &source, 0.1),
+        [format!("{refused} {refused} {refused} {refused} error Unable to create an Instance of type \"player\""), format!("{refused} ok nil")]
+    );
+    assert_eq!(printed(server(), &source, 0.1), [format!("{refused} {refused} {refused} {refused} error Unable to create an Instance of type \"player\"")]);
+    let edit = printed(Options::default(), &format!("{TRY}\nprint(try(function() return Instance.new('Player').ClassName end))"), 0.1);
+    assert_eq!(edit, ["ok Player"]);
+}
+
 /// A game script gets nil for the services Roblox keeps for itself, Studio and plugins (nothing made), finds a client's starting
 /// services before any GetService, reads a few GetService makes as "Instance", and is refused the network service its side lacks.
 #[test]

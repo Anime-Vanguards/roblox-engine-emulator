@@ -47,6 +47,8 @@ fn run_with(lua: &Lua, engine: &Rc<Engine>, source: &str, until: f64, globals: &
         super::instance::create_named(&mut state, &engine.reflection, class, "Test")
     };
     let env = engine_lua::modules::environment(lua, engine, script).expect("environment");
+    // (a test script lets its players in as a harness does: Context.Join, record/run.rs)
+    env.set("Context", crate::record::run::players_context(lua, engine)).expect("Context");
     for (name, value) in globals {
         env.set(*name, value.clone()).expect("global");
     }
@@ -128,10 +130,7 @@ fn a_server_has_no_local_player_and_renders_nothing() {
             print("locks", select(2, pcall(function() Player.PlayerGui.Parent = Player end)), pcall(function() Player.Backpack.Parent = Player end))
         end)
         Players.PlayerRemoving:Connect(function(Player) print("removing", Player.Name) end)
-        local Player = Instance.new("Player")
-        Player.Name = "Fake"
-        Player.UserId = 7
-        Player.Parent = Players
+        local Player = Context.Join({ identity = { name = "Fake", userId = 7 } })
         task.wait(0.1)
         print("frames", Rendered, Bound, Beats > 3, #Players:GetPlayers())
         Player:Kick("bye")
@@ -458,9 +457,7 @@ fn messages_reach_subscribers_and_remotes_reach_no_client() {
         MessagingService:PublishAsync("Topic", { N = 2 })
         task.wait()
         print("messages", table.concat(Got, ","))
-        local Players = game:GetService("Players")
-        local Player = Instance.new("Player")
-        Player.Parent = Players
+        local Player = Context.Join()
         local Remote = Instance.new("RemoteEvent") Remote.Parent = game:GetService("ReplicatedStorage")
         Remote.OnServerEvent:Connect(function() end)
         Remote:FireClient(Player, 1)
@@ -802,8 +799,7 @@ fn a_server_makes_r6_rigs_raises_on_load_asset_and_loads_no_character() {
         local AsyncBefore = time()
         local AsyncOk, AsyncMessage = pcall(game:GetService("AssetService").LoadAssetAsync, game:GetService("AssetService"), 789)
         print("async", AsyncOk, AsyncMessage, time() > AsyncBefore)
-        local Player = Instance.new("Player")
-        Player.Parent = Players
+        local Player = Context.Join()
         print("character", select('#', Player:LoadCharacterAsync()), Player.Character)
         "#,
         0.2,
@@ -832,14 +828,11 @@ fn a_live_server_is_not_studio_and_its_players_carry_join_data() {
         local RunService = game:GetService("RunService")
         local Players = game:GetService("Players")
         print("studio", RunService:IsStudio(), RunService:IsServer())
-        local Host = Instance.new("Player")
-        Host.UserId = 11
-        local Plain = Instance.new("Player")
+        local Host = Context.Join({ identity = { userId = 11 } })
+        local Plain = Context.Join({ identity = { userId = 12 } })
         local Given = { TeleportData = { Stage = "Stage1", MatchPlayers = { 11, 12 } }, Members = { 11, 12 } }
         SetJoinData(Host, Given)
         Given.TeleportData.Stage = "Changed"
-        Host.Parent = Players
-        Plain.Parent = Players
         local First, Second = Host:GetJoinData(), Host:GetJoinData()
         print("join", First.TeleportData.Stage, #First.TeleportData.MatchPlayers, First.Members[2], First ~= Second, next(Plain:GetJoinData()))
         print("bad", pcall(SetJoinData, Host, { Part = Instance.new("Part") }))
@@ -855,6 +848,67 @@ fn a_live_server_is_not_studio_and_its_players_carry_join_data() {
     let (studio_lua, studio_engine) = start(RunContext::Server);
     let studio = run_in(&studio_lua, &studio_engine, r#"print("studio", game:GetService("RunService"):IsStudio())"#, 0.0);
     assert!(has(&studio, "print: studio true"), "{studio:?}");
+}
+
+/// A play run's harness lets players in with Context.Join (record/run.rs install_players, services/players.rs join): the run's own
+/// player from the run's client profile, made once and the same while it is in, made anew after it left; another from a profile
+/// of its own (a table or JSON text), whose answers are its own, given the lowest free UserId when it sets none; a user in the
+/// game and the run's sections refused. Context.Leave lets a player go at the next frame's network step, the run's own with no
+/// argument. Each join fires PlayerAdded.
+#[test]
+fn a_harness_lets_players_in_and_out() {
+    let profile = crate::client_profile::ClientProfile::parse(r#"{"identity":{"name":"Owner","userId":5},"ownership":{"gamePasses":[1]}}"#).unwrap();
+    let options = Options { mode: "play".into(), run_context: RunContext::Server, local_player: false, profile, ..Options::default() };
+    let engine = Engine::new(options).expect("engine");
+    let lua = Lua::new();
+    engine_lua::start(&lua, &engine).expect("start");
+    let lines = run_in(
+        &lua,
+        &engine,
+        r#"
+        local Players = game:GetService("Players")
+        local MS = game:GetService("MarketplaceService")
+        local Added = {}
+        Players.PlayerAdded:Connect(function(P) table.insert(Added, P.Name .. "=" .. P.UserId) end)
+        local Owner = Context.Join()
+        print("own", Owner.Name, Owner.UserId, Owner.Parent == Players, Context.Join() == Owner, #Owner:GetChildren())
+        local Guest = Context.Join({ identity = { name = "Guest" }, ownership = { gamePasses = { 2 } }, localization = { countryRegion = "SE" }, policy = { AreAdsAllowed = false } })
+        local Plain = Context.Join({ identity = { name = "Plain" } })
+        local Json = Context.Join('{"identity":{"name":"Json","userId":9}}')
+        print("ids", Guest.UserId, Plain.UserId, Json.Name, Json.UserId)
+        print("owns", MS:UserOwnsGamePassAsync(5, 1), MS:UserOwnsGamePassAsync(5, 2), MS:UserOwnsGamePassAsync(Guest.UserId, 2), MS:UserOwnsGamePassAsync(Guest.UserId, 1), MS:UserOwnsGamePassAsync(Plain.UserId, 2),
+            game:GetService("LocalizationService"):GetCountryRegionForPlayerAsync(Guest), game:GetService("LocalizationService"):GetCountryRegionForPlayerAsync(Plain),
+            game:GetService("PolicyService"):GetPolicyInfoForPlayerAsync(Guest).AreAdsAllowed, game:GetService("PolicyService"):GetPolicyInfoForPlayerAsync(Plain).AreAdsAllowed)
+        print("dup", select(2, pcall(Context.Join, { identity = { userId = 5 } })))
+        print("device", select(2, pcall(Context.Join, { device = { kind = "phone" } })))
+        print("locale", select(2, pcall(Context.Join, { localization = { robloxLocaleId = "de-de" } })))
+        print("bad", select(2, pcall(Context.Join, 5)), select(2, pcall(Context.Leave, workspace)))
+        task.wait()
+        print("added", table.concat(Added, " "))
+        Context.Leave(Guest)
+        print("still", Guest.Parent == Players)
+        task.wait()
+        print("gone", Guest.Parent, select(2, pcall(Context.Leave, Guest)))
+        Context.Leave()
+        task.wait()
+        print("own gone", Owner.Parent)
+        local Again = Context.Join()
+        print("again", Again ~= Owner, Again.Name, Again.UserId, Again.Parent == Players)
+        "#,
+        0.2,
+    );
+    let printed: Vec<&str> = lines.iter().filter_map(|line| line.strip_prefix("print: ")).collect();
+    let join = "Context.Join: ";
+    assert_eq!(printed[0], "own Owner 5 true true 3", "{lines:?}");
+    assert_eq!(printed[1], "ids 1 2 Json 9", "{lines:?}");
+    assert_eq!(printed[2], "owns true false true false false SE US false true", "{lines:?}");
+    assert!(printed[3].contains(&format!("{join}user 5 is in the game already (Owner)")), "{lines:?}");
+    assert!(printed[4].contains(&format!("{join}device is the run's, not a player's")), "{lines:?}");
+    assert!(printed[5].contains(&format!("{join}localization.robloxLocaleId is the run's")), "{lines:?}");
+    assert!(printed[6].contains("a client profile (a table or JSON text) expected") && printed[6].contains("Context.Leave: a Player expected"), "{lines:?}");
+    assert_eq!(&printed[7..9], ["added Owner=5 Guest=1 Plain=2 Json=9", "still true"], "{lines:?}");
+    assert!(printed[9].starts_with("gone nil ") && printed[9].contains("Context.Leave: Guest is not in the game"), "{lines:?}");
+    assert_eq!(&printed[10..], ["own gone nil", "again true Owner 5 true"], "{lines:?}");
 }
 
 /// What follows a wait in a test script runs and is checked: the helper steps frames until the script ends (an assert after a
@@ -873,10 +927,7 @@ fn a_test_script_is_checked_after_it_waits() {
 const LEAVING_SCENE: &str = r#"
 local Players = game:GetService("Players")
 local Order = {}
-local Player = Instance.new("Player")
-Player.Name = "Leaver"
-Player.UserId = 5
-Player.Parent = Players
+local Player = Context.Join({ identity = { name = "Leaver", userId = 5 } })
 local Body = Instance.new("Model")
 Body.Name = "Body"
 Instance.new("Humanoid").Parent = Body
@@ -1103,9 +1154,7 @@ fn a_kicked_player_leaves_about_a_second_on() {
         RunContext::Server,
         r#"
 local Players = game:GetService("Players")
-local Player = Instance.new("Player")
-Player.Name = "Leaver"
-Player.Parent = Players
+local Player = Context.Join({ identity = { name = "Leaver" } })
 local Body = Instance.new("Model")
 Body.Name = "Body"
 Body.Parent = workspace
@@ -1149,9 +1198,7 @@ fn a_servers_leave_destroys_the_players_gui() {
         RunContext::Server,
         r#"
 local Players = game:GetService("Players")
-local Player = Instance.new("Player")
-Player.Name = "Leaver"
-Player.Parent = Players
+local Player = Context.Join({ identity = { name = "Leaver" } })
 local Names = {}
 for _, Child in Player:GetChildren() do table.insert(Names, Child.Name) end
 print("containers", table.concat(Names, " "))
@@ -1189,9 +1236,7 @@ print("after", Gui.Parent, Pack.Parent, Gear.Parent)
 /// statements run before the writes (the engine and `Player` in reach). Each case prints its events in the order they fired.
 const CHARACTER_WRITES: &str = r#"
 local Players = game:GetService("Players")
-local Player = Instance.new("Player")
-Player.Name = "P"
-Player.Parent = Players
+local Player = Context.Join({ identity = { name = "P" } })
 local Holder = Instance.new("Folder")
 Holder.Name = "Holder"
 Holder.Parent = game:GetService("ReplicatedStorage")
@@ -1293,9 +1338,7 @@ fn a_character_write_costs_the_old_characters_removal() {
         let (lua, engine) = start(RunContext::Server);
         let source = format!(
             r#"
-local Player = Instance.new("Player")
-Player.Name = "P"
-Player.Parent = game:GetService("Players")
+local Player = Context.Join({{ identity = {{ name = "P" }} }})
 local function Model(Name) local M = Instance.new("Model") M.Name = Name local Part = Instance.new("Part") Part.Anchored = true Part.Parent = M M.Parent = workspace return M end
 local Old, New = Model("Old"), Model("New")
 if {held} then Player.Character = Old end
@@ -1353,8 +1396,7 @@ fn a_servers_character_write_is_a_spawn() {
         Make("ScreenGui", "Reset", game:GetService("StarterGui"))
         Make("ScreenGui", "Keep", game:GetService("StarterGui")).ResetOnSpawn = false
         Make("Folder", "GuiFolder", game:GetService("StarterGui"))
-        local Player = Instance.new("Player")
-        Player.Parent = Players
+        local Player = Context.Join()
         Make("Tool", "GearTool", Player:FindFirstChildOfClass("StarterGear"))
         local Gui = Player:FindFirstChildOfClass("PlayerGui")
         local function Names(X)

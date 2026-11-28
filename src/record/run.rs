@@ -1818,10 +1818,10 @@ fn context_table(lua: &Lua, engine: &Rc<Engine>, checkpoint: &Rc<Checkpoint>, sp
         })?,
     )?;
     // A loopback run's sides (src/loopback): Context.Side is "server" or "client"; the server's harness also gets the player
-    // that is to join (Context.Player, a Player not in Players yet: Context.SetJoinData works on it), HoldJoin() (the player
-    // joins when the harness calls Join(), at that frame's end, not before frame 1) and Leave() (the player leaves at the
-    // next frame boundary: PlayerRemoving on the server, the client steps no more, its waiting InvokeClient calls raise)
-    if let Some(endpoint) = engine.loopback() {
+    // that is to join (Context.Player, a Player not in Players yet: Context.SetJoinData works on it) and HoldJoin() (the player
+    // joins when the harness calls Join(), at that frame's end, not before frame 1)
+    let loopback = engine.loopback();
+    if let Some(endpoint) = &loopback {
         context.set("Side", endpoint.side.name())?;
         if endpoint.side == crate::loopback::Side::Server {
             if let Some((player, _)) = endpoint.bridge.player.get() {
@@ -1834,17 +1834,12 @@ fn context_table(lua: &Lua, engine: &Rc<Engine>, checkpoint: &Rc<Checkpoint>, sp
                 }
                 Ok(())
             })?)?;
-            let bridge = endpoint.bridge.clone();
-            context.set("Join", crate::lua::lua_fn(lua, move |_, ()| {
-                bridge.join_asked.set(true);
-                Ok(())
-            })?)?;
-            let bridge = endpoint.bridge.clone();
-            context.set("Leave", crate::lua::lua_fn(lua, move |_, ()| {
-                bridge.leave_asked.set(true);
-                Ok(())
-            })?)?;
         }
+    }
+    // A play run's players (a client's, a server's, a loopback pair's server): Context.Join(Profile?) lets a player in and returns
+    // it, Context.Leave(Player?) lets one go (services/players.rs join, leave_soon); a game script cannot make a Player
+    if !engine.options.edit_mode() && loopback.as_ref().is_none_or(|endpoint| endpoint.side == crate::loopback::Side::Server) {
+        install_players(lua, engine, &context, loopback)?;
     }
     // Context.Mount(Path, File): `--mount Path=File` from the harness (what a run varies, a bundle
     // say, mounted after its checkpoint); the instance at Path, nil when the mount made none there
@@ -1870,6 +1865,93 @@ fn context_table(lua: &Lua, engine: &Rc<Engine>, checkpoint: &Rc<Checkpoint>, sp
         })?,
     )?;
     Ok(context)
+}
+
+/// Context.Join(Profile?) and Context.Leave(Player?) in a play run (not an edit run's, nor a loopback client's: its server's harness
+/// adds the players).
+///
+/// Join lets a player in and returns its Player. Profile (a client profile's player fields, a table or JSON text, unset fields the
+/// format's defaults: client_profile.rs player_profile) makes a new player of that identity, whose answers (policy, ownership,
+/// social, country) are its own. Without one it is the run's own player, the run's client profile's: a client's local player, a
+/// loopback pair's client (let in at the end of the frame when the harness held its join, HoldJoin), or on a server a Player made
+/// the first time and again after it left. A user in the game already is refused.
+///
+/// Leave lets the player go as its client leaving does, at the next frame's network step (services/players.rs leave_soon), the
+/// engine's own step no script pays for; a loopback pair's client leaves at the next frame boundary (its client steps no more, the
+/// InvokeClient calls waiting on it raise: loopback::leave). Without a Player it is the run's own player; a client's stays.
+fn install_players(lua: &Lua, engine: &Rc<Engine>, context: &LuaTable, loopback: Option<Rc<crate::loopback::Endpoint>>) -> LuaResult<()> {
+    // (a server run's own player once it joined)
+    let own = Rc::new(std::cell::Cell::new(None));
+    let (e, joined, bridge) = (engine.clone(), own.clone(), loopback.as_ref().map(|endpoint| endpoint.bridge.clone()));
+    context.set(
+        "Join",
+        crate::lua::lua_fn(lua, move |lua, profile: LuaValue| {
+            let failed = |problem: String| LuaError::runtime(format!("Context.Join: {problem}"));
+            let player = if !profile.is_nil() {
+                let json: Json = match &profile {
+                    LuaValue::String(text) => serde_json::from_slice(&text.as_bytes()).map_err(|error| failed(error.to_string()))?,
+                    LuaValue::Table(_) => lua.from_value::<Json>(profile.clone()).map(crate::client_profile::empty_lists).map_err(|error| failed(error.to_string()))?,
+                    _ => return Err(failed("a client profile (a table or JSON text) expected".into())),
+                };
+                let profile = crate::client_profile::player_profile(&json).map_err(failed)?;
+                services::players::join(lua, &e, Rc::new(profile), false).map_err(failed)?
+            } else if let Some(bridge) = &bridge {
+                if bridge.left.get() {
+                    return Err(failed("the run's player left; a loopback pair's client does not come back".into()));
+                }
+                bridge.join_asked.set(true);
+                bridge.player.get().map(|(player, _)| player).ok_or_else(|| failed("no loopback player".into()))?
+            } else if let Some(local) = e.world().local_player {
+                local
+            } else if let Some(player) = joined.get().filter(|&player| services::players::in_players(&e.state.borrow(), player)) {
+                player
+            } else {
+                let player = services::players::join(lua, &e, e.profile(), true).map_err(failed)?;
+                joined.set(Some(player));
+                player
+            };
+            instance_value(lua, &e, player)
+        })?,
+    )?;
+    let e = engine.clone();
+    context.set(
+        "Leave",
+        crate::lua::lua_fn(lua, move |_, player: LuaValue| {
+            let failed = |problem: String| LuaError::runtime(format!("Context.Leave: {problem}"));
+            let given = match &player {
+                LuaValue::Nil => None,
+                other => Some(engine_lua::instance_id(other).filter(|&id| e.reflection.is_a(e.state.borrow().dom.at(id).class, "Player")).ok_or_else(|| failed("a Player expected".into()))?),
+            };
+            if let Some(endpoint) = &loopback
+                && let Some((client_player, _)) = endpoint.bridge.player.get()
+                && given.is_none_or(|given| given == client_player)
+            {
+                endpoint.bridge.leave_asked.set(true);
+                return Ok(());
+            }
+            let local = e.world().local_player;
+            let player = match given {
+                Some(player) if Some(player) != local => player,
+                Some(_) => return Err(failed("a client run's own player stays (pass another player)".into())),
+                None if local.is_some() => return Err(failed("a client run's own player stays (pass another player)".into())),
+                None => own.get().ok_or_else(|| failed("the run's player has not joined (Context.Join)".into()))?,
+            };
+            if !services::players::leave_soon(&mut e.state.borrow_mut(), player) {
+                let name = String::from_utf8_lossy(e.state.borrow().dom.at(player).name.as_bytes()).into_owned();
+                return Err(failed(format!("{name} is not in the game")));
+            }
+            Ok(())
+        })?,
+    )?;
+    Ok(())
+}
+
+/// A `Context` with Join and Leave alone ([`install_players`]), for a test that runs a script of `engine` without a harness
+#[cfg(test)]
+pub(crate) fn players_context(lua: &Lua, engine: &Rc<Engine>) -> LuaTable {
+    let context = lua.create_table().expect("table");
+    install_players(lua, engine, &context, engine.loopback()).expect("Context.Join");
+    context
 }
 
 /// What a harness's Run gets that its Prepare did not: the command's `--context` fields, Seconds and Fps.

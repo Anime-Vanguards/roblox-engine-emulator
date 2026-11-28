@@ -37,6 +37,8 @@ fn run(run_context: RunContext, source: &str, seconds: f64) -> Vec<String> {
         super::instance::create_named(&mut state, &engine.reflection, class, "Test")
     };
     let env = engine_lua::modules::environment(&lua, &engine, script).expect("environment");
+    // (a test script lets its players in as a harness does: Context.Join, record/run.rs)
+    env.set("Context", crate::record::run::players_context(&lua, &engine)).expect("Context");
     let function = lua.load(source).set_name("=Test").set_environment(env).into_function().expect("compile");
     let call = engine_lua::globals::call(&lua, &engine, function, LuaMultiValue::new()).expect("call");
     if let CallOutcome::Failed(message, _) = call.outcome().unwrap() {
@@ -420,16 +422,8 @@ fn stubs_cast_their_arguments_from_the_last() {
 #[test]
 fn players_friends_methods_answer_as_a_client_and_a_server_do_for_the_offline_player() {
     let source = r##"
-        local Players = game:GetService("Players")
-        local Player = Players.LocalPlayer
-        if not Player then
-            Player = Instance.new("Player")
-            Player.UserId = 1
-            Player.Parent = Players
-        end
-        local Other = Instance.new("Player")
-        Other.UserId = 2
-        Other.Parent = Players
+        local Player = Context.Join()
+        local Other = Context.Join({ identity = { userId = 2 } })
         local function Show(Ok, Answer)
             if type(Answer) == "table" then
                 Answer = "list" .. #Answer

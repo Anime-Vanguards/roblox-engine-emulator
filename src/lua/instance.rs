@@ -1164,6 +1164,11 @@ pub fn clone(engine: &Engine, id: InstanceId) -> Option<InstanceId> {
     if matches!(engine.state.borrow().dom.raw_get(id, K::Archivable as NameId), Some(Value::Bool(false))) {
         return None;
     }
+    // (a playing client and a server copy no Player, its Archivable true or not: Clone answers nil, at identity 2 and 4 alike;
+    // measured, roblox-sim 0.747, tools/parity/probes/player_new.luau. The edit run context, not measured, copies one.)
+    if !engine.options.edit_mode() && &*engine.reflection.class(engine.state.borrow().dom.at(id).class).name == "Player" {
+        return None;
+    }
     // (the template's root was touched by the call itself: whether that touch found it cold)
     let root_cold = engine.state.borrow().sched.touched.borrow_mut().take_last_cold();
     project::materialize_deep(engine, id);

@@ -29,6 +29,8 @@ fn run_on(lua: &Lua, engine: &Rc<Engine>, source: &str) -> (Vec<String>, Vec<Str
         super::instance::create_named(&mut state, &engine.reflection, class, "Harness")
     };
     let env = engine_lua::modules::environment(lua, engine, script).expect("environment");
+    // (a test script lets its players in as a harness does: Context.Join, record/run.rs)
+    env.set("Context", crate::record::run::players_context(lua, engine)).expect("Context");
     let function = lua.load(source).set_name("=Harness").set_environment(env).into_function().expect("compile");
     let call = engine_lua::globals::call(lua, engine, function, LuaMultiValue::new()).expect("call");
     if let CallOutcome::Failed(message, _) = call.outcome().unwrap() {
@@ -124,8 +126,7 @@ fn where_a_script_runs_follows_its_class_its_run_context_and_the_side() {
     check(&prints, &["start LS_PlayerGui", "start LS_Backpack", "start LS_ReplicatedFirst"]);
     let (prints, errors) = run(server(), &with_helpers(r#"
         task.wait()
-        local Player = Instance.new("Player")
-        Player.Parent = game:GetService("Players")
+        local Player = Context.Join()
         task.wait()
         Make("Script", "SL_Workspace", '_G.L("start " .. script.Name)', workspace)
         Make("Script", "SL_ServerScriptService", '_G.L("start " .. script.Name)', game:GetService("ServerScriptService"))

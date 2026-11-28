@@ -1434,11 +1434,5 @@
 			"line": "destroy now OnRemoved(A3) OnRemoved(O)",
 			"why": "the order of Destroy's OnRemoved calls is the client's own (neither the order the members joined nor tree order); ree calls them in the order they joined"
 		}
-	],
-	"instance_new_refusals": [
-		{
-			"line": "Player error The current thread cannot create 'Player' (lacking capability WritePlayer)",
-			"why": "a game script may not make a Player (WritePlayer), but ree's harnesses and tests make the players of a run with Instance.new (a Player parented to Players joins): instance.rs NEW_PERMITS"
-		}
 	]
 }

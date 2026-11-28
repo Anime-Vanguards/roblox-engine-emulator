@@ -2928,8 +2928,7 @@ fn a_harness_fires_a_remote_with_a_buffer() {
         "return function(Context)\n\
          local Remote = Instance.new('RemoteEvent')\n\
          Remote.Parent = game:GetService('ReplicatedStorage')\n\
-         local Player = Instance.new('Player')\n\
-         Player.Parent = game:GetService('Players')\n\
+         local Player = Context.Join()\n\
          local Heard = {}\n\
          Remote.OnServerEvent:Connect(function(From, Data, Tag) table.insert(Heard, `{From == Player} {typeof(Data)} {buffer.tostring(Data)} {Tag}`) end)\n\
          local Data = buffer.fromstring('abc')\n\

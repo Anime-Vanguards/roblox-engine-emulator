@@ -51,6 +51,11 @@ fn profile_table(lua: &Lua, engine: &Engine, profile: &crate::client_profile::Cl
     if !profile.read_by_luau(engine.options.server()) {
         return Ok(LuaValue::Nil);
     }
+    profile_fields(lua, profile)
+}
+
+/// [`profile_table`]'s table, whatever the profile sets
+fn profile_fields(lua: &Lua, profile: &crate::client_profile::ClientProfile) -> LuaResult<LuaValue> {
     let options = LuaSerializeOptions::new().set_array_metatable(false).serialize_none_to_null(false).serialize_unit_to_null(false);
     let value = lua.to_value_with(&profile.to_json(), options)?;
     if let LuaValue::Table(table) = &value {
@@ -100,6 +105,32 @@ pub fn set_profile(lua: &Lua, engine: &Rc<Engine>, profile: crate::client_profil
             _ if read => load_profile(lua, engine, &r)?,
             _ => {}
         }
+    }
+    engine.clear_member_cache();
+    Ok(())
+}
+
+/// A player a harness let in with a client profile of its own (Context.Join, services/players.rs join): its answers come from that
+/// profile from now on, in Rust ([`Engine::profile_of`]) and in the stubs (R.Joined, by UserId: profile.luau ProfileOfUser), whose
+/// profile answers load the first time a profile sets what they read, as for the run's ([`set_profile`])
+pub fn add_joined_profile(lua: &Lua, engine: &Rc<Engine>, profile: Rc<crate::client_profile::ClientProfile>) -> LuaResult<()> {
+    engine.add_joined_profile(profile.clone());
+    if !profile.read_by_luau(engine.options.server()) {
+        return Ok(());
+    }
+    let Ok(r) = lua.named_registry_value::<LuaTable>(STUBS) else { return Ok(()) };
+    let joined = match r.raw_get::<LuaValue>("Joined")? {
+        LuaValue::Table(joined) => joined,
+        _ => {
+            let joined = lua.create_table()?;
+            r.raw_set("Joined", joined.clone())?;
+            joined
+        }
+    };
+    joined.raw_set(profile.identity.user_id(), profile_fields(lua, &profile)?)?;
+    match r.raw_get::<LuaValue>("ProfileMethods")? {
+        LuaValue::Function(methods) => methods.call::<()>(())?,
+        _ => load_profile(lua, engine, &r)?,
     }
     engine.clear_member_cache();
     Ok(())

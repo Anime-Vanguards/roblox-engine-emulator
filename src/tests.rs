@@ -59,6 +59,8 @@ fn start_script(lua: &Lua, engine: &Rc<Engine>, source: &str) -> engine_lua::glo
         super::instance::create_named(&mut state, &engine.reflection, class, "Test")
     };
     let env = engine_lua::modules::environment(lua, engine, script).expect("environment");
+    // (a test script lets its players in as a harness does: Context.Join, record/run.rs)
+    env.set("Context", crate::record::run::players_context(lua, engine)).expect("Context");
     let function = lua.load(source).set_name("=Test").set_environment(env).into_function().expect("compile");
     let call = engine_lua::globals::call(lua, engine, function, LuaMultiValue::new()).expect("call");
     if let CallOutcome::Failed(message, _) = call.outcome().unwrap() {
@@ -7179,9 +7181,9 @@ fn the_shared_table_registry_makes_a_table_per_name() {
     assert!(output.contains(&"print: ok".to_string()), "{output:?}");
 }
 
-/// A harness can add players to a run (a lobby's other players): a Player parented to Players is listed by
-/// GetPlayers, found by GetPlayerByUserId and (through its Character) by GetPlayerFromCharacter, and fires
-/// PlayerAdded, PlayerRemoving and CharacterAdded; the local player stays first and fires none of them.
+/// A harness can add players to a run (a lobby's other players): a Player Context.Join lets in is listed by GetPlayers,
+/// found by GetPlayerByUserId and (through its Character) by GetPlayerFromCharacter, and fires PlayerAdded, PlayerRemoving and
+/// CharacterAdded; the local player stays first and fires none of them (Context.Join() returns it; it cannot leave).
 #[test]
 fn players_a_harness_adds_join_the_game() {
     let (lua, engine) = start();
@@ -7194,10 +7196,8 @@ fn players_a_harness_adds_join_the_game() {
         Players.PlayerRemoving:Connect(function(Player) print("removing " .. Player.Name) end)
         local Local = Players.LocalPlayer
         assert(#Players:GetPlayers() == 1 and Players:GetPlayers()[1] == Local)
-        local Other = Instance.new("Player")
-        Other.Name = "Other"
-        Other.UserId = 77
-        Other.Parent = Players
+        assert(Context.Join() == Local and not pcall(Context.Leave) and not pcall(Context.Leave, Local), "a client's own player is in and stays")
+        local Other = Context.Join({ identity = { name = "Other", userId = 77 } })
         Other.CharacterAdded:Connect(function(Character) print("character " .. Character.Name) end)
         local Body = Instance.new("Model")
         Body.Name = "Body"

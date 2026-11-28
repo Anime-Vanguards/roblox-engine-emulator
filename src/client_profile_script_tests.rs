@@ -217,16 +217,12 @@ fn friends_methods_answer_from_the_profiles_friends() {
 	},
 	"game": { "gameId": 11 }
 }"#;
-    let harness = r#"return function()
+    let harness = r#"return function(Context)
 	local Players = game:GetService("Players")
 	local Http = game:GetService("HttpService")
 	local P = Players.LocalPlayer
-	local Friend = Instance.new("Player")
-	Friend.UserId = 2
-	Friend.Parent = Players
-	local Stranger = Instance.new("Player")
-	Stranger.UserId = 8
-	Stranger.Parent = Players
+	local Friend = Context.Join({ identity = { userId = 2 } })
+	Context.Join({ identity = { userId = 8 } })
 	print("is", P:IsFriendsWithAsync(2), P:IsFriendsWithAsync(" 3 "), P:IsFriendsWithAsync(6), P:IsFriendsWithAsync(4), P:IsFriendsWith(2.9), P:IsFriendsWithAsync(-2))
 	print("online", Http:JSONEncode(P:GetFriendsOnlineAsync()))
 	print("online counts", #P:GetFriendsOnlineAsync(1), #P:GetFriendsOnline(0), #P:GetFriendsOnlineAsync(500))

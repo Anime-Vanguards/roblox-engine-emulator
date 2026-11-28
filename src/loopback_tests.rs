@@ -1112,7 +1112,8 @@ return {
 }
 
 /// Context.HoldJoin keeps the player out until the server's harness calls Context.Join: the server steps alone meanwhile,
-/// and the client's harness starts at the join, its clock from 0 then (a client's DataModel starts after the server's)
+/// and the client's harness starts at the join, its clock from 0 then (a client's DataModel starts after the server's). Join
+/// returns the client's Player (Context.Player), which comes in at the frame's end.
 #[test]
 fn a_held_join_waits_for_the_servers_harness() {
     let summary = run_pair(
@@ -1127,7 +1128,8 @@ return {
 			RunService.Heartbeat:Wait()
 		end
 		print("players before the join", #Players:GetPlayers(), math.floor(time() * 60 + 0.5))
-		Context.Join()
+		local Joined = Context.Join()
+		print("joins", Joined == Context.Player, Joined.Parent)
 		RunService.Heartbeat:Wait()
 		RunService.Heartbeat:Wait()
 		print("players after", #Players:GetPlayers())
@@ -1145,6 +1147,7 @@ return {
     let lines = lines(&summary);
     assert_eq!(summary["status"], "ok", "{lines:?}");
     assert!(has(&lines, "server print: players before the join 0 5"), "{lines:?}");
+    assert!(has(&lines, "server print: joins true nil"), "{lines:?}");
     assert!(has(&lines, "server print: players after 1"), "{lines:?}");
     assert!(has(&lines, "client print: client starts at 0"), "{lines:?}");
 }
@@ -3070,9 +3073,7 @@ fn a_loopback_client_sees_another_players_character_leave() {
 local Players = game:GetService("Players")
 return {
 	Server = function(Context)
-		local Other = Instance.new("Player")
-		Other.Name = "Other"
-		Other.Parent = Players
+		local Other = Context.Join({ identity = { name = "Other" } })
 		local Body = Instance.new("Model")
 		Body.Name = "Body"
 		Body.Parent = workspace

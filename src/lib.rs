@@ -952,6 +952,9 @@ pub struct Engine {
     /// The client profile as the run has it now: [`Options::profile`], with what a harness changed since
     /// (Context.SetClientProfile, which changes only what is read at call time)
     profile: RefCell<Rc<client_profile::ClientProfile>>,
+    /// The players a harness let in with a client profile of their own (Context.Join), by UserId: their answers
+    /// ([`Engine::profile_of`])
+    joined_profiles: RefCell<Vec<(f64, Rc<client_profile::ClientProfile>)>>,
 }
 
 impl Engine {
@@ -971,6 +974,7 @@ impl Engine {
         let profile = RefCell::new(Rc::new(options.profile.clone()));
         Ok(Rc::new(Engine {
             profile,
+            joined_profiles: RefCell::new(Vec::new()),
             reflection,
             state: RefCell::new(State {
                 dom: Dom::new(),
@@ -1022,6 +1026,24 @@ impl Engine {
     /// social, the country): the player, the device and the game were set up from the start's profile.
     pub fn set_profile(&self, profile: client_profile::ClientProfile) {
         *self.profile.borrow_mut() = Rc::new(profile);
+    }
+
+    /// The client profile a player's answers come from, by its UserId: the one a harness let it in with (Context.Join), else
+    /// the run's when the id is its player's; None: the engine's own answers
+    pub fn profile_of(&self, user_id: f64) -> Option<Rc<client_profile::ClientProfile>> {
+        if let Some((_, profile)) = self.joined_profiles.borrow().iter().find(|(id, _)| *id == user_id) {
+            return Some(profile.clone());
+        }
+        let profile = self.profile();
+        (profile.identity.user_id() == user_id).then_some(profile)
+    }
+
+    /// A player let in with a client profile of its own (Context.Join): what its answers read from now on ([`Engine::profile_of`])
+    pub(crate) fn add_joined_profile(&self, profile: Rc<client_profile::ClientProfile>) {
+        let user_id = profile.identity.user_id();
+        let mut joined = self.joined_profiles.borrow_mut();
+        joined.retain(|(id, _)| *id != user_id);
+        joined.push((user_id, profile));
     }
 
     /// The host's layers, in installation order.

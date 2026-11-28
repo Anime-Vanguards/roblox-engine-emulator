@@ -1400,6 +1400,12 @@ fn build_shared(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<LuaTable> {
         library_function(lua, "fromExisting", move |lua, args| {
             let args = Args::new(args);
             let Some(existing) = args.instance(0) else { return raise_plain("Instance expected") };
+            // (a copy is made as Instance.new makes one: a client refuses a game script's copy of a Player, "The current thread cannot
+            // create 'Player' (lacking capability WritePlayer)", measured, roblox-sim 0.747, tools/parity/probes/player_new.luau)
+            let class_name = e.reflection.class(e.state.borrow().dom.at(existing).class).name.clone();
+            if let Some(message) = core::new_refusal(&class_name, e.script_capabilities(), !e.options.edit_mode()) {
+                return raise_plain(message);
+            }
             let Some(copy) = instance::clone(&e, existing) else { return Ok(values([LuaValue::Nil])) };
             let children = e.state.borrow().dom.at(copy).children.to_vec();
             for child in children {

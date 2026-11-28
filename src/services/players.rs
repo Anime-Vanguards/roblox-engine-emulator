@@ -96,7 +96,7 @@ struct SpawnNames {
     reset_on_spawn: NameId,
 }
 
-/// A kicked player waiting to leave ([`kick`], [`network_step`])
+/// A kicked player waiting to leave ([`kick`], [`network_step`]), or one whose client left ([`leave_soon`]: closed already)
 struct Kick {
     player: InstanceId,
     /// The call's time and the delay: the first frame that starts after it closes the connection
@@ -448,8 +448,63 @@ pub(crate) fn kick(state: &mut State, player: InstanceId) {
     state.collection.departures.kicks.push(Kick { player, due, closed: false });
 }
 
+/// A player a play run's harness lets in (Context.Join, record/run.rs): a new Player named and identified as `profile` gives
+/// (lua/globals.rs set_identity), its answers from `profile` unless it is the run's own player, whose are the run's (lua/stubs.rs
+/// add_joined_profile), entering Players as any joining player does (services/mod.rs: on a server its StarterGear, Backpack and
+/// PlayerGui and its team, then PlayerAdded, then ChildAdded) in the engine's own step, which no script pays for. Another player's
+/// profile that sets no identity.userId gets the lowest id from 1 up that no player in the game has, nor the run's own player. A
+/// user in the game already is refused: a user is in a game once.
+pub(crate) fn join(lua: &Lua, engine: &Rc<Engine>, mut profile: Rc<crate::client_profile::ClientProfile>, own: bool) -> Result<InstanceId, String> {
+    let players = crate::services::get_service(engine, engine.world().game, "Players").map_err(|_| "the run has no Players".to_string())?;
+    let class = engine.reflection.class_id("Player").ok_or("no Player class")?;
+    {
+        let state = engine.state.borrow();
+        let ids: Vec<(f64, InstanceId)> = state.dom.at(players).children.iter().filter(|&&child| state.dom.at(child).class == class).filter_map(|&child| Some((state.dom.number(child, K::UserId as NameId)?, child))).collect();
+        if !own && profile.identity.user_id.is_none() {
+            let taken = |id: f64| id == engine.profile().identity.user_id() || ids.iter().any(|&(held, _)| held == id);
+            let free = (1..).map(f64::from).find(|&id| !taken(id)).unwrap_or(1.0);
+            Rc::make_mut(&mut profile).identity.user_id = Some(free);
+        }
+        let user_id = profile.identity.user_id();
+        if let Some(&(_, present)) = ids.iter().find(|&&(held, _)| held == user_id) {
+            let name = String::from_utf8_lossy(state.dom.at(present).name.as_bytes()).into_owned();
+            return Err(format!("user {user_id} is in the game already ({name}): give the player an identity.userId of its own"));
+        }
+    }
+    let player = {
+        let mut state = engine.state.borrow_mut();
+        let player = core::create_named(&mut state, &engine.reflection, class, profile.identity.name());
+        crate::lua::globals::set_identity(&mut state, &engine.reflection, player, &profile);
+        player
+    };
+    if !own {
+        crate::lua::stubs::add_joined_profile(lua, engine, profile).map_err(|error| error.to_string())?;
+    }
+    let muted = Muted::raise(&engine.state.borrow().sched.muted);
+    let joined = crate::lua::instance::set_parent(engine, player, Some(players));
+    drop(muted);
+    joined.map_err(|_| "the player cannot join".to_string())?;
+    Ok(player)
+}
+
+/// A player's client leaving (Context.Leave, record/run.rs): the player leaves at the next frame's network step ([`network_step`]),
+/// as one whose connection closed, the engine's own step no script pays for. False when it is not in Players.
+pub(crate) fn leave_soon(state: &mut State, player: InstanceId) -> bool {
+    if state.collection.departures.names.is_none() || !in_players(state, player) {
+        return false;
+    }
+    let now = state.sched.now;
+    let kicks = &mut state.collection.departures.kicks;
+    match kicks.iter_mut().find(|kick| kick.player == player) {
+        Some(kick) => kick.closed = true,
+        None => kicks.push(Kick { player, due: now, closed: true }),
+    }
+    true
+}
+
 /// A server frame's network step (scheduler.rs heartbeat_timers, after a loopback run's receive point): a kicked player whose
-/// connection closed in an earlier frame leaves now, as the engine's own step that no script pays for; a kick whose second has
+/// connection closed in an earlier frame (or whose client left: [`leave_soon`]) leaves now, as the engine's own step that no script
+/// pays for; a kick whose second has
 /// passed closes its player's connection (a loopback run's client hears nothing the server sends from now on:
 /// loopback::connection_closed). A kicked player that left meanwhile is forgotten. Nothing kicked: one compare.
 pub(crate) fn network_step(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {

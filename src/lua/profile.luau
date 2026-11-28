@@ -7,25 +7,31 @@
 --
 -- R.Profile is the profile's set fields in its JSON format, its player's UserId as the engine gives it (set or not), and where
 -- the profile sets its identity its Name, DisplayName and HasVerifiedBadge. It is read at each call: Context.SetClientProfile
--- replaces it.
+-- replaces it. R.Joined holds the same for each player a harness let in with a profile of its own (Context.Join), by UserId:
+-- such a player's answers come from its own profile.
 
 local R, Original = ...
 local Method = R.Method
 local Getter = R.Getter
 local RawGet = R.RawGet
 
--- The profile when UserId is its player's
+-- The profile of the player whose UserId is UserId: the one a harness let it in with, else the run's when it is its player's
 local function ProfileOfUser(UserId)
+	local Id = tonumber(UserId)
+	local Joined = R.Joined and R.Joined[Id]
+	if Joined then
+		return Joined
+	end
 	local Profile = R.Profile
-	if Profile and tonumber(UserId) == Profile.UserId then
+	if Profile and Id == Profile.UserId then
 		return Profile
 	end
 	return nil
 end
 
--- The profile when Player is its player
+-- The profile of Player (ProfileOfUser)
 local function ProfileOf(Player)
-	if R.Profile and typeof(Player) == "Instance" and Player:IsA("Player") then
+	if (R.Profile or R.Joined) and typeof(Player) == "Instance" and Player:IsA("Player") then
 		return ProfileOfUser(RawGet(Player, "UserId"))
 	end
 	return nil
@@ -50,9 +56,9 @@ local function Holds(List, Id)
 	return false
 end
 
--- The profile's friend whose UserId is UserId
-local function Friend(UserId)
-	for _, Found in Field(R.Profile, "social", "friends") or {} do
+-- The friend whose UserId is UserId of Profile's player (the run's player's when no profile is given)
+local function Friend(UserId, Profile)
+	for _, Found in Field(Profile or R.Profile, "social", "friends") or {} do
 		if Found.userId == tonumber(UserId) then
 			return Found
 		end
@@ -188,14 +194,26 @@ Wrap("BadgeService", "UserHasBadgeAsync", function(Stub, Self, UserId, BadgeId, 
 	return Stub(Self, UserId, BadgeId, ...)
 end)
 
--- Members the stubs leave unemulated that answer once the profile gives what they read: each is added the first time the
--- profile sets its field (now, or after Context.SetClientProfile: R.ProfileMethods). Without its field (before, or after a
--- patch removed it) a call reports itself and returns nothing, as with no profile.
+-- Members the stubs leave unemulated that answer once a profile gives what they read: each is added the first time a profile
+-- (the run's, or a joined player's) sets its field (now, after Context.SetClientProfile or after Context.Join: R.ProfileMethods).
+-- Without its field in any (before, or after a patch removed it) a call reports itself and returns nothing, as with no profile.
 local Added = {}
+-- Whether the run's profile or a joined player's gives ownership Kind
+local function Gives(Kind)
+	local Ownership = R.Profile and R.Profile.ownership
+	if Ownership and Ownership[Kind] ~= nil then
+		return true
+	end
+	for _, Joined in R.Joined or {} do
+		if Joined.ownership and Joined.ownership[Kind] ~= nil then
+			return true
+		end
+	end
+	return false
+end
 local function Answering(Class, Name, Kind, Answer)
 	Method(Class, Name, function(...)
-		local Ownership = R.Profile and R.Profile.ownership
-		if not Ownership or Ownership[Kind] == nil then
+		if not Gives(Kind) then
 			R.Missing(Class, Name)
 			return
 		end
@@ -203,10 +221,11 @@ local function Answering(Class, Name, Kind, Answer)
 	end)
 end
 R.ProfileMethods = function()
-	local Ownership = R.Profile and R.Profile.ownership
-	if not Ownership then
-		return
-	end
+	local Ownership = {
+		assets = if Gives("assets") then true else nil,
+		subscriptions = if Gives("subscriptions") then true else nil,
+		badges = if Gives("badges") then true else nil,
+	}
 	if Ownership.assets ~= nil and not Added.PlayerOwnsAssetAsync then
 		Added.PlayerOwnsAssetAsync = true
 		Answering("MarketplaceService", "PlayerOwnsAssetAsync", "assets", function(_, Player, AssetId)
@@ -264,7 +283,7 @@ for _, Name in { "IsFriendsWith", "IsFriendsWithAsync" } do
 	Wrap("Player", Name, function(Stub, Self, UserId, ...)
 		local Stubbed = Stub(Self, UserId, ...)
 		if Field(ProfileOf(Self), "social", "friends") then
-			return Friend(R.FriendUser(UserId)) ~= nil
+			return Friend(R.FriendUser(UserId), ProfileOf(Self)) ~= nil
 		end
 		return Stubbed
 	end)
@@ -300,7 +319,7 @@ Wrap("Player", "GetFriendsInServerAsync", function(Stub, Self, ...)
 	end
 	local InServer = {}
 	for _, Player in game:GetService("Players"):GetPlayers() do
-		if Player ~= Self and Friend(RawGet(Player, "UserId")) then
+		if Player ~= Self and Friend(RawGet(Player, "UserId"), ProfileOf(Self)) then
 			table.insert(InServer, Player)
 		end
 	end

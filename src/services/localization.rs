@@ -1792,17 +1792,17 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
     if let Some(id) = member("GetCorescriptLocalizations") {
         behaviors.add_method(service, id, method(|lua, _, _, _| Ok(values([LuaValue::Table(lua.create_table()?)]))));
     }
-    // (a client's answer is its player's country: the client profile's for its player, else "US", which stands in where no
-    // offline run has one)
+    // (a client's answer is its player's country: the client profile's for its player (a player a harness let in with a profile
+    // of its own: that one's), else "US", which stands in where no offline run has one)
     if let Some(id) = member("GetCountryRegionForPlayerAsync") {
         behaviors.add_method(service, id, method(move |lua, engine, _, args| {
             let Some(player) = object_arg(engine, args)? else { return raise("Argument 1 missing or nil") };
             if !is_player(engine, &names, player) {
                 return raise("Instance was not a player");
             }
-            let profile = engine.profile();
             let user_id = engine.state.borrow().dom.number(player, K::UserId as NameId);
-            let country = if user_id == Some(profile.identity.user_id()) { profile.localization.country_region() } else { "US" };
+            let profile = user_id.and_then(|user_id| engine.profile_of(user_id));
+            let country = profile.as_ref().map_or("US", |profile| profile.localization.country_region());
             Ok(values([string(lua, country.as_bytes())?]))
         }));
     }

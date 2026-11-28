@@ -202,9 +202,9 @@ const MADE_SERVICES: &[&str] = &["HeightmapImporterService", "MemoryStoreService
 /// Classes whose making needs capabilities a script may lack, with them: the class's New permit (data/reflection-security.json), for
 /// the three services its GetService permit. A client's `Instance.new` raises "The current thread cannot create 'Breakpoint' (lacking
 /// capability RobloxScript)" for code that lacks one, naming the first it lacks (measured likewise, a game script's set; a plugin's
-/// code, ree's edit run context, holds Plugin). Player's New permit (WritePlayer) is left out: a client refuses a game script's
-/// `Instance.new("Player")` likewise, but ree's harnesses and tests make the players of a run so (a player parented to Players is
-/// one that joins).
+/// code, ree's edit run context, holds Plugin). Player's (WritePlayer) is refused at identity 4 too, before the parent argument is
+/// looked at (measured likewise, the command bar's identity: tools/parity/probes/player_new.luau): a play run's harness lets players
+/// in with Context.Join (record/run.rs). The edit run context still makes one (Studio's edit mode is not measured).
 const NEW_PERMITS: &[(&str, &str)] = &[
     ("AnimationPlayer", "RobloxScript"),
     ("AvatarAbilityRules", "RobloxScript"),
@@ -218,6 +218,7 @@ const NEW_PERMITS: &[(&str, &str)] = &[
     ("FollowTwistBoneBehavior", "InternalTest"),
     ("Noise", "RobloxScript"),
     ("NonReplicatedCSGDictionaryService", "RobloxEngine"),
+    ("Player", "WritePlayer"),
     ("PluginAction", "Plugin"),
     ("PluginCapabilities", "Plugin"),
     ("RTAnimationTracker", "RobloxScript"),
@@ -238,13 +239,14 @@ const NEW_REFUSALS: &[(&str, &str)] = &[
     ("ParabolaAdornment", "ParabolaAdornment may only be instantiated by CoreScripts at this time"),
 ];
 
-/// What `Instance.new(class_name)` raises for code holding the capabilities `held` (services/reflection_data.rs) before it makes
-/// anything: None when the class's making is no capability's or the code holds it.
-pub fn new_refusal(class_name: &str, held: u64) -> Option<String> {
+/// What `Instance.new(class_name)` (and `Instance.fromExisting` of one) raises for code holding the capabilities `held`
+/// (services/reflection_data.rs) before it makes anything, in a play run (`play`) or the edit run context: None when the class's
+/// making is no capability's or the code holds it.
+pub fn new_refusal(class_name: &str, held: u64, play: bool) -> Option<String> {
     if let Some(&(_, message)) = NEW_REFUSALS.iter().find(|&&(class, _)| class == class_name) {
         return Some(message.to_string());
     }
-    let &(_, need) = NEW_PERMITS.iter().find(|&&(class, _)| class == class_name)?;
+    let &(_, need) = NEW_PERMITS.iter().find(|&&(class, _)| class == class_name && (play || class != "Player"))?;
     let capability = crate::services::reflection_data::first_lacking(held, crate::services::reflection_data::caps_of(need))?;
     Some(format!("The current thread cannot create '{class_name}' (lacking capability {capability})"))
 }

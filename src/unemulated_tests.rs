@@ -350,8 +350,7 @@ fn a_server_runs_remotes_to_clients_report_themselves() {
 	local Players = game:GetService("Players")
 	local Remote = Instance.new("RemoteEvent") Remote.Parent = game:GetService("ReplicatedStorage") -- (a parentless one does nothing)
 	Remote:FireAllClients(1)
-	local Player = Instance.new("Player")
-	Player.Parent = Players
+	local Player = Context.Join()
 	Remote:FireClient(Player, 2)
 	Remote:FireAllClients(3)
 	local Function = Instance.new("RemoteFunction") Function.Parent = game:GetService("ReplicatedStorage")
@@ -368,9 +367,9 @@ end
     assert_eq!(
         summary["unemulated"],
         json!([
-            { "member": "RemoteEvent.FireAllClients", "count": 1, "first": at(8) },
-            { "member": "RemoteEvent.FireClient", "count": 1, "first": at(7) },
-            { "member": "RemoteFunction.InvokeClient", "count": 1, "first": at(10) },
+            { "member": "RemoteEvent.FireAllClients", "count": 1, "first": at(7) },
+            { "member": "RemoteEvent.FireClient", "count": 1, "first": at(6) },
+            { "member": "RemoteFunction.InvokeClient", "count": 1, "first": at(9) },
         ])
     );
 }

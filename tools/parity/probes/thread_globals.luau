@@ -14,8 +14,8 @@ Log.Parent = RS
 local HELPER = 'local function L(s) local Log = game:GetService("ReplicatedStorage").E3Log local n = Log:GetAttribute("n") + 1 Log:SetAttribute("n", n) Log:SetAttribute("l" .. n, s) end\n'
 local player = Players.LocalPlayer or Players:GetPlayers()[1]
 if not player then
-	player = Instance.new("Player")
-	player.Parent = Players
+	-- (ree's server run has none: its harness lets one in, Context.Join; the real engine's job has no Context)
+	player = Context.Join()
 end
 local PG = if IS_SERVER then game:GetService("ServerScriptService") else player:WaitForChild("PlayerGui")
 local function make(name, body)
