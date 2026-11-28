@@ -181,18 +181,19 @@ pub fn over_luau(lua: &Lua, name: &str, kind: Kind, body: LuaFunction) -> LuaRes
 /// subclass; anything else (nil, another value, another class's instance, as `.` lets a script pass) raises "Expected ':' not
 /// '.' calling member function <name>" without a position, before the arguments are looked at (measured in a 0.747 playing
 /// client and a server: tools/parity/probes/engine_functions.luau, SharedTableRegistry.GetSharedTable(aPart, "x")).
-pub fn over_luau_method(lua: &Lua, name: &str, class: u32, body: LuaFunction) -> LuaResult<LuaFunction> {
+pub fn over_luau_method(lua: &Lua, name: &str, method: crate::NameId, class: u32, body: LuaFunction) -> LuaResult<LuaFunction> {
     install();
     let debug_name = interned(name);
     let message = format!("Expected ':' not '.' calling member function {name}");
-    // SAFETY: the body is pushed as the argument; the class and the message are pushed above it, and the closure takes the three
-    // as its upvalues and is left as the one result
+    // SAFETY: the body is pushed as the argument; the class, the message and the method's name are pushed above it, and the closure
+    // takes the four as its upvalues and is left as the one result
     unsafe {
         lua.exec_raw(body, move |state| {
-            ffi::lua_rawcheckstack(state, 2);
+            ffi::lua_rawcheckstack(state, 3);
             ffi::lua_pushnumber(state, class as f64);
             ffi::lua_pushlstring(state, message.as_ptr().cast(), message.len());
-            ffi::lua_pushcclosurek(state, luau_method, debug_name, 3, Some(luau_continue));
+            ffi::lua_pushnumber(state, method as f64);
+            ffi::lua_pushcclosurek(state, luau_method, debug_name, 4, Some(luau_continue));
         })
     }
 }
@@ -438,6 +439,8 @@ unsafe extern "C-unwind" fn luau_method(state: *mut ffi::lua_State) -> c_int {
         }
         // (a bundle placeholder among the arguments is the bundle's instance first, as a Rust method's is: lua/instance.rs)
         super::raw::reveal_stack_arguments(state);
+        // (called through its value, the method costs what its `:` call does: raw.rs charge_luau_value_call)
+        super::raw::charge_luau_value_call(state, ffi::lua_tonumber(state, ffi::lua_upvalueindex(4)) as crate::NameId);
         luau_call(state, Kind::Served)
     }
 }

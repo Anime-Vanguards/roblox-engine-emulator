@@ -16733,3 +16733,47 @@ fn a_clone_shows_the_editable_image_its_template_shows() {
         "#,
     );
 }
+
+/// An engine method called through its function value costs what its `:` call does (roblox-sim 0.747, a playing client, seven
+/// sessions: FindFirstChild 0.072 / 0.073 us, GetChildren of five 0.128 / 0.121, GetPropertyChangedSignal 0.289 / 0.264;
+/// lua/raw.rs charge_value_call), a Rust method's, a base method's list and signal prices and a method in the engine's Luau
+/// alike, within the function's own call (cost.rs LUAU_HOSTCALL). The value's call was charged the function's call alone (0.03 us).
+#[test]
+fn a_method_called_through_its_value_costs_what_its_colon_call_does() {
+    let (lua, engine) = start();
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    run(
+        &lua,
+        &engine,
+        r#"
+        local Folder = Instance.new("Folder")
+        for _ = 1, 5 do Instance.new("Folder").Parent = Folder end
+        Folder.Parent = workspace
+        local Part = Instance.new("Part")
+        Part:SetAttribute("A", 1)
+        Part.Parent = workspace
+        local Lighting = game:GetService("Lighting")
+        local Event = Instance.new("BindableEvent")
+        local function Per(F)
+            F()
+            local Start = os.clock()
+            for _ = 1, 100 do F() end
+            local Middle = os.clock()
+            for _ = 1, 100 do end
+            return ((Middle - Start) - (os.clock() - Middle)) / 100 * 1e6
+        end
+        local FindFirstChild, GetChildren, GetAttribute, Signal, Sun, Fire = Folder.FindFirstChild, Folder.GetChildren, Part.GetAttribute, Part.GetPropertyChangedSignal, Lighting.GetSunDirection, Event.Fire
+        local function Same(Name, Colon, Value)
+            local C, V = Per(Colon), Per(Value)
+            assert(math.abs(V - C) < 0.025, `{Name}: {V} us through its value, {C} with ':'`)
+        end
+        Same("FindFirstChild", function() Folder:FindFirstChild("X") end, function() FindFirstChild(Folder, "X") end)
+        Same("GetChildren", function() Folder:GetChildren() end, function() GetChildren(Folder) end)
+        Same("GetAttribute", function() Part:GetAttribute("A") end, function() GetAttribute(Part, "A") end)
+        Same("GetPropertyChangedSignal", function() Part:GetPropertyChangedSignal("Name") end, function() Signal(Part, "Name") end)
+        Same("Lighting:GetSunDirection (the engine's Luau)", function() Lighting:GetSunDirection() end, function() Sun(Lighting) end)
+        Same("BindableEvent:Fire", function() Event:Fire(1) end, function() Fire(Event, 1) end)
+        "#,
+    );
+}
+

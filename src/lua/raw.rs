@@ -1711,7 +1711,12 @@ unsafe fn namecall_general(state: *mut ffi::lua_State) -> c_int {
         }
         ffi::lua_insert(state, 1);
         let count = ffi::lua_gettop(state) - 1;
+        // (the call is priced: a Luau method's function, shared with its value, charges nothing more: [`charge_luau_value_call`])
+        if let Some(name) = name {
+            NAMECALLED.with(|called| called.set(name));
+        }
         ffi::lua_call(state, count, ffi::LUA_MULTRET);
+        NAMECALLED.with(|called| called.set(NameId::MAX));
         if ffi::lua_status(state) != ffi::LUA_OK {
             // the Luau method yielded: namecall_continue finishes when it returns
             return -1;
@@ -1810,24 +1815,95 @@ unsafe fn namecall_fast(state: *mut ffi::lua_State) -> Out {
             class = engine.state.borrow().dom.at(id).class;
         }
         let Some((name, member, lower_first)) = method_member(api, class, key, exact) else { return Out::NotMethod };
-        crate::cost::tally_member("call", &engine.reflection.class(class).name, || engine.reflection.name(name).to_string());
-        let serial = engine.state.borrow().dom.at(id).serial;
-        let cost = {
-            let mut touched = api.touched.borrow_mut();
-            // (where the method's own price came from: cost.rs method_kinds)
-            touched.book_kinds_with(member.cost as f64, || crate::cost::method_kinds(engine.reflection.name(name)));
-            // (the method's code, cold at its first call in the frame: cost.rs FIRST_CALL)
-            member.cost as f64 + touched.touch(id.index, class, serial) + touched.first_use(crate::cost::MemberUse::Call, name) + lower_first
-        };
-        // (PivotTo: the frame's first one, and the parts it carries and what hangs on them that the frame had not touched: cost.rs
-        // Path::Pivot, priced here so the engine's Luau body is unchanged)
-        let cost = if api.touched.borrow().pivot_to == Some(name) { cost + linstance::pivot_cold(engine, id) } else { cost };
-        api.charge(cost);
-        api.cross(crate::boundary::Kind::Method, class, Some(name), false, id, cost, true);
+        charge_method(api, engine, id, class, name, &member, lower_first, true);
         match member.call {
             Call::Base(base) => base_call(state, api, engine, id, class, base),
             Call::Function => Out::General,
             Call::NotMethod => Out::NotMethod,
+        }
+    }
+}
+
+/// What a method's call costs the work clock beyond the call itself, charged (and crossed for the boundary profile): the method's own
+/// price (cost.rs method, `extra` beside it), the instance's first touch in the frame, with `first_call` the method's first call in the
+/// frame (its code cold: cost.rs FIRST_CALL), and PivotTo's cold parts.
+fn charge_method(api: &Api, engine: &Engine, id: InstanceId, class: ClassId, name: NameId, member: &Member, extra: f64, first_call: bool) {
+    crate::cost::tally_member("call", &engine.reflection.class(class).name, || engine.reflection.name(name).to_string());
+    let serial = engine.state.borrow().dom.at(id).serial;
+    let cost = {
+        let mut touched = api.touched.borrow_mut();
+        // (where the method's own price came from: cost.rs method_kinds)
+        touched.book_kinds_with(member.cost as f64, || crate::cost::method_kinds(engine.reflection.name(name)));
+        let first = if first_call { touched.first_use(crate::cost::MemberUse::Call, name) } else { 0.0 };
+        member.cost as f64 + touched.touch(id.index, class, serial) + first + extra
+    };
+    // (PivotTo: the frame's first one, and the parts it carries and what hangs on them that the frame had not touched: cost.rs
+    // Path::Pivot, priced here so the engine's Luau body is unchanged)
+    let cost = if api.touched.borrow().pivot_to == Some(name) { cost + linstance::pivot_cold(engine, id) } else { cost };
+    api.charge(cost);
+    api.cross(crate::boundary::Kind::Method, class, Some(name), false, id, cost, true);
+}
+
+thread_local! {
+    /// The method a `:` call is about to run through its member function ([`namecall_general`]), whose price [`namecall_fast`]
+    /// charged: a Luau method's function, which a function value shares, takes it ([`namecalled`]) and charges nothing more.
+    static NAMECALLED: Cell<NameId> = const { Cell::new(NameId::MAX) };
+}
+
+/// Whether the running call of method `name`'s function came from a `:` call ([`NAMECALLED`], taken), not from its function value.
+pub(crate) fn namecalled(name: NameId) -> bool {
+    NAMECALLED.with(|called| {
+        let was = called.get() == name;
+        if was {
+            called.set(NameId::MAX);
+        }
+        was
+    })
+}
+
+/// A method called through its function value (`local f = workspace.Raycast; f(workspace, ...)`, `pcall(part.GetAttribute, part,
+/// "a")`, a value called on another instance of the class) costs a client what the `:` call costs (roblox-sim 0.747, a headless
+/// playing client, seven sessions of 15-sample medians of 200 calls scaled by a gauge in each sample, the value's call against the
+/// `:` call: FindFirstChild 0.072 / 0.073 us, IsA 0.041 / 0.041, GetAttribute 0.067 / 0.064, GetChildren of five 0.128 / 0.121,
+/// GetPivot 0.070 / 0.067, SetAttribute 0.097 / 0.095, GetFullName 0.064 / 0.064, IsDescendantOf 0.052 / 0.050, WaitForChild 0.070
+/// / 0.069, GetPropertyChangedSignal 0.289 / 0.264, Raycast 0.567 / 0.564, a missing Raycast 0.411 / 0.397), where ree charged the
+/// function's own call alone (0.03 us).
+/// So the value's call is priced as [`namecall_fast`] prices the `:` call, but for the method's first call in the frame, which the
+/// function's own first call stands for (cfunction.rs Kind::Served); the method's behaviour then charges what the `:` call's inline
+/// path does ([`base_call`]: a list's entries, a property signal, the ancestors walked). Charged once self passed its check.
+pub(crate) fn charge_value_call(engine: &Engine, id: InstanceId, name: NameId) {
+    let Some(api) = api(engine) else { return };
+    let class = {
+        let state = engine.state.borrow();
+        let Some(instance) = state.dom.get(id) else { return };
+        (!instance.has(flags::BUNDLE_ROOT)).then_some(instance.class)
+    };
+    let class = match class {
+        Some(class) => class,
+        None => {
+            linstance::reveal_bundle(engine, id);
+            engine.state.borrow().dom.at(id).class
+        }
+    };
+    let member = api.member(class, name);
+    if !matches!(member.call, Call::NotMethod) {
+        charge_method(&api, engine, id, class, name, &member, 0.0, false);
+    }
+}
+
+/// [`charge_value_call`]'s price for a method implemented in the engine's Luau, whose one function a `:` call runs too: charged unless the
+/// `:` call charged it ([`namecalled`]). Self is the stack's first value, its class checked already.
+pub(crate) unsafe fn charge_luau_value_call(state: *mut ffi::lua_State, name: NameId) {
+    unsafe {
+        if namecalled(name) {
+            return;
+        }
+        let Some((api, id)) = this(state) else { return };
+        let engine = api.engine();
+        let Some(class) = engine.state.try_borrow().ok().and_then(|state| state.dom.get(id).map(|instance| instance.class)) else { return };
+        let member = api.member(class, name);
+        if !matches!(member.call, Call::NotMethod) {
+            charge_method(api, engine, id, class, name, &member, 0.0, false);
         }
     }
 }
@@ -2062,7 +2138,7 @@ unsafe fn base_call(state: *mut ffi::lua_State, api: &Api, engine: &Engine, id: 
                 Out::Ret(1)
             }
             Base::GetPropertyChangedSignal => {
-                api.charge(crate::cost::PROPERTY_SIGNAL);
+                // (the behaviour charges PROPERTY_SIGNAL where this path leaves the call to it)
                 let Some(name) = arg_bytes(state, 2).and_then(|b| engine.reflection.name_id_bytes(b)) else {
                     return Out::General;
                 };
@@ -2075,6 +2151,7 @@ unsafe fn base_call(state: *mut ffi::lua_State, api: &Api, engine: &Engine, id: 
                     ffi::lua_pop(state, 2);
                     return Out::General;
                 }
+                api.charge(crate::cost::PROPERTY_SIGNAL);
                 Out::Ret(1)
             }
             Base::GetAttribute => {

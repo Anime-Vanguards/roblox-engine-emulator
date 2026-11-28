@@ -160,6 +160,8 @@ fn method_function_uncached(lua: &Lua, engine: &Rc<Engine>, class: ClassId, name
         }
         project::before_method(&mut e.state.borrow_mut(), &e.reflection, id, name);
         reveal_arguments(&e, &args);
+        // (priced as its `:` call: raw.rs charge_value_call)
+        raw::charge_value_call(&e, id, name);
         method(lua, &e, id, &args)
     })?;
     engine.lua.borrow_mut().methods.insert((owner, name), function.clone());
@@ -190,7 +192,7 @@ fn lua_method(lua: &Lua, engine: &Rc<Engine>, owner: ClassId, name: NameId, func
         function
     } else {
         // (checking its self first, as the Rust methods do: cfunction::over_luau_method)
-        super::cfunction::over_luau_method(lua, engine.reflection.name(name), engine.reflection.declaring_class(owner, name), function)?
+        super::cfunction::over_luau_method(lua, engine.reflection.name(name), name, engine.reflection.declaring_class(owner, name), function)?
     };
     engine.lua.borrow_mut().lua_methods.insert((owner, name), (body, wrapped.clone()));
     Ok(wrapped)
@@ -1689,9 +1691,12 @@ fn install_base(behaviors: &mut Behaviors, reflection: &crate::Reflection) {
     }));
 
     // Methods
+    // (each instance listed charged as the `:` call's inline path charges it, raw.rs base_call: a call through the method's value
+    // reaches this)
     let get_children = method(|lua, engine, id, _| {
         materialize(engine, id);
         let children = engine.state.borrow().dom.at(id).children.to_vec();
+        charge_work(engine, children.len() as f64 * crate::cost::LISTED);
         instance_list(lua, engine, &children)
     });
     behaviors.add_method(base, K::GetChildren as NameId, get_children.clone());
@@ -1713,6 +1718,7 @@ fn install_base(behaviors: &mut Behaviors, reflection: &crate::Reflection) {
                 crate::boundary::add_cost(first);
             }
         }
+        charge_work(engine, descendants.len() as f64 * crate::cost::LISTED);
         instance_list(lua, engine, &descendants)
     }));
     // A missing name raises (measured in a playing client, Studio 0.744, tools/parity/probes/instances.luau; no position):
@@ -1883,6 +1889,8 @@ fn install_base(behaviors: &mut Behaviors, reflection: &crate::Reflection) {
     }));
     behaviors.add_method(base, K::WaitForChild as NameId, strings(QUIET_NAME, method(wait_for_child)));
     behaviors.add_method(base, K::GetPropertyChangedSignal as NameId, strings(NAME, method(|lua, engine, id, args| {
+        // (what the call costs, its errors' included, as raw.rs base_call charges it where it does not reach this)
+        charge_work(engine, crate::cost::PROPERTY_SIGNAL);
         let class = engine.state.borrow().dom.at(id).class;
         let text = args.string(1).map(|s| s.as_bytes().to_vec()).unwrap_or_default();
         let shown = String::from_utf8_lossy(&text);

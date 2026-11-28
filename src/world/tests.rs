@@ -10942,7 +10942,9 @@ fn engine_errors_cost_what_a_client_spends_on_the_error() {
     let (plain, at_caller) = (crate::cost::RAISED, crate::cost::RAISED_AT_CALLER);
     let checks = [
         ("Method", plain),
-        ("Dot", plain),
+        // (a method's value called with no instance raises before the method's own price, which the passing call pays as its `:`
+        // call does: lua/raw.rs charge_value_call)
+        ("Dot", plain - crate::cost::method("GetChildren")),
         ("Read", plain),
         ("Write", plain),
         ("Parent", plain),
