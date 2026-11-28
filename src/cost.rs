@@ -997,6 +997,21 @@ pub const JOINT_LISTED: f64 = 0.069e-6;
 pub const REFLECTED_CLASS: f64 = 1.55e-6;
 pub const REFLECTED_CLASS_DISPLAY: f64 = 0.56e-6;
 pub const REFLECTED_CLASS_TESTED: f64 = 0.006e-6;
+/// ReflectionService:GetClass beyond its call ([`method`] 0.033 us) and its filter's read ([`REFLECTED_FILTER`]): each byte of the name
+/// looked up [`REFLECTED_NAME_BYTE`]; a class the name names [`REFLECTED_CLASS_FOUND`] (its capabilities tested against the set), and
+/// when it has subclasses [`REFLECTED_SUBCLASS_LIST`] and [`REFLECTED_SUBCLASS`] for each its Subclasses list names, whether the set
+/// gives it or not; the entry of a class the set gives [`GETCLASS_ENTRY`] and [`REFLECTED_CLASS_DISPLAY`] for its Display table. A playing 0.747 client (roblox-sim, headless, four sessions
+/// of 15-sample medians of 50 to 200 calls beside an unchanged CastShadow write, gauge-scaled): a name no class has 0.055 us with an
+/// empty name, 0.068 with 13 bytes, 0.142 with 60; a class the default set refuses 0.46 to 0.48 (CoreGui, Player, StudioService,
+/// NetworkClient, Plugin; UserGameSettings 0.29); Part refused by an empty or one-capability set 1.41 to 1.44 with the filter's 0.52,
+/// Players 0.97; answered, Workspace 1.78, Humanoid 1.70 (no subclasses), Folder (1) 2.10, Part (5) 2.66, Model (5) 2.40, GuiObject (11)
+/// 2.79, ValueBase (13) 3.12, Constraint (18) 4.23, Instance (614) 39.9 (62.0 with an empty set). ree charged 0.28 for the lookup
+/// whatever it found and 2.11 for any entry.
+pub const REFLECTED_NAME_BYTE: f64 = 1.4e-9;
+pub const REFLECTED_CLASS_FOUND: f64 = 0.40e-6;
+pub const REFLECTED_SUBCLASS_LIST: f64 = 0.35e-6;
+pub const REFLECTED_SUBCLASS: f64 = 0.064e-6;
+pub const GETCLASS_ENTRY: f64 = 0.71e-6;
 /// ReflectionService's member queries (GetPropertiesOfClass, GetMethodsOfClass, GetEventsOfClass): an answer's list, each entry of
 /// each kind, each parameter, permit value and Display table in it, and a property the filter's capabilities leave out; a class
 /// they may not query ([`REFLECTED_MEMBERS_REFUSED`]). Fitted on a playing 0.747 client (roblox-sim, headless; os.clock around
@@ -2829,8 +2844,8 @@ pub fn method(name: &str) -> f64 {
         "JSONEncode" | "JSONDecode" => JSON_CALL * 1e6,
         // (TweenService:GetValue of a linear alpha 51.8 ns whole, 27 beyond the Luau around it)
         "GetValue" => 0.027,
-        // ReflectionService:GetClass's lookup; the entry it makes is [`REFLECTED_CLASS`]'s
-        "GetClass" => 0.28,
+        // ReflectionService:GetClass's call; what its lookup and answer add is [`REFLECTED_NAME_BYTE`]'s and after
+        "GetClass" => 0.033,
         // (the member queries' lookup: a name no class has, 0.06 us whole on a client and 0.01 of Luau here; what an answer makes is
         // [`REFLECTED_MEMBER_LIST`]'s and after)
         "GetPropertiesOfClass" | "GetMethodsOfClass" | "GetEventsOfClass" => 0.05,

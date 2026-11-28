@@ -16871,3 +16871,45 @@ fn a_reflection_filter_costs_what_a_client_spends_reading_it() {
     );
 }
 
+/// ReflectionService:GetClass costs what a playing 0.747 client spends on it (cost.rs REFLECTED_NAME_BYTE and after): the name's bytes
+/// looked up, a class found (its capabilities tested, its subclasses listed) whether the set gives it or not, and the entry. A name no
+/// class has 0.055 to 0.142 us by its length, a class the default set refuses 0.46, Part refused by an empty set 1.44 with the filter,
+/// Instance (614 subclasses) answered 39.9; ree charged 0.28 for any lookup and 2.11 for any entry.
+#[test]
+fn getclass_costs_what_a_client_spends_finding_and_answering() {
+    let (lua, engine) = start();
+    crate::scheduler::step(&lua, &engine, Some(1.0 / 60.0)).expect("step");
+    use crate::cost::{REFLECTED_CLASS_FOUND, REFLECTED_NAME_BYTE, REFLECTED_SUBCLASS, REFLECTED_SUBCLASS_LIST};
+    run(
+        &lua,
+        &engine,
+        &format!(
+            r#"
+        local RS = game:GetService("ReflectionService")
+        local Empty = {{ Security = SecurityCapabilities.new() }}
+        local function Per(F)
+            F()
+            local Start = os.clock()
+            for _ = 1, 20 do F() end
+            local Middle = os.clock()
+            for _ = 1, 20 do end
+            return ((Middle - Start) - (os.clock() - Middle)) / 20 * 1e6
+        end
+        local function Is(Name, Got, Want, Within)
+            assert(math.abs(Got - Want) < (Within or 0.002), `{{Name}}: {{Got}} us, where {{Want}}`)
+        end
+        local Long = string.rep("Q", 60)
+        local Short = Per(function() RS:GetClass("") end)
+        Is("a long name", Per(function() RS:GetClass(Long) end) - Short, {long:e})
+        Is("a class found and refused", Per(function() RS:GetClass("CoreGui") end) - Per(function() RS:GetClass("NoSuchX") end), {found:e})
+        Is("Part refused by an empty set, beside Players", Per(function() RS:GetClass("Part", Empty) end) - Per(function() RS:GetClass("Players", Empty) end), {part:e})
+        Is("Instance answered, beside Workspace", Per(function() RS:GetClass("Instance") end) - Per(function() RS:GetClass("Workspace") end), {instance:e}, 0.05)
+        "#,
+            long = 60.0 * REFLECTED_NAME_BYTE * 1e6,
+            found = REFLECTED_CLASS_FOUND * 1e6,
+            part = (REFLECTED_SUBCLASS_LIST + 5.0 * REFLECTED_SUBCLASS - 3.0 * REFLECTED_NAME_BYTE) * 1e6,
+            instance = (REFLECTED_SUBCLASS_LIST + 614.0 * REFLECTED_SUBCLASS - REFLECTED_NAME_BYTE) * 1e6,
+        ),
+    );
+}
+

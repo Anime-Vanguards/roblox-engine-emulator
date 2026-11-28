@@ -404,15 +404,20 @@ pub fn install(engine: &Rc<Engine>, behaviors: &mut Behaviors) {
     if let Some(n) = reflection.name_id("GetClass") {
         behaviors.add_method(service, n, strings(CLASS_NAME, method(|lua, engine, _, args| {
             let Some(name) = args.string(1).map(|name| name.to_string_lossy()) else { return raise("Argument 2 missing or nil") };
+            // (the lookup reads the name's bytes; a class it finds is tested with its subclasses: cost.rs REFLECTED_NAME_BYTE)
+            charge_seconds(engine, name.len() as f64 * crate::cost::REFLECTED_NAME_BYTE);
             let table = dictionary(engine, args, 2)?;
             let data = data::data();
             // (a name no class has answers nil before the fields are read; a class GetClass never gives, UserGameSettings, has them read)
             let Some(index) = data.index(&name) else { return Ok(values([LuaValue::Nil])) };
             let filter = class_filter(engine, data, table.as_ref())?;
+            let subclasses = data.classes[index as usize].subclasses.len();
+            let list = if subclasses > 0 { crate::cost::REFLECTED_SUBCLASS_LIST + subclasses as f64 * crate::cost::REFLECTED_SUBCLASS } else { 0.0 };
+            charge_seconds(engine, crate::cost::REFLECTED_CLASS_FOUND + list);
             if !class_matches(data, index, &filter) {
                 return Ok(values([LuaValue::Nil]));
             }
-            charge(engine, 1, 0, filter.display);
+            charge_seconds(engine, crate::cost::GETCLASS_ENTRY + if filter.display { crate::cost::REFLECTED_CLASS_DISPLAY } else { 0.0 });
             Ok(values([LuaValue::Table(class_entry(lua, engine, data, index, &filter)?)]))
         })));
     }
