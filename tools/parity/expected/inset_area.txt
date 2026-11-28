@@ -1,0 +1,18 @@
+# engine: Roblox Studio 0.747.0.7471481, a headless playing client (script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-28
+TopbarInset 0, 0, 0, 0 GetGuiInset 0, 0 0, 0
+whole 0 0 true true
+GetInsetArea None 0 0 true
+GetInsetArea DeviceSafeInsets 0 0 true
+GetInsetArea CoreUISafeInsets 0 0 true
+GetInsetArea TopbarSafeInsets 0 0 true
+GetInsetArea of string None ok 0 0 true
+GetInsetArea of string TopbarSafeInsets ok 0 0 true
+GetInsetArea of number 0 ok 0 0 true
+GetInsetArea of number 3 ok 0 0 true
+GetInsetArea of number 9 error Unable to cast double to ScreenInsets
+GetInsetArea of string x error Unable to cast string to ScreenInsets
+GetInsetArea of boolean true error Unable to cast bool to ScreenInsets
+GetInsetArea of table {} error Unable to cast Array to ScreenInsets
+GetInsetArea of EnumItem Enum.Material.Plastic error Unable to cast Material to ScreenInsets
+GetInsetArea of nothing error Argument 1 missing or nil

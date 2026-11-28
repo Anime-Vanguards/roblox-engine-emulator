@@ -726,6 +726,9 @@ pub fn load(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
     )?;
     // CreateCollection's collections (services/collections.rs)
     crate::services::collections::install(lua, engine, &r)?;
+    // R.TopbarStart: where the top bar's band right of Roblox's buttons starts now (services/mod.rs TopBar; 0 without the bar)
+    let e = engine.clone();
+    r.set("TopbarStart", super::lua_fn(lua, move |_, ()| Ok(e.state.borrow().topbar.start))?)?;
     let options = lua.create_table()?;
     let device = &engine.options.profile.device;
     options.set("TopbarInset", device.topbar_inset())?;

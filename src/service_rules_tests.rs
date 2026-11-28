@@ -30,6 +30,14 @@ fn server() -> Options {
     Options { mode: "play".into(), run_context: RunContext::Server, local_player: false, ..Options::default() }
 }
 
+/// A playing client with Roblox's top bar: a 58 px inset on a 1280 x 720 screen
+fn topbar() -> Options {
+    let mut options = play();
+    options.profile.device.topbar_inset = Some(58.0);
+    options.profile.device.viewport = Some((1280.0, 720.0));
+    options
+}
+
 /// Runs `source` as a script of a new engine to its end, the clock `seconds` on first: the printed lines. A script error fails
 /// the test.
 #[inline(never)]
@@ -176,6 +184,49 @@ fn players_read_the_members_a_client_gives_them() {
             "error VoiceChatInternal API security check failed error Unable to assign property VoiceChatState. Property is read only",
         ]
     );
+}
+
+/// With Roblox's top bar the band starts right of the menu and chat buttons (164), at 120 with chat off, moving there in the steps
+/// a client's buttons take; GetInsetArea answers in a ScreenGui's coordinates. Without the bar (no inset) both keep their answers.
+#[test]
+fn the_top_bar_band_follows_chat_in_a_clients_steps() {
+    let source = r#"
+        local G, SG, RS = game:GetService("GuiService"), game:GetService("StarterGui"), game:GetService("RunService")
+        local function rect(r) return `{r.Min.X},{r.Min.Y},{r.Max.X},{r.Max.Y}` end
+        RS.Heartbeat:Wait()
+        print(rect(G.TopbarInset), rect(G:GetInsetArea(Enum.ScreenInsets.None)), rect(G:GetInsetArea(Enum.ScreenInsets.CoreUISafeInsets)), rect(G:GetInsetArea(Enum.ScreenInsets.TopbarSafeInsets)))
+        local Changed = 0
+        G:GetPropertyChangedSignal("TopbarInset"):Connect(function() Changed += 1 end)
+        local function watch(apply)
+            RS.Heartbeat:Wait()
+            apply()
+            local Seen, Last = {}, rect(G.TopbarInset)
+            for Frame = 1, 30 do
+                RS.Heartbeat:Wait()
+                local Now = rect(G.TopbarInset)
+                if Now ~= Last then table.insert(Seen, `+{Frame}={G.TopbarInset.Min.X}`) Last = Now end
+            end
+            print(table.concat(Seen, " "), Changed)
+            Changed = 0
+        end
+        watch(function() SG:SetCoreGuiEnabled(Enum.CoreGuiType.Chat, false) end)
+        print(rect(G:GetInsetArea(Enum.ScreenInsets.TopbarSafeInsets)))
+        watch(function() SG:SetCoreGuiEnabled(Enum.CoreGuiType.All, true) end)
+        watch(function() SG:SetCoreGuiEnabled(Enum.CoreGuiType.All, false) SG:SetCoreGuiEnabled(Enum.CoreGuiType.Chat, true) end)
+    "#;
+    let lines = printed(topbar(), source, 2.0);
+    assert_eq!(
+        lines,
+        [
+            "164,0,1280,58 0,-58,1280,662 0,0,1280,662 164,-58,1280,0",
+            "+3=135 +5=125 +7=122 +9=120 4",
+            "120,-58,1280,0",
+            "+2=145 +4=155 +6=160 +8=162 +10=163 +24=164 6",
+            " 0",
+        ]
+    );
+    let plain = printed(play(), "local G = game:GetService('GuiService') print(G.TopbarInset, G:GetInsetArea(Enum.ScreenInsets.TopbarSafeInsets))", 0.1);
+    assert_eq!(plain, ["0, 0, 0, 0 0, 0, 1920, 1080"]);
 }
 
 /// A collection counts what its query matched when it was made, takes in what comes to match at the next deferred point (after the

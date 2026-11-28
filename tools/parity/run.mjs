@@ -126,8 +126,12 @@ export function readKnown(server = false, loopback = false) {
 // plugin's code ("context=edit")
 export function serverProbe(name) {
 	const options = probeOptions(name);
-	return !options.device && !options.rendered && !options.context;
+	return !options.device && !options.rendered && !options.context && !options.topbar;
 }
+
+// ("topbar": a probe of Roblox's top bar, captured on a client running its core scripts with a 58 px inset on a 1280 x 720 screen;
+// ree runs it with a client profile of that device. capture_sim.py runs no core scripts, so --capture leaves it out: README.md)
+export const TOPBAR_PROFILE = JSON.stringify({ device: { topbarInset: 58, viewport: [1280, 720] } });
 
 function defaultRee() {
 	const exe = path.join(REPO, "target", "release", process.platform === "win32" ? "ree.exe" : "ree");
@@ -170,6 +174,7 @@ export function runInRee(name, ree, scratch, server = false, realAssets = false)
 	// ("timeout=<seconds>": the script timeout the capture set with ScriptContext:SetTimeout, which a game script may not call;
 	// the run goes on past timeouts, as a client does)
 	if (options.timeout) context.push("--script-timeout", String(options.timeout), "--max-script-timeouts", "0");
+	if (options.topbar && !server) context.push("--client-profile", TOPBAR_PROFILE);
 	// (300 s of the run's clock, the capture's cap on one job: a probe may wait on the engine, ten seconds a translator)
 	const result = spawnSync(ree, ["run", "--harness", harness, "--roots", empty, "--seconds", "300", ...context], {
 		encoding: "utf8", maxBuffer: 256 * 1024 * 1024, windowsHide: true,
@@ -289,6 +294,11 @@ function capture(names, server = false, loopback = false) {
 		console.error("parity: --capture runs the probes in the real engine through the command REE_PARITY_CAPTURE names; README.md says what it is given and must write");
 		process.exit(2);
 	}
+	// (a top-bar probe needs the client's core scripts, which capture_sim.py does not run: README.md says how it was captured)
+	const topbar = names.filter(name => !loopback && probeOptions(name).topbar);
+	for (const name of topbar) console.error(`parity: ${name}: a top-bar probe, left out: capture it on a client running its core scripts (README.md)`);
+	names = names.filter(name => !topbar.includes(name));
+	if (!names.length) return;
 	const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "ree-parity-"));
 	const input = path.join(scratch, "bodies.json");
 	const output = path.join(scratch, "outputs.json");

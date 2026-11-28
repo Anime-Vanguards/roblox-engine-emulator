@@ -155,6 +155,10 @@ fn probe_job(scratch: &Path, empty: &Path, name: &str, source: &str, server: boo
     if let Some(seconds) = timeout {
         args.extend(["--script-timeout", seconds, "--max-script-timeouts", "0"].map(str::to_owned));
     }
+    // ("topbar": a client with Roblox's top bar, a 58 px inset on a 1280 x 720 screen: run.mjs TOPBAR_PROFILE)
+    if directive("topbar") && !server {
+        args.extend(["--client-profile".to_owned(), r#"{"device":{"topbarInset":58,"viewport":[1280,720]}}"#.to_owned()]);
+    }
     serde_json::json!({ "id": name, "args": args })
 }
 

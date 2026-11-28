@@ -854,6 +854,8 @@ pub struct State {
     pub project: project::ProjectState,
     /// Engine-wide instance signals by (instance, event) are in the dom; these are services'
     pub collection: services::CollectionState,
+    /// Roblox's top bar on a playing client that has one (services/mod.rs TopBar)
+    pub topbar: services::TopBar,
     /// Rigid assemblies: the joint index and pending joint work (world::joints)
     pub joints: world::joints::Joints,
     /// Free fall: the unanchored parts in the Workspace and their velocities (world::gravity)
@@ -978,6 +980,7 @@ impl Engine {
                 log_history: Default::default(),
                 project: Default::default(),
                 collection: Default::default(),
+                topbar: Default::default(),
                 joints: Default::default(),
                 gravity: Default::default(),
                 cameras: Default::default(),

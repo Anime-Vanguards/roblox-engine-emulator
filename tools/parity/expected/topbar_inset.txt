@@ -1,0 +1,40 @@
+# engine: Roblox Studio 0.747.0.7471481, a rendered 1280 x 720 playing client running its core scripts (StarterScript; script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-28
+start TopbarInset 164,0,1280,58 GetGuiInset 0 58 0 0
+start GetInsetArea None ok 0,-58,1280,662
+start GetInsetArea DeviceSafeInsets ok 0,-58,1280,662
+start GetInsetArea CoreUISafeInsets ok 0,0,1280,662
+start GetInsetArea TopbarSafeInsets ok 164,-58,1280,0
+GetInsetArea of string None ok 0,-58,1280,662
+GetInsetArea of string TopbarSafeInsets ok 164,-58,1280,0
+GetInsetArea of number 0 ok 0,-58,1280,662
+GetInsetArea of number 3 ok 164,-58,1280,0
+GetInsetArea of string x error Unable to cast string to ScreenInsets
+GetInsetArea of boolean true error Unable to cast bool to ScreenInsets
+GetInsetArea of table {} error Unable to cast Array to ScreenInsets
+GetInsetArea of nothing error Argument 1 missing or nil
+chat off ok same frame 164,0,1280,58 moves +3=135,0,1280,58 +5=125,0,1280,58 +7=122,0,1280,58 +9=120,0,1280,58 Changed 4
+chat off TopbarInset 120,0,1280,58 GetGuiInset 0 58 0 0
+chat off GetInsetArea None ok 0,-58,1280,662
+chat off GetInsetArea DeviceSafeInsets ok 0,-58,1280,662
+chat off GetInsetArea CoreUISafeInsets ok 0,0,1280,662
+chat off GetInsetArea TopbarSafeInsets ok 120,-58,1280,0
+chat enabled false false
+chat on ok same frame 120,0,1280,58 moves +2=145,0,1280,58 +4=155,0,1280,58 +6=160,0,1280,58 +8=162,0,1280,58 +10=163,0,1280,58 +24=164,0,1280,58 Changed 6
+all off ok same frame 164,0,1280,58 moves +3=135,0,1280,58 +5=125,0,1280,58 +7=122,0,1280,58 +9=120,0,1280,58 Changed 4
+all on ok same frame 120,0,1280,58 moves +2=145,0,1280,58 +4=155,0,1280,58 +6=160,0,1280,58 +8=162,0,1280,58 +10=163,0,1280,58 +24=164,0,1280,58 Changed 6
+PlayerList off ok same frame 164,0,1280,58 moves  Changed 0
+Health off ok same frame 164,0,1280,58 moves  Changed 0
+Backpack off ok same frame 164,0,1280,58 moves  Changed 0
+EmotesMenu off ok same frame 164,0,1280,58 moves  Changed 0
+chat off, on, off ok same frame 164,0,1280,58 moves +3=135,0,1280,58 +5=125,0,1280,58 +7=122,0,1280,58 +9=120,0,1280,58 Changed 4
+chat on again ok same frame 120,0,1280,58 moves +2=145,0,1280,58 +4=155,0,1280,58 +6=160,0,1280,58 +8=162,0,1280,58 +10=163,0,1280,58 +24=164,0,1280,58 Changed 6
+all off, chat on ok same frame 164,0,1280,58 moves  Changed 0
+all on again ok same frame 164,0,1280,58 moves  Changed 0
+topbar off ok same frame 164,0,1280,58 moves  Changed 0
+topbar on ok same frame 164,0,1280,58 moves  Changed 0
+end TopbarInset 164,0,1280,58 GetGuiInset 0 58 0 0
+end GetInsetArea None ok 0,-58,1280,662
+end GetInsetArea DeviceSafeInsets ok 0,-58,1280,662
+end GetInsetArea CoreUISafeInsets ok 0,0,1280,662
+end GetInsetArea TopbarSafeInsets ok 164,-58,1280,0

@@ -166,8 +166,9 @@ fn each_field_changes_what_scripts_read() {
             r#"print player Ada Ada L 5 400 Enum.MembershipType.Premium true de-de 9"#,
             r#"print inputs false false true false true true true"#,
             r#"print input Enum.PreferredInput.Touch Enum.UserInputType.Touch"#,
-            r#"print gui true 0, 58 0, 0, 844, 58 Enum.PreferredTextSize.Large 0.5 true"#,
-            r#"print screen 844, 390 0, 58, 844, 390"#,
+            // (Roblox's top bar: its band starts right of the menu and chat buttons, and a CoreUISafeInsets area is the screen below it)
+            r#"print gui true 0, 58 164, 0, 844, 58 Enum.PreferredTextSize.Large 0.5 true"#,
+            r#"print screen 844, 390 0, 0, 844, 332"#,
             r#"print settings Enum.SavedQualitySetting.QualityLevel3 -1"#,
             r#"print vr true"#,
             r#"print locale de-de de-de DE"#,

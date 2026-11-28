@@ -1194,21 +1194,21 @@ end)
 
 -- (CollectionService:GetAllTags is Rust: services/mod.rs)
 
--- GuiService.TopbarInset
+-- GuiService.TopbarInset: the top bar's band right of Roblox's buttons (R.TopbarStart: services/mod.rs TopBar)
 Getter("GuiService", "TopbarInset", function()
 	if Options.TopbarInset > 0 then
-		return Rect.new(0, 0, Options.ViewportWidth, Options.TopbarInset)
+		return Rect.new(R.TopbarStart(), 0, Options.ViewportWidth, Options.TopbarInset)
 	end
 	return Rect.new(0, 0, 0, 0)
 end)
 
--- GuiService:GetInsetArea(insets): the screen less the insets, as a Rect. The emulated screen has no device cutout, so None and
--- DeviceSafeInsets are the whole viewport and the core-UI insets leave the topbar out of the top (Roblox's documentation; not yet
--- measured in Studio: a panel's backdrop sizes itself from it).
+local InsetArea -- GuiService:GetInsetArea(insets): the area a ScreenGui of those insets lays out in, as a Rect; InsetArea, at the
+-- end of this file (it casts the argument with CastEnum, defined below), is the measured rule (a panel's backdrop sizes itself
+-- from it).
 Method("GuiService", "GetInsetArea", function(_, Insets)
-	local Name = if Insets then Insets.Name else "None"
-	local Top = if (Name == "CoreUISafeInsets" or Name == "TopbarSafeInsets") and Options.TopbarInset > 0 then Options.TopbarInset else 0
-	return Rect.new(0, Top, Options.ViewportWidth, Options.ViewportHeight)
+	return InsetArea(Insets)
+	-- (the method keeps its place: the lines below it are named by warnings' traces)
+	-- (see InsetArea)
 end)
 
 -- Marketplace / Policy / social stubs (LocalizationService, LocalizationTable and Translator are services/localization.rs)
@@ -3062,6 +3062,24 @@ R.OnImageClone(function(Original, Copy)
 	Extra(Copy).Shown = Shown
 	R.ShowsImage(Copy)
 end)
+
+-- GuiService:GetInsetArea (InsetArea, declared above) in a playing client's ScreenGui coordinates, where y is measured from the top
+-- bar's inset (GetGuiInset): with Roblox's top bar (device.topbarInset > 0, a playing client) None and DeviceSafeInsets are the whole
+-- screen (0, -inset, width, height - inset), CoreUISafeInsets the screen below the bar (0, 0, width, height - inset), and
+-- TopbarSafeInsets the bar's band right of Roblox's buttons (TopbarInset.Min.X, -inset, width, 0); a client without a top bar answers
+-- the whole screen (0, 0, width, height) for each. The argument is an item, its name or its value; another value raises "Unable to cast
+-- string to ScreenInsets", none "Argument 1 missing or nil" (measured, roblox-sim 0.747 with its core scripts, rendered 1280 x 720
+-- and 844 x 390 touch clients, and a client without them: tools/parity/probes/topbar_inset.luau).
+InsetArea = function(Insets)
+	local Name = CastEnum("ScreenInsets", Insets, 1).Name
+	local Inset, Width, Height = Options.TopbarInset, Options.ViewportWidth, Options.ViewportHeight
+	if Inset <= 0 then
+		return Rect.new(0, 0, Width, Height)
+	elseif Name == "TopbarSafeInsets" then
+		return Rect.new(R.TopbarStart(), -Inset, Width, 0)
+	end
+	return Rect.new(0, if Name == "CoreUISafeInsets" then 0 else -Inset, Width, Height - Inset)
+end
 
 -- Player.User: what a client signed in to no account reads for every player, its own and the others' (typeof User, its text below,
 -- Id 0, any other key "X is not a valid member of User"; each read a value of its own, equal to every other: measured, roblox-sim

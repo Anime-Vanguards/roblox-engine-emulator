@@ -866,6 +866,7 @@ pub fn install(engine: &Rc<Engine>) {
     install_workspace_and_camera(&mut behaviors, &reflection, &options);
     install_players(engine, &mut behaviors, &reflection, &options);
     install_run_service(engine, &mut behaviors, &reflection, &options);
+    install_topbar(engine);
     // Actor messages (lua/actors.rs)
     crate::lua::actors::install(engine, &mut behaviors);
     crate::scripts::install(engine);
@@ -1402,6 +1403,107 @@ fn install_run_service(engine: &Rc<Engine>, behaviors: &mut Behaviors, reflectio
     }
 }
 
+/// Roblox's top bar on a playing client whose client profile gives it one (`device.topbarInset` above 0; Studio's edit mode and a
+/// server have none): where the band right of its buttons starts, GuiService.TopbarInset's `Min.X` and GetInsetArea's
+/// TopbarSafeInsets. Beside the menu button (44 px at x 16) the Unibar holds the menu and chat buttons and the band starts at 164 GUI
+/// pixels, at any screen size and GUI scale; with chat off (StarterGui:SetCoreGuiEnabled of Chat or All false) it holds one and the
+/// band starts at 120. No other CoreGuiType moves it, nor SetCore("TopbarEnabled", false), and GetGuiInset stays (0, inset). The bar
+/// reads chat's state a frame after the calls (All off and Chat on in one go leave it as it was; off, on, off move it once) and its
+/// buttons move to their new places over the frames after the call, TopbarInset changing (with Changed and its property signal) at
+/// each step of [`CHAT_OFF_STEPS`] and [`CHAT_ON_STEPS`] (measured, roblox-sim 0.747 clients running their core scripts, rendered
+/// 1280 x 720 desktop and 844 x 390 touch clients, two sessions alike; one touch step fell a frame early:
+/// tools/parity/probes/topbar_inset.luau). A client's bar is built a second or two after it joins, reading (0, 0, width, inset) until
+/// then; ree's is there from the start, and a change of chat before the first frame takes it to its place at once.
+#[derive(Default)]
+pub struct TopBar {
+    /// Whether the run has the bar
+    shown: bool,
+    /// The band's start now (0 without the bar)
+    pub start: f64,
+    /// Whether the bar holds chat's button (the place its steps lead to)
+    chat: bool,
+    /// Whether chat is enabled (StarterGui:SetCoreGuiEnabled)
+    chat_enabled: bool,
+    /// The frame of the first SetCoreGuiEnabled since the bar last read chat's state
+    asked: Option<u64>,
+    /// A move under way: the frame it began in and its steps
+    steps: Option<(u64, &'static [(u64, f64)])>,
+}
+
+/// The band's start the frames after chat was turned off (frames counted from the call's)
+const CHAT_OFF_STEPS: &[(u64, f64)] = &[(3, 135.0), (5, 125.0), (7, 122.0), (9, 120.0)];
+/// ... and after it was turned back on
+const CHAT_ON_STEPS: &[(u64, f64)] = &[(2, 145.0), (4, 155.0), (6, 160.0), (8, 162.0), (10, 163.0), (24, 164.0)];
+const TOPBAR_START: f64 = 164.0;
+const TOPBAR_START_NO_CHAT: f64 = 120.0;
+
+/// Gives a playing client with a top-bar inset its bar ([`TopBar`]) and the frame step that moves its band.
+fn install_topbar(engine: &Rc<Engine>) {
+    if engine.options.server() || engine.options.edit_mode() || engine.options.profile.device.topbar_inset() <= 0.0 {
+        return;
+    }
+    let mut state = engine.state.borrow_mut();
+    state.topbar = TopBar { shown: true, start: TOPBAR_START, chat: true, chat_enabled: true, asked: None, steps: None };
+    state.sched.add_hook(Phase::PreRender, Rc::new(|_, engine, _| step_topbar(engine).map_err(|flow| match flow {
+        Flow::Fail(error) => error,
+        Flow::Error(error) => LuaError::runtime(error.message),
+        _ => LuaError::runtime("the top bar's step"),
+    })));
+}
+
+/// StarterGui:SetCoreGuiEnabled changed what is enabled: the bar reads chat's state at the next frame ([`TopBar`]).
+fn note_chat(engine: &Engine, enabled: bool) {
+    let mut state = engine.state.borrow_mut();
+    let frame = state.sched.frame;
+    let bar = &mut state.topbar;
+    if !bar.shown {
+        return;
+    }
+    bar.chat_enabled = enabled;
+    if frame == 0 {
+        // (before the first frame: the bar is built with it)
+        bar.chat = enabled;
+        bar.start = if enabled { TOPBAR_START } else { TOPBAR_START_NO_CHAT };
+        bar.steps = None;
+        return;
+    }
+    bar.asked.get_or_insert(frame);
+}
+
+/// A frame's step of the top bar: it reads chat's state after a SetCoreGuiEnabled, and its band moves a step where one falls.
+fn step_topbar(engine: &Rc<Engine>) -> Result<(), Flow> {
+    let start = {
+        let mut state = engine.state.borrow_mut();
+        let frame = state.sched.frame;
+        let bar = &mut state.topbar;
+        if let Some(asked) = bar.asked.take()
+            && bar.chat_enabled != bar.chat
+        {
+            bar.chat = bar.chat_enabled;
+            bar.steps = Some((asked, if bar.chat { CHAT_ON_STEPS } else { CHAT_OFF_STEPS }));
+        }
+        let Some((began, steps)) = bar.steps else { return Ok(()) };
+        let at = frame.saturating_sub(began);
+        let last = steps.last().map_or(0, |&(n, _)| n);
+        if at >= last {
+            bar.steps = None;
+        }
+        match steps.iter().find(|&&(n, _)| n == at) {
+            Some(&(_, start)) => {
+                bar.start = start;
+                start
+            }
+            None => return Ok(()),
+        }
+    };
+    let Some(inset_name) = engine.reflection.name_id("TopbarInset") else { return Ok(()) };
+    let device = &engine.options.profile.device;
+    let rect = dom::Rect::new(dom::Vector2::new(start as f32, 0.0), dom::Vector2::new(device.viewport().0 as f32, device.topbar_inset() as f32));
+    let gui = get_service(engine, engine.world().game, "GuiService")?;
+    crate::lua::instance::set_property(engine, gui, inset_name, Value::Rect(rect));
+    Ok(())
+}
+
 #[inline(never)]
 fn install_collection_service(behaviors: &mut Behaviors, reflection: &Reflection) {
     // CollectionService
@@ -1814,6 +1916,10 @@ fn install_starter_actions_debris_sound(behaviors: &mut Behaviors, reflection: &
                 } else {
                     disabled.insert(item);
                 }
+                // (the top bar's chat button follows Chat: TopBar)
+                let chat = engine.reflection.enum_item("CoreGuiType", "Chat").is_none_or(|chat| !disabled.contains(&chat));
+                drop(disabled);
+                note_chat(engine, chat);
                 Ok(none())
             }));
         }

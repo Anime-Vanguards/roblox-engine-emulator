@@ -48,6 +48,7 @@ A probe that plays an animation names a real asset, which the real engine fetche
   - `timeout=<seconds>` — a probe captured with `ScriptContext:SetTimeout(<seconds>)` (at identity 4: a game script may not call it): `ree` runs it with `--script-timeout <seconds> --max-script-timeouts 0`. The probe calls `SetTimeout` itself in a `pcall` and sets it back to 0 (no timeout) at its end, as the capture session is shared.
   - `studio=false` — a probe of what a running game refuses that Studio allows (the capture's client and server are a running game): `ree` runs it with `--studio false`.
   - `flag=<name>` — enable an engine flag (e.g., `flag=FFlagEnableLoadModule` passes `--load-module` to `ree`). Server runs automatically pass `--load-string` to match server captures.
+  - `topbar` — a probe of Roblox's top bar, captured at identity 2 on a rendered 1280 x 720 playing client running its core scripts (StarterScript), whose bar has a 58 px inset: `ree` runs it with the client profile `{"device":{"topbarInset":58,"viewport":[1280,720]}}`, and not on a server. The capture command runs no core scripts, so `--capture` leaves such a probe out; its expected file is captured by hand.
   - `-- parity: device=desktop rendered` — capture on a rendered 1920x1080 desktop client (58 px top-bar inset). Plain `ree` lacks GUI layout, so these lines sit in `known.json` and must match 100% when run with `--rur <checkout>` (`RUR_NATIVE_ENGINE` overrides the `rur-native` binary).
 - Capture new probes twice and verify identical output before checking them in.
 
