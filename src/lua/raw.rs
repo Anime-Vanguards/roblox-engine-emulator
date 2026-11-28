@@ -1125,6 +1125,12 @@ unsafe extern "C-unwind" fn instance_new(state: *mut ffi::lua_State) -> c_int {
             }
             None => String::new(),
         };
+        // (a class whose making needs a capability the code lacks, or one a client never makes for a script: instance.rs
+        // new_refusal)
+        if let Some(message) = core::new_refusal(&class_name, engine.script_capabilities()) {
+            let error = crate::ScriptError::plain(message);
+            return Out::Raise(error.message, error.level);
+        }
         let parent = arg_instance(state, 2);
         if parent.is_none() && ffi::lua_type(state, 2) > ffi::LUA_TNIL && engine.reflection.class_id(&class_name).is_some_and(|class| engine.reflection.class(class).creatable) {
             bad_parent.set(true);

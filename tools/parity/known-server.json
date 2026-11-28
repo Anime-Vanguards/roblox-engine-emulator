@@ -80,23 +80,7 @@
 	"core_services": [
 		{
 			"line": "CoreGui get nil",
-			"why": "ree answers a service a plugin or the command bar may use (identity 4 gets it in the same capture), since edit-mode code that Studio runs as a plugin parents its previews to CoreGui; a game script (identity 2) gets nil"
-		},
-		{
-			"line": "StudioService get nil",
-			"why": "ree answers a service a plugin or the command bar may use (identity 4 gets it in the same capture), since edit-mode code that Studio runs as a plugin parents its previews to CoreGui; a game script (identity 2) gets nil"
-		},
-		{
-			"line": "ScriptEditorService get nil",
-			"why": "ree answers a service a plugin or the command bar may use (identity 4 gets it in the same capture), since edit-mode code that Studio runs as a plugin parents its previews to CoreGui; a game script (identity 2) gets nil"
-		},
-		{
-			"line": "NetworkClient get-error The current thread cannot create 'NetworkClient' (lacking capability Plugin)",
-			"why": "a server has no NetworkClient and a game script may not make one; ree makes the service on either side"
-		},
-		{
-			"line": "NetworkClient find ok nil",
-			"why": "a server has no NetworkClient; ree's probe line is the service it made"
+			"why": "a game script gets nil for CoreGui, but rur's story host mounts its stories in game:GetService(\"CoreGui\"), so ree answers it in every run context (services/mod.rs HIDDEN_SERVICES)"
 		}
 	],
 	"editable_image_draw": [
@@ -857,18 +841,20 @@
 			"why": "a script's Source reads and writes in a play run: ree runs a run's code at one identity, and the play-run code that writes Source is the identity-4 probes' and ree's tests (instance.rs OPEN_PROPERTIES)"
 		},
 		{
-			"line": "TextChannelWindow.IsRendering r=",
-			"why": "a client refuses to parent a Folder into a TextChannelWindow (the line has no c= field); ree parents it and reads the property with the child there"
-		},
-		{
 			"line": "VoiceChatInternal.VoiceChatState r=VoiceChatInternal API security check failed",
 			"why": "a client's read raises VoiceChatInternal's own security error and a write is cast, then refused as read only; ree has no such property (no member: instance.rs OPEN_PROPERTIES)"
 		}
 	],
-	"capability_property_names": [
+	"instance_new_refusals": [
 		{
-			"line": "ResizeableFaces number error Unable to assign property ResizeableFaces. Faces expected, got number",
-			"why": "ree casts no value to Faces (a Faces property takes any value), so a read-only Faces property refuses a number as read only"
+			"line": "Player error The current thread cannot create 'Player' (lacking capability WritePlayer)",
+			"why": "a game script may not make a Player (WritePlayer), but ree's harnesses and tests make the players of a run with Instance.new (a Player parented to Players joins): instance.rs NEW_PERMITS"
+		}
+	],
+	"service_access": [
+		{
+			"line": "CoreGui | nil | nil | nil | nil | nil",
+			"why": "a game script gets nil for CoreGui, but rur's story host mounts its stories in game:GetService(\"CoreGui\"), so ree answers it in every run context (services/mod.rs HIDDEN_SERVICES)"
 		}
 	]
 }

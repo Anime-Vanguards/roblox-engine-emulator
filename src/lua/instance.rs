@@ -374,6 +374,13 @@ pub fn get(lua: &Lua, engine: &Rc<Engine>, id: InstanceId, key: &LuaValue) -> Re
     {
         return value;
     }
+    // (the DataModel's services a client holds from the start, made now, and the hidden ones it reads as nil: services/mod.rs)
+    if let Some(found) = crate::services::data_model_child(engine, id, key_bytes)? {
+        return Ok(match found {
+            Some(service) => instance_value(lua, engine, service)?,
+            None => LuaValue::Nil,
+        });
+    }
     Err(not_a_member(engine, id, key))
 }
 

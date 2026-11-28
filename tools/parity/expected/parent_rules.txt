@@ -1,0 +1,39 @@
+# engine: Roblox Studio 0.747.0.7471481, a headless playing client (script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-28
+window child Folder error TextChannelWindow only accepts Script, LocalScript, ModuleScript, UICorner, UIAspectRatioConstraint, or UISizeConstraint as children false
+window child Frame error TextChannelWindow only accepts Script, LocalScript, ModuleScript, UICorner, UIAspectRatioConstraint, or UISizeConstraint as children false
+window child TextLabel error TextChannelWindow only accepts Script, LocalScript, ModuleScript, UICorner, UIAspectRatioConstraint, or UISizeConstraint as children false
+window child UICorner ok  true
+window child UIListLayout error TextChannelWindow only accepts Script, LocalScript, ModuleScript, UICorner, UIAspectRatioConstraint, or UISizeConstraint as children false
+window child Configuration error TextChannelWindow only accepts Script, LocalScript, ModuleScript, UICorner, UIAspectRatioConstraint, or UISizeConstraint as children false
+window child StringValue error TextChannelWindow only accepts Script, LocalScript, ModuleScript, UICorner, UIAspectRatioConstraint, or UISizeConstraint as children false
+window child ModuleScript ok  true
+window child LocalScript ok  true
+window child TextChannel error TextChannelWindow only accepts Script, LocalScript, ModuleScript, UICorner, UIAspectRatioConstraint, or UISizeConstraint as children false
+window child ScreenGui error TextChannelWindow only accepts Script, LocalScript, ModuleScript, UICorner, UIAspectRatioConstraint, or UISizeConstraint as children false
+window child TextChannelWindow error TextChannelWindow only accepts Script, LocalScript, ModuleScript, UICorner, UIAspectRatioConstraint, or UISizeConstraint as children false
+window child ImageLabel error TextChannelWindow only accepts Script, LocalScript, ModuleScript, UICorner, UIAspectRatioConstraint, or UISizeConstraint as children false
+window child UIGradient error TextChannelWindow only accepts Script, LocalScript, ModuleScript, UICorner, UIAspectRatioConstraint, or UISizeConstraint as children false
+window child Model error TextChannelWindow only accepts Script, LocalScript, ModuleScript, UICorner, UIAspectRatioConstraint, or UISizeConstraint as children false
+window new parent error TextChannelWindow only accepts Script, LocalScript, ModuleScript, UICorner, UIAspectRatioConstraint, or UISizeConstraint as children
+window into folder ok 
+folder under a window's corner ok 
+window clone with a child ok 1
+window set parent of child error TextChannelWindow only accepts Script, LocalScript, ModuleScript, UICorner, UIAspectRatioConstraint, or UISizeConstraint as children ok 
+window into screen ok 
+write faces top | Faces ok  Top | Axes error Unable to assign property Axes. Axes expected, got Faces X, Y, Z | H.Faces
+write faces none | Faces ok   | Axes error Unable to assign property Axes. Axes expected, got Faces X, Y, Z | H.Faces
+write axes x | Faces error Unable to assign property Faces. Faces expected, got Axes  | Axes ok  X | A.Axes
+write axes faces | Faces error Unable to assign property Faces. Faces expected, got Axes  | Axes ok  Z | A.Axes
+write number | Faces error Unable to assign property Faces. Faces expected, got number  | Axes error Unable to assign property Axes. Axes expected, got number Z | 
+write string | Faces error Unable to assign property Faces. Faces expected, got string  | Axes error Unable to assign property Axes. Axes expected, got string Z | 
+write table | Faces error Unable to assign property Faces. Faces expected, got table  | Axes error Unable to assign property Axes. Axes expected, got table Z | 
+write bool | Faces error Unable to assign property Faces. Faces expected, got boolean  | Axes error Unable to assign property Axes. Axes expected, got boolean Z | 
+write normal | Faces error Unable to assign property Faces. Faces expected, got EnumItem  | Axes error Unable to assign property Axes. Axes expected, got EnumItem Z | 
+write axis | Faces error Unable to assign property Faces. Faces expected, got EnumItem  | Axes error Unable to assign property Axes. Axes expected, got EnumItem Z | 
+write vector | Faces error Unable to assign property Faces. Faces expected, got Vector3  | Axes error Unable to assign property Axes. Axes expected, got Vector3 Z | 
+write instance | Faces error Unable to assign property Faces. Faces expected, got Instance  | Axes error Unable to assign property Axes. Axes expected, got Instance Z | 
+write nil | Faces error Unable to assign property Faces. Faces expected, got nil  | Axes error Unable to assign property Axes. Axes expected, got nil Z | 
+resizeable Right, Top, Back, Left, Bottom, Front error Unable to assign property ResizeableFaces. Property is read only error Unable to assign property ResizeableFaces. Faces expected, got number
+attribute faces error Faces is not a supported attribute type error Axes is not a supported attribute type
+faces in a value error Unable to assign property Value. Instance expected, got Faces

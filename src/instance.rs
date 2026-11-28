@@ -194,6 +194,61 @@ pub fn create_named_str(state: &mut State, reflection: &Reflection, class: Class
     id
 }
 
+/// Services a script's `Instance.new` makes all the same: a new instance of the class outside the DataModel, as a playing client and a
+/// server make one (measured, roblox-sim 0.747, every class data/reflection.json, data/reflection-security.json and rbx-dom's database
+/// name: tools/parity/probes/instance_new_refusals.luau); every other service is "Unable to create an Instance of type".
+const MADE_SERVICES: &[&str] = &["HeightmapImporterService", "MemoryStoreService", "ProximityPromptService", "TestService", "VirtualInputManager"];
+
+/// Classes whose making needs capabilities a script may lack, with them: the class's New permit (data/reflection-security.json), for
+/// the three services its GetService permit. A client's `Instance.new` raises "The current thread cannot create 'Breakpoint' (lacking
+/// capability RobloxScript)" for code that lacks one, naming the first it lacks (measured likewise, a game script's set; a plugin's
+/// code, ree's edit run context, holds Plugin). Player's New permit (WritePlayer) is left out: a client refuses a game script's
+/// `Instance.new("Player")` likewise, but ree's harnesses and tests make the players of a run so (a player parented to Players is
+/// one that joins).
+const NEW_PERMITS: &[(&str, &str)] = &[
+    ("AnimationPlayer", "RobloxScript"),
+    ("AvatarAbilityRules", "RobloxScript"),
+    ("Breakpoint", "RobloxScript"),
+    ("CSGDictionaryService", "RobloxEngine"),
+    ("CustomLog", "InternalTest"),
+    ("DebuggerWatch", "LocalUser"),
+    ("ExplorerFilter", "RobloxScript"),
+    ("FlyweightService", "RobloxEngine"),
+    ("FollowRotationBoneBehavior", "InternalTest"),
+    ("FollowTwistBoneBehavior", "InternalTest"),
+    ("Noise", "RobloxScript"),
+    ("NonReplicatedCSGDictionaryService", "RobloxEngine"),
+    ("PluginAction", "Plugin"),
+    ("PluginCapabilities", "Plugin"),
+    ("RTAnimationTracker", "RobloxScript"),
+    ("RealtimeMedia", "InternalTest"),
+    ("RelativeGui", "RobloxScript | UI"),
+    ("StandalonePluginScripts", "Plugin"),
+    ("StateMachineDefinition", "RobloxScript"),
+    ("StudioAttachment", "RobloxScript"),
+    ("StudioCallout", "RobloxScript"),
+    ("TrackerStreamAnimation", "RobloxScript"),
+    ("VideoDeviceInput", "RobloxScript"),
+];
+
+/// Classes a client's `Instance.new` refuses with words of their own (measured likewise)
+const NEW_REFUSALS: &[(&str, &str)] = &[
+    ("AuroraScript", "This type can not be instantiated"),
+    ("InternalSyncItem", "Internal Permission is required for this feature."),
+    ("ParabolaAdornment", "ParabolaAdornment may only be instantiated by CoreScripts at this time"),
+];
+
+/// What `Instance.new(class_name)` raises for code holding the capabilities `held` (services/reflection_data.rs) before it makes
+/// anything: None when the class's making is no capability's or the code holds it.
+pub fn new_refusal(class_name: &str, held: u64) -> Option<String> {
+    if let Some(&(_, message)) = NEW_REFUSALS.iter().find(|&&(class, _)| class == class_name) {
+        return Some(message.to_string());
+    }
+    let &(_, need) = NEW_PERMITS.iter().find(|&&(class, _)| class == class_name)?;
+    let capability = crate::services::reflection_data::first_lacking(held, crate::services::reflection_data::caps_of(need))?;
+    Some(format!("The current thread cannot create '{class_name}' (lacking capability {capability})"))
+}
+
 /// InstanceModule.New: `Instance.new(ClassName, Parent)`.
 pub fn new_instance(
     state: &mut State,
@@ -204,7 +259,7 @@ pub fn new_instance(
 ) -> ScriptResult<InstanceId> {
     let class = reflection
         .class_id(class_name)
-        .filter(|&class| reflection.class(class).creatable)
+        .filter(|&class| reflection.class(class).creatable || MADE_SERVICES.contains(&class_name))
         .ok_or_else(|| ScriptError::plain(format!("Unable to create an Instance of type \"{class_name}\"")))?;
     let id = create(state, reflection, class);
     state.dom.at_mut(id).set_flag(flags::SCRIPT_CREATED, true);
@@ -817,6 +872,15 @@ pub fn set_parent(
     {
         return Err(ScriptError::plain(message));
     }
+    // (a service Instance.new made goes under no instance: "Invalid parent for Service. TestService cannot be parented to Workspace .",
+    // measured, roblox-sim 0.747, a client and a server, tools/parity/probes/instance_new_refusals.luau)
+    if let Some(parent) = new_parent
+        && reflection.class(state.dom.at(id).class).service
+        && Some(state.dom.at(parent).class) != reflection.class_id("DataModel")
+    {
+        let class = &reflection.class(state.dom.at(id).class).name;
+        return Err(ScriptError::plain(format!("Invalid parent for Service. {class} cannot be parented to {} .", state.dom.at(parent).name)));
+    }
     reparent(state, reflection, hooks, id, new_parent)
 }
 
@@ -844,6 +908,13 @@ fn released_primaries(state: &State, reflection: &Reflection, leaving: &[Instanc
 /// tools/parity/probes/instance_api_texts.luau).
 fn parent_rule(reflection: &Reflection, class: ClassId, parent: ClassId) -> Option<&'static str> {
     let is = |name: &str| reflection.is_a(parent, name);
+    // (a TextChannelWindow takes scripts and three UI objects only, a client and a server alike: measured, roblox-sim 0.747,
+    // tools/parity/probes/parent_rules.luau)
+    if &*reflection.class(parent).name == "TextChannelWindow"
+        && !["Script", "LocalScript", "ModuleScript", "UICorner", "UIAspectRatioConstraint", "UISizeConstraint"].iter().any(|name| reflection.is_a(class, name))
+    {
+        return Some("TextChannelWindow only accepts Script, LocalScript, ModuleScript, UICorner, UIAspectRatioConstraint, or UISizeConstraint as children");
+    }
     match &*reflection.class(class).name {
         "AdPortal" if &*reflection.class(parent).name != "Part" => Some("AdPortal must be parented to a Part."),
         "Animator" if !is("Humanoid") && !is("AnimationController") => Some("Animator has to be placed under Humanoid or AnimationController!"),

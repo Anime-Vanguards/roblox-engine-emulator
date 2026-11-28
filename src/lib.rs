@@ -72,6 +72,8 @@ mod engine_function_tests;
 #[cfg(test)]
 mod client_rules_tests;
 #[cfg(test)]
+mod service_rules_tests;
+#[cfg(test)]
 mod engine_thread_tests;
 #[cfg(test)]
 mod client_profile_script_tests;

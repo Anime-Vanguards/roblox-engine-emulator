@@ -1,0 +1,42 @@
+# engine: Roblox Studio 0.747.0.7471481, a headless playing client (script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-28
+AnimationPlayer error The current thread cannot create 'AnimationPlayer' (lacking capability RobloxScript)
+AuroraScript error This type can not be instantiated
+AvatarAbilityRules error The current thread cannot create 'AvatarAbilityRules' (lacking capability RobloxScript)
+Breakpoint error The current thread cannot create 'Breakpoint' (lacking capability RobloxScript)
+CSGDictionaryService error The current thread cannot create 'CSGDictionaryService' (lacking capability RobloxEngine)
+CustomLog error The current thread cannot create 'CustomLog' (lacking capability InternalTest)
+DebuggerWatch error The current thread cannot create 'DebuggerWatch' (lacking capability LocalUser)
+ExplorerFilter error The current thread cannot create 'ExplorerFilter' (lacking capability RobloxScript)
+FlyweightService error The current thread cannot create 'FlyweightService' (lacking capability RobloxEngine)
+FollowRotationBoneBehavior error The current thread cannot create 'FollowRotationBoneBehavior' (lacking capability InternalTest)
+FollowTwistBoneBehavior error The current thread cannot create 'FollowTwistBoneBehavior' (lacking capability InternalTest)
+HeightmapImporterService ok HeightmapImporterService nil
+InternalSyncItem error Internal Permission is required for this feature.
+MemoryStoreService ok MemoryStoreService nil
+Noise error The current thread cannot create 'Noise' (lacking capability RobloxScript)
+NonReplicatedCSGDictionaryService error The current thread cannot create 'NonReplicatedCSGDictionaryService' (lacking capability RobloxEngine)
+ParabolaAdornment error ParabolaAdornment may only be instantiated by CoreScripts at this time
+Player error The current thread cannot create 'Player' (lacking capability WritePlayer)
+PluginAction error The current thread cannot create 'PluginAction' (lacking capability Plugin)
+PluginCapabilities error The current thread cannot create 'PluginCapabilities' (lacking capability Plugin)
+ProximityPromptService ok ProximityPromptService nil
+RTAnimationTracker error The current thread cannot create 'RTAnimationTracker' (lacking capability RobloxScript)
+RealtimeMedia error The current thread cannot create 'RealtimeMedia' (lacking capability InternalTest)
+RelativeGui error The current thread cannot create 'RelativeGui' (lacking capability RobloxScript)
+StandalonePluginScripts error The current thread cannot create 'StandalonePluginScripts' (lacking capability Plugin)
+StateMachineDefinition error The current thread cannot create 'StateMachineDefinition' (lacking capability RobloxScript)
+StudioAttachment error The current thread cannot create 'StudioAttachment' (lacking capability RobloxScript)
+StudioCallout error The current thread cannot create 'StudioCallout' (lacking capability RobloxScript)
+TestService ok TestService nil
+TrackerStreamAnimation error The current thread cannot create 'TrackerStreamAnimation' (lacking capability RobloxScript)
+VideoDeviceInput error The current thread cannot create 'VideoDeviceInput' (lacking capability RobloxScript)
+VirtualInputManager ok VirtualInputManager nil
+Part ok Part nil
+Folder ok Folder nil
+Workspace error Unable to create an Instance of type "Workspace"
+CoreGui error Unable to create an Instance of type "CoreGui"
+NetworkClient error Unable to create an Instance of type "NetworkClient"
+NotAClass error Unable to create an Instance of type "NotAClass"
+made service TestService nil true true
+made service parent error Invalid parent for Service. TestService cannot be parented to Workspace . ok 

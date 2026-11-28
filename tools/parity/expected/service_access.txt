@@ -1,0 +1,298 @@
+# engine: Roblox Studio 0.747.0.7471481, a headless playing client (script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-28
+AccountService | nil | nil | nil | nil | err AccountService is not a valid member of DataModel "<game>"
+AchievementService | nil | nil | nil | nil | err AchievementService is not a valid member of DataModel "<game>"
+ActivityHistoryEventService | nil | nil | nil | nil | err ActivityHistoryEventService is not a valid member of DataModel "<game>"
+AdService | inst AdService/AdService | inst AdService/AdService | inst AdService/AdService | inst AdService/AdService | inst AdService/AdService
+AnalyticsService | inst AnalyticsService/AnalyticsService | inst AnalyticsService/AnalyticsService | inst AnalyticsService/AnalyticsService | inst AnalyticsService/AnalyticsService | inst AnalyticsService/AnalyticsService
+AnimatedImageService | nil | nil | nil | nil | err AnimatedImageService is not a valid member of DataModel "<game>"
+AnimationClipProvider | inst AnimationClipProvider/AnimationClipProvider | inst AnimationClipProvider/AnimationClipProvider | inst AnimationClipProvider/AnimationClipProvider | inst AnimationClipProvider/AnimationClipProvider | inst AnimationClipProvider/AnimationClipProvider
+AnimationFromVideoCreatorService | nil | inst AnimationFromVideoCreatorService/Instance | inst AnimationFromVideoCreatorService/Instance | inst AnimationFromVideoCreatorService/Instance | err AnimationFromVideoCreatorService is not a valid member of DataModel "<game>"
+AnimationFromVideoCreatorStudioService | nil | nil | nil | nil | err AnimationFromVideoCreatorStudioService is not a valid member of DataModel "<game>"
+AnnotationsService | nil | nil | nil | nil | err AnnotationsService is not a valid member of DataModel "<game>"
+AppAgeSignalsService | nil | nil | nil | nil | err AppAgeSignalsService is not a valid member of DataModel "<game>"
+AppLifecycleObserverService | nil | nil | nil | nil | err AppLifecycleObserverService is not a valid member of DataModel "<game>"
+AppRatingPromptService | nil | nil | nil | nil | err AppRatingPromptService is not a valid member of DataModel "<game>"
+AppStorageService | nil | nil | nil | nil | nil
+AppUpdateService | nil | nil | nil | nil | err AppUpdateService is not a valid member of DataModel "<game>"
+AssetCounterService | nil | nil | nil | nil | err AssetCounterService is not a valid member of DataModel "<game>"
+AssetDeliveryProxy | nil | inst AssetDeliveryProxy/Instance | inst AssetDeliveryProxy/Instance | inst AssetDeliveryProxy/Instance | err AssetDeliveryProxy is not a valid member of DataModel "<game>"
+AssetImportService | nil | nil | nil | nil | err AssetImportService is not a valid member of DataModel "<game>"
+AssetManagerService | nil | nil | nil | nil | err AssetManagerService is not a valid member of DataModel "<game>"
+AssetQualityService | nil | nil | nil | nil | err AssetQualityService is not a valid member of DataModel "<game>"
+AssetService | inst AssetService/AssetService | inst AssetService/AssetService | inst AssetService/AssetService | inst AssetService/AssetService | inst AssetService/AssetService
+AudioFocusService | nil | nil | nil | nil | err AudioFocusService is not a valid member of DataModel "<game>"
+AuroraScriptService | nil | nil | nil | nil | err AuroraScriptService is not a valid member of DataModel "<game>"
+AuroraService | nil | nil | nil | nil | err AuroraService is not a valid member of DataModel "<game>"
+AvatarChatService | nil | nil | nil | nil | nil
+AvatarCreationService | inst AvatarCreationService/AvatarCreationService | inst AvatarCreationService/AvatarCreationService | inst AvatarCreationService/AvatarCreationService | inst AvatarCreationService/AvatarCreationService | inst AvatarCreationService/AvatarCreationService
+AvatarEditorService | inst AvatarEditorService/AvatarEditorService | inst AvatarEditorService/AvatarEditorService | inst AvatarEditorService/AvatarEditorService | inst AvatarEditorService/AvatarEditorService | inst AvatarEditorService/AvatarEditorService
+AvatarImportService | nil | nil | nil | nil | err AvatarImportService is not a valid member of DataModel "<game>"
+AvatarSettings | nil | nil | nil | nil | nil
+BackendReplicatedStorage | nil | nil | nil | nil | err BackendReplicatedStorage is not a valid member of DataModel "<game>"
+BackendServerScriptService | nil | nil | nil | nil | err BackendServerScriptService is not a valid member of DataModel "<game>"
+BackendServerStorage | nil | nil | nil | nil | err BackendServerStorage is not a valid member of DataModel "<game>"
+BadgeService | inst BadgeService/BadgeService | inst BadgeService/BadgeService | inst BadgeService/BadgeService | inst BadgeService/BadgeService | inst BadgeService/BadgeService
+BranchService | nil | nil | nil | nil | err BranchService is not a valid member of DataModel "<game>"
+BrowserService | inst BrowserService/BrowserService | inst BrowserService/BrowserService | inst BrowserService/BrowserService | inst BrowserService/BrowserService | inst BrowserService/BrowserService
+BugReporterService | nil | nil | nil | nil | err BugReporterService is not a valid member of DataModel "<game>"
+CSGDictionaryService | nil | nil | nil | nil | nil
+CacheableContentProvider | nil | nil | nil | nil | err CacheableContentProvider is not a valid member of DataModel "<game>"
+CallingService | nil | nil | nil | nil | err CallingService is not a valid member of DataModel "<game>"
+CalloutService | nil | nil | nil | nil | err CalloutService is not a valid member of DataModel "<game>"
+CaptureService | inst CaptureService/CaptureService | inst CaptureService/CaptureService | inst CaptureService/CaptureService | inst CaptureService/CaptureService | inst CaptureService/CaptureService
+ChangeHistoryStreamingService | nil | nil | nil | nil | err ChangeHistoryStreamingService is not a valid member of DataModel "<game>"
+Chat | inst Chat/Chat | inst Chat/Chat | inst Chat/Chat | inst Chat/Chat | inst Chat/Chat
+ClientStorageService | nil | nil | nil | nil | err ClientStorageService is not a valid member of DataModel "<game>"
+CloudCRUDService | nil | nil | nil | nil | err CloudCRUDService is not a valid member of DataModel "<game>"
+CloudClientService | nil | nil | nil | nil | err CloudClientService is not a valid member of DataModel "<game>"
+CloudExecutionService | nil | nil | nil | nil | err CloudExecutionService is not a valid member of DataModel "<game>"
+ClusterPacketCache | nil | nil | nil | nil | err ClusterPacketCache is not a valid member of DataModel "<game>"
+CollaboratorsService | nil | nil | nil | nil | err CollaboratorsService is not a valid member of DataModel "<game>"
+CollectionService | inst CollectionService/CollectionService | inst CollectionService/CollectionService | inst CollectionService/CollectionService | inst CollectionService/CollectionService | inst CollectionService/CollectionService
+CommerceService | inst CommerceService/CommerceService | inst CommerceService/CommerceService | inst CommerceService/CommerceService | inst CommerceService/CommerceService | inst CommerceService/CommerceService
+ConfigureServerService | nil | nil | nil | nil | err ConfigureServerService is not a valid member of DataModel "<game>"
+ConnectivityService | nil | nil | nil | nil | err ConnectivityService is not a valid member of DataModel "<game>"
+ContentProvider | inst ContentProvider/ContentProvider | inst ContentProvider/ContentProvider | inst ContentProvider/ContentProvider | inst ContentProvider/ContentProvider | inst ContentProvider/ContentProvider
+ContextActionService | inst ContextActionService/ContextActionService | inst ContextActionService/ContextActionService | inst ContextActionService/ContextActionService | inst ContextActionService/ContextActionService | inst ContextActionService/ContextActionService
+ControllerService | nil | nil | nil | nil | err ControllerService is not a valid member of DataModel "<game>"
+CookiesService | inst CookiesService/CookiesService | inst CookiesService/CookiesService | inst CookiesService/CookiesService | inst CookiesService/CookiesService | inst CookiesService/CookiesService
+CoreGui | nil | nil | nil | nil | nil
+CorePackages | nil | nil | nil | nil | nil
+CoreScriptDebuggingManagerHelper | nil | nil | nil | nil | err CoreScriptDebuggingManagerHelper is not a valid member of DataModel "<game>"
+CoreScriptSyncService | nil | nil | nil | nil | err CoreScriptSyncService is not a valid member of DataModel "<game>"
+CreationDBService | nil | nil | nil | nil | err CreationDBService is not a valid member of DataModel "<game>"
+CrossDMScriptChangeListener | nil | nil | nil | nil | err CrossDMScriptChangeListener is not a valid member of DataModel "<game>"
+DataStoreService | inst DataStoreService/DataStoreService | inst DataStoreService/DataStoreService | inst DataStoreService/DataStoreService | inst DataStoreService/DataStoreService | inst DataStoreService/DataStoreService
+Debris | inst Debris/Debris | inst Debris/Debris | inst Debris/Debris | inst Debris/Debris | inst Debris/Debris
+DebuggablePluginWatcher | nil | nil | nil | nil | err DebuggablePluginWatcher is not a valid member of DataModel "<game>"
+DebuggerConnectionManager | nil | nil | nil | nil | err DebuggerConnectionManager is not a valid member of DataModel "<game>"
+DebuggerManager | nil | nil | nil | nil | err DebuggerManager is not a valid member of DataModel "<game>"
+DebuggerUIService | nil | nil | nil | nil | err DebuggerUIService is not a valid member of DataModel "<game>"
+DeferredAssetManagerService | nil | nil | nil | nil | err DeferredAssetManagerService is not a valid member of DataModel "<game>"
+DesignFoundationsService | nil | nil | nil | nil | err DesignFoundationsService is not a valid member of DataModel "<game>"
+DeviceDisplayService | nil | nil | nil | nil | err DeviceDisplayService is not a valid member of DataModel "<game>"
+DeviceIdService | nil | nil | nil | nil | err DeviceIdService is not a valid member of DataModel "<game>"
+DraftsService | nil | nil | nil | nil | err DraftsService is not a valid member of DataModel "<game>"
+DraggerService | nil | nil | nil | nil | err DraggerService is not a valid member of DataModel "<game>"
+EditableService | nil | nil | nil | nil | nil
+EditorSourceService | nil | nil | nil | nil | err EditorSourceService is not a valid member of DataModel "<game>"
+EventIngestService | nil | nil | nil | nil | err EventIngestService is not a valid member of DataModel "<game>"
+ExampleV2Service | nil | nil | nil | nil | err ExampleV2Service is not a valid member of DataModel "<game>"
+ExperienceAuthService | nil | nil | nil | nil | nil
+ExperienceService | nil | nil | nil | nil | err ExperienceService is not a valid member of DataModel "<game>"
+ExperienceStateCaptureService | nil | nil | nil | nil | err ExperienceStateCaptureService is not a valid member of DataModel "<game>"
+ExperienceStateRecordingService | nil | nil | nil | nil | err ExperienceStateRecordingService is not a valid member of DataModel "<game>"
+ExplorerServiceVisibilityService | nil | nil | nil | nil | err ExplorerServiceVisibilityService is not a valid member of DataModel "<game>"
+ExternalIdentityService | nil | nil | nil | nil | err ExternalIdentityService is not a valid member of DataModel "<game>"
+FaceAnimatorService | nil | nil | nil | nil | err FaceAnimatorService is not a valid member of DataModel "<game>"
+FacialAgeEstimationService | nil | nil | nil | nil | err FacialAgeEstimationService is not a valid member of DataModel "<game>"
+FacialAnimationRecordingService | nil | nil | nil | nil | err FacialAnimationRecordingService is not a valid member of DataModel "<game>"
+FacialAnimationStreamingServiceV2 | nil | nil | nil | nil | err FacialAnimationStreamingServiceV2 is not a valid member of DataModel "<game>"
+FeatureRestrictionManager | inst FeatureRestrictionManager/FeatureRestrictionManager | inst FeatureRestrictionManager/FeatureRestrictionManager | inst FeatureRestrictionManager/FeatureRestrictionManager | inst FeatureRestrictionManager/FeatureRestrictionManager | inst FeatureRestrictionManager/FeatureRestrictionManager
+FileManagerService | nil | nil | nil | nil | err FileManagerService is not a valid member of DataModel "<game>"
+FileSyncReplicationService | nil | nil | nil | nil | err FileSyncReplicationService is not a valid member of DataModel "<game>"
+FlagStandService | nil | nil | nil | nil | err FlagStandService is not a valid member of DataModel "<game>"
+FlyweightService | nil | nil | nil | nil | err FlyweightService is not a valid member of DataModel "<game>"
+FriendService | inst FriendService/FriendService | inst FriendService/FriendService | inst FriendService/FriendService | inst FriendService/FriendService | inst FriendService/FriendService
+FriendsCallingService | nil | nil | nil | nil | err FriendsCallingService is not a valid member of DataModel "<game>"
+GameDownloaderService | nil | nil | nil | nil | err GameDownloaderService is not a valid member of DataModel "<game>"
+GamePassService | inst GamePassService/GamePassService | inst GamePassService/GamePassService | inst GamePassService/GamePassService | inst GamePassService/GamePassService | inst GamePassService/GamePassService
+GenerationService | inst GenerationService/GenerationService | inst GenerationService/GenerationService | inst GenerationService/GenerationService | inst GenerationService/GenerationService | inst GenerationService/GenerationService
+GongService | nil | nil | nil | nil | err GongService is not a valid member of DataModel "<game>"
+GuiService | inst GuiService/GuiService | inst GuiService/GuiService | inst GuiService/GuiService | inst GuiService/GuiService | inst GuiService/GuiService
+GuidRegistryService | inst GuidRegistryService/GuidRegistryService | inst GuidRegistryService/GuidRegistryService | inst GuidRegistryService/GuidRegistryService | inst GuidRegistryService/GuidRegistryService | inst GuidRegistryService/GuidRegistryService
+HSRDataContentProvider | nil | nil | nil | nil | err HSRDataContentProvider is not a valid member of DataModel "<game>"
+HarmonyService | nil | nil | nil | nil | err HarmonyService is not a valid member of DataModel "<game>"
+HeapProfilerService | inst HeapProfilerService/HeapProfilerService | inst HeapProfilerService/HeapProfilerService | inst HeapProfilerService/HeapProfilerService | inst HeapProfilerService/HeapProfilerService | inst HeapProfilerService/HeapProfilerService
+HeatmapQueryService | nil | nil | nil | nil | err HeatmapQueryService is not a valid member of DataModel "<game>"
+HeatmapService | nil | nil | nil | nil | nil
+HiddenPlayerService | nil | nil | nil | nil | err HiddenPlayerService is not a valid member of DataModel "<game>"
+Hopper | nil | nil | nil | nil | err Hopper is not a valid member of DataModel "<game>"
+HttpRbxApiService | inst HttpRbxApiService/HttpRbxApiService | inst HttpRbxApiService/HttpRbxApiService | inst HttpRbxApiService/HttpRbxApiService | inst HttpRbxApiService/HttpRbxApiService | inst HttpRbxApiService/HttpRbxApiService
+HttpService | inst HttpService/HttpService | inst HttpService/HttpService | inst HttpService/HttpService | inst HttpService/HttpService | inst HttpService/HttpService
+ILegacyStudioBridge | nil | nil | nil | nil | err ILegacyStudioBridge is not a valid member of DataModel "<game>"
+IXPService | nil | nil | nil | nil | err IXPService is not a valid member of DataModel "<game>"
+ImageScreenCaptureService | nil | nil | nil | nil | err ImageScreenCaptureService is not a valid member of DataModel "<game>"
+IncrementalPatchBuilder | nil | inst IncrementalPatchBuilder/Instance | inst IncrementalPatchBuilder/Instance | inst IncrementalPatchBuilder/Instance | err IncrementalPatchBuilder is not a valid member of DataModel "<game>"
+InputReplayService | nil | nil | nil | nil | err InputReplayService is not a valid member of DataModel "<game>"
+InsertService | inst InsertService/InsertService | inst InsertService/InsertService | inst InsertService/InsertService | inst InsertService/InsertService | inst InsertService/InsertService
+InstanceFileSyncService | nil | nil | nil | nil | err InstanceFileSyncService is not a valid member of DataModel "<game>"
+InstanceRegistryService | nil | inst InstanceRegistryService/Instance | inst InstanceRegistryService/Instance | inst InstanceRegistryService/Instance | err InstanceRegistryService is not a valid member of DataModel "<game>"
+IntegrityService | nil | inst IntegrityService/Instance | inst IntegrityService/Instance | inst IntegrityService/Instance | err IntegrityService is not a valid member of DataModel "<game>"
+IntentService | nil | nil | nil | nil | err IntentService is not a valid member of DataModel "<game>"
+InternalMessagingService | nil | nil | nil | nil | err InternalMessagingService is not a valid member of DataModel "<game>"
+InternalMessagingServiceVerifier | nil | nil | nil | nil | err InternalMessagingServiceVerifier is not a valid member of DataModel "<game>"
+InternalSyncService | nil | nil | nil | nil | err InternalSyncService is not a valid member of DataModel "<game>"
+JointsService | inst JointsService/JointsService | inst JointsService/JointsService | inst JointsService/JointsService | inst JointsService/JointsService | inst JointsService/JointsService
+KeyboardService | inst KeyboardService/KeyboardService | inst KeyboardService/KeyboardService | inst KeyboardService/KeyboardService | inst KeyboardService/KeyboardService | inst KeyboardService/KeyboardService
+KeyframeSequenceProvider | inst KeyframeSequenceProvider/KeyframeSequenceProvider | inst KeyframeSequenceProvider/KeyframeSequenceProvider | inst KeyframeSequenceProvider/KeyframeSequenceProvider | inst KeyframeSequenceProvider/KeyframeSequenceProvider | inst KeyframeSequenceProvider/KeyframeSequenceProvider
+LanguageService | nil | nil | nil | nil | err LanguageService is not a valid member of DataModel "<game>"
+LegacyStudioBridge | nil | nil | nil | nil | err LegacyStudioBridge is not a valid member of DataModel "<game>"
+Lighting | inst Lighting/Lighting | inst Lighting/Lighting | inst Lighting/Lighting | inst Lighting/Lighting | inst Lighting/Lighting
+LinkingService | nil | nil | nil | nil | err LinkingService is not a valid member of DataModel "<game>"
+LiveScriptingService | nil | nil | nil | nil | err LiveScriptingService is not a valid member of DataModel "<game>"
+LiveSyncService | nil | nil | nil | nil | err LiveSyncService is not a valid member of DataModel "<game>"
+LocalStorageService | nil | nil | nil | nil | err LocalStorageService is not a valid member of DataModel "<game>"
+LocalizationService | inst LocalizationService/LocalizationService | inst LocalizationService/LocalizationService | inst LocalizationService/LocalizationService | inst LocalizationService/LocalizationService | inst LocalizationService/LocalizationService
+LodDataService | nil | nil | nil | nil | nil
+LogReporterService | nil | nil | nil | nil | err LogReporterService is not a valid member of DataModel "<game>"
+LogService | inst LogService/LogService | inst LogService/LogService | inst LogService/LogService | inst LogService/LogService | inst LogService/LogService
+LoginService | nil | nil | nil | nil | err LoginService is not a valid member of DataModel "<game>"
+LuaWebService | nil | nil | nil | nil | err LuaWebService is not a valid member of DataModel "<game>"
+LuauExpressionService | nil | nil | nil | nil | err LuauExpressionService is not a valid member of DataModel "<game>"
+LuauScriptAnalyzerService | nil | nil | nil | nil | err LuauScriptAnalyzerService is not a valid member of DataModel "<game>"
+MLModelDeliveryService | nil | nil | nil | nil | err MLModelDeliveryService is not a valid member of DataModel "<game>"
+MarketplaceService | inst MarketplaceService/MarketplaceService | inst MarketplaceService/MarketplaceService | inst MarketplaceService/MarketplaceService | inst MarketplaceService/MarketplaceService | inst MarketplaceService/MarketplaceService
+MaterialGenerationService | nil | nil | nil | nil | err MaterialGenerationService is not a valid member of DataModel "<game>"
+MaterialService | inst MaterialService/MaterialService | inst MaterialService/MaterialService | inst MaterialService/MaterialService | inst MaterialService/MaterialService | inst MaterialService/MaterialService
+MemoryStoreService | inst MemoryStoreService/MemoryStoreService | inst MemoryStoreService/MemoryStoreService | inst MemoryStoreService/MemoryStoreService | inst MemoryStoreService/MemoryStoreService | inst MemoryStoreService/MemoryStoreService
+MeshContentProvider | nil | nil | nil | nil | err MeshContentProvider is not a valid member of DataModel "<game>"
+MessageBusService | nil | nil | nil | nil | err MessageBusService is not a valid member of DataModel "<game>"
+MessagingService | inst MessagingService/MessagingService | inst MessagingService/MessagingService | inst MessagingService/MessagingService | inst MessagingService/MessagingService | inst MessagingService/MessagingService
+MetaBreakpointManager | nil | nil | nil | nil | err MetaBreakpointManager is not a valid member of DataModel "<game>"
+MicroProfilerService | inst MicroProfilerService/MicroProfilerService | inst MicroProfilerService/MicroProfilerService | inst MicroProfilerService/MicroProfilerService | inst MicroProfilerService/MicroProfilerService | inst MicroProfilerService/MicroProfilerService
+ModelInfoService | nil | nil | nil | nil | err ModelInfoService is not a valid member of DataModel "<game>"
+ModerationService | inst ModerationService/ModerationService | inst ModerationService/ModerationService | inst ModerationService/ModerationService | inst ModerationService/ModerationService | inst ModerationService/ModerationService
+MouseService | inst MouseService/MouseService | inst MouseService/MouseService | inst MouseService/MouseService | inst MouseService/MouseService | inst MouseService/MouseService
+NetworkClient | inst NetworkClient/NetworkClient | inst NetworkClient/NetworkClient | inst NetworkClient/NetworkClient | inst NetworkClient/NetworkClient | inst NetworkClient/NetworkClient
+NetworkServer | nil | err The current thread cannot create 'NetworkServer' (lacking capability RobloxEngine) | nil | nil | err NetworkServer is not a valid member of DataModel "<game>"
+NonReplicatedCSGDictionaryService | nil | nil | nil | nil | nil
+NotificationService | inst NotificationService/NotificationService | inst NotificationService/NotificationService | inst NotificationService/NotificationService | inst NotificationService/NotificationService | inst NotificationService/NotificationService
+OmniRecommendationsService | nil | nil | nil | nil | err OmniRecommendationsService is not a valid member of DataModel "<game>"
+PackageService | nil | inst PackageService/Instance | inst PackageService/Instance | inst PackageService/Instance | err PackageService is not a valid member of DataModel "<game>"
+PackageUIService | nil | nil | nil | nil | err PackageUIService is not a valid member of DataModel "<game>"
+Packages | inst Packages/Packages | inst Packages/Packages | inst Packages/Packages | inst Packages/Packages | inst Packages/Packages
+PartyEmulatorService | nil | nil | nil | nil | err PartyEmulatorService is not a valid member of DataModel "<game>"
+PathfindingService | nil | inst PathfindingService/Instance | inst PathfindingService/Instance | inst PathfindingService/Instance | err PathfindingService is not a valid member of DataModel "<game>"
+PerformanceControlService | nil | nil | nil | nil | err PerformanceControlService is not a valid member of DataModel "<game>"
+PermissionsService | inst PermissionsService/PermissionsService | inst PermissionsService/PermissionsService | inst PermissionsService/PermissionsService | inst PermissionsService/PermissionsService | inst PermissionsService/PermissionsService
+PhysicsService | inst PhysicsService/PhysicsService | inst PhysicsService/PhysicsService | inst PhysicsService/PhysicsService | inst PhysicsService/PhysicsService | inst PhysicsService/PhysicsService
+PinShortcutService | nil | nil | nil | nil | err PinShortcutService is not a valid member of DataModel "<game>"
+PlaceAssetIdsService | nil | nil | nil | nil | err PlaceAssetIdsService is not a valid member of DataModel "<game>"
+PlaceSettings | nil | nil | nil | nil | nil
+PlaceStatsService | nil | nil | nil | nil | nil
+PlatformCloudStorageService | nil | nil | nil | nil | err PlatformCloudStorageService is not a valid member of DataModel "<game>"
+PlatformFriendsService | nil | nil | nil | nil | err PlatformFriendsService is not a valid member of DataModel "<game>"
+PlatformLibraries | nil | nil | nil | nil | nil
+PlayerEmulatorService | nil | nil | nil | nil | nil
+PlayerHydrationService | nil | nil | nil | nil | nil
+Players | inst Players/Players | inst Players/Players | inst Players/Players | inst Players/Players | inst Players/Players
+PluginConnectionService | nil | nil | nil | nil | err PluginConnectionService is not a valid member of DataModel "<game>"
+PluginDebugService | nil | nil | nil | nil | err PluginDebugService is not a valid member of DataModel "<game>"
+PluginGuiService | nil | nil | nil | nil | err PluginGuiService is not a valid member of DataModel "<game>"
+PluginPolicyService | nil | nil | nil | nil | err PluginPolicyService is not a valid member of DataModel "<game>"
+PointsService | inst PointsService/PointsService | inst PointsService/PointsService | inst PointsService/PointsService | inst PointsService/PointsService | inst PointsService/PointsService
+PolicyService | inst PolicyService/PolicyService | inst PolicyService/PolicyService | inst PolicyService/PolicyService | inst PolicyService/PolicyService | inst PolicyService/PolicyService
+ProceduralBehaviorSchedulerService | nil | nil | nil | nil | err ProceduralBehaviorSchedulerService is not a valid member of DataModel "<game>"
+ProcessInstancePhysicsService | nil | nil | nil | nil | err ProcessInstancePhysicsService is not a valid member of DataModel "<game>"
+ProjectService | nil | nil | nil | nil | err ProjectService is not a valid member of DataModel "<game>"
+ProximityPromptService | inst ProximityPromptService/ProximityPromptService | inst ProximityPromptService/ProximityPromptService | inst ProximityPromptService/ProximityPromptService | inst ProximityPromptService/ProximityPromptService | inst ProximityPromptService/ProximityPromptService
+PublishService | nil | inst PublishService/Instance | inst PublishService/Instance | inst PublishService/Instance | err PublishService is not a valid member of DataModel "<game>"
+RbxAnalyticsService | nil | nil | nil | nil | err RbxAnalyticsService is not a valid member of DataModel "<game>"
+RecommendationService | inst RecommendationService/RecommendationService | inst RecommendationService/RecommendationService | inst RecommendationService/RecommendationService | inst RecommendationService/RecommendationService | inst RecommendationService/RecommendationService
+RemoteCursorService | nil | nil | nil | nil | err RemoteCursorService is not a valid member of DataModel "<game>"
+RemoteDebuggerServer | nil | nil | nil | nil | err RemoteDebuggerServer is not a valid member of DataModel "<game>"
+ReplicatedFirst | inst ReplicatedFirst/ReplicatedFirst | inst ReplicatedFirst/ReplicatedFirst | inst ReplicatedFirst/ReplicatedFirst | inst ReplicatedFirst/ReplicatedFirst | inst ReplicatedFirst/ReplicatedFirst
+ReplicatedStorage | inst ReplicatedStorage/ReplicatedStorage | inst ReplicatedStorage/ReplicatedStorage | inst ReplicatedStorage/ReplicatedStorage | inst ReplicatedStorage/ReplicatedStorage | inst ReplicatedStorage/ReplicatedStorage
+RequestOrchestratorService | nil | nil | nil | nil | err RequestOrchestratorService is not a valid member of DataModel "<game>"
+RibbonNotificationService | nil | nil | nil | nil | err RibbonNotificationService is not a valid member of DataModel "<game>"
+RobloxPluginGuiService | nil | nil | nil | nil | err RobloxPluginGuiService is not a valid member of DataModel "<game>"
+RobloxReplicatedStorage | nil | nil | nil | nil | nil
+RobloxServerStorage | nil | nil | nil | nil | nil
+RolloutValidationService | nil | nil | nil | nil | err RolloutValidationService is not a valid member of DataModel "<game>"
+RomarkRbxAnalyticsService | nil | nil | nil | nil | err RomarkRbxAnalyticsService is not a valid member of DataModel "<game>"
+RomarkService | nil | nil | nil | nil | err RomarkService is not a valid member of DataModel "<game>"
+RtMessagingService | nil | nil | nil | nil | err RtMessagingService is not a valid member of DataModel "<game>"
+RunService | inst RunService/Run Service | inst RunService/Run Service | inst RunService/Run Service | inst RunService/Run Service | inst RunService/Run Service
+RuntimeContentService | nil | nil | nil | nil | nil
+RuntimeScriptService | nil | nil | nil | nil | nil
+SafetyService | nil | nil | nil | nil | nil
+ScriptChangeService | nil | nil | nil | nil | err ScriptChangeService is not a valid member of DataModel "<game>"
+ScriptCloneWatcher | nil | nil | nil | nil | err ScriptCloneWatcher is not a valid member of DataModel "<game>"
+ScriptCloneWatcherHelper | nil | nil | nil | nil | err ScriptCloneWatcherHelper is not a valid member of DataModel "<game>"
+ScriptCommitService | nil | nil | nil | nil | err ScriptCommitService is not a valid member of DataModel "<game>"
+ScriptContext | inst ScriptContext/Script Context | inst ScriptContext/Script Context | inst ScriptContext/Script Context | inst ScriptContext/Script Context | err ScriptContext is not a valid member of DataModel "<game>"
+ScriptDebuggerService | nil | nil | nil | nil | err ScriptDebuggerService is not a valid member of DataModel "<game>"
+ScriptEditorService | nil | nil | nil | nil | err ScriptEditorService is not a valid member of DataModel "<game>"
+ScriptProfilerService | inst ScriptProfilerService/ScriptProfilerService | inst ScriptProfilerService/ScriptProfilerService | inst ScriptProfilerService/ScriptProfilerService | inst ScriptProfilerService/ScriptProfilerService | inst ScriptProfilerService/ScriptProfilerService
+ScriptRegistrationService | nil | nil | nil | nil | err ScriptRegistrationService is not a valid member of DataModel "<game>"
+ScriptScannerService | nil | nil | nil | nil | err ScriptScannerService is not a valid member of DataModel "<game>"
+ScriptService | inst ScriptService/ScriptService | inst ScriptService/ScriptService | inst ScriptService/ScriptService | inst ScriptService/ScriptService | inst ScriptService/ScriptService
+Selection | inst Selection/Selection | inst Selection/Selection | inst Selection/Selection | inst Selection/Selection | inst Selection/Selection
+SerializationService | nil | nil | nil | nil | err SerializationService is not a valid member of DataModel "<game>"
+ServerScriptService | inst ServerScriptService/ServerScriptService | inst ServerScriptService/ServerScriptService | inst ServerScriptService/ServerScriptService | inst ServerScriptService/ServerScriptService | inst ServerScriptService/ServerScriptService
+ServerStorage | nil | inst ServerStorage/ServerStorage | inst ServerStorage/ServerStorage | inst ServerStorage/ServerStorage | inst ServerStorage/ServerStorage
+ServiceVisibilityService | nil | inst ServiceVisibilityService/Instance | inst ServiceVisibilityService/Instance | inst ServiceVisibilityService/Instance | err ServiceVisibilityService is not a valid member of DataModel "<game>"
+SessionService | nil | nil | nil | nil | err SessionService is not a valid member of DataModel "<game>"
+SharedTableRegistry | inst SharedTableRegistry/SharedTableRegistry | inst SharedTableRegistry/SharedTableRegistry | inst SharedTableRegistry/SharedTableRegistry | inst SharedTableRegistry/SharedTableRegistry | inst SharedTableRegistry/SharedTableRegistry
+SlimAnimationReplicationService | nil | nil | nil | nil | nil
+SlimContentProvider | inst SlimContentProvider/SlimContentProvider | inst SlimContentProvider/SlimContentProvider | inst SlimContentProvider/SlimContentProvider | inst SlimContentProvider/SlimContentProvider | inst SlimContentProvider/SlimContentProvider
+SlimDebugSettings | nil | nil | nil | nil | err SlimDebugSettings is not a valid member of DataModel "<game>"
+SlimReplicationService | nil | nil | nil | nil | nil
+SlimService | nil | nil | nil | nil | err SlimService is not a valid member of DataModel "<game>"
+SmoothVoxelsUpgraderService | nil | nil | nil | nil | err SmoothVoxelsUpgraderService is not a valid member of DataModel "<game>"
+SocialService | inst SocialService/SocialService | inst SocialService/SocialService | inst SocialService/SocialService | inst SocialService/SocialService | inst SocialService/SocialService
+SolidModelContentProvider | nil | nil | nil | nil | err SolidModelContentProvider is not a valid member of DataModel "<game>"
+SoundService | inst SoundService/SoundService | inst SoundService/SoundService | inst SoundService/SoundService | inst SoundService/SoundService | inst SoundService/SoundService
+SoundShimService | nil | nil | nil | nil | err SoundShimService is not a valid member of DataModel "<game>"
+SpawnerService | nil | nil | nil | nil | err SpawnerService is not a valid member of DataModel "<game>"
+StartPageService | nil | nil | nil | nil | err StartPageService is not a valid member of DataModel "<game>"
+StarterGui | inst StarterGui/StarterGui | inst StarterGui/StarterGui | inst StarterGui/StarterGui | inst StarterGui/StarterGui | inst StarterGui/StarterGui
+StarterPack | inst StarterPack/StarterPack | inst StarterPack/StarterPack | inst StarterPack/StarterPack | inst StarterPack/StarterPack | inst StarterPack/StarterPack
+StarterPlayer | inst StarterPlayer/StarterPlayer | inst StarterPlayer/StarterPlayer | inst StarterPlayer/StarterPlayer | inst StarterPlayer/StarterPlayer | inst StarterPlayer/StarterPlayer
+StartupMessageService | nil | inst StartupMessageService/Instance | inst StartupMessageService/Instance | inst StartupMessageService/Instance | err StartupMessageService is not a valid member of DataModel "<game>"
+Stats | inst Stats/Stats | inst Stats/Stats | inst Stats/Stats | inst Stats/Stats | inst Stats/Stats
+StopWatchReporter | nil | nil | nil | nil | err StopWatchReporter is not a valid member of DataModel "<game>"
+StudioAssetService | nil | nil | nil | nil | err StudioAssetService is not a valid member of DataModel "<game>"
+StudioCameraService | nil | nil | nil | nil | err StudioCameraService is not a valid member of DataModel "<game>"
+StudioCaptureService | nil | nil | nil | nil | err StudioCaptureService is not a valid member of DataModel "<game>"
+StudioData | nil | nil | nil | nil | nil
+StudioDeviceEmulatorService | nil | nil | nil | nil | err StudioDeviceEmulatorService is not a valid member of DataModel "<game>"
+StudioDeviceSimulatorService | nil | nil | nil | nil | err StudioDeviceSimulatorService is not a valid member of DataModel "<game>"
+StudioPublishService | nil | nil | nil | nil | err StudioPublishService is not a valid member of DataModel "<game>"
+StudioScriptDebugEventListener | nil | nil | nil | nil | err StudioScriptDebugEventListener is not a valid member of DataModel "<game>"
+StudioSdkService | nil | nil | nil | nil | err StudioSdkService is not a valid member of DataModel "<game>"
+StudioService | nil | nil | nil | nil | err StudioService is not a valid member of DataModel "<game>"
+StudioTestService | nil | inst StudioTestService/Instance | inst StudioTestService/Instance | inst StudioTestService/Instance | err StudioTestService is not a valid member of DataModel "<game>"
+StudioUserService | nil | nil | nil | nil | err StudioUserService is not a valid member of DataModel "<game>"
+StudioWidgetsService | nil | nil | nil | nil | err StudioWidgetsService is not a valid member of DataModel "<game>"
+SystemThemeService | nil | nil | nil | nil | err SystemThemeService is not a valid member of DataModel "<game>"
+TeamCreateData | nil | nil | nil | nil | err TeamCreateData is not a valid member of DataModel "<game>"
+TeamCreatePublishService | nil | nil | nil | nil | err TeamCreatePublishService is not a valid member of DataModel "<game>"
+TeamCreateService | nil | nil | nil | nil | err TeamCreateService is not a valid member of DataModel "<game>"
+Teams | inst Teams/Teams | inst Teams/Teams | inst Teams/Teams | inst Teams/Teams | inst Teams/Teams
+TelemetryService | nil | nil | nil | nil | err TelemetryService is not a valid member of DataModel "<game>"
+TeleportService | inst TeleportService/Teleport Service | inst TeleportService/Teleport Service | inst TeleportService/Teleport Service | inst TeleportService/Teleport Service | err TeleportService is not a valid member of DataModel "<game>"
+TemporaryCageMeshProvider | nil | nil | nil | nil | err TemporaryCageMeshProvider is not a valid member of DataModel "<game>"
+TemporaryScriptService | nil | nil | nil | nil | err TemporaryScriptService is not a valid member of DataModel "<game>"
+TestCoordinatorService | nil | nil | nil | nil | err TestCoordinatorService is not a valid member of DataModel "<game>"
+TestService | inst TestService/TestService | inst TestService/TestService | inst TestService/TestService | inst TestService/TestService | inst TestService/TestService
+TextChatService | inst TextChatService/TextChatService | inst TextChatService/TextChatService | inst TextChatService/TextChatService | inst TextChatService/TextChatService | inst TextChatService/TextChatService
+TextService | inst TextService/TextService | inst TextService/TextService | inst TextService/TextService | inst TextService/TextService | inst TextService/TextService
+TextureGenerationService | nil | nil | nil | nil | err TextureGenerationService is not a valid member of DataModel "<game>"
+ThirdPartyUserService | nil | nil | nil | nil | err ThirdPartyUserService is not a valid member of DataModel "<game>"
+TimerService | inst TimerService/TimerService | inst TimerService/TimerService | inst TimerService/TimerService | inst TimerService/TimerService | inst TimerService/TimerService
+ToastNotificationService | nil | nil | nil | nil | err ToastNotificationService is not a valid member of DataModel "<game>"
+TouchInputService | inst TouchInputService/TouchInputService | inst TouchInputService/TouchInputService | inst TouchInputService/TouchInputService | inst TouchInputService/TouchInputService | inst TouchInputService/TouchInputService
+TraceRouteService | nil | inst TraceRouteService/Instance | inst TraceRouteService/Instance | inst TraceRouteService/Instance | err TraceRouteService is not a valid member of DataModel "<game>"
+TracerService | nil | nil | nil | nil | err TracerService is not a valid member of DataModel "<game>"
+TutorialService | nil | nil | nil | nil | err TutorialService is not a valid member of DataModel "<game>"
+TweenService | inst TweenService/TweenService | inst TweenService/TweenService | inst TweenService/TweenService | inst TweenService/TweenService | inst TweenService/TweenService
+UGCAvatarService | nil | nil | nil | nil | err UGCAvatarService is not a valid member of DataModel "<game>"
+UnvalidatedAssetService | nil | nil | nil | nil | err UnvalidatedAssetService is not a valid member of DataModel "<game>"
+UserInputService | inst UserInputService/UserInputService | inst UserInputService/UserInputService | inst UserInputService/UserInputService | inst UserInputService/UserInputService | inst UserInputService/UserInputService
+UserStorageService | nil | nil | nil | nil | err UserStorageService is not a valid member of DataModel "<game>"
+VRService | inst VRService/VRService | inst VRService/VRService | inst VRService/VRService | inst VRService/VRService | inst VRService/VRService
+VersionControlService | nil | nil | nil | nil | err VersionControlService is not a valid member of DataModel "<game>"
+VideoCaptureService | inst VideoCaptureService/VideoCaptureService | inst VideoCaptureService/VideoCaptureService | inst VideoCaptureService/VideoCaptureService | inst VideoCaptureService/VideoCaptureService | inst VideoCaptureService/VideoCaptureService
+VideoScreenCaptureService | nil | inst VideoScreenCaptureService/Instance | inst VideoScreenCaptureService/Instance | inst VideoScreenCaptureService/Instance | err VideoScreenCaptureService is not a valid member of DataModel "<game>"
+VideoService | inst VideoService/VideoService | inst VideoService/VideoService | inst VideoService/VideoService | inst VideoService/VideoService | inst VideoService/VideoService
+VirtualUser | nil | inst VirtualUser/Instance | inst VirtualUser/Instance | inst VirtualUser/Instance | err VirtualUser is not a valid member of DataModel "<game>"
+VisibilityCheckDispatcher | nil | inst VisibilityCheckDispatcher/Instance | inst VisibilityCheckDispatcher/Instance | inst VisibilityCheckDispatcher/Instance | err VisibilityCheckDispatcher is not a valid member of DataModel "<game>"
+VoiceChatService | inst VoiceChatService/VoiceChatService | inst VoiceChatService/VoiceChatService | inst VoiceChatService/VoiceChatService | inst VoiceChatService/VoiceChatService | inst VoiceChatService/VoiceChatService
+WebSocketService | nil | nil | nil | nil | err WebSocketService is not a valid member of DataModel "<game>"
+WebViewService | nil | nil | nil | nil | err WebViewService is not a valid member of DataModel "<game>"
+WindowProtocolService | nil | nil | nil | nil | err WindowProtocolService is not a valid member of DataModel "<game>"
+Workspace | inst Workspace/Workspace | inst Workspace/Workspace | inst Workspace/Workspace | inst Workspace/Workspace | inst Workspace/Workspace
+WrapContentProvider | nil | nil | nil | nil | err WrapContentProvider is not a valid member of DataModel "<game>"

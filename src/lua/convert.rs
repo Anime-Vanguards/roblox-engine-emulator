@@ -518,7 +518,11 @@ pub fn coerce(lua: &Lua, engine: &Engine, info: &PropertyInfo, value: &LuaValue)
             }
             let actual = typeof_value(engine, value);
             if actual != &*info.script_type_name {
-                if value.is_nil() || info.script_type.strict() || physical {
+                // (a Faces or an Axes property takes its own type only, an Axes no Faces and a Faces no Axes, read-only ones casting
+                // first too: "Unable to assign property Faces. Faces expected, got Axes", measured, roblox-sim 0.747, a client and a
+                // server, tools/parity/probes/parent_rules.luau)
+                let faces = matches!(&*info.script_type_name, "Faces" | "Axes");
+                if value.is_nil() || info.script_type.strict() || physical || faces {
                     return Err(type_error(info, engine, name, &info.script_type_name, value));
                 }
             }

@@ -481,6 +481,120 @@ pub const ROBLOX_ONLY_SERVICES: &[&str] = &[
     "RobloxReplicatedStorage",
 ];
 
+/// The services a game script's GetService and FindService answer nil for in a play run, a playing client's and a server's alike,
+/// making nothing (measured, roblox-sim 0.747, script identity 2: GetService, FindService, FindFirstChildOfClass and an index of
+/// every service class data/reflection.json, data/reflection-security.json and rbx-dom's database name, two sessions each side;
+/// tools/parity/probes/service_access.luau): the services Roblox keeps for its own scripts, Studio and plugins, whatever their
+/// permits say. A client also answers nil for ClusterPacketCache, a server's. Sorted (binary search). CoreGui is nil to a game
+/// script as well, but ree answers it: rur's story host mounts its stories in CoreGui. The edit run context (a plugin's code) keeps
+/// what it had: [`ROBLOX_ONLY_SERVICES`] nil, the rest made.
+pub const HIDDEN_SERVICES: &[&str] = &[
+    "AccountService", "AchievementService", "ActivityHistoryEventService", "AnimatedImageService",
+    "AnimationFromVideoCreatorStudioService", "AnnotationsService", "AppAgeSignalsService", "AppLifecycleObserverService",
+    "AppRatingPromptService", "AppStorageService", "AppUpdateService", "AssetCounterService", "AssetImportService",
+    "AssetManagerService", "AssetQualityService", "AudioFocusService", "AuroraScriptService", "AuroraService", "AvatarChatService",
+    "AvatarImportService", "AvatarSettings", "BackendReplicatedStorage", "BackendServerScriptService", "BackendServerStorage",
+    "BranchService", "BugReporterService", "CSGDictionaryService", "CacheableContentProvider", "CallingService", "CalloutService",
+    "ChangeHistoryStreamingService", "ClientStorageService", "CloudCRUDService", "CloudClientService", "CloudExecutionService",
+    "CollaboratorsService", "ConfigureServerService", "ConnectivityService", "ControllerService", "CorePackages",
+    "CoreScriptDebuggingManagerHelper", "CoreScriptSyncService", "CreationDBService", "CrossDMScriptChangeListener",
+    "DebuggablePluginWatcher", "DebuggerConnectionManager", "DebuggerManager", "DebuggerUIService", "DeferredAssetManagerService",
+    "DesignFoundationsService", "DeviceDisplayService", "DeviceIdService", "DraftsService", "DraggerService", "EditableService",
+    "EditorSourceService", "EventIngestService", "ExampleV2Service", "ExperienceAuthService", "ExperienceService",
+    "ExperienceStateCaptureService", "ExperienceStateRecordingService", "ExplorerServiceVisibilityService", "ExternalIdentityService",
+    "FaceAnimatorService", "FacialAgeEstimationService", "FacialAnimationRecordingService", "FacialAnimationStreamingServiceV2",
+    "FileManagerService", "FileSyncReplicationService", "FlagStandService", "FlyweightService", "FriendsCallingService",
+    "GameDownloaderService", "GongService", "HSRDataContentProvider", "HarmonyService", "HeatmapQueryService", "HeatmapService",
+    "HiddenPlayerService", "Hopper", "ILegacyStudioBridge", "IXPService", "ImageScreenCaptureService", "InputReplayService",
+    "InstanceFileSyncService", "IntentService", "InternalMessagingService", "InternalMessagingServiceVerifier", "InternalSyncService",
+    "LanguageService", "LegacyStudioBridge", "LinkingService", "LiveScriptingService", "LiveSyncService", "LocalStorageService",
+    "LodDataService", "LogReporterService", "LoginService", "LuaWebService", "LuauExpressionService", "LuauScriptAnalyzerService",
+    "MLModelDeliveryService", "MaterialGenerationService", "MeshContentProvider", "MessageBusService", "MetaBreakpointManager",
+    "ModelInfoService", "NonReplicatedCSGDictionaryService", "OmniRecommendationsService", "PackageUIService", "PartyEmulatorService",
+    "PerformanceControlService", "PinShortcutService", "PlaceAssetIdsService", "PlaceSettings", "PlaceStatsService",
+    "PlatformCloudStorageService", "PlatformFriendsService", "PlatformLibraries", "PlayerEmulatorService", "PlayerHydrationService",
+    "PluginConnectionService", "PluginDebugService", "PluginGuiService", "PluginPolicyService", "ProceduralBehaviorSchedulerService",
+    "ProcessInstancePhysicsService", "ProjectService", "RbxAnalyticsService", "RemoteCursorService", "RemoteDebuggerServer",
+    "RequestOrchestratorService", "RibbonNotificationService", "RobloxPluginGuiService", "RobloxReplicatedStorage",
+    "RobloxServerStorage", "RolloutValidationService", "RomarkRbxAnalyticsService", "RomarkService", "RtMessagingService",
+    "RuntimeContentService", "RuntimeScriptService", "SafetyService", "ScriptChangeService", "ScriptCloneWatcher",
+    "ScriptCloneWatcherHelper", "ScriptCommitService", "ScriptDebuggerService", "ScriptEditorService", "ScriptRegistrationService",
+    "ScriptScannerService", "SerializationService", "SessionService", "SlimAnimationReplicationService", "SlimDebugSettings",
+    "SlimReplicationService", "SlimService", "SmoothVoxelsUpgraderService", "SolidModelContentProvider", "SoundShimService",
+    "SpawnerService", "StartPageService", "StopWatchReporter", "StudioAssetService", "StudioCameraService", "StudioCaptureService",
+    "StudioData", "StudioDeviceEmulatorService", "StudioDeviceSimulatorService", "StudioPublishService",
+    "StudioScriptDebugEventListener", "StudioSdkService", "StudioService", "StudioUserService", "StudioWidgetsService",
+    "SystemThemeService", "TeamCreateData", "TeamCreatePublishService", "TeamCreateService", "TelemetryService",
+    "TemporaryCageMeshProvider", "TemporaryScriptService", "TestCoordinatorService", "TextureGenerationService",
+    "ThirdPartyUserService", "ToastNotificationService", "TracerService", "TutorialService", "UGCAvatarService",
+    "UnvalidatedAssetService", "UserStorageService", "VersionControlService", "WebSocketService", "WebViewService",
+    "WindowProtocolService", "WrapContentProvider",
+];
+
+/// Of [`HIDDEN_SERVICES`], those an index of the DataModel (`game.CorePackages`) reads as nil, where any other name no child
+/// has raises "is not a valid member of DataModel" (measured likewise; a server also reads InternalMessagingService so). Sorted.
+const HIDDEN_CHILDREN: &[&str] = &[
+    "AppStorageService", "AvatarChatService", "AvatarSettings", "CSGDictionaryService", "CorePackages", "EditableService",
+    "ExperienceAuthService", "HeatmapService", "LodDataService", "NonReplicatedCSGDictionaryService", "PlaceSettings",
+    "PlaceStatsService", "PlatformLibraries", "PlayerEmulatorService", "PlayerHydrationService", "RobloxReplicatedStorage",
+    "RobloxServerStorage", "RuntimeContentService", "RuntimeScriptService", "SafetyService", "SlimAnimationReplicationService",
+    "SlimReplicationService", "StudioData",
+];
+
+/// Whether a game script's GetService or FindService of `name` answers nil in this run: [`HIDDEN_SERVICES`] in a play run, and in
+/// any run a name of them ree knows no class of (the client knows every one; ree would raise "is not a valid Service name").
+fn hidden_service(engine: &Engine, name: &str) -> bool {
+    if HIDDEN_SERVICES.binary_search(&name).is_err() {
+        return !engine.options.edit_mode() && !engine.options.server() && name == "ClusterPacketCache";
+    }
+    !engine.options.edit_mode() || engine.reflection.class_id(name).is_none()
+}
+
+/// What a game script's GetService raises in a play run for a service its side lacks and may not make (measured likewise): a client's
+/// NetworkServer, a server's NetworkClient.
+fn refused_service(engine: &Engine, name: &str) -> Option<&'static str> {
+    if engine.options.edit_mode() {
+        return None;
+    }
+    match name {
+        "NetworkServer" if !engine.options.server() => Some("The current thread cannot create 'NetworkServer' (lacking capability RobloxEngine)"),
+        "NetworkClient" if engine.options.server() => Some("The current thread cannot create 'NetworkClient' (lacking capability Plugin)"),
+        _ => None,
+    }
+}
+
+/// Whether the DataModel of a play run holds `name` from the start: a client's [`STARTING_SERVICES`] and NetworkClient, a server's
+/// and its [`SERVER_STARTING_SERVICES`] and NetworkServer (but SpawnerService, which a game script may not get). ree makes each the
+/// first time a script asks: FindService and an index find them as a client does (measured likewise: FindService before any
+/// GetService answers each).
+fn starting_service(engine: &Engine, name: &str) -> bool {
+    if engine.options.edit_mode() {
+        return false;
+    }
+    if engine.options.server() {
+        (STARTING_SERVICES.contains(&name) && name != "NetworkClient") || matches!(name, "ClusterPacketCache" | "ServerStorage" | "NetworkServer")
+    } else {
+        STARTING_SERVICES.contains(&name) || name == "NetworkClient"
+    }
+}
+
+/// An index of the DataModel `game` by `name` that names no member or child: nil for a hidden service the client holds
+/// ([`HIDDEN_CHILDREN`]), a starting service made and answered ([`starting_service`]; one whose instance name is its class's), else
+/// None (the index raises).
+pub fn data_model_child(engine: &Engine, game: InstanceId, name: &[u8]) -> Result<Option<Option<InstanceId>>, Flow> {
+    if engine.options.edit_mode() || Some(engine.state.borrow().dom.at(game).class) != engine.reflection.class_id("DataModel") {
+        return Ok(None);
+    }
+    let Ok(name) = std::str::from_utf8(name) else { return Ok(None) };
+    if HIDDEN_CHILDREN.binary_search(&name).is_ok() || (engine.options.server() && name == "InternalMessagingService") {
+        return Ok(Some(None));
+    }
+    if starting_service(engine, name) && !matches!(name, "RunService" | "ScriptContext" | "TeleportService") {
+        return Ok(Some(Some(get_service(engine, game, name)?)));
+    }
+    Ok(None)
+}
+
 /// GetService: the existing service child, or a new one (named, parented without events and
 /// parent-locked).
 pub fn get_service(engine: &Engine, game: InstanceId, service_name: &str) -> Result<InstanceId, Flow> {
@@ -508,7 +622,10 @@ pub fn get_service(engine: &Engine, game: InstanceId, service_name: &str) -> Res
         "ScriptContext" => "Script Context",
         "TeleportService" => "Teleport Service",
         "UserGameSettings" => "GameSettings",
-        "PathfindingService" => "Instance",
+        // (and these, measured likewise: tools/parity/probes/service_access.luau)
+        "PathfindingService" | "AnimationFromVideoCreatorService" | "AssetDeliveryProxy" | "IncrementalPatchBuilder" | "InstanceRegistryService"
+        | "IntegrityService" | "PackageService" | "PublishService" | "ServiceVisibilityService" | "StartupMessageService" | "StudioTestService"
+        | "TraceRouteService" | "VideoScreenCaptureService" | "VirtualUser" | "VisibilityCheckDispatcher" => "Instance",
         other => other,
     };
     let service = core::create_named(&mut state, reflection, class, instance_name);
@@ -556,9 +673,11 @@ const STARTING_SERVICES: &[&str] = &[
     "ServerScriptService", "SharedTableRegistry", "SlimContentProvider", "SocialService", "SoundService", "StarterGui", "StarterPack",
     "StarterPlayer", "Stats", "Teams", "TeleportService", "TestService", "TextChatService", "TextService", "TimerService", "TouchInputService",
     "TweenService", "UserInputService", "VRService", "VideoCaptureService", "VideoService", "VoiceChatService", "Workspace",
+    // (a client's; a server has none)
+    "NetworkClient",
 ];
 /// [`STARTING_SERVICES`]' server has these too
-const SERVER_STARTING_SERVICES: &[&str] = &["ClusterPacketCache", "ServerStorage", "SpawnerService"];
+const SERVER_STARTING_SERVICES: &[&str] = &["ClusterPacketCache", "NetworkServer", "ServerStorage", "SpawnerService"];
 
 /// What a playing client's services hold from the start where neither the dump nor rbx-dom gives a default (a service
 /// has none, and rbx-dom leaves UserGameSettings' numbers out, so they read 0): the mouse and gamepad sensitivities read 1
@@ -784,6 +903,12 @@ fn install_data_model(behaviors: &mut Behaviors, reflection: &Reflection, option
     if let Some(data_model) = class(reflection, "DataModel") {
         let get = method(|lua, engine, id, args| {
             let service_name = service_param(lua, engine, args)?;
+            if hidden_service(engine, &service_name) {
+                return Ok(values([LuaValue::Nil]));
+            }
+            if let Some(refused) = refused_service(engine, &service_name) {
+                return raise(refused);
+            }
             if names_no_service(engine, &service_name) {
                 if let Some(refused) = refused_class(&service_name) {
                     return raise(refused);
@@ -805,8 +930,12 @@ fn install_data_model(behaviors: &mut Behaviors, reflection: &Reflection, option
         behaviors.add_method(data_model, K::service as NameId, get);
         behaviors.add_method(data_model, K::FindService as NameId, method(|lua, engine, id, args| {
             let service_name = service_param(lua, engine, args)?;
-            if names_no_service(engine, &service_name) {
+            if names_no_service(engine, &service_name) || hidden_service(engine, &service_name) {
                 return Ok(values([LuaValue::Nil]));
+            }
+            if starting_service(engine, &service_name) && Some(engine.state.borrow().dom.at(id).class) == engine.reflection.class_id("DataModel") {
+                let service = get_service(engine, id, &service_name)?;
+                return Ok(values([instance_value(lua, engine, service)?]));
             }
             // (a name no class, member, enum or type has raises as GetService does: tools/parity/probes/service_names.luau)
             if !names_service(engine, &service_name) && !settings::found_nowhere(&service_name) {
