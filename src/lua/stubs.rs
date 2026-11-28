@@ -9,7 +9,30 @@ use super::{
     instance::{set_parent, set_property},
     instance_value, modules, raw, signal_value, types,
 };
-use crate::{Engine, instance as core};
+use crate::{Engine, InstanceId, instance as core};
+
+/// A clone copied instances one of whose properties showed an EditableImage (R.ShowsImage): the engine's Luau makes each copy show
+/// it too (services.luau), as a client's copy does (measured, roblox-sim 0.747: tools/parity/probes/image_clone.luau). Muted: the
+/// clone's price is the call's.
+pub(crate) fn image_cloned(engine: &Engine, pairs: &[(InstanceId, InstanceId)]) -> LuaResult<()> {
+    let (hook, shown) = {
+        let refs = engine.lua.borrow();
+        if refs.shows_image.is_empty() {
+            return Ok(());
+        }
+        let Some(hook) = refs.image_clone.clone() else { return Ok(()) };
+        (hook, pairs.iter().filter(|(original, _)| refs.shows_image.contains(original)).copied().collect::<Vec<_>>())
+    };
+    if shown.is_empty() {
+        return Ok(());
+    }
+    let Some(lua) = raw::engine_lua(engine) else { return Ok(()) };
+    let _muted = crate::scheduler::Muted::raise(&engine.state.borrow().sched.muted);
+    for (original, copy) in shown {
+        hook.call::<()>((instance_value(&lua, engine, original)?, instance_value(&lua, engine, copy)?))?;
+    }
+    Ok(())
+}
 
 pub(crate) static SERVICES: &str = include_str!("services.luau");
 pub(crate) static SERVER: &str = include_str!("server.luau");
@@ -227,6 +250,25 @@ pub fn load(lua: &Lua, engine: &Rc<Engine>) -> LuaResult<()> {
                 LuaValue::Nil | LuaValue::Boolean(false) => core::raw_set(&mut state, &e.reflection, &hooks, id, name, value),
                 _ => core::raw_set_silent(&mut state, &e.reflection, id, name, value),
             })
+        })?,
+    )?;
+    // an instance one of whose properties shows an EditableImage (services.luau), and the function the engine's Luau gives a clone
+    // of one: (template, copy), for each such instance a clone copies (image_cloned)
+    let e = engine.clone();
+    r.set(
+        "ShowsImage",
+        super::lua_fn(lua, move |_, target: LuaValue| {
+            let id = instance_of(&target)?;
+            e.lua.borrow_mut().shows_image.insert(id);
+            Ok(())
+        })?,
+    )?;
+    let e = engine.clone();
+    r.set(
+        "OnImageClone",
+        super::lua_fn(lua, move |_, hook: LuaFunction| {
+            e.lua.borrow_mut().image_clone = Some(hook);
+            Ok(())
         })?,
     )?;
     let e = engine.clone();

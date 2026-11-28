@@ -1189,6 +1189,10 @@ pub fn clone(engine: &Engine, id: InstanceId) -> Option<InstanceId> {
     // collision groups)
     if let Some(pairs) = pairs {
         crate::services::physics::cloned(engine, &pairs);
+        // (an EditableImage a property of the template shows, which the copy shows too)
+        if let Err(error) = super::stubs::image_cloned(engine, &pairs) {
+            engine.warn(format!("clone: {error}"));
+        }
     }
     copy
 }

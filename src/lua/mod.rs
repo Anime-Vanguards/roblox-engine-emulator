@@ -212,6 +212,10 @@ pub struct LuaRefs {
     pub libraries: FxHashMap<&'static str, LuaTable>,
     /// The slots the VM holds for scripts (refs.rs)
     pub gauge: Option<refs::Gauge>,
+    /// The instances one of whose properties showed an EditableImage, and what the engine's Luau does for a clone of one
+    /// (services.luau: the copy shows the image too; stubs.rs image_cloned)
+    pub shows_image: rustc_hash::FxHashSet<crate::InstanceId>,
+    pub image_clone: Option<LuaFunction>,
 }
 
 impl Engine {

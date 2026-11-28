@@ -16607,3 +16607,59 @@ fn the_edit_run_context_holds_a_plugins_capabilities() {
         "##,
     );
 }
+
+/// A Decal's ColorMap and ColorMapContent are its Texture and TextureContent under other names: a write of any of the four is read by
+/// the others and fires TextureContent's, Texture's, ColorMap's and ColorMapContent's events in that order (measured, roblox-sim 0.747,
+/// a client and a server: tools/parity/probes/decal_color_map.luau). ree kept ColorMap apart.
+#[test]
+fn a_decals_color_map_is_its_texture() {
+    assert_script(
+        r#"
+        for _, Written in { "ColorMap", "Texture", "ColorMapContent", "TextureContent" } do
+            local Decal = Instance.new("Texture")
+            local Seen = {}
+            Decal.Changed:Connect(function(Name) table.insert(Seen, Name) end)
+            Decal[Written] = if string.find(Written, "Content") then Content.fromUri("rbxassetid://11") else "rbxassetid://11"
+            task.wait()
+            assert(Decal.ColorMap == "rbxassetid://11" and Decal.Texture == "rbxassetid://11", Written)
+            assert(Decal.ColorMapContent.Uri == "rbxassetid://11" and Decal.TextureContent.Uri == "rbxassetid://11", Written)
+            assert(table.concat(Seen, ",") == "TextureContent,Texture,ColorMap,ColorMapContent", table.concat(Seen, ","))
+            assert(Decal:Clone().ColorMap == "rbxassetid://11", "a clone")
+        end
+        local Image = game:GetService("AssetService"):CreateEditableImage({ Size = Vector2.new(2, 2) })
+        local Decal = Instance.new("Decal")
+        Decal.TextureContent = Content.fromObject(Image)
+        assert(Decal.ColorMapContent.Object == Image and Decal.ColorMap == "", "an image through either")
+        Decal.ColorMap = "rbxassetid://12"
+        assert(Decal.TextureContent.Uri == "rbxassetid://12" and Decal.TextureContent.Object == nil, "a ColorMap write drops it")
+        "#,
+    );
+}
+
+/// A clone of an instance one of whose properties shows an EditableImage shows the image too, as a client's does (measured, roblox-sim
+/// 0.747, a client and a server: tools/parity/probes/image_clone.luau): its Content reads the image back (written or destroyed since),
+/// its string id reads "", and its own later writes drop only its own. ree's copy read the snapshot's file.
+#[test]
+fn a_clone_shows_the_editable_image_its_template_shows() {
+    assert_script(
+        r#"
+        local AssetService = game:GetService("AssetService")
+        local Image = AssetService:CreateEditableImage({ Size = Vector2.new(2, 2) })
+        local Frame = Instance.new("Frame")
+        local Label = Instance.new("ImageLabel")
+        Label.ImageContent = Content.fromObject(Image)
+        Label.Parent = Frame
+        local Copy = Frame:Clone():FindFirstChildOfClass("ImageLabel")
+        assert(Copy.ImageContent.Object == Image and Copy.Image == "", "the copy shows it")
+        Image:WritePixelsBuffer(Vector2.zero, Vector2.new(2, 2), buffer.create(16))
+        task.wait()
+        assert(Copy.ImageContent.Object == Image, "after a write")
+        Copy.Image = "rbxassetid://5"
+        assert(Copy.ImageContent.Uri == "rbxassetid://5" and Label.ImageContent.Object == Image, "the copy's own write")
+        Image:Destroy()
+        assert(Label:Clone().ImageContent.Object == Image, "destroyed since")
+        local Surface = AssetService:CreateSurfaceAppearanceAsync({ ColorMap = Content.fromObject(AssetService:CreateEditableImage({ Size = Vector2.new(2, 2) })) })
+        assert(Surface:Clone().ColorMapContent.Object == Surface.ColorMapContent.Object, "a SurfaceAppearance")
+        "#,
+    );
+}

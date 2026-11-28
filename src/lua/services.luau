@@ -875,7 +875,7 @@ Method("AssetService", "CreateSurfaceAppearanceAsync", function(_, Maps)
 		Data.Users[Surface] = Data.Users[Surface] or {}
 		Data.Users[Surface][Property] = true
 		Extra(Surface).Shown = Extra(Surface).Shown or {}
-		Extra(Surface).Shown[Property] = Image
+		Extra(Surface).Shown[Property] = Image R.ShowsImage(Surface)
 		local Drawn = if Data.Source then Content.fromUri(Data.Source) else Snapshot(Image)
 		RawSet(Surface, Property, Drawn or Map, true)
 	end
@@ -958,7 +958,7 @@ for ClassName, Properties in IMAGE_CONTENT do
 			Data.Users[Self] = Data.Users[Self] or {}
 			Data.Users[Self][Sibling] = true
 			Extra(Self).Shown = Extra(Self).Shown or {}
-			Extra(Self).Shown[Sibling] = Image
+			Extra(Self).Shown[Sibling] = Image R.ShowsImage(Self)
 			return (if Data.Source then Content.fromUri(Data.Source) else Snapshot(Image)) or Value
 		end)
 		R.ContentGetter(ClassName, Property, function(Self, Value)
@@ -3038,5 +3038,29 @@ R.FriendUser = FriendUser
 R.FriendCount = function(Value)
 	return math.min(FriendCount(Value), FriendsOnlineCap)
 end
+
+-- Decal.ColorMap is its Texture under another name (derived.rs): a write drops an EditableImage Texture or TextureContent shows, and it
+-- reads "" while one is shown, as Texture does (measured, roblox-sim 0.747: decal_color_map.luau)
+ContentSetter("Decal", "ColorMap", function(Self, Value) Unshow(Self, "Texture") return Value end)
+R.ContentGetter("Decal", "ColorMap", function(Self, Value) return if ShownImage(Self, "Texture") then "" else Value end)
+-- A clone of an instance one of whose properties shows an EditableImage shows the image too, written or destroyed since, and reads ""
+-- for its string id (measured, roblox-sim 0.747: an ImageLabel, an ImageButton inside a Frame, a Decal, a MeshPart and a
+-- SurfaceAppearance; image_clone.luau); its later writes reach the copy as the template's do
+R.OnImageClone(function(Original, Copy)
+	local Held = Extras[Original]
+	if not (Held and Held.Shown) or next(Held.Shown) == nil then
+		return
+	end
+	local Shown = {}
+	for Key, Image in Held.Shown do
+		Shown[Key] = Image
+		local Data = Extra(Image)
+		Data.Users = Data.Users or setmetatable({}, { __mode = "k" })
+		Data.Users[Copy] = Data.Users[Copy] or {}
+		Data.Users[Copy][Key] = true
+	end
+	Extra(Copy).Shown = Shown
+	R.ShowsImage(Copy)
+end)
 
 return true

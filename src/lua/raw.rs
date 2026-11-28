@@ -811,6 +811,12 @@ pub fn set_metatable(lua: &Lua, metatable: LuaTable) -> LuaResult<()> {
 // Rust-side conversions
 
 /// The userdata of an instance (cached; created on first use).
+/// The engine's main VM, while it runs (for engine code that calls the engine's Luau from where no Lua is at hand)
+pub(crate) fn engine_lua(engine: &Engine) -> Option<Lua> {
+    let api = engine.lua.borrow().raw.clone()?;
+    api.lua.try_upgrade()
+}
+
 pub fn instance_value(lua: &Lua, engine: &Engine, id: InstanceId) -> LuaResult<LuaValue> {
     let _ = lua;
     let api = api(engine).expect("raw Instance API not installed");

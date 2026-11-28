@@ -463,16 +463,19 @@ pub fn install(engine: &Rc<Engine>) {
                 continue;
             }
             let Some(source) = reflection.content_sibling(class.id, property_name) else { continue };
+            // (Decal's colour map views, below)
+            if &*class.name == "Decal" && reflection.name(property_name) == "ColorMapContent" {
+                continue;
+            }
             content_views.push((class.name.to_string(), reflection.name(property_name).to_string(), reflection.name(source).to_string()));
         }
     }
     crate::sort::ord(&mut content_views);
-    for (class_name, name, source_name) in content_views {
+    let content_view = |source: Option<NameId>| -> (ReadFn, WriteFn) {
         let read: ReadFn = Rc::new(|uri| match uri {
             Some(Value::String(uri)) if !uri.is_empty() => Value::Content(Rc::new(ContentValue::Uri(uri.clone()))),
             _ => Value::Content(Rc::new(ContentValue::None)),
         });
-        let source = name_of(&source_name);
         let write: WriteFn = Rc::new(move |state, reflection, hooks, id, value| {
             let uri = match &value {
                 Value::Content(content) => content.uri().cloned().unwrap_or_default(),
@@ -482,8 +485,27 @@ pub fn install(engine: &Rc<Engine>) {
                 raw_set(state, reflection, hooks, id, source, Value::String(uri));
             }
         });
+        (read, write)
+    };
+    for (class_name, name, source_name) in content_views {
+        let (read, write) = content_view(name_of(&source_name));
         derive(&mut views, &class_name, &name, &source_name, ViewEvents::Before, read, write);
     }
+    // Decal's ColorMap and ColorMapContent are its Texture and TextureContent under other names: what one of the four is written
+    // the other three read, and a write of any (that changes it) fires TextureContent's events, Texture's, ColorMap's and then
+    // ColorMapContent's, each Changed with its property's signal; a write of what it holds fires none, and a clone holds the four
+    // as its template did (measured, roblox-sim 0.747, a client and a server: a Decal and a Texture, each of the four written a
+    // string or a Content; tools/parity/probes/decal_color_map.luau). ree kept ColorMap apart.
+    let texture = name_of("Texture");
+    let color_map: ReadFn = Rc::new(|value| value.cloned().filter(|value| !value.is_nil()).unwrap_or_else(|| Value::String(Str::default())));
+    let write: WriteFn = Rc::new(move |state, reflection, hooks, id, value| {
+        if let Some(texture) = texture {
+            raw_set(state, reflection, hooks, id, texture, value);
+        }
+    });
+    derive(&mut views, "Decal", "ColorMap", "Texture", ViewEvents::After, color_map, write);
+    let (read, write) = content_view(texture);
+    derive(&mut views, "Decal", "ColorMapContent", "Texture", ViewEvents::After, read, write);
 
     // BasePart.Color is stored in 1/255 steps (`uint8_t(int(channel * 255.0f)) / 255.0f`, measured in Studio 0.747:
     // direct writes and TweenService blends both cut each channel down to whole 1/255 steps, tools/parity/probes/tween_color.luau).

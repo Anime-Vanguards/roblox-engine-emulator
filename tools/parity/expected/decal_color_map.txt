@@ -1,0 +1,18 @@
+# engine: Roblox Studio 0.747.0.7471481, a headless playing client (script identity 2; Workspace.SignalBehavior Deferred)
+# captured: 2026-11-28
+Decal write ColorMap ok rbxassetid://11,rbxassetid://11,rbxassetid://11,rbxassetid://11 | C:TextureContent,S:TextureContent,C:Texture,S:Texture,C:ColorMap,S:ColorMap,C:ColorMapContent,S:ColorMapContent | 
+Decal write Texture ok rbxassetid://11,rbxassetid://11,rbxassetid://11,rbxassetid://11 | C:TextureContent,S:TextureContent,C:Texture,S:Texture,C:ColorMap,S:ColorMap,C:ColorMapContent,S:ColorMapContent | 
+Decal write ColorMapContent ok rbxassetid://11,rbxassetid://11,rbxassetid://11,rbxassetid://11 | C:TextureContent,S:TextureContent,C:Texture,S:Texture,C:ColorMap,S:ColorMap,C:ColorMapContent,S:ColorMapContent | 
+Decal write TextureContent ok rbxassetid://11,rbxassetid://11,rbxassetid://11,rbxassetid://11 | C:TextureContent,S:TextureContent,C:Texture,S:Texture,C:ColorMap,S:ColorMap,C:ColorMapContent,S:ColorMapContent | 
+Decal defaults ok ,,nil,nil | Enum.ContentSourceType.None uri=nil object=nil | Enum.ContentSourceType.None uri=nil object=nil
+Decal image via ColorMapContent ok Enum.ContentSourceType.Object uri=nil object=EditableImage | Enum.ContentSourceType.Object uri=nil object=EditableImage |  |  | true
+Decal image via TextureContent then ColorMap ok Enum.ContentSourceType.Object uri=nil object=EditableImage | Enum.ContentSourceType.Uri uri=rbxassetid://12 object=nil | rbxassetid://12
+Decal clone ok rbxassetid://13,rbxassetid://13,rbxassetid://13,rbxassetid://13
+Texture write ColorMap ok rbxassetid://11,rbxassetid://11,rbxassetid://11,rbxassetid://11 | C:TextureContent,S:TextureContent,C:Texture,S:Texture,C:ColorMap,S:ColorMap,C:ColorMapContent,S:ColorMapContent | 
+Texture write Texture ok rbxassetid://11,rbxassetid://11,rbxassetid://11,rbxassetid://11 | C:TextureContent,S:TextureContent,C:Texture,S:Texture,C:ColorMap,S:ColorMap,C:ColorMapContent,S:ColorMapContent | 
+Texture write ColorMapContent ok rbxassetid://11,rbxassetid://11,rbxassetid://11,rbxassetid://11 | C:TextureContent,S:TextureContent,C:Texture,S:Texture,C:ColorMap,S:ColorMap,C:ColorMapContent,S:ColorMapContent | 
+Texture write TextureContent ok rbxassetid://11,rbxassetid://11,rbxassetid://11,rbxassetid://11 | C:TextureContent,S:TextureContent,C:Texture,S:Texture,C:ColorMap,S:ColorMap,C:ColorMapContent,S:ColorMapContent | 
+Texture defaults ok ,,nil,nil | Enum.ContentSourceType.None uri=nil object=nil | Enum.ContentSourceType.None uri=nil object=nil
+Texture image via ColorMapContent ok Enum.ContentSourceType.Object uri=nil object=EditableImage | Enum.ContentSourceType.Object uri=nil object=EditableImage |  |  | true
+Texture image via TextureContent then ColorMap ok Enum.ContentSourceType.Object uri=nil object=EditableImage | Enum.ContentSourceType.Uri uri=rbxassetid://12 object=nil | rbxassetid://12
+Texture clone ok rbxassetid://13,rbxassetid://13,rbxassetid://13,rbxassetid://13
